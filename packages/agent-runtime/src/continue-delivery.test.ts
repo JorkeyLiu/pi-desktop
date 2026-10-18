@@ -553,42 +553,69 @@ describe("continue guards", () => {
     }
   });
 
-  it("rejects chains with no replayable history or a stopped status", async () => {
+  it("continues a stopped, rowless chain from its original task", async () => {
     const runtime = createRuntime();
     try {
-      (runtime as any).transcriptHistory.push(
-        {
-          id: "task-empty",
-          role: "tool",
-          content: "",
-          createdAt: new Date().toISOString(),
-          toolCallId: "task-empty",
-          toolName: "Task",
-          toolArgs: { agent: "explorer", task: "Explore the parser." },
-          toolResult: { details: { delegationId: "del-empty", agent: "explorer", status: "completed" } },
-          toolStatus: "success",
+      // A stop that landed before the first child event: the chain has its
+      // original brief but no child rows. The new input continues it.
+      (runtime as any).transcriptHistory.push({
+        id: "task-stopped",
+        role: "tool",
+        content: "",
+        createdAt: new Date().toISOString(),
+        toolCallId: "task-stopped",
+        toolName: "Task",
+        toolArgs: { agent: "explorer", task: "Explore the parser." },
+        toolResult: {
+          details: { delegationId: "del-stopped", agent: "explorer", status: "stopped" },
         },
-        {
-          id: "task-stopped",
-          role: "tool",
-          content: "",
-          createdAt: new Date().toISOString(),
-          toolCallId: "task-stopped",
-          toolName: "Task",
-          toolArgs: { agent: "explorer", task: "Explore the parser." },
-          toolResult: { details: { delegationId: "del-stopped", agent: "explorer", status: "stopped" } },
-          toolStatus: "success",
-        },
+        toolStatus: "success",
+      });
+      const historyModule = await import("./delegation-history.js");
+      (runtime as any).delegationChains.hydrate(
+        historyModule.rebuildChainsFromTranscript((runtime as any).transcriptHistory),
       );
+      const continued = await runtime.continueSubagent({
+        delegationId: "del-stopped",
+        text: "Pick it back up.",
+      });
+      expect(continued.accepted).toBe(true);
+      expect(continued.delivery).toBe("user");
+      // Seeded with the original brief, then the new input — no fabricated rows.
+      const seeded = subagentRuns.calls.at(-1)?.initialMessages ?? [];
+      expect(seeded.map((message: { role: string }) => message.role)).toEqual(["user"]);
+      expect(JSON.stringify(seeded[0]?.content)).toContain("Explore the parser.");
+      expect(seeded.some((message: { role: string }) => message.role === "assistant")).toBe(
+        false,
+      );
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("rejects a chain whose transcript lost its original task", async () => {
+    const runtime = createRuntime();
+    try {
+      (runtime as any).transcriptHistory.push({
+        id: "task-malformed",
+        role: "tool",
+        content: "",
+        createdAt: new Date().toISOString(),
+        toolCallId: "task-malformed",
+        toolName: "Task",
+        // No `task` brief survives: the chain cannot be seeded.
+        toolArgs: { agent: "explorer" },
+        toolResult: {
+          details: { delegationId: "del-malformed", agent: "explorer", status: "completed" },
+        },
+        toolStatus: "success",
+      });
       const historyModule = await import("./delegation-history.js");
       (runtime as any).delegationChains.hydrate(
         historyModule.rebuildChainsFromTranscript((runtime as any).transcriptHistory),
       );
       await expect(
-        runtime.continueSubagent({ delegationId: "del-empty", text: "Continue." }),
-      ).rejects.toMatchObject({ errorCode: "NOT_RESUMABLE" });
-      await expect(
-        runtime.continueSubagent({ delegationId: "del-stopped", text: "Continue." }),
+        runtime.continueSubagent({ delegationId: "del-malformed", text: "Continue." }),
       ).rejects.toMatchObject({ errorCode: "NOT_RESUMABLE" });
     } finally {
       await runtime.dispose();
@@ -597,7 +624,7 @@ describe("continue guards", () => {
 });
 
 describe("post-restart hydration continuation", () => {
-  it.each(["completed", "failed", "interrupted"] as const)(
+  it.each(["completed", "failed", "interrupted", "stopped", "aborted"] as const)(
     "a %s chain continues user-owned with no parent prompt after restart",
     async (status) => {
       // Post-restart: a fresh idle runtime hydrated from the persisted

@@ -130,6 +130,41 @@ export function subagentChainLatestDelegationId(
   return delegationIdForMessage(last);
 }
 
+/**
+ * Whether the delegation chain names a backend instance: at least one `Task`
+ * call of the chain carries a backend-owned `delegationId`.
+ *
+ * A denied call that never started has no delegation identity, so it is not a
+ * child and must not offer a continuation; a tab whose `Task` calls are
+ * missing has no chain at all. Either way there is no instance to continue,
+ * even though the tab itself is settled.
+ */
+export function subagentChainInstantiated(
+  messages: readonly UiMessage[],
+  delegationId: string,
+): boolean {
+  const target = delegationId.trim();
+  if (!target) return false;
+  const chain = subagentChainCallIds(messages, target);
+  if (chain.size === 0) return false;
+  return messages.some((message) => {
+    if (
+      message.role !== "tool" ||
+      !isDelegationStartTool(message.toolName) ||
+      !message.toolCallId ||
+      !chain.has(message.toolCallId)
+    ) {
+      return false;
+    }
+    const payload = toolResultPayload(message);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return false;
+    }
+    const id = (payload as { delegationId?: unknown }).delegationId;
+    return typeof id === "string" && id.length > 0;
+  });
+}
+
 /** Whether `delegationId` is not the chain-latest tab (stale after resume). */
 export function isStaleSubagentTab(
   messages: readonly UiMessage[],

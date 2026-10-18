@@ -78,9 +78,9 @@ export type ValidatedSubagentContinue =
  * Decide one settled-chain continuation without touching any loop.
  *
  * Guards, in order: identity, chain liveness (a still-running chain names its
- * live run — steer it instead of forking a second run), resumability
- * (`stopped`/`aborted`/denied stay non-resumable; only `completed`,
- * `failed`, `timed_out`, `interrupted` continue), then the stale guard. An
+ * live run — steer it instead of forking a second run), then the stale guard.
+ * A settled chain continues regardless of how its last run ended: the outcome
+ * is history, not a barrier. An
  * explicit `expectedParentTurnId` must name the live parent turn; an absent
  * one is allowed only when the runtime holds no live turn (the idle path,
  * where the host opens a new durable execution turn first). A repeated
@@ -222,7 +222,7 @@ export function mapContinueSpawnError(message: string): Error {
   if (/unknown delegation|no longer available|delegation is unavailable/i.test(text)) {
     return codedError(text, "DELEGATION_NOT_FOUND");
   }
-  if (/cannot be resumed|ended as|cannot be continued|no recorded history|too much to resume/i.test(text)) {
+  if (/cannot be continued|no recorded history/i.test(text)) {
     return codedError(text, "NOT_RESUMABLE");
   }
   if (/target turn has ended|parent turn ended/i.test(text)) {

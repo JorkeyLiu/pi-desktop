@@ -33,7 +33,6 @@ import type {
 } from "@earendil-works/pi-ai";
 import {
   MAX_RESUMABLE_LISTED_FILES,
-  MAX_RESUMABLE_READ_LINES,
   normalizeSubagentName,
   type UiMessage,
 } from "@pi-desktop/shared";
@@ -67,11 +66,10 @@ export type DelegationChain = {
   latestModelId?: string;
   /** `providerId/modelId` key the latest run resolved (ADR 0279 §4). */
   latestModelKey?: string;
-  /** Settled status of the latest run; `running` while it works. Owns the
-   * resumability gate so pruning finished delegation records cannot make a
-   * stopped chain look reusable (ADR 0279). */
+  /** Settled status of the latest run; `running` while it works. Historical
+   * context only: no status bans continuation (ADR 0279). */
   latestStatus?: string;
-  /** Latest activity timestamp, used for LRU eviction. */
+  /** Latest activity timestamp; orders the prompt listing, newest first. */
   lastActivityAt: number;
 };
 
@@ -658,13 +656,6 @@ export function rebuildChainsFromTranscript(
     });
   }
   return chains;
-}
-
-export function isChainWithinReadBudget(
-  chain: Pick<DelegationChain, "readLineCount">,
-  budget = MAX_RESUMABLE_READ_LINES,
-): boolean {
-  return chain.readLineCount <= budget;
 }
 
 export function listedReadFiles(

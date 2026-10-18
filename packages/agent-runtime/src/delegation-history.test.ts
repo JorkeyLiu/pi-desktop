@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { estimateTokens } from "./pi-runtime-estimates.js";
 import type { Message } from "@earendil-works/pi-ai";
-import { MAX_RESUMABLE_READ_LINES, type UiMessage } from "@pi-desktop/shared";
+import type { UiMessage } from "@pi-desktop/shared";
 import {
   contextBudgetLimitsFor,
   type ContextBudgetLimits,
@@ -10,7 +10,6 @@ import {
   chainRowsToMessages,
   extractReadFiles,
   formatResumableList,
-  isChainWithinReadBudget,
   listedReadFiles,
   originalTaskFromTranscript,
   rebuildChainsFromTranscript,
@@ -671,17 +670,6 @@ describe("rebuildChainsFromTranscript", () => {
   });
 });
 
-describe("read budget", () => {
-  it("gates a chain on its cumulative read lines", () => {
-    expect(isChainWithinReadBudget({ readLineCount: MAX_RESUMABLE_READ_LINES })).toBe(
-      true,
-    );
-    expect(
-      isChainWithinReadBudget({ readLineCount: MAX_RESUMABLE_READ_LINES + 1 }),
-    ).toBe(false);
-  });
-});
-
 describe("listedReadFiles", () => {
   it("caps the listing and reports the omitted count", () => {
     const files = ["a", "b", "c", "d"];
@@ -797,7 +785,7 @@ describe("rebuildChainsFromTranscript restart status (ADR 0279)", () => {
     }
   });
 
-  it("keeps a stopped or aborted chain out of the resumable set", () => {
+  it("revives a stopped or aborted chain after hydration", () => {
     for (const status of ["stopped", "aborted"]) {
       const chains = rebuildChainsFromTranscript([
         restartedTaskRow("call-1", {
@@ -806,11 +794,9 @@ describe("rebuildChainsFromTranscript restart status (ADR 0279)", () => {
           status,
         }),
       ]);
+      // The outcome stays a recorded fact; it no longer bans continuation.
       expect(chains[0].latestStatus).toBe(status);
-      expect(resolveRebuilt(chains, "d1")).toEqual({
-        ok: false,
-        error: { kind: "not-resumable", status },
-      });
+      expect(resolveRebuilt(chains, "d1").ok).toBe(true);
     }
   });
 
@@ -945,10 +931,8 @@ describe("rebuildChainsFromTranscript settled copies and replay (ADR 0279)", () 
     ).toEqual(["d2"]);
   });
 
-  it("gates a rebuilt chain on the lines its own rows read", () => {
-    const text = Array.from({ length: MAX_RESUMABLE_READ_LINES + 1 }, () => "x").join(
-      "\n",
-    );
+  it("keeps a rebuilt chain that read past the old budget continuable", () => {
+    const text = Array.from({ length: 50_001 }, () => "x").join("\n");
     const transcript: UiMessage[] = [
       restartedTaskRow("call-1", {
         delegationId: "d1",
@@ -965,12 +949,10 @@ describe("rebuildChainsFromTranscript settled copies and replay (ADR 0279)", () 
     ];
     const [chain] = rebuildChainsFromTranscript(transcript);
 
-    expect(chain.readLineCount).toBe(MAX_RESUMABLE_READ_LINES + 1);
-    expect(isChainWithinReadBudget(chain)).toBe(false);
-    expect(resolveRebuilt([chain], "d1")).toEqual({
-      ok: false,
-      error: { kind: "over-budget" },
-    });
+    // Read metadata is still recorded for display; it no longer gates resume.
+    expect(chain.readLineCount).toBe(50_001);
+    expect(chain.readFiles).toEqual(["huge.ts"]);
+    expect(resolveRebuilt([chain], "d1").ok).toBe(true);
   });
 
   it("replays a delegate tool row with the arguments its call recorded", () => {

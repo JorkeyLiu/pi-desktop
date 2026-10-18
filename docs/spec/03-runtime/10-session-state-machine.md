@@ -160,7 +160,9 @@ turn that has ended.
     returns the session to idle so Continue is accepted. Parent idle with
     running delegates still keeps the turn open (D328 / D352). System-interrupted
     delegates settle as failed and remain manually resumable; explicit Stop and
-    dispose remain non-resumable cancellations.
+    dispose cancel the running execution (settling it `stopped` / `aborted`) and
+    retire its waiting and delivery, but the chain stays continuable, seeded from
+    whatever child rows remain or from its original task brief (ADR 0279 §15).
 
 ## 4. Persistence points
 

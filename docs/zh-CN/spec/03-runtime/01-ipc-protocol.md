@@ -220,6 +220,81 @@ type AgentSteerRequest = {
 id、顺序和所属回合。图像字节不进入持久消息。这是新增的桌面通道和事件字段，
 不改变 RACP、主机 RPC 版本或存储架构。见 ADR active-turn-steering。
 
+### 5.1b 向正在运行的子智能体补充指令
+
+`pi-desktop/agent/steerSubagent` 接受 `AgentSteerSubagentRequest`：
+
+```ts
+type AgentSteerSubagentRequest = {
+  sessionId: string;
+  /** `Task` 为正在运行的委托返回的 `delegationId`。 */
+  delegationId: string;
+  /** 拥有这次补充指令的持久父回合；它结束后即被拒绝。 */
+  expectedTurnId: string;
+  /** 给子级的用户文本。附件随父回合走。 */
+  content: string;
+  messageId?: string;
+};
+```
+
+成功时返回 `{ accepted: true, delegationId, turnId }`。主进程在到达 sidecar 之前，对
+缺失、已结束或不可派发的父回合返回 `TURN_NOT_FOUND`；sidecar 运行时在派发后重新
+验证回合归属，因此过期目标会在那里失败，而不会把指令发给错误的子级。空内容返回
+`INVALID_ARGUMENT`；载荷有界（`delegationId` 128 字符，文本 20,000 字符）。调用方
+提供的 UUID `messageId` 用于去重重试：同一委托重复的 id 会报告 `already-applied`，
+因此子级恰好执行一次该补充指令、回显也恰好发出一次；其它情况则改用运行时生成的身份。
+仅文本：附件随父回合走。
+
+该文本只通过命名子级保留的循环句柄进入它的对话，处于该子级现有的工具与权限范围内。
+运行时自身发出带归属的子级回显（`parentToolCallId` / `agentName`）；父级的模型上下文
+重建会跳过带标记的行，而链重放会保留它们，嵌套 `Task` / `asktool` 仍被拒绝。对已结算
+的委托会返回指名 `Task(resume)` 的 `DELEGATION_NOT_RUNNING` 错误；补充指令绝不排队到
+已死的循环上，也绝不启动运行时或提示父级模型。这是一个新增的桌面通道；它不改变 RACP、
+主机 RPC 版本或存储架构。
+
+### 5.1c 直接继续已结算的子智能体
+
+`pi-desktop/agent/continueSubagent` 接受 `AgentContinueSubagentRequest`：
+
+```ts
+type AgentContinueSubagentRequest = {
+  sessionId: string;
+  /** 要继续的链上的任意 `delegationId`。 */
+  delegationId: string;
+  /** 给子级的用户后续文本。 */
+  content: string;
+  /** 渲染器为幂等重试选择的 id（D288 式去重）。 */
+  messageId?: string;
+  /** 记录调用方所见回合的过期守卫；空闲路径上省略。 */
+  expectedTurnId?: string;
+};
+```
+
+成功时返回 `{ accepted: true, delegationId, turnId?, delivery: "parent" |
+"user" }`。`expectedTurnId` 只是过期守卫，绝不是归属选择器：服务器根据来源记录决定
+投递方式。只有当父级仍期望这条链时（来源归父级所有、起始于当前父 epoch、尚未投递、
+且其所属回合仍存活——已结算为 `stopped` / `aborted` 的来源早已被 Stop 退役，因此绝不
+附加），才为附加（`parent`）；否则为分离（`user`），这包括对 `stopped` 或 `aborted`
+来源的每一次继续。对正在运行的委托补充指令会使其保持附加；程序唤醒、`any` 阈值或进度
+检查点绝不会让未完成的委托分离。`TaskWait` / `TaskList` 的等待不带模型超时
+（`timeoutSeconds`），也没有逐调用唤醒覆盖——旧提供商工具调用中的遗留计时参数会被
+忽略。来源报告已投递或其所属回合结束后，继续运行归 `user` 所有，没有父级模型提示、
+上下文、唤醒，也不记到旧父回合账上；`user` 所有的继续绝不会复活原父级的等待或投递。
+分离的来源绝不附加到不相关的存活父回合——请求以 `AGENT_BUSY` 失败并保留草稿。该派生复用
+`Task(resume)` 工具路径（相同模型、工具、权限、worktree、链预算、幂等 UUID）；仍在运行
+的链是 `CHAIN_BUSY`，而只有自身 `Task` 行已消失、无法重建的链才是 `NOT_RESUMABLE`——
+`completed`、`failed`、`timed_out`、`interrupted`、`stopped` 与 `aborted` 链全部可继续
+（ADR 0279 §15）。调用方的 `messageId` 用于去重重试（`already-applied`）；重启后
+hydrate 会从转录重建历史，无需父级提供商调用。持久化的 `Task` 标记保留真实调用 id，
+带 `toolArgs.resume` 以及 `toolArgs.source: "user"`，且绝不进入父级模型上下文；后续文本
+作为带归属的子级行持久化。分离的运行在它自己的、仅子级的执行记账回合下执行，该回合用
+现有的 `session.beginTurn` 打开（无新模式、无子会话）：不运行父级提示，不写主用户行，
+渲染器保持空闲，而该运行自身的终态只静默关闭那一行（无任务通知、无父级提示或上下文）。
+会话只持有一个活跃回合，因此分离运行结算或停止前，父级发送会一直保持 `AGENT_BUSY`；
+正在运行的 user 所有运行通过其执行所有者接收补充指令。只有显式父级 `Task(resume)` 会把
+该链重新附加为新的父级所有运行。这是一个新增的桌面通道；它不改变 RACP、主机 RPC 版本
+或存储架构。
+
 ### 5.2 在下一个回合边界停止
 
 ```ts

@@ -71,20 +71,10 @@ export function resolveResumeChain(
         ok: false,
         message: `Delegation ${error.delegationId} is still running. Call TaskWait to converge with it first, or start a new delegation. Resuming a running delegation is not queued.`,
       };
-    case "not-resumable":
-      return {
-        ok: false,
-        message: `Delegation ${resume} ended as "${error.status}" and cannot be resumed. Only completed, failed, timed-out, or interrupted delegations continue; start a new delegation instead.`,
-      };
     case "agent-mismatch":
       return {
         ok: false,
         message: `Delegation ${resume} belongs to the ${error.expected} subagent, not ${error.actual}. Resume it with the matching agent name, or start a new delegation.`,
-      };
-    case "over-budget":
-      return {
-        ok: false,
-        message: `Delegation ${resume} has read too much to resume cheaply. Start a new delegation and point it at the specific files it should re-read.`,
       };
   }
 }
@@ -164,6 +154,12 @@ export async function resumedChainProvider(
  * Rebuild the delegate's prior conversation from its transcript rows. The
  * rows carry `parentToolCallId` for exactly the chain's `Task` calls, so the
  * replay never picks up the parent's own rows or a sibling delegate's.
+ *
+ * A run stopped before it emitted a single child event leaves no rows, but the
+ * chain's original brief still seeds the continued run: the seed is that
+ * brief alone, with no fabricated history. Only a chain whose brief is gone
+ * (a truncated or malformed transcript) has nothing to continue from, and
+ * returns `undefined`.
  */
 export function seedResumedDelegate(
   transcriptHistory: readonly UiMessage[],
@@ -175,7 +171,6 @@ export function seedResumedDelegate(
     originalTaskFromTranscript(transcriptHistory, chain);
   if (!originalTask) return undefined;
   const rows = selectChainRows(transcriptHistory, chain);
-  if (rows.length === 0) return undefined;
   // The seed is truncated against the delegate's own budget (ADR 0299 §7),
   // derived from the same model the resumed run will use, so the first
   // request fits the window instead of overflowing on arrival.

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Policy-Sync: 2026-09-26.1
+Policy-Sync: 2026-10-18.1
 
 Instructions for Claude Code CLI and Claude Cowork on PI-Desktop.
 
@@ -30,21 +30,23 @@ Reply to the user in the language they used (Chinese request → Chinese answer,
 
 ## Hard rules (do not negotiate)
 
-### Worktree isolation
+### Multi-agent isolation
 
-Every request uses:
+Development happens on a non-`main` branch. The primary checkout is a normal
+development workspace when it is on a non-`main` branch such as
+`jorkey/integration`. A fresh dedicated branch or worktree per request is
+optional — use it when it is genuinely useful (parallel or incompatible
+concurrent changes, or work that must not entangle another task's state).
 
-```text
-1 request = 1 branch + 1 dedicated worktree
-```
-
-- Never develop on `main` or in the primary checkout.
+- Never develop directly on `main`.
 - Never merge unvalidated task code into local `main`.
 - Never reuse, modify, or delete another agent's branch or worktree.
 - Never discard unrelated work in the primary checkout.
-- Resolve conflicts only inside your own task worktree.
+- Resolve conflicts in the task's working checkout, not in another task's
+  worktree or uncommitted work.
 
-Create the worktree from current remote `main`:
+When isolation helps, create a dedicated branch and worktree from current
+remote `main`:
 
 ```bash
 git fetch origin main
@@ -62,20 +64,20 @@ Branch names: `feat/...`, `fix/...`, `docs/...`, `refactor/...`, `chore/...`.
 ### Delivery order (code-bearing changes)
 
 ```text
-1. branch + worktree from origin/main
-2. implement in the worktree
+1. non-main working branch (primary checkout or optional worktree)
+2. implement
 3. targeted static/unit/integration checks
 4. review the full diff
 5. commit
 6. fetch + rebase/refresh against latest origin/main (private branch)
-7. resolve conflicts in the worktree
-8. task-candidate E2E in the same worktree
+7. resolve conflicts in the working checkout
+8. task-candidate E2E on the same candidate
 9. push branch
 10. open/update PR
 11. PR integration validation
 12. merge into remote main through repository gates
 13. synchronize local main
-14. remove your worktree and merged local branch
+14. if you created a worktree, remove it and the merged local branch
 ```
 
 Do **not** insert `merge task → local main` between refresh and task-candidate E2E. The task branch itself is the local integration candidate after incorporating latest `origin/main`. Do not open or update a PR that is behind `origin/main`. Run `pnpm check:pr-base` before opening or updating a PR.
@@ -280,7 +282,7 @@ Docs-only changes: review rendered Markdown and `git diff --check`; no runtime t
 
 Before editing:
 
-1. Confirm you are (or will create) a dedicated worktree — not the primary checkout, not `main`.
+1. Confirm you are on a non-`main` branch — the primary checkout or an optional dedicated worktree.
 2. Identify observable behavior, persistence, protocol, security, and architecture impact.
 3. Read the relevant spec/ADR and list the validation you will run.
 4. For a linked issue, verify the claim against current code first. For a linked PR, preserve a sound direction; do not force-push contributor branches.

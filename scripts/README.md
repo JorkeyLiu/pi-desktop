@@ -43,7 +43,7 @@ disagrees, so a green `check:release-docs` is a precondition, not a substitute.
 
 ## End-to-end
 
-Run relevant task-candidate E2E from the dedicated request worktree, reusing
+Run relevant task-candidate E2E from the task's working checkout, reusing
 the provisioned host environment as required by `AGENTS.md`. `verify:ui:*`,
 live providers, paid APIs, and the user's running desktop require explicit
 request authorization. Use isolated profiles and deterministic local fixtures.

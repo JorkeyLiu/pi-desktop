@@ -736,7 +736,8 @@ Stop / 运行时销毁。主 Agent 用 `TaskStop` 判断要不要取消；运行
 父级终态错误还会中止残留委托、跳过续跑提示，并把会话恢复为空闲，这样
 “继续”不会变成 `AGENT_BUSY`（D352）。 被系统中断的委托以
 `failed` 和 `SUBAGENT_PARENT_FAILED` 结算，保留基于历史的恢复资格，但不会自动重启。
-用户 Stop、TaskStop 与运行时销毁仍按不可恢复的取消处理。
+用户 Stop、TaskStop 与运行时销毁仍会取消正在运行的执行并将其结算为 `stopped` / `aborted`，
+但该链仍可继续（见下）。
 
 **可恢复的委托（ADR 0279）。** `Task` 接受一个可选的 `resume` 参数，携带同一会话中
 某个已结算委托的 `delegationId`。恢复后的委托是一个新的 `SubagentRun`，以该链此前的
@@ -753,20 +754,27 @@ Stop / 运行时销毁。主 Agent 用 `TaskStop` 判断要不要取消；运行
 能挺过一次 sidecar 重启。链的身份（`delegateSessionId`）始终留在内部；父级只会传
 `delegationId`，由反向映射解析它。
 
-只有 `completed` 与 `failed` 的链可恢复；`stopped` 和 `aborted` 的运行是终态，只能靠
-新建委托重来；而应用在它还在工作时被关掉的那种运行会重建成 `interrupted`，同样不可
-恢复。只读工具输出超过 `MAX_RESUMABLE_READ_LINES`（50000）的链会从可复用清单里消失，
-且不做链内裁剪，因此恢复绝不会悄悄丢掉历史。注册表按定义名最多保留
-`MAX_RESUMABLE_CHAINS_PER_AGENT`（2）条可复用链，并在每次委托结算时淘汰最久未活动的
-那些；仍在工作的链永不淘汰，所以这个上限只算可复用链，活跃链可以让它暂时超出。
+每一条已真正实例化并结算的链都可继续，无论最后一次运行的结局是什么：`completed`、
+`failed`、仅作记录的 `timed_out`（按 `failed` 处理）、`interrupted`、`stopped` 与
+`aborted`。结局只是那次运行的历史事实，绝不是链的永久属性：`stopped` / `aborted`
+（显式 Stop 或运行时销毁）会取消那次执行并退役它的等待与投递，但该链仍可继续。
+一次在生成委派实例之前就被拒绝的 `Task` 调用——未知 `agent`、空 `task`、无法解析的模型
+固定、工具全部不可用的定义，或 `MAX_SUBAGENT_CONCURRENCY` 上限——不会创建链，也永不可
+继续。每次继续都在同一条链上启动新运行，其种子按模型上下文预算裁剪（ADR 0299 §7，
+`seedDelegateMessages`），因此再大的链也不会产生超限的首次请求；链仍可解析但没有子行可
+重放时（例如刚被取消的运行），则用最初的 task 简述加新输入作种子。只有链自身的 `Task`
+行已从转录中消失、无法重建的链，才会按未知 id 解析。读取量不再把链移出可复用清单——种子
+裁剪保证请求安全，且读取元数据仍会展示；按智能体名的上限
+（`MAX_RESUMABLE_CHAINS_PER_AGENT`，2）只限制父级提示里列出的条数，绝不限制保留，也不会
+因时间或数量丢弃任何条。
 
 恢复严格限定在同一会话内，且从不排队：对正在运行的委托做恢复是一个工具错误，提示父级
 先用 `TaskWait` 收敛；一条链在任何时刻最多只有一条活跃记录。`model` 与 `resume` 同时
 给出会被拒绝，而恢复后的运行会沿用该链记录的绑定：优先使用链解析出的
 `providerId/modelId` 键，从 transcript 重建的链则按模型 id 匹配；当什么都匹配不上时，
 运行会继续使用定义当前的绑定，并把先前的模型 id 记进它生命周期 details 的
-`modelChangedFrom`。有意换模型意味着新建一个委托。未知 id、属于另一个定义的 id、
-不可恢复的状态、超出读预算的链，以及行已经不在的链，各自返回一个说明原因的工具错误；
+`modelChangedFrom`。有意换模型意味着新建一个委托。未知 id（包括自身 `Task` 行已不在的
+链）、属于另一个定义的 id，以及仍在运行的链，各自返回一个说明原因的工具错误；
 对未知 id，还会一并列出当前可复用的 id。
 
 On-demand grants expire at each new parent prompt or approved plan/goal execution;

@@ -383,19 +383,24 @@ It returns `{ accepted: true, delegationId, turnId?, delivery: "parent" |
 "user" }`. `expectedTurnId` is only a stale guard, never an ownership chooser:
 the server decides delivery from the source record. Attached (`parent`) only
 while the parent still expects THAT chain (source parent-owned, started in the
-current parent epoch, undelivered, not stopped/aborted, owning turn alive);
-detached (`user`) otherwise. Steering a running delegate keeps it attached; a
+current parent epoch, undelivered, and its owning turn alive — a source that
+settled `stopped` / `aborted` was already retired by Stop, so it never
+attaches); detached (`user`) otherwise, which includes every continuation of a
+`stopped` or `aborted` source. Steering a running delegate keeps it attached; a
 program wake, `any` threshold, or progress checkpoint never detaches unfinished
 delegates. A `TaskWait` / `TaskList` wait carries no model timeout (`timeoutSeconds`)
 and no per-call wake override — legacy timing args in older provider tool calls are
 ignored. After the source report was delivered or its owning turn ended, the
 continuation is `user`-owned with no parent model prompt, context, wake, or
-charge to the old parent turn. A detached source never attaches to an unrelated
+charge to the old parent turn; a `user`-owned continuation never resurrects the
+original parent's waiting or delivery. A detached source never attaches to an unrelated
 live parent turn — the request fails with `AGENT_BUSY` and the draft is
 preserved. The spawn reuses the `Task(resume)` tool path (same model,
 tools, permissions, worktree, chain budgets, idempotent UUID); a still-running
-chain is `CHAIN_BUSY`, a stopped chain or one with no replayable history is
-`NOT_RESUMABLE`. A caller `messageId` dedups retries (`already-applied`);
+chain is `CHAIN_BUSY`, and only a chain whose own `Task` rows are gone and cannot
+be rebuilt is `NOT_RESUMABLE` — `completed`, `failed`, `timed_out`,
+`interrupted`, `stopped`, and `aborted` chains are all continuable (ADR 0279
+§15). A caller `messageId` dedups retries (`already-applied`);
 post-restart hydration rebuilds history from the transcript with no parent
 provider call. The persisted `Task` marker keeps the real invocation id
 with `toolArgs.resume` plus `toolArgs.source: "user"` and never enters the

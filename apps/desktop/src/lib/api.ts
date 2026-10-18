@@ -1026,7 +1026,13 @@ export const api = {
   steerSubagent: (req: AgentSteerSubagentRequest) =>
     invoke<AgentSteerSubagentResponse>(IPC.invoke.agentSteerSubagent, req),
   /**
-   * Continue a settled delegate directly with its retained history.
+   * Continue a settled delegate directly.
+   *
+   * Every settled instance is continuable, whatever its last outcome: the next
+   * run is seeded from the child rows that remain, or from the chain's original
+   * task brief alone when none do, so the original task plus the caller's new
+   * text is always enough to start. `stopped` / `aborted` sources continue like
+   * `completed` ones; only a chain that can no longer be resolved is refused.
    *
    * Backend contract (host-owned): `{ sessionId, delegationId, content,
    * messageId?, expectedTurnId? }` -> `{ accepted: true, delegationId: new,

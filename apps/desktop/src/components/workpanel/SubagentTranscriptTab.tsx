@@ -17,6 +17,7 @@ import {
 import {
   isStaleSubagentTab,
   subagentChainDeliveryOwner,
+  subagentChainInstantiated,
   subagentChainLatestDelegationId,
 } from "../../lib/subagent-chain";
 import { sessionAllows } from "../../lib/remote-session-safety";
@@ -52,9 +53,11 @@ import { delegateModelId, delegateThinkingLevel } from "../../features/chat/tran
  * that call render with the main transcript's own message-list language.
  * One unified composer serves both states: a live delegate steers text into
  * the child via `agent.steerSubagent` (never into the parent context), and a
- * settled continuable delegate continues directly via
- * `agent.continueSubagent` with its retained history. There is no parent
- * `Task(resume)` text prompt and no ask-parent/follow-up distinction.
+ * settled instantiated delegate continues directly via
+ * `agent.continueSubagent`. Every instantiated settled child continues, no
+ * matter how it ended — outcome labels stay as history, never a permanent
+ * cannot-continue state. There is no parent `Task(resume)` text prompt and no
+ * ask-parent/follow-up distinction.
  */
 export function SubagentTranscriptTab({ delegationId }: { delegationId: string }) {
   return (
@@ -171,13 +174,18 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     () => aggregateChainMetricsFromMessages(messages, activeDelegationId),
     [messages, activeDelegationId],
   );
-  const hasHistory = transcriptResult !== null;
-  // Settled delegates continue directly through the backend; `stopped`,
-  // `aborted`, and `denied` stay blocked and history-less tabs stay read-only.
+  // A backend instance exists once a `Task` call of the chain carries a
+  // delegationId. Every instantiated settled child continues regardless of how
+  // it ended — a child stopped before its first transcript event included —
+  // while a denied never-started call or a missing Task chain has no instance.
+  const instantiated = useMemo(
+    () => subagentChainInstantiated(messages, activeDelegationId),
+    [messages, activeDelegationId],
+  );
   // The chain-latest tab owns the action so a stale tab never duplicates it.
   const continuable = shouldShowSubagentContinue({
     outcome,
-    hasHistory,
+    hasInstance: instantiated,
     canPromptParent,
     readOnlySession,
     isStaleTab: staleTab,
@@ -465,18 +473,18 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
       : t("chat.subagentDeliveryParentHelp");
   // Explicit capability reasons: every blocked composer names its own cause
   // without exposing harness internals. Stale tabs never duplicate the
-  // chain-latest action; history-less continuations stay read-only; remote,
-  // native, and permission blocks keep their existing copy.
+  // chain-latest action. A delegation with no backend instance — a denied
+  // never-started call, or a tab whose Task chain is missing — names that
+  // instead of a cannot-continue line, because an instantiated settled child
+  // always continues; remote, native, and permission blocks keep their copy.
   const readonlyReason = !running && !continuable
     ? staleTab
       ? t("panel.subagentStale")
-      : !hasHistory
-        ? t("panel.subagentNoHistory")
-        : outcome === "stopped" || outcome === "aborted" || outcome === "denied"
-          ? t(`panel.subagentEnded.${outcome}`)
-          : readOnlySession
-            ? t("chat.subagentSteerReadOnly")
-            : t("panel.subagentReadOnly")
+      : !instantiated
+        ? t("panel.subagentNoInstance")
+        : readOnlySession
+          ? t("chat.subagentSteerReadOnly")
+          : t("panel.subagentReadOnly")
     : null;
   const composerPlaceholder = running
     ? (steerBlockedReason ?? t("chat.subagentSteerPlaceholder"))

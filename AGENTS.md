@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Policy-Sync: 2026-09-26.1
+Policy-Sync: 2026-10-18.1
 
 Mandatory rules for AI coding agents working in PI-Desktop.
 
@@ -76,7 +76,7 @@ workflow. Domain specifications remain authoritative for product
 behavior, architecture, protocol contracts, persistence semantics,
 security boundaries, and acceptance criteria.
 
-If a delivery document conflicts with the branch / worktree / integration
+If a delivery document conflicts with the branch / isolation / integration
 / E2E workflow defined in this file:
 
 1. do not silently choose one
@@ -193,33 +193,32 @@ or security boundary requires an ADR.
 
 ---
 
-## 5. Multi-Agent Isolation Is Mandatory
+## 5. Multi-Agent Isolation
 
 Assume multiple agents work concurrently.
 
-Every development request uses:
-
-```text
-1 request = 1 branch + 1 dedicated worktree
-```
-
-The primary checkout and local `main` are coordination surfaces, not
-development workspaces.
+Development happens on a non-`main` branch. The primary checkout is a
+normal development workspace when it is on a non-`main` branch such as
+`jorkey/integration`. A fresh dedicated branch or worktree per request is
+optional: use isolation when it is genuinely useful — for example parallel
+or incompatible concurrent changes, or work that must not entangle another
+task's state. Local `main` stays a protected integration target, not a
+development or scratch workspace.
 
 ### Never
 
 * develop directly on `main`
-* develop in the primary checkout
 * merge unvalidated task code into local `main`
 * use local `main` as a temporary integration branch
-* reuse another task's worktree
-* modify another agent's branch
-* delete another agent's branch or worktree
+* reuse, modify, or delete another agent's branch or worktree
 * reset or discard unrelated work
 * include unrelated changes in your task
 * depend on uncommitted work from another worktree
 
-### Start from current `main`
+### Optional worktree isolation
+
+When isolation helps, create a dedicated branch and worktree from current
+`main`:
 
 ```bash
 git fetch origin main
@@ -232,21 +231,22 @@ git worktree add \
 cd <worktree-path>
 ```
 
-All implementation, targeted validation, conflict resolution, and
-task-candidate E2E happen inside the task's dedicated worktree.
+Implementation, targeted validation, conflict resolution, and
+task-candidate E2E happen in the task's working checkout — the primary
+checkout on a non-`main` branch, or the optional task worktree.
 
 ### E2E environment reuse
 
-Task-candidate E2E runs from the dedicated request worktree but reuses the
-host development environment already provisioned in the primary checkout.
-Reuse the host Node/pnpm toolchain, compatible `node_modules`, Electron,
-Rust/Cargo targets, package-manager stores, build caches, and ignored local
-configuration by reference or link when needed.
+Task-candidate E2E reuses the host development environment already
+provisioned in the primary checkout. Reuse the host Node/pnpm toolchain,
+compatible `node_modules`, Electron, Rust/Cargo targets, package-manager
+stores, build caches, and ignored local configuration by reference or link
+when needed.
 
 Do not run `pnpm install`, `npm install`, or create a second dependency or
 runtime environment solely to execute E2E. Keep only mutable test state
 (temporary profiles, data directories, sockets, ports, logs, and artifacts)
-isolated to the request worktree or its scratch directory. Install or rebuild
+isolated to the task's working checkout or its scratch directory. Install or rebuild
 dependencies only when the host environment is missing or incompatible, and
 record that reason. Clean CI and release runners may install from lockfiles.
 
@@ -265,8 +265,8 @@ If the branch has already been shared and rewriting history would be
 unsafe, do not force-push merely to rebase. Use a non-destructive
 integration strategy or rely on the PR integration candidate per § 16.
 
-Resolve conflicts inside your own worktree. Never resolve task conflicts
-by modifying the primary checkout.
+Resolve conflicts in the task's working checkout. Never resolve task
+conflicts by touching another task's worktree or uncommitted work.
 
 ### Before opening or updating a PR
 
@@ -279,28 +279,29 @@ git merge-base --is-ancestor origin/main HEAD
 pnpm check:pr-base
 ```
 
-If that fails, refresh in the task worktree (`git rebase origin/main` on
-a private branch; a non-destructive merge when rewriting history would
-be unsafe), then re-run the check. Do not open or update a PR that is
-behind `origin/main`.
+If that fails, refresh in the task's working checkout (`git rebase
+origin/main` on a private branch; a non-destructive merge when rewriting
+history would be unsafe), then re-run the check. Do not open or update a
+PR that is behind `origin/main`.
 
 ### Fixed delivery order
 
 ```text
-1. create dedicated branch + worktree from current origin/main
-2. implement in the request worktree
+1. start from current origin/main on a non-main working branch
+   (primary checkout or an optional dedicated worktree)
+2. implement
 3. run targeted static/unit/integration checks
 4. review the task diff
 5. commit the task
 6. refresh the task branch against latest origin/main (`pnpm check:pr-base`)
-7. resolve conflicts inside the task worktree
-8. run required task-candidate E2E in the task worktree
+7. resolve conflicts
+8. run required task-candidate E2E
 9. push the request branch
 10. open/update the PR/MR
 11. validate the PR integration candidate
 12. merge into remote main through repository gates
 13. synchronize local main
-14. remove the worktree and merged local branch
+14. if you created a worktree, remove it and the merged local branch
 ```
 
 Do not insert `merge task → local main` between steps 6 and 8. The task
@@ -819,7 +820,7 @@ Task Candidate Validation
 PR Integration Validation
 ```
 
-Task Candidate Validation runs in the request worktree after the
+Task Candidate Validation runs in the task's working checkout after the
 request branch incorporates the latest available `origin/main`.
 
 PR Integration Validation verifies the actual code that is about to
@@ -874,7 +875,7 @@ git fetch origin main
 git rebase origin/main
 ```
 
-then E2E from the same task worktree.
+then E2E from the task's working checkout.
 
 Record:
 

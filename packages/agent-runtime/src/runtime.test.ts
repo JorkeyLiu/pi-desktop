@@ -9497,8 +9497,10 @@ describe("DesktopAgentRuntime subagents", () => {
           turns: 1, toolCalls: 0 });
         await cancelled;
         await vi.waitFor(() => expect(internals.delegations.get(id).status).toBe(action === "abort" ? "aborted" : "stopped"));
+        // The explicit stop wins over the parent-error interruption, and the
+        // recorded outcome no longer bans continuation.
         expect(internals.delegationChains.resolveResume({ resume: id, agentName: "explorer",
-          runningDelegationIds: new Set() }).ok).toBe(false);
+          runningDelegationIds: new Set() }).ok).toBe(true);
       } finally {
         subagentRuns.ignoreAbort = false;
         subagentRuns.deferred = false;
@@ -9606,30 +9608,7 @@ describe("DesktopAgentRuntime subagents", () => {
       await runtime.dispose();
     });
 
-    it("refuses to resume a chain a restart rebuilt from a stopped Task row", async () => {
-      const history: UiMessage[] = [
-        restartedTaskRow("task-1", "del-1", { status: "stopped" }),
-        delegateRow("child-1", "task-1"),
-      ];
-      const runtime = createRuntime({ subagents: [explorer], history });
-      subagentRuns.calls.length = 0;
-      subagentRuns.deferred = false;
-
-      const result = await startTask(runtime, "task-2", {
-        agent: "explorer",
-        task: "Continue.",
-        resume: "del-1",
-      });
-
-      expect(String((result.details as any).error)).toContain(
-        'ended as "stopped"',
-      );
-      expect(String((result.details as any).error)).toContain("cannot be resumed");
-      expect(subagentRuns.calls).toHaveLength(0);
-      await runtime.dispose();
-    });
-
-    it.each(["completed", "failed"])("resumes a chain a restart rebuilt from a %s Task row", async (status) => {
+    it.each(["completed", "failed", "stopped", "aborted"])("resumes a chain a restart rebuilt from a %s Task row", async (status) => {
       const history: UiMessage[] = [
         restartedTaskRow("task-1", "del-1", { status,
           ...(status === "failed" ? { error: { code: "SUBAGENT_PARENT_FAILED" } } : {}) }),
@@ -9856,11 +9835,25 @@ describe("DesktopAgentRuntime subagents", () => {
       await runtime.dispose();
     });
 
-    it("drops a chain whose rows are gone and keeps its id out of the reusable list", async () => {
+    it("continues a rowless chain from its brief and drops a chain with no brief", async () => {
       const history: UiMessage[] = [
         restartedTaskRow("task-1", "del-1", { status: "completed" }),
         restartedTaskRow("task-9", "del-2", { status: "completed" }),
         delegateRow("child-2", "task-9"),
+        {
+          id: "row-task-3",
+          role: "tool",
+          content: "",
+          createdAt: "2026-08-06T00:00:00.000Z",
+          toolCallId: "task-3",
+          toolName: "Task",
+          // The brief itself is gone: this chain cannot be seeded.
+          toolArgs: { agent: "explorer" },
+          toolResult: {
+            details: { delegationId: "del-3", agent: "explorer", status: "completed" },
+          },
+          toolStatus: "success",
+        } as UiMessage,
       ];
       const runtime = createRuntime({ subagents: [explorer], history });
       const internals = runtime as any;
@@ -9868,29 +9861,35 @@ describe("DesktopAgentRuntime subagents", () => {
       subagentRuns.deferred = false;
       expect(internals.delegationChains.lookup("del-2")).toBeDefined();
 
-      const result = await startTask(runtime, "task-2", {
+      // A chain whose rows are gone but whose brief survives continues: the
+      // seed is the original task, with no fabricated tool executions.
+      const continued = await startTask(runtime, "task-2", {
         agent: "explorer",
         task: "Continue.",
         resume: "del-1",
       });
-      const message = String((result.details as any).error);
+      expect((continued.details as any).error).toBeUndefined();
+      expect((continued.details as any).resumedFrom).toBe("del-1");
+      const seeded = subagentRuns.calls.at(-1)?.initialMessages ?? [];
+      expect(seeded.map((message: { role: string }) => message.role)).toEqual(["user"]);
+      expect(JSON.stringify(seeded[0]?.content)).toContain("Explore the parser.");
 
-      expect(message).toContain('Delegation "del-1" has no recorded history');
-      // The chain is dropped before the message is composed, so the id it
-      // names can never come back as its own suggestion (ADR 0279 §4).
-      expect(message).not.toContain("Reusable: explorer / del-1");
-      expect(message.split("Reusable: ")[1]).toBe("explorer / del-2.");
-      expect(internals.delegationChains.lookup("del-1")).toBeUndefined();
-      expect(
-        internals.delegationChains
-          .resumableList({ runningDelegationIds: new Set() })
-          .map((chain: { latestDelegationId: string }) => chain.latestDelegationId),
-      ).toEqual(["del-2"]);
-      expect(subagentRuns.calls).toHaveLength(0);
+      // A chain that lost its brief fails prerequisite validation and is
+      // dropped before the message is composed, so its id can never come back
+      // as its own suggestion (ADR 0279 §4).
+      const missing = await startTask(runtime, "task-4", {
+        agent: "explorer",
+        task: "Continue.",
+        resume: "del-3",
+      });
+      const message = String((missing.details as any).error);
+      expect(message).toContain('Delegation "del-3" has no recorded history');
+      expect(message).not.toContain("Reusable: explorer / del-3");
+      expect(internals.delegationChains.lookup("del-3")).toBeUndefined();
       await runtime.dispose();
     });
 
-    it("keeps a running chain in the registry when a sibling settles", async () => {
+    it("retains every chain and bounds the listing when a sibling settles", async () => {
       const runtime = createRuntime({ subagents: [explorer] });
       const internals = runtime as any;
       subagentRuns.calls.length = 0;
@@ -9934,19 +9933,15 @@ describe("DesktopAgentRuntime subagents", () => {
       expect(internals.delegationChains.lookup(runningId)).toMatchObject({
         latestStatus: "running",
       });
-      expect(internals.delegationChains.lookup(startedIds[1])).toBeUndefined();
-      expect(internals.delegationChains.lookup(startedIds[2])).toBeDefined();
-      expect(internals.delegationChains.lookup(startedIds[3])).toBeDefined();
+      // Every chain stays addressable; only the parent prompt listing is bound.
+      for (const id of startedIds) {
+        expect(internals.delegationChains.lookup(id)).toBeDefined();
+      }
       expect(
         internals.delegationChains
           .resumableList({ runningDelegationIds: new Set([runningId]) })
           .map((chain: { latestDelegationId: string }) => chain.latestDelegationId),
       ).toEqual([startedIds[3], startedIds[2]]);
-      expect(
-        [startedIds[1], startedIds[2], startedIds[3]].filter((id) =>
-          internals.delegationChains.lookup(id),
-        ),
-      ).toHaveLength(MAX_RESUMABLE_CHAINS_PER_AGENT);
 
       subagentRuns.deferred = false;
       await runtime.dispose();
@@ -12625,7 +12620,157 @@ describe("DesktopAgentRuntime subagent wakeup, progress and child steer", () => 
     }
   });
 
-  it("refuses resume for an explicitly stopped chain and for missing history", async () => {
+  it("resumes a stopped or aborted chain hydrated with its rows", async () => {
+    for (const status of ["stopped", "aborted"]) {
+      const toolCallId = `task-${status}`;
+      const delegationId = `del-${status}`;
+      const history = [
+        {
+          id: toolCallId,
+          role: "tool",
+          content: "",
+          createdAt: new Date(1_700_000_000_000).toISOString(),
+          toolCallId,
+          toolName: "Task",
+          toolArgs: { agent: "explorer", task: "Map the parser." },
+          toolStatus: "success",
+          toolResult: { details: { delegationId, agent: "explorer", status } },
+          status: "complete",
+        },
+        {
+          id: `child-${status}`,
+          role: "assistant",
+          content: "saw the parser",
+          createdAt: new Date(1_700_000_001_000).toISOString(),
+          status: "complete",
+          parentToolCallId: toolCallId,
+          agentName: "explorer",
+        },
+      ] as unknown as UiMessage[];
+      const runtime = createRuntime({ subagents: [explorer], history });
+      subagentRuns.calls.length = 0;
+      subagentRuns.deferred = false;
+      try {
+        const resumed = await taskTool(runtime).execute(`task-new-${status}`, {
+          agent: "explorer",
+          task: "Keep mapping.",
+          resume: delegationId,
+        });
+        expect(resumed.details.error).toBeUndefined();
+        expect(resumed.details).toMatchObject({ resumedFrom: delegationId });
+        // Replay keeps the original brief and the recorded child row, and
+        // fabricates no tool execution.
+        const seeded = subagentRuns.calls.at(-1)?.initialMessages ?? [];
+        expect(seeded.map((message: { role: string }) => message.role)).toEqual([
+          "user",
+          "assistant",
+        ]);
+        expect(JSON.stringify(seeded[0]?.content)).toContain("Map the parser.");
+        expect(
+          seeded.some(
+            (message: { content?: unknown }) =>
+              Array.isArray(message.content) &&
+              message.content.some(
+                (block: { type?: string }) => block.type === "toolCall",
+              ),
+          ),
+        ).toBe(false);
+      } finally {
+        await runtime.dispose();
+      }
+    }
+  });
+
+  it("continues a chain that read past the old 50k-line budget", async () => {
+    const text = Array.from({ length: 50_001 }, () => "x").join("\n");
+    const history = [
+      {
+        id: "task-huge",
+        role: "tool",
+        content: "",
+        createdAt: new Date(1_700_000_000_000).toISOString(),
+        toolCallId: "task-huge",
+        toolName: "Task",
+        toolArgs: { agent: "explorer", task: "Map the parser." },
+        toolStatus: "success",
+        toolResult: {
+          details: { delegationId: "del-huge", agent: "explorer", status: "completed" },
+        },
+        status: "complete",
+      },
+      {
+        id: "delegate-tool-huge",
+        role: "tool",
+        content: "",
+        createdAt: new Date(1_700_000_001_000).toISOString(),
+        toolCallId: "read-huge",
+        toolName: "Read",
+        toolArgs: { path: "huge.ts" },
+        toolResult: { content: [{ type: "text", text }] },
+        toolStatus: "success",
+        parentToolCallId: "task-huge",
+        agentName: "explorer",
+        status: "complete",
+      },
+    ] as unknown as UiMessage[];
+    const runtime = createRuntime({ subagents: [explorer], history });
+    subagentRuns.calls.length = 0;
+    subagentRuns.deferred = false;
+    try {
+      const resumed = await taskTool(runtime).execute("task-huge-2", {
+        agent: "explorer",
+        task: "Keep mapping.",
+        resume: "del-huge",
+      });
+      expect(resumed.details.error).toBeUndefined();
+      // The delegate's own seed truncation and model window protect the
+      // context; the runtime no longer refuses the continuation up front.
+      expect(subagentRuns.calls.at(-1)?.initialMessages?.length ?? 0).toBeGreaterThan(0);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("retains more than two chains per agent and caps only the prompt listing", async () => {
+    const runtime = createRuntime({ subagents: [explorer] });
+    const internals = runtime as any;
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    const ids: string[] = [];
+    try {
+      for (const toolCallId of ["task-1", "task-2", "task-3", "task-4"]) {
+        const started = await taskTool(runtime).execute(toolCallId, {
+          agent: "explorer",
+          task: "Find it.",
+        });
+        ids.push((started.details as any).delegationId as string);
+        subagentRuns.resolveRun?.({
+          agentName: "explorer",
+          status: "completed",
+          report: "done",
+          turns: 1,
+          toolCalls: 0,
+        });
+        await vi.waitFor(() => {
+          expect(internals.delegations.get(ids[ids.length - 1]).status).toBe(
+            "completed",
+          );
+        });
+      }
+      for (const id of ids) {
+        expect(internals.delegationChains.lookup(id)).toBeDefined();
+      }
+      expect(
+        internals.delegationChains.resumableList({ runningDelegationIds: new Set() }),
+      ).toHaveLength(MAX_RESUMABLE_CHAINS_PER_AGENT);
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("resumes an explicitly stopped chain and refuses one that lost its brief", async () => {
     const stoppedRow = {
       id: "task-stopped",
       role: "tool",
@@ -12644,19 +12789,28 @@ describe("DesktopAgentRuntime subagent wakeup, progress and child steer", () => 
     subagentRuns.calls.length = 0;
     subagentRuns.deferred = false;
     try {
-      const refused = await taskTool(runtime).execute("task-new", {
+      // A stop is a historical outcome, not a permanent ban: the chain
+      // continues from its original brief plus the new task.
+      const resumed = await taskTool(runtime).execute("task-new", {
         agent: "explorer",
         task: "Keep mapping.",
         resume: "del-stopped",
       });
-      expect(String(refused.details.error)).toContain("stopped");
-      expect(subagentRuns.calls).toHaveLength(0);
+      expect(resumed.details.error).toBeUndefined();
+      expect(resumed.details).toMatchObject({
+        status: "running",
+        resumedFrom: "del-stopped",
+      });
+      const seeded = subagentRuns.calls.at(-1)?.initialMessages ?? [];
+      expect(seeded.map((message: { role: string }) => message.role)).toEqual(["user"]);
+      expect(JSON.stringify(seeded[0]?.content)).toContain("Map the parser.");
     } finally {
       await runtime.dispose();
     }
 
-    // Interrupted but rowless: resolves, then reports the missing history
-    // clearly and drops the id so it is never advertised as reusable.
+    // A chain that lost its original brief cannot be seeded: it reports the
+    // missing history clearly and drops the id so it is never advertised as
+    // reusable.
     const ghostRow = {
       id: "task-ghost",
       role: "tool",
@@ -12664,7 +12818,7 @@ describe("DesktopAgentRuntime subagent wakeup, progress and child steer", () => 
       createdAt: new Date(1_700_000_000_000).toISOString(),
       toolCallId: "task-ghost",
       toolName: "Task",
-      toolArgs: { agent: "explorer", task: "Map the parser." },
+      toolArgs: { agent: "explorer" },
       toolStatus: "running",
       toolResult: {
         details: { delegationId: "del-ghost", agent: "explorer", status: "running" },

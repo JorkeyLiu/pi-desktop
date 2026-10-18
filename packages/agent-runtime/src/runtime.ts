@@ -4642,9 +4642,11 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           ? seedResumedDelegate(this.transcriptHistory, resumedChain, provider)
           : undefined;
         if (resume && !initialMessages) {
-          // The chain resolved but has nothing left to replay. Drop it so the
-          // prompt stops advertising an id that can never be continued, and
-          // report the drop without listing that same id as reusable.
+          // The chain resolved but its original brief is gone from the
+          // transcript (a truncated or malformed branch), so nothing can seed
+          // the continued run. Drop it so the prompt stops advertising an id
+          // that can never be continued, and report the drop without listing
+          // that same id as reusable.
           if (resumedChain) {
             this.delegationChains.drop(resumedChain.delegateSessionId);
             this.refreshResumablePrompt();

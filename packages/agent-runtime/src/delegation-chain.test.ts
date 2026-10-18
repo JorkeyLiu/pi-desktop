@@ -93,23 +93,15 @@ describe("resolveResume", () => {
     });
   });
 
-  it("reports a settled chain whose status is not resumable", () => {
-    for (const status of ["stopped", "aborted"]) {
-      const registry = new DelegationChainRegistry();
-      start(registry, { delegateSessionId: "res-1", delegationId: "del-1" });
-      registry.settle("res-1", status);
-      expect(
-        registry.resolveResume({
-          resume: "del-1",
-          agentName: "explorer",
-          runningDelegationIds: NONE,
-        }),
-      ).toEqual({ ok: false, error: { kind: "not-resumable", status } });
-    }
-  });
-
-  it("accepts every settled status a delegate can end on", () => {
-    for (const status of ["completed", "failed", "timed_out", "interrupted"]) {
+  it("accepts every settled status a delegate can end on, stops included", () => {
+    for (const status of [
+      "completed",
+      "failed",
+      "timed_out",
+      "interrupted",
+      "stopped",
+      "aborted",
+    ]) {
       const registry = new DelegationChainRegistry();
       start(registry, { delegateSessionId: "res-1", delegationId: "del-1" });
       registry.settle("res-1", status);
@@ -137,7 +129,7 @@ describe("resolveResume", () => {
     });
   });
 
-  it("reports a chain that read past the resume budget", () => {
+  it("accepts a chain that read past the old resume budget", () => {
     const registry = new DelegationChainRegistry();
     start(registry, { delegateSessionId: "res-1", delegationId: "del-1" });
     registry.noteReads("res-1", ["huge.ts"], 50_001);
@@ -147,31 +139,22 @@ describe("resolveResume", () => {
         resume: "del-1",
         agentName: "explorer",
         runningDelegationIds: NONE,
-      }),
-    ).toEqual({ ok: false, error: { kind: "over-budget" } });
-  });
-
-  it("accepts a chain exactly at the budget", () => {
-    const registry = new DelegationChainRegistry();
-    start(registry, { delegateSessionId: "res-1", delegationId: "del-1" });
-    registry.noteReads("res-1", ["big.ts"], 50_000);
-    registry.settle("res-1", "completed");
-    expect(
-      registry.resolveResume({
-        resume: "del-1",
-        agentName: "explorer",
-        runningDelegationIds: NONE,
       }).ok,
     ).toBe(true);
+    // Read metadata survives the removal of the admission gate.
+    expect(registry.lookup("del-1")).toMatchObject({
+      readFiles: ["huge.ts"],
+      readLineCount: 50_001,
+    });
   });
 });
 
 describe("resumableList / promptBlock", () => {
-  it("excludes running, non-resumable and over-budget chains, newest first", () => {
+  it("lists stopped, aborted and past-budget chains too, newest first", () => {
     vi.useFakeTimers({ now: 1_700_000_000_000 });
     const registry = new DelegationChainRegistry();
-    // One agent per excluded case: eviction is per agent, so a third settled
-    // chain for `explorer` would drop the two the ordering check needs.
+    // One agent per case: the listing is bounded per agent, so a third settled
+    // chain for `explorer` would drop one the ordering check needs.
     start(registry, { delegateSessionId: "res-a", delegationId: "del-a" });
     registry.settle("res-a", "completed");
     vi.advanceTimersByTime(1_000);
@@ -190,12 +173,14 @@ describe("resumableList / promptBlock", () => {
         lastActivityAt: 1_700_000_009_000,
       }),
     ]);
+    vi.advanceTimersByTime(1_000);
     start(registry, {
       delegateSessionId: "res-d",
       delegationId: "del-d",
       agentName: "reviewer",
     });
     registry.settle("res-d", "stopped");
+    vi.advanceTimersByTime(1_000);
     start(registry, {
       delegateSessionId: "res-e",
       delegationId: "del-e",
@@ -208,13 +193,14 @@ describe("resumableList / promptBlock", () => {
       registry
         .resumableList({ runningDelegationIds: new Set(["del-c"]) })
         .map((entry) => entry.latestDelegationId),
-    ).toEqual(["del-b", "del-a"]);
-    // A chain whose status is unknown is only held back while it is running.
+    ).toEqual(["del-e", "del-d", "del-b", "del-a"]);
+    // Only a running chain is held back; a stopped, aborted, or
+    // past-read-budget chain is still a continuation candidate.
     expect(
       registry
         .resumableList({ runningDelegationIds: NONE })
         .map((entry) => entry.latestDelegationId),
-    ).toEqual(["del-c", "del-b", "del-a"]);
+    ).toEqual(["del-c", "del-e", "del-d", "del-b", "del-a"]);
   });
 
   it("prompts with the agent, the id, the objective and the files it read", () => {
@@ -256,8 +242,8 @@ describe("resumableList / promptBlock", () => {
   });
 });
 
-describe("LRU eviction", () => {
-  it("never evicts a running chain and drops the oldest settled one", () => {
+describe("retention and the prompt listing bound", () => {
+  it("retains every chain while capping only the listing", () => {
     vi.useFakeTimers({ now: 1_700_000_000_000 });
     const registry = new DelegationChainRegistry();
     // The running chain is the *oldest* activity of the group: a naive LRU
@@ -273,12 +259,13 @@ describe("LRU eviction", () => {
     start(registry, { delegateSessionId: "res-c", delegationId: "del-c" });
     registry.settle("res-c", "completed");
 
+    // Every chain stays addressable: the bound only trims the parent prompt.
+    for (const delegationId of ["del-run", "del-a", "del-b", "del-c"]) {
+      expect(registry.lookup(delegationId)).toBeDefined();
+    }
     expect(registry.lookup("del-run")).toMatchObject({
       latestStatus: "running",
     });
-    expect(registry.lookup("del-a")).toBeUndefined();
-    expect(registry.lookup("del-b")).toBeDefined();
-    expect(registry.lookup("del-c")).toBeDefined();
 
     const listed = registry.resumableList({
       runningDelegationIds: new Set(["del-run"]),
@@ -290,28 +277,29 @@ describe("LRU eviction", () => {
     expect(listed).toHaveLength(MAX_RESUMABLE_CHAINS_PER_AGENT);
   });
 
-  it("keeps every chain when only two per agent are settled", () => {
+  it("keeps every chain addressable past the listing cap", () => {
     vi.useFakeTimers({ now: 1_700_000_000_000 });
     const registry = new DelegationChainRegistry();
-    start(registry, { delegateSessionId: "res-a", delegationId: "del-a" });
-    registry.settle("res-a", "completed");
-    vi.advanceTimersByTime(1_000);
-    start(registry, { delegateSessionId: "res-b", delegationId: "del-b" });
-    registry.settle("res-b", "completed");
-    vi.advanceTimersByTime(1_000);
-    start(registry, { delegateSessionId: "res-run", delegationId: "del-run" });
-    // Re-settling an already settled chain is what triggers the sweep here.
-    registry.settle("res-b", "completed");
+    for (const [delegateSessionId, delegationId] of [
+      ["res-a", "del-a"],
+      ["res-b", "del-b"],
+      ["res-c", "del-c"],
+      ["res-d", "del-d"],
+    ] as Array<[string, string]>) {
+      vi.advanceTimersByTime(1_000);
+      start(registry, { delegateSessionId, delegationId });
+      registry.settle(delegateSessionId, "completed");
+    }
 
-    for (const delegationId of ["del-a", "del-b", "del-run"]) {
+    for (const delegationId of ["del-a", "del-b", "del-c", "del-d"]) {
       expect(registry.lookup(delegationId)).toBeDefined();
     }
-    expect(registry.lookup("del-run")).toMatchObject({
-      latestStatus: "running",
-    });
+    expect(
+      registry.resumableList({ runningDelegationIds: NONE }),
+    ).toHaveLength(MAX_RESUMABLE_CHAINS_PER_AGENT);
   });
 
-  it("evicts per agent, not across agents", () => {
+  it("bounds the listing per agent, not across agents", () => {
     vi.useFakeTimers({ now: 1_700_000_000_000 });
     const registry = new DelegationChainRegistry();
     const settled: Array<[string, string]> = [
@@ -332,8 +320,14 @@ describe("LRU eviction", () => {
     });
     registry.settle("res-r1", "completed");
 
-    expect(registry.lookup("del-e1")).toBeUndefined();
+    // The oldest explorer chain leaves the *listing*, never the registry.
+    expect(registry.lookup("del-e1")).toBeDefined();
     expect(registry.lookup("del-r1")).toBeDefined();
+    expect(
+      registry
+        .resumableList({ runningDelegationIds: NONE })
+        .map((entry) => entry.latestDelegationId),
+    ).toEqual(["del-r1", "del-e3", "del-e2"]);
   });
 });
 

@@ -10,7 +10,7 @@
 
 ### E2E-QUEUE-send-now-wakes-subagents
 
-- **Preconditions:** Dedicated request worktree with built workspace packages,
+- **Preconditions:** Task working checkout with built workspace packages,
   compatible reused Host binary, temporary HOME/data/project, and a local SSE
   model fixture. Production Composer queue service, Main IPC, AgentHost, Rust
   Host and agent sidecar are used; no installed app or real account is used.
@@ -41,7 +41,7 @@
 
 ### E2E-STORAGE-custom-location-and-maintenance
 
-- **Preconditions:** Dedicated request worktree, current remote-main base, shared
+- **Preconditions:** Task working checkout, current remote-main base, shared
   compatible host toolchain, built host-core and desktop, isolated temporary data
   and Chromium profiles. No user's running desktop, provider, or network is used.
 - **Steps:** Through the production Settings page, choose/cancel a destination,
@@ -757,14 +757,14 @@ startup, and build or CI behavior that affects application execution.
 Documentation-only changes are exempt when they do not alter executable
 behavior.
 
-Run the selected suites from the request worktree after `pnpm check:pr-base`
+Run the selected suites from the task's working checkout after `pnpm check:pr-base`
 passes. An E2E run on a branch that is behind `origin/main` is exploratory and
 does not satisfy this gate. Do not merge the task into local `main` to create
 the candidate.
 
 ### E2E environment reuse
 
-Task-candidate E2E runs from the request worktree after the candidate is
+Task-candidate E2E runs from the task's working checkout after the candidate is
 prepared, but uses the host development environment already provisioned in the
 primary checkout. Reuse the compatible Node/pnpm toolchain, `node_modules`,
 Electron, Rust/Cargo targets, package-manager stores, build caches, and ignored
@@ -794,9 +794,9 @@ The minimum selection is:
 - Plan UI behavior: `pnpm test:e2e:plan` and `pnpm test:e2e:plan-ui`.
 - Host supervision, crash recovery, or restart behavior: `pnpm test:e2e` and
   `pnpm test:e2e:supervision`.
-- Subagent lifecycle: `pnpm test:e2e:subagent-lifecycle` (the program-wait
-  phases over real host-core/sidecar/Main), plus `pnpm test:e2e` and
-  `pnpm test:e2e:subagents`.
+- Subagent lifecycle: `pnpm test:e2e:subagent-lifecycle` (program-wait, steer,
+  and continuation phases over real host-core/sidecar/Main), plus `pnpm test:e2e`
+  and `pnpm test:e2e:subagents`.
 - Imported-extension dependency installation or registry-boundary changes: `pnpm test:e2e:plugin-import-deps`.
 - Trusted extension or plugin-extension changes: `pnpm test:e2e:trusted-extensions`.
 - Session collaboration / Session Orchestrator: `pnpm test:e2e:collaboration`.
@@ -7849,9 +7849,11 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
      thinking rows, markdown answers).
    5. Verify the foot carries one Send composer: a live delegate steers
       text-only (`steerSubagent` with the owning turn) and a settled
-      continuable delegate continues directly (`continueSubagent` with retained
-      history); a non-continuable tab keeps the disabled read-only hint, in
-      every supported locale.
+      continuable delegate continues directly (`continueSubagent`, seeded from
+      the rows that remain or the original brief) — including a delegate whose
+      last run settled `stopped` or `aborted`; only a tab with no continuable
+      child instance (a `Task` call denied before spawn, or an unresolvable
+      chain) keeps the disabled read-only hint, in every supported locale.
   6. Wait for the failed delegate to settle, open its tab, and verify the
      ended tab persists until manually closed.
   7. Switch to another session and back. Verify the tabs are restored per
@@ -11804,6 +11806,12 @@ This test plan spec is accepted when:
       confirm the topology node and the `TaskStop` row both read `stopped`
       (not `running`). End the turn and reload the session; confirm the card is not
       labelled working and does not keep ticking elapsed.
+  10a. Continue the delegate stopped in step 10 — once by an explicit parent
+      `Task.resume` during a later turn, and once by a direct user continue with
+      no parent prompt. Confirm each starts a new run on the same chain: the
+      parent resume's report is delivered back to the parent, while the direct
+      user continue runs detached (zero parent provider requests) and cannot
+      resurrect the stopped run's waiting or delivery.
   11. Inject synchronous `SubagentRun` initialization failure; confirm the
       `Task` result is an error and `TaskList` has no permanently running row.
   12. In a runtime fixture, make settled-row publication throw and confirm the
@@ -11824,16 +11832,23 @@ This test plan spec is accepted when:
   global definition's declared scope is dropped; the per-session running cap
   of 10 is enforced; a delegate outlives the parent tool loop under the open durable
   turn and ends only via `TaskStop`, user Stop, disposal, or terminal parent error;
-  reloaded transcripts keep their delegation topology.
+  a stopped/aborted delegate's chain is still continuable (a parent `Task(resume)`
+  delivers its report, a direct user continue runs detached without waking the
+  parent); reloaded transcripts keep their delegation topology.
 - **Specs linked**: `03-runtime/02-agent-runtime.md` §5f/§5f.1/§7.1,
   `03-runtime/03-tools-and-permissions.md` §10.2,
   `08-meta/decisions-log.md` (D242 amends D231), ADR 0089 and ADR 0100
 - **Acceptance**: C (conversation), E (tools & permissions), F (persistence),
   Security, Quality
 - **Milestone**: M6+
-- **Status**: Unit coverage includes synchronous initialization failure,
-  completion-publication failure, and Stop during parent auto-resume in
-  `packages/agent-runtime/src/runtime.test.ts`; desktop journey pending
+- **Status**: Partially automated. Unit coverage includes synchronous
+  initialization failure, completion-publication failure, and Stop during parent
+  auto-resume in `packages/agent-runtime/src/runtime.test.ts`. The backend
+  stopped-child continuation (step 10a) is automated by
+  `pnpm test:e2e:subagent-lifecycle` over the real host-core / sidecar / Main
+  path: it stops a running child, continues it explicitly, and confirms the new
+  run's provider request and delivery ownership. The renderer journey (steps
+  2/3/7) stays pending over a capable environment.
 
 #### E2E-162 / E2E-173: Delegate workflow scrolling
 
@@ -12075,9 +12090,10 @@ This test plan spec is accepted when:
      the chain and read its delegation lifecycle details and card.
   9. Settle two `scout` chains, `resume` the older one, settle a third chain for
      the same definition, and read the reusable list the next prompt offers; then
-     keep one chain running while two others settle for that definition.
-  10. Accumulate more than 50,000 lines of read-only tool output in one chain,
-      then call `Task.resume` with its id.
+     keep one chain running while two others settle for that definition, and
+     `Task.resume` a settled chain the listing no longer shows.
+  10. Accumulate read-only tool output beyond the delegate's context budget in
+      one chain, then call `Task.resume` with its id.
   11. Resume a `scout` chain while spelling `Task.agent` as `Explorer`, then as
       `explorer.md`, then as another definition's name.
   12. Let one chain read more than eight files and send two further prompts in
@@ -12086,6 +12102,10 @@ This test plan spec is accepted when:
       `completed` chain from before the restart.
   14. From a fixture session that resolves a chain but no longer holds any of its
       delegate rows, call `Task.resume` with that id.
+  15. From a session where the chain's own `Task` rows are gone, call
+      `Task.resume` with that id; and from a permission-denied or over-cap
+      `Task` call that never spawned a delegate instance, call `Task.resume`
+      with the id the failed call would have used.
 - **Expected**:
   - Step 2 resumes from the chain: the new run answers with the earlier
     conclusion's exact file and line, and its rows contain no fresh full read of
@@ -12098,57 +12118,70 @@ This test plan spec is accepted when:
     still running, with the instruction to converge through `TaskWait` first;
     nothing is started, nothing is queued, and the running delegate keeps
     working.
-   - Step 5 refuses `stopped` and `aborted` as not resumable, each naming that
-     reason and the fresh-delegation path instead, while the run the app closed
-     while it was still working (which reads as `interrupted` after relaunch)
-     resumes from its retained chain history. No run starts for the refused ids.
-  - Step 6 resumes the failed chain like a completed one: the reads it already
-    made seed the new run, and its failed assistant row is not replayed.
-  - Step 7 is refused as a tool error: a resumed run keeps the chain's model, and
-    the message points at starting a new delegation to change models.
-  - Step 8 still resumes, on the binding the definition resolves to now, and the
-    delegation's lifecycle details carry the previous model id as
-    `modelChangedFrom`. The parent sees it through the lifecycle snapshot it
-    polls and the card shows it with the run, so the switch is never silent.
-  - Step 9 keeps at most two reusable chains per definition: the least recently
-    active settled chain is evicted whole, so every id on it answers as an
-    unknown delegation with the current reusable list, while a chain whose latest
-    run is still working is never evicted — the group may sit over the bound
-    rather than strand a live delegate.
-  - Step 10 drops the over-budget chain from the reusable list without trimming
-    its history: no later prompt offers it and a `resume` for it is refused as
-    having read too much to resume cheaply, while an ordinary delegation for the
-    same work still succeeds from cold.
-  - Step 11 matches the definition name case-insensitively and with the document
-    suffix — `Explorer` and `explorer.md` both resume the chain — while a
-    different definition's name is a name mismatch that lists the agents that do
-    have reusable chains.
-  - Step 12 offers each chain's latest `delegationId`, its objective, and at most
-    eight of the files it read, with a `(+N more)` suffix past that. A chain that
-    just settled is already there in the same session, with no app restart and no
-    new session; running, non-resumable, over-budget, and evicted chains never
-    appear.
-  - Step 13 rebuilds the chain relationship from the transcript, so the
-    `completed` chain is offered again after relaunch and resumes as before.
-  - Step 14 fails as having no recorded history, and that same id is not listed
-    among the reusable ids in the error or in any later prompt: the chain leaves
-    the reusable list.
-  - Throughout, the transcript shows the chain as one continuous multi-turn
-    conversation under its newest Task card, with no "resumed" marker, and the
-    resumed run's counters start at 0 so its turn, tool, and usage numbers
-    describe the new run while the earlier rounds stay readable above it.
-- **Specs linked**: `03-runtime/02-agent-runtime.md` §5f, ADR 0279
+  - Step 5 continues all three ids: the `stopped` chain, the `aborted` chain,
+    and the run the app closed while it was still working (which reads as
+    `interrupted` after relaunch) each start a new run on their chain, seeded
+    from retained history — the outcome never makes a chain permanently
+    uncontinuable. Because each is an explicit parent `Task(resume)`, every new
+    run is parent-owned and its report is delivered back to the parent. (A
+    *direct* user continue of a `stopped`/`aborted` source is instead `user`-owned
+    and isolated — see the subagent-lifecycle E2E and E2E-155 step 3c.)
+   - Step 6 resumes the failed chain like a completed one: the reads it already
+     made seed the new run, and its failed assistant row is not replayed.
+   - Step 7 is refused as a tool error: a resumed run keeps the chain's model, and
+     the message points at starting a new delegation to change models.
+   - Step 8 still resumes, on the binding the definition resolves to now, and the
+     delegation's lifecycle details carry the previous model id as
+     `modelChangedFrom`. The parent sees it through the lifecycle snapshot it
+     polls and the card shows it with the run, so the switch is never silent.
+   - Step 9 shows at most two chains per definition in the listing (most recently
+     active first), but the cap is a listing bound, not eviction: the older settled
+     chain still resolves and `Task.resume` starts a new run on it — no id answers
+     as an unknown delegation merely because it fell off the listing. A chain whose
+     latest run is still working is never listed.
+   - Step 10 continues the over-budget chain: `resume` starts a new run whose seed
+     is truncated to the delegate's context budget (the seed keeps the original
+     task brief and recent turns and drops the oldest read results first), so no
+     request overflows and the chain is never refused for having read too much.
+   - Step 11 matches the definition name case-insensitively and with the document
+     suffix — `Explorer` and `explorer.md` both resume the chain — while a
+     different definition's name is a name mismatch that lists the agents that do
+     have reusable chains.
+   - Step 12 offers each chain's latest `delegationId`, its objective, and at most
+     eight of the files it read, with a `(+N more)` suffix past that. A chain that
+     just settled — whatever its outcome, including `stopped` and `aborted` — is
+     already there in the same session, with no app restart and no new session;
+     only a running chain and a never-created chain never appear.
+   - Step 13 rebuilds the chain relationship from the transcript, so the
+     `completed` chain is offered again after relaunch and resumes as before; a
+     chain whose last run settled `stopped` or `aborted` relists as continuable the
+     same way.
+   - Step 14 continues from the original task brief: with the chain's `Task` rows
+     still present but no child rows left to replay, the new run is seeded with the
+     original task plus the new input, not dropped.
+   - Step 15 resolves neither id: a chain whose own `Task` rows are gone cannot be
+     rebuilt, and a `Task` call denied before spawn never created a chain, so both
+     answer as an unknown delegation with the current reusable list. This is the
+     only kind of id that is not continuable.
+   - Throughout, the transcript shows the chain as one continuous multi-turn
+     conversation under its newest Task card, with no "resumed" marker, and the
+     resumed run's counters start at 0 so its turn, tool, and usage numbers
+     describe the new run while the earlier rounds stay readable above it.
+- **Specs linked**: `03-runtime/02-agent-runtime.md` §5f, ADR 0279 §15
 - **Acceptance**: C (conversation), Quality
 - **Milestone**: M6+
-- **Not covered (二期)**: reviving a `stopped`/`aborted` delegation, in-chain
-  compaction, task queuing, and cross-session resumption.
+- **Not covered (二期)**: in-chain compaction, task queuing, and cross-session
+  resumption. (Reviving a `stopped`/`aborted` delegation is now in scope and
+  covered by ADR 0279 §15 and the subagent-lifecycle E2E.)
 - **Status**: Draft — chain resolution, resume validation, the reusable list, and
   transcript chain grouping are unit/regression covered
   (`packages/agent-runtime/src/delegation-chain.test.ts`,
   `delegation-history.test.ts`, `runtime.test.ts`,
-  `apps/desktop/test/assistant-turns.test.mjs`); the desktop journey needs a
-  capable environment. Required suites: `test:e2e`, `test:e2e:subagents`,
-  `test:e2e:transcript`.
+  `apps/desktop/test/assistant-turns.test.mjs`); the backend
+  `stopped` / `aborted` continuation path is automated by
+  `pnpm test:e2e:subagent-lifecycle` (see E2E-142 status); the desktop journey
+  needs a capable environment. Required suites: `test:e2e`,
+  `test:e2e:subagents`, `test:e2e:transcript`.
 
 #### E2E-SUBAGENT-context-overflow-compacts-before-failing
 
@@ -12252,8 +12285,8 @@ This test plan spec is accepted when:
 #### E2E-SUBAGENT-resume-seeds-within-context-budget
 
 - **Preconditions**: The same injected small-window fake provider. One settled
-  `reader` chain read enough to exceed the delegate hard limit while staying
-  under `MAX_RESUMABLE_READ_LINES`; a second settled chain fits well inside
+  `reader` chain read enough to exceed the delegate's context hard limit, so its
+  seed must be truncated; a second settled chain fits well inside
   the budget. The resumed fixture uses `vendorKey: "deepseek"` and includes a
   persisted assistant row with both answer text and thinking.
 - **Steps**:
@@ -12264,8 +12297,9 @@ This test plan spec is accepted when:
      round, and for one it reached in its first round.
   4. Relaunch the app, rebuild the chain index from the transcript, and resume
      the over-budget chain again.
-  5. Accumulate more than `MAX_RESUMABLE_READ_LINES` of read-only output in a
-     chain and read the reusable list the next prompt offers.
+  5. Accumulate read-only output beyond the delegate's context budget in a
+     chain and read the reusable list the next prompt offers, then `Task.resume`
+     that chain.
   6. Inspect the resumed assistant history in the captured request and verify
      its same-model reasoning remains in `reasoning_content`.
 - **Expected**: The first request of a resumed run is below the hard limit. It
@@ -12278,9 +12312,10 @@ This test plan spec is accepted when:
   with `CONTEXT_TOO_LARGE` or `SUBAGENT_CONTEXT_OVERFLOW` on its first
   request. With a vendorKey binding, restored assistant history uses the same
   `model.provider` / `model.id` identity as live requests, and its thinking
-  stays in the native `reasoning_content` field. `MAX_RESUMABLE_READ_LINES`
-  still removes an over-read chain from the reusable list; truncation does not
-  make it resumable again.
+  stays in the native `reasoning_content` field. Read volume never removes a
+  chain from the reusable list (ADR 0279 §15); the
+  seed truncation is what keeps the resumed request safe, and the over-read
+  chain continues from a bounded seed rather than being dropped.
 - **Specs linked**: `03-runtime/02-agent-runtime.md` §5f, ADR 0299, ADR 0279
 - **Acceptance criterion**: C — Conversation & stream; Quality
 - **Milestone**: M6+
@@ -12338,9 +12373,14 @@ This test plan spec is accepted when:
    delegate once and confirm the attached report still delivers once to the same parent
    turn; continue the settled chain as user takeover and confirm no parent prompt,
    context, wake, or old-turn charge; resume explicitly via parent `Task(resume)` to
-   reattach. 4) `TaskList` a running delegate under the same program gate and confirm
+   reattach. 3c) Stop a running delegate (`TaskStop`), then continue its chain
+   explicitly — once by parent `Task(resume)` and once by direct user continue —
+   and confirm each starts a new run: the parent resume's report delivers once,
+   while the direct user continue runs detached with zero parent provider requests
+   and cannot resurrect the stopped run's waiting or delivery. 4) `TaskList` a running delegate under the same program gate and confirm
    fresh elapsed / last-tool fields plus cheap settled re-read. 5) `TaskStop` (cancel
-   obsolete work) and user Stop still abort; restart hydrates the retained chain with
+   obsolete work) and user Stop still abort the running execution; restart hydrates
+   the retained chain — including a `stopped` / `aborted` chain — as continuable with
    no parent messages. 6) Run a delegate whose
   document declares `maxTurns: 2` and let it pass two tool-calling turns;
   confirm the key is ignored and the delegate keeps running. 7) Start a
@@ -12368,6 +12408,10 @@ This test plan spec is accepted when:
    pending and deliver once via the idle resume. A detached continuation
    against an unrelated live parent fails with `AGENT_BUSY` with the draft
    preserved, and its terminal silently closes only its own execution turn.
+   In step 3c a `stopped` / `aborted` delegate's chain is still continuable —
+   Stop retires only that run's waiting and delivery, never the chain — the
+   parent resume delivers its report once, and the direct user continue runs
+   detached without waking the parent.
    Delegation entries and result headers separate estimated context
    occupancy from cumulative billed spend. No turn count ends a
    delegate, and no status reports one. Explorer's catalog includes
@@ -12395,7 +12439,12 @@ This test plan spec is accepted when:
   report still delivered exactly once; phase 2 attaches a user steer that only
   the child adopts before its single report; phase 3 continues a settled chain as
   `user` detached with zero parent provider requests and its own execution turn;
-  phase 4 reattaches via an explicit parent `Task(resume)`. The exact 900s cadence
+  phase 4 reattaches via an explicit parent `Task(resume)`; phase 5 stops a
+  running child and continues the stopped chain during the same parent turn, and
+  phase 6 stops the parent's execution, continues the resulting `aborted`
+  source as an isolated `user` run with no old-parent request or wake, then
+  reattaches via a parent `Task(resume)` whose report depends only on the new
+  run. The exact 900s cadence
   and the stop / parent-error / restart paths are covered separately by
   unit/fake-clock tests and `test:e2e:subagent-stop` / `test:e2e:subagent-parent-error`;
   they are not part of this bounded-window suite. The output cap's parse and clamp
@@ -14486,7 +14535,7 @@ are withdrawn with ADR 0165.
 - **Acceptance**: C (conversation & stream), D (provenance), Quality
 - **Milestone**: M6+
 - **Status**: Automated by `pnpm test:e2e:session-completion` on the committed,
-  rebased candidate in its dedicated worktree. The harness drives real Host
+  rebased candidate in the task's working checkout. The harness drives real Host
   RPCs, the production provenance resolver, sidecar, and local SSE, and persists
   runtime messages before Host settlement. It does not exercise Electron's
   queue/outbox UI or a live provider. Candidate/base SHAs and results belong in
@@ -17688,11 +17737,16 @@ registry-only installation and credential isolation.
   Agent, SDK transport, Task/TaskStop and delegate history. Host Read is a fixture.
 - **Steps**: Spawn two delegates, let each finish a Read, then leave both provider
   streams active. Fail the parent request, send a later prompt with both resume
-  ids, and inspect the resumed requests. Repeat with user Stop and TaskStop.
+  ids, and inspect the resumed requests. Repeat with user Stop and TaskStop,
+  confirming each cancelled run stays cancelled and only the explicit resume
+  starts a new run.
 - **Expected**: Parent failure returns the session to idle; both delegates settle
-  failed with SUBAGENT_PARENT_FAILED and resume with their own prior Read context.
-  Explicit Stop/TaskStop produce aborted/stopped; both resume attempts are rejected
-  without starting another delegate. No automatic restart occurs.
+  failed with SUBAGENT_PARENT_FAILED. Explicit Stop/TaskStop produce aborted/stopped.
+  Cancelling a run retires its waiting and delivery, so it is never replayed on its
+  own. A later explicit parent `Task(resume)` is a new parent-owned run whatever the
+  last outcome, so each id starts a fresh delegate seeded from its own original task
+  and prior Read context and delivers back to the parent once, while the cancelled
+  run keeps its historical status and is not resurrected. No automatic restart occurs.
 - **Specs linked**: 03-runtime/02-agent-runtime.md §5f; ADR 0279.
 - **Acceptance**: C, E, Quality. **Milestone**: Maintenance.
 - **Status**: Automated headless runtime/provider integration via

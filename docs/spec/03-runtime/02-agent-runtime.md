@@ -1132,7 +1132,8 @@ terminal parent error also aborts leftover delegates, skips the resume prompt,
 and returns the session to idle so Continue is not `AGENT_BUSY` (D352). The
 interrupted delegates settle as `failed` with `SUBAGENT_PARENT_FAILED` and keep
 their transcript-backed resume eligibility. This does not automatically restart
-them; user Stop, TaskStop and dispose still settle as non-resumable cancellations.
+them; user Stop, TaskStop and dispose still cancel the running execution and
+settle it as `stopped` / `aborted`, but the chain stays continuable (below).
 
 **Resumable delegations (ADR 0279).** `Task` accepts an optional `resume`
 parameter carrying the `delegationId` of a settled delegation in the same
@@ -1155,20 +1156,26 @@ name normalized on rebuild — so resumability survives a sidecar restart.
 Chain identity (`delegateSessionId`) stays internal; the parent only
 ever passes a `delegationId`, and the reverse map resolves it.
 
-Only `completed` and `failed` chains are resumable, plus `timed_out` (treated as
-`failed`) and `interrupted`: a run the app closed while it still worked keeps
-its retained rows as chain history, so resuming continues them rather than
-starting cold — but only when those rows still exist. A chain whose rows are
-gone (truncated branch, or a delegation that died before writing any) is
-dropped and reports no-history, for `interrupted` like every other status.
-`stopped` and `aborted` runs
-are terminal and revive only by starting a new delegation. A chain whose read-only tool output exceeds `MAX_RESUMABLE_READ_LINES`
-(50000) leaves the reusable list without an in-chain trim, so a resume never
-silently drops history. The registry keeps at most
-`MAX_RESUMABLE_CHAINS_PER_AGENT` (2) reusable chains per definition name and
-evicts least-recently-active ones whenever a delegation settles; a chain that is
-still working is never evicted, so the bound counts reusable chains and a live
-chain may sit above it until it settles.
+Every instantiated settled chain is continuable, whatever its last outcome:
+`completed`, `failed`, the record-only `timed_out` (treated as `failed`),
+`interrupted`, `stopped`, and `aborted`. The settling outcome is a historical
+fact about the run that recorded it, never a permanent property of the chain:
+`stopped` / `aborted` (an explicit Stop or runtime disposal) cancel that
+execution and retire its waiting and delivery, but the chain may still be
+continued. A `Task` call denied before it spawned a delegate instance — an
+unknown `agent`, an empty `task`, an unresolvable model pin, a definition whose
+tools are all unavailable, or the `MAX_SUBAGENT_CONCURRENCY` cap — creates no
+chain and is never continuable. Each continuation spawns a new run, seeded with
+the chain's retained rows through the model-context seed truncation (ADR 0299
+§7, `seedDelegateMessages`), so a large chain never produces an oversized first
+request; a chain that still resolves but has no child rows left (an immediately
+cancelled run, for example) is seeded with the original task brief plus the new
+input. Only a chain whose own `Task` rows are gone from the transcript cannot be
+rebuilt at all and resolves as an unknown id. Read volume no longer removes a
+chain from the reusable list — the seed truncation preserves request safety, and
+read metadata still displays — and the per-agent bound
+(`MAX_RESUMABLE_CHAINS_PER_AGENT`, 2) limits only how many of an agent's chains
+the parent's prompt lists, never retention; no entry is dropped for age or count.
 
 Resume is strictly same-session and never queues: resuming a running
 delegation is a tool error telling the parent to converge with `TaskWait`
@@ -1182,16 +1189,19 @@ A known key never falls through to another account just because its model id
 matches. When nothing authorized resolves it the run
 continues on the definition's current binding and records the previous model id
 as `modelChangedFrom` in its lifecycle details. Changing models on purpose means
-starting a new delegation. An unknown id, an id belonging to another definition,
-a non-resumable status, an over-budget chain, and a chain whose rows are gone
-each return a tool error naming the reason and, for an unknown id, the reusable
-ids when there are any.
+starting a new delegation. An unknown id (including a chain whose own `Task` rows
+are gone), an id belonging to another definition, and a run that is still
+running each return a tool error naming the reason and, for an unknown id, the
+reusable ids when there are any.
 
 The parent discovers reusable chains through the system prompt, which lists
 each chain's latest `delegationId`, its objective, and up to
 `MAX_RESUMABLE_LISTED_FILES` (8) of the files it read (with a `(+N more)`
-suffix past that). The list is recomposed when a delegation settles, around the
-existing prompt sections. A resumed run is an ordinary delegation for
+suffix past that). Every settled chain appears regardless of outcome — including
+`stopped` and `aborted` chains — while a running chain is never listed; the
+per-agent cap (`MAX_RESUMABLE_CHAINS_PER_AGENT`, 2, most recently active first)
+trims only this listing, never the resolvable set. The list is recomposed when a
+delegation settles, around the existing prompt sections. A resumed run is an ordinary delegation for
 `MAX_SUBAGENT_CONCURRENCY`, `TaskWait`, `TaskList`, `TaskStop`, and lifecycle
 snapshots. The immediate `Task` result and the lifecycle details add
 `resumedFrom` for audit; the transcript renders a chain as one continuous
@@ -1212,7 +1222,8 @@ the delegate's own execution-accounting turn for a detached user-owned run
 (kept from the accepted steer/continue response, never the parent's generic
 running flag). It is refused once that owner ended; a delegate that settled
 first continues via `agent.continueSubagent` instead. A settled delegate
-continues directly with retained history — no parent prompt. Only an explicit
+continues directly, seeded from whatever child rows remain or its original task
+brief — no parent prompt. Only an explicit
 parent-model `Task(resume)` reattaches a chain as a new parent-owned run.
 The renderer exposes one Send composer: while running it steers text-only via
 `agent.steerSubagent` with the owning turn identity; while settled and
@@ -1329,7 +1340,10 @@ delegate reuses it), and its `tools.execute` calls carry that id as
 merged back into the session worktree, a failed or stopped run keeps its
 changes, and the outcome (merged, no changes, conflict with files, not merged
 with reason, or kept) is appended to the report so the parent knows whether to
-resume the delegate. Host-core briefly holds the session's own tools while it
+resume the delegate. A kept run's partial files stay in its worktree and are
+reused when its chain is continued (including a `stopped` / `aborted` chain,
+ADR 0279 §15); only a completed run is merged back, so continuing a partial run
+never merges it. Host-core briefly holds the session's own tools while it
 commits and merges in the session worktree, waiting at most a few seconds for
 tools already running. Read-only and Bash-only delegates, and every delegate
 of a non-isolated session, are unchanged.

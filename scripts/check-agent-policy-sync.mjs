@@ -57,8 +57,15 @@ const claude = claudeRaw ? normalize(claudeRaw) : "";
 /** @type {{ id: string, anyOf: string[] }[]} */
 const REQUIRED_ANCHORS = [
   {
-    id: "worktree-isolation",
-    anyOf: ["1 request = 1 branch + 1 dedicated worktree"],
+    id: "optional-worktree-isolation",
+    anyOf: [
+      "a fresh dedicated branch or worktree per request is optional",
+      "dedicated branch or worktree per request is optional",
+    ],
+  },
+  {
+    id: "protect-other-agent-work",
+    anyOf: ["reuse, modify, or delete another agent's branch or worktree"],
   },
   {
     id: "never-develop-on-main",

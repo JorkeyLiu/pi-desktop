@@ -254,7 +254,7 @@ test("header names the live report owner from backend fields, settled stays bare
   } finally { await vite.close(); }
 });
 
-test("running steers while settled continues directly, blocked states stay read-only", async () => {
+test("running steers, every settled child continues, only an instance-less call stays read-only", async () => {
   const { vite, render, useAppStore } = await setup();
   try {
     // Running: steer composer via existing channel labels.
@@ -274,25 +274,55 @@ test("running steers while settled continues directly, blocked states stay read-
     const settled = render("d2");
     assert.match(settled, /Completed/);
     assert.match(settled, /Send a follow-up/);
-    assert.match(settled, /retained history/);
+    assert.match(settled, /Continues this subagent as a new run/);
     assert.doesNotMatch(settled, /Ask parent/);
     assert.doesNotMatch(settled, /Task\(resume/);
-    // Blocked outcomes name their own explicit end reason, never a generic
-    // read-only line and never a follow-up composer.
-    const endedCopy = {
-      stopped: /Stopped by request — it cannot continue/,
-      aborted: /Stopped — it cannot continue/,
-      denied: /Never started — nothing to continue/,
+    // Outcome is history, never a gate: every instantiated settled child —
+    // including one stopped before its first transcript event — offers the
+    // continue composer, and never a permanent cannot-continue line. The
+    // stopped/aborted cases have no child rows at all.
+    const statusLabel = {
+      stopped: /Stopped by request/,
+      aborted: /Stopped/,
+      failed: /Failed/,
+      timed_out: /Timed out/,
+      interrupted: /Interrupted/,
     };
-    for (const status of ["stopped", "aborted", "denied"]) {
+    for (const status of ["stopped", "aborted", "failed", "timed_out", "interrupted"]) {
       seed(useAppStore, {
         messages: [taskMessage("t1", "call-1", "d3", status)],
         running: false,
       });
-      const blocked = render("d3");
-      assert.doesNotMatch(blocked, /Send a follow-up/);
-      assert.match(blocked, endedCopy[status]);
+      const continued = render("d3");
+      assert.match(continued, statusLabel[status]);
+      assert.match(continued, /Send a follow-up/);
+      assert.match(continued, /Send/);
+      assert.doesNotMatch(continued, /cannot continue/);
+      assert.doesNotMatch(continued, /nothing to continue/);
     }
+    // A denied never-started call carries no delegation identity: no backend
+    // instance, so no continue composer and a meaningful no-instance reason.
+    seed(useAppStore, {
+      messages: [message("t1", "tool", "", {
+        toolName: "Task",
+        toolCallId: "call-9",
+        toolStatus: "denied",
+        toolArgs: { agent: "explorer", task: "Investigate the cache" },
+        toolResult: { details: { denied: true } },
+      })],
+      running: false,
+    });
+    const denied = render("call-9");
+    assert.doesNotMatch(denied, /Send a follow-up/);
+    assert.match(denied, /Never started — nothing to continue/);
+    // A tab whose Task calls are missing is likewise instance-less.
+    seed(useAppStore, {
+      messages: [taskMessage("t1", "call-1", "d9", "completed")],
+      running: false,
+    });
+    const missing = render("missing");
+    assert.doesNotMatch(missing, /Send a follow-up/);
+    assert.match(missing, /Never started — nothing to continue/);
   } finally { await vite.close(); }
 });
 
@@ -325,9 +355,9 @@ test("continue identity omits the turn guard when idle and blocks read-only", as
     assert.equal(actions.canContinueSubagent("failed", true), true);
     assert.equal(actions.canContinueSubagent("timed_out", true), true);
     assert.equal(actions.canContinueSubagent("interrupted", true), true);
-    assert.equal(actions.canContinueSubagent("stopped", true), false);
-    assert.equal(actions.canContinueSubagent("aborted", true), false);
-    assert.equal(actions.canContinueSubagent("denied", true), false);
+    assert.equal(actions.canContinueSubagent("stopped", true), true);
+    assert.equal(actions.canContinueSubagent("aborted", true), true);
+    assert.equal(actions.canContinueSubagent("denied", true), true);
     assert.equal(actions.canContinueSubagent("running", true), false);
     assert.equal(actions.canContinueSubagent("completed", false), false);
   } finally { await vite.close(); }
@@ -554,7 +584,7 @@ window.continueProbe = async () => {
   await setPanelWidth(400);
   checkNoClip("settled 400px");
   check(document.body.textContent.includes("Context") && document.body.textContent.includes("Spent"), "400px context/spend labels missing");
-  // Settled send goes direct with retained history, idle omits the turn guard.
+  // Settled send continues the same chain directly; idle omits the turn guard.
   setDraft("go on");
   await settle();
   const send = sendButton();
@@ -577,6 +607,33 @@ window.continueProbe = async () => {
   await settle(); await settle(); await new Promise((r) => setTimeout(r, 50)); await settle();
   check(composerTextarea().value === "retry me", "failure must preserve draft");
   check(document.body.textContent.includes("host refused"), "failure must surface");
+  // A child stopped before its first transcript event (no retained child rows)
+  // still continues directly: the Task chain identity is enough, the outcome
+  // stays as history, and there is no cannot-continue line. Same public path
+  // as the settled send above: draft -> Send -> continueSubagent -> clear.
+  for (const [outcome, statusText] of [["stopped", "Stopped by request"], ["aborted", "Stopped"]]) {
+    seed([task("t1", "call-1", "d1", outcome)], false);
+    flushSync(() => rootNode.render(React.createElement(SubagentTranscriptTab, { delegationId: "d1" })));
+    await settle();
+    check(document.body.textContent.includes(statusText), outcome + " status missing");
+    check(!document.body.textContent.includes("cannot continue"), outcome + " must not show cannot-continue");
+    check(composerTextarea(), outcome + " continue composer missing");
+    check(document.body.textContent.includes("Continues this subagent"), outcome + " continue help missing");
+    setDraft("continue after " + outcome);
+    await settle();
+    const send = sendButton();
+    check(send && !send.disabled, outcome + " Send must enable");
+    calls.length = 0;
+    flushSync(() => send.click());
+    await settle(); await settle(); await new Promise((r) => setTimeout(r, 50)); await settle();
+    const continued = calls.find((call) => call.channel === "pi-desktop/agent/continueSubagent");
+    check(continued, outcome + " Send must call continueSubagent, saw " + JSON.stringify(calls));
+    check(continued.req.delegationId === "d1" && continued.req.content === "continue after " + outcome,
+      outcome + " continue payload wrong: " + JSON.stringify(continued.req));
+    check(!("expectedTurnId" in continued.req), outcome + " idle continue must omit expectedTurnId");
+    check(!calls.some((call) => call.channel === "pi-desktop/agent/steerSubagent"), outcome + " must not steer");
+    check(composerTextarea().value === "", outcome + " draft must clear after accepted continue");
+  }
   // Running narrow panel at 320px: steer path intact, same single region.
   await setPanelWidth(320);
   seed(runningMessages, true);

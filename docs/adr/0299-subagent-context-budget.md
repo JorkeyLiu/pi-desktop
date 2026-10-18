@@ -38,7 +38,10 @@ it:
   task first and appends every converted chain row, de-duplicating the task
   brief and truncating nothing. The chain-level `MAX_RESUMABLE_READ_LINES`
   guard removes an over-read chain from the reusable list; it does not bound
-  what a still-reusable chain seeds.
+  what a still-reusable chain seeds. (Superseded 2026-10 by ADR 0279 §15: the
+  read-admission stop is removed — an over-read chain stays continuable and
+  seeds through the truncation in §7 below, so the guard no longer bounds the
+  reusable list.)
 - On overflow the provider error classifies as `CONTEXT_TOO_LARGE` with
   `retriable = false` (`packages/agent-runtime/src/agent-errors.ts:407`, `:412`,
   `:426`) and `SubagentRun.run()` returns `result("failed", ...)`

@@ -21,6 +21,15 @@
 //     report in any parent context.
 //  4. An explicit parent `Task(resume)` on the settled chain reattaches: the
 //     resumed run's report is delivered back to the parent exactly once.
+//  5. A stopped child settles `stopped` and delivers no report, yet its chain is
+//     still continuable: an explicit direct continue starts a new run seeded
+//     with the original task brief plus the new input (zero child rows), stays
+//     `user`-owned with ZERO parent requests, and refuses a concurrent second
+//     continue while the new run is still working.
+//  6. A parent abort aborts its leftover child (`aborted`); a direct continue of
+//     that aborted chain runs independently with no old-parent request or wake,
+//     and a later explicit parent `Task(resume)` reattaches the chain as a new
+//     parent-owned run whose report depends only on the new dependency.
 //
 // Requires a freshly built agent-runtime/sidecar dist that carries the program
 // coordinator. A stale dist is detected from the emitted TaskWait tool schema
@@ -53,13 +62,25 @@ const blocked = (message) => Object.assign(new Blocked(message), { __blocked: tr
 const PHASE1_PROMPT = "PHASE1: run the no-early fixture.";
 const PHASE2_PROMPT = "PHASE2: run the steer fixture.";
 const PHASE4_PROMPT = "PHASE4: reattach the delivered chain.";
+const PHASE5_PROMPT = "PHASE5: stop a child, then continue its chain explicitly.";
+const PHASE6_PROMPT = "PHASE6: abort the parent, then continue the child independently.";
+const PHASE6R_PROMPT = "PHASE6R: reattach the independently continued chain.";
 const CONTINUE_PROMPT = "CONTINUE_FIXTURE: report the detached marker.";
 const STEER_TEXT = "STEER_MARKER: adopt this steer before your final report.";
 const REATTACH_TASK = "Reattach A fixture run.";
+const STOP_TASK = "Delegate stop fixture.";
+const STOP_CONTINUE_PROMPT = "CONTINUE_STOPPED: report after the child was stopped.";
+const STOP_CONTINUE_BUSY_PROMPT = "CONTINUE_STOPPED_BUSY: must be refused.";
+const PARENT_STOP_TASK = "Delegate parent-stop fixture.";
+const PARENT_STOP_CONTINUE_PROMPT = "CONTINUE_PARENT_STOP: report after the parent was aborted.";
+const REATTACH_STOP_TASK = "Reattach stop fixture run.";
 const CHILD_A_REPORT = "Delegate A fixture report ALPHA.";
 const CHILD_B_REPORT = "Delegate B fixture report BETA.";
 const DETACHED_REPORT = "Detached continuation report GAMMA.";
 const REATTACH_REPORT = "Reattach fixture report DELTA.";
+const STOP_CONTINUE_REPORT = "Stopped-chain continuation report EPSILON.";
+const PARENT_STOP_REPORT = "Independent continuation report ZETA.";
+const REATTACH_STOP_REPORT = "Reattached stop-chain report ETA.";
 const QUIET_WINDOW_MS = 2_500; // > stale timeoutSeconds:1, << the 900s program period
 
 const root = mkdtempSync(join(tmpdir(), "pi-subagent-lifecycle-"));
@@ -86,8 +107,14 @@ let stderr = "";
 let eventError;
 let delegationA;
 let delegationB;
+let delegationS;
+let delegationP;
 let turnIdA;
 let turnIdB;
+let turnIdS;
+let turnIdP;
+let continuedStopped;
+let continuedParentStop;
 let stepped = {};
 
 const changed = () => { for (const check of [...parentObservers]) check(); };
@@ -191,7 +218,10 @@ function assertRoleSequence(payload) {
     const role = messages[i].role;
     if (role === "assistant" && prev === "assistant") throw new Error(`invalid provider role sequence: consecutive assistant messages (${payload.model})`);
     if (role === "system") throw new Error(`invalid provider role sequence: system message after index 0 (${payload.model})`);
-    if (role === "user" && prev === "user") throw new Error(`invalid provider role sequence: consecutive user messages (${payload.model})`);
+    // Consecutive user turns are intentionally allowed: a resumed run seeds the
+    // chain's brief and then appends this turn's task, and a chain stopped
+    // before its first child message seeds that brief alone, so two user turns
+    // in a row is the expected shape for those continuations.
   }
 }
 
@@ -249,6 +279,47 @@ function respondParent(payload, stream) {
     stepped.phase2Parent = "PARENT_UNEXPECTED";
     return say(stream, "PARENT_UNEXPECTED");
   }
+  if (text.includes("PHASE5")) {
+    if (!hasToolResult(payload, "task_s5")) {
+      return toolCalls(stream, [{ id: "task_s5", name: "Task", args: { agent: "explorer", task: STOP_TASK } }]);
+    }
+    if (!hasToolResult(payload, "wait_s5")) {
+      delegationS = extractDelegationId(payload);
+      assert.ok(delegationS, "phase 5 parent must observe the stop fixture delegation id before waiting");
+      return toolCalls(stream, [{ id: "wait_s5", name: "TaskWait", args: { delegationIds: [delegationS] } }]);
+    }
+    stepped.phase5WaitResult = toolResultText(payload, "wait_s5");
+    stepped.phase5Parent = stepped.phase5WaitResult.toLowerCase().includes("stopped")
+      ? "PARENT_SAW_STOPPED"
+      : "PARENT_UNEXPECTED";
+    return say(stream, stepped.phase5Parent);
+  }
+  if (text.includes("PHASE6R")) {
+    if (!hasToolResult(payload, "task_s6r")) {
+      return toolCalls(stream, [{ id: "task_s6r", name: "Task", args: { agent: "explorer", task: REATTACH_STOP_TASK, resume: delegationP } }]);
+    }
+    if (!hasToolResult(payload, "wait_s6r")) {
+      const resumed = extractDelegationId(payload);
+      assert.ok(resumed, "phase 6R parent must observe the resumed delegation id before waiting");
+      return toolCalls(stream, [{ id: "wait_s6r", name: "TaskWait", args: { delegationIds: [resumed] } }]);
+    }
+    stepped.phase6rWaitResult = toolResultText(payload, "wait_s6r");
+    stepped.phase6rParent = stepped.phase6rWaitResult.includes(REATTACH_STOP_REPORT)
+      ? "PARENT_RECEIVED_REATTACH_STOP_REPORT"
+      : "PARENT_UNEXPECTED";
+    return say(stream, stepped.phase6rParent);
+  }
+  if (text.includes("PHASE6")) {
+    if (!hasToolResult(payload, "task_s6")) {
+      return toolCalls(stream, [{ id: "task_s6", name: "Task", args: { agent: "explorer", task: PARENT_STOP_TASK } }]);
+    }
+    delegationP = extractDelegationId(payload);
+    assert.ok(delegationP, "phase 6 parent must observe the parent-stop fixture delegation id");
+    stepped.phase6ParentIdle = true;
+    // End the parent tool loop without TaskWait: parent idle keeps the durable
+    // turn open while the child runs, so a later parent abort owns both.
+    return say(stream, "PHASE6_PARENT_IDLE");
+  }
   throw new Error(`unexpected parent request: ${text.slice(-200)}`);
 }
 
@@ -259,9 +330,23 @@ function respondChild(payload, stream) {
   const text = lastUserText(payload);
   if (text.includes("STEER_MARKER")) { stepped.childAdoptedSteer = true; return say(stream, CHILD_B_REPORT); }
   if (text.includes("Reattach A fixture")) return say(stream, REATTACH_REPORT);
+  if (text.includes("Reattach stop fixture")) return say(stream, REATTACH_STOP_REPORT);
   if (text.includes("CONTINUE_FIXTURE")) return say(stream, DETACHED_REPORT);
+  // A second continue while the chain runs is refused upstream, so its text
+  // must never reach a provider; failing loudly keeps that assertion honest.
+  if (text.includes("CONTINUE_STOPPED_BUSY")) throw new Error("a refused concurrent continue reached the provider");
+  if (text.includes("CONTINUE_STOPPED")) { held.set("S2", { res: stream.res, stream }); return stream.hold(); }
+  if (text.includes("CONTINUE_PARENT_STOP")) return say(stream, PARENT_STOP_REPORT);
   if (text.includes("Delegate B fixture")) { held.set("B", { res: stream.res, stream }); return stream.hold(); }
   if (text.includes("Delegate A fixture")) { held.set("A", { res: stream.res, stream }); return stream.hold(); }
+  if (text.includes("Delegate parent-stop fixture")) {
+    held.set("P", { res: stream.res, stream });
+    // The parent abort cancels this child's in-flight request; the release of
+    // the held stream is the deterministic sync point for the continue below.
+    stream.res.on("close", () => { if (held.get("P")?.res === stream.res) { held.delete("P"); changed(); } });
+    return stream.hold();
+  }
+  if (text.includes("Delegate stop fixture")) { held.set("S", { res: stream.res, stream }); return stream.hold(); }
   throw new Error(`unexpected child request: ${text.slice(-200)}`);
 }
 
@@ -473,6 +558,87 @@ try {
   assert.equal(countReportDeliveries(REATTACH_REPORT), 1, "the reattached report must be delivered exactly once");
   await until(() => !activeTurns.has(sessionId), "phase 4 parent turn did not settle");
 
+  // ---- Phase 5: stopped child -> explicit continue ------------------------
+  await invoke(IPC.invoke.agentPrompt, [{ sessionId, content: PHASE5_PROMPT }]);
+  await until(() => activeTurns.has(sessionId), "phase 5 turn did not become active");
+  turnIdS = activeTurns.get(sessionId);
+  await until(() => held.has("S"), "child S stream was not held by the fixture");
+  await until(() => delegationS, "phase 5 parent did not observe the stop fixture delegation id");
+  const parentBeforeStop5 = parentRequests.length;
+  await invoke(IPC.invoke.agentStopSubagents, [{ sessionId, delegationIds: [delegationS] }]);
+  await until(() => parentRequests.length > parentBeforeStop5, "phase 5 parent did not resume after the child was stopped");
+  await eventWork;
+  assert.equal(stepped.phase5Parent, "PARENT_SAW_STOPPED", `TaskWait must return the stopped status, not a report: ${stepped.phase5WaitResult}`);
+  assert.equal(stepped.phase5WaitResult?.includes(STOP_CONTINUE_REPORT), false, "a stopped run must not deliver a report");
+  assert.equal(countReportDeliveries(STOP_CONTINUE_REPORT), 0, "no report exists for a stopped run");
+  await until(() => !activeTurns.has(sessionId), "phase 5 parent turn did not settle");
+
+  // The stopped chain is still continuable: an explicit direct continue starts
+  // a new run seeded with the original task brief plus the new input, even
+  // though the stopped-before-first-message run left zero child rows.
+  const parentBeforeContinue5 = parentRequests.length;
+  continuedStopped = await invoke(IPC.invoke.agentContinueSubagent, [{ sessionId, delegationId: delegationS, content: STOP_CONTINUE_PROMPT }]);
+  assert.equal(continuedStopped.delivery, "user", "a stopped source must continue user-owned");
+  assert.ok(continuedStopped.turnId, "the stopped-chain continuation must own an execution turn");
+  assert.notEqual(continuedStopped.turnId, turnIdS, "the continuation must not reuse the stopped parent turn");
+  await until(() => held.has("S2"), "the stopped-chain continuation child run did not start");
+  // No concurrent chain: a second continue while the new run works is refused
+  // and never reaches a provider request.
+  const busyRejection = await invoke(IPC.invoke.agentContinueSubagent, [{ sessionId, delegationId: continuedStopped.delegationId, content: STOP_CONTINUE_BUSY_PROMPT }])
+    .then(() => null, (error) => error);
+  assert.ok(busyRejection, "a second continue while the chain runs must be refused");
+  const busyText = `${busyRejection?.errorCode ?? ""} ${busyRejection?.message ?? busyRejection}`;
+  assert.match(busyText, /BUSY|active turn/i, "the refusal must name the busy chain or session");
+  held.get("S2").stream.finish({ role: "assistant", content: STOP_CONTINUE_REPORT }, "stop");
+  await until(() => !activeTurns.has(sessionId), "the stopped-chain continuation did not settle");
+  await eventWork;
+  const stoppedContinueRequest = childRequests.find((request) => lastUserText(request).includes("CONTINUE_STOPPED"));
+  assert.ok(stoppedContinueRequest, "the stopped-chain continuation must reach the fixture");
+  assert.equal(allUserText(stoppedContinueRequest).includes(STOP_TASK), true, "the continuation must seed the original task brief despite zero child rows");
+  assert.equal(childRequests.some((request) => allUserText(request).includes("CONTINUE_STOPPED_BUSY")), false, "a refused continue must not start a child run");
+  assert.equal(parentRequests.length, parentBeforeContinue5, "continuing a stopped chain must issue ZERO parent provider requests");
+  assert.equal(parentRequests.some((request) => JSON.stringify(request.messages).includes(STOP_CONTINUE_REPORT)), false, "a user-owned stopped-chain report must never enter the parent context");
+
+  // ---- Phase 6: parent abort -> independent continue, no parent wake ------
+  await invoke(IPC.invoke.agentPrompt, [{ sessionId, content: PHASE6_PROMPT }]);
+  await until(() => activeTurns.has(sessionId), "phase 6 turn did not become active");
+  turnIdP = activeTurns.get(sessionId);
+  await until(() => held.has("P"), "child P stream was not held by the fixture");
+  await until(() => delegationP, "phase 6 parent did not observe the parent-stop delegation id");
+  await until(() => stepped.phase6ParentIdle === true, "phase 6 parent did not end its tool loop");
+  const parentBeforeStop6 = parentRequests.length;
+  await invoke(IPC.invoke.agentAbort, [{ sessionId, turnId: turnIdP }]);
+  await until(() => !held.has("P"), "the aborted child stream was not released by the parent abort");
+  await until(() => !activeTurns.has(sessionId), "the aborted parent turn did not settle");
+  await eventWork;
+  assert.equal(parentRequests.length, parentBeforeStop6, "aborting the parent must not issue a parent provider request");
+
+  // The aborted chain is still continuable: a direct continue runs isolated
+  // with no old-parent request or wake.
+  continuedParentStop = await invoke(IPC.invoke.agentContinueSubagent, [{ sessionId, delegationId: delegationP, content: PARENT_STOP_CONTINUE_PROMPT }]);
+  assert.equal(continuedParentStop.delivery, "user", "an aborted source must continue user-owned");
+  assert.ok(continuedParentStop.turnId, "the independent continuation must own an execution turn");
+  assert.notEqual(continuedParentStop.turnId, turnIdP, "the independent continuation must not reuse the aborted parent turn");
+  await until(() => childRequests.some((request) => allUserText(request).includes("CONTINUE_PARENT_STOP")), "the independent continuation did not start a child run");
+  await until(() => !activeTurns.has(sessionId), "the independent continuation did not settle");
+  await eventWork;
+  assert.equal(parentRequests.length, parentBeforeStop6, "the aborted parent must not be woken by the stop or the independent continuation");
+  assert.equal(parentRequests.some((request) => JSON.stringify(request.messages).includes(PARENT_STOP_REPORT)), false, "an aborted chain's user-owned report must never enter the parent context");
+
+  // An explicit parent Task(resume) reattaches the chain as a new parent-owned
+  // run whose report depends only on the new dependency.
+  await invoke(IPC.invoke.agentPrompt, [{ sessionId, content: PHASE6R_PROMPT }]);
+  await until(() => childRequests.some((request) => allUserText(request).includes(REATTACH_STOP_TASK)), "phase 6R parent Task(resume) did not start a resumed child run");
+  await until(() => parentRequests.some((request) => textOf(request.messages.at(-1)?.content).includes(REATTACH_STOP_REPORT)), "phase 6R parent did not receive the reattached report");
+  await eventWork;
+  assert.equal(stepped.phase6rParent, "PARENT_RECEIVED_REATTACH_STOP_REPORT", "an explicit parent resume must deliver the reattached stop-chain report");
+  assert.equal(countReportDeliveries(REATTACH_STOP_REPORT), 1, "the reattached stop-chain report must be delivered exactly once");
+  const reattachStopRequest = childRequests.find((request) => lastUserText(request).includes(REATTACH_STOP_TASK));
+  assert.ok(reattachStopRequest, "the reattached run must reach the fixture");
+  assert.equal(allUserText(reattachStopRequest).includes("CONTINUE_PARENT_STOP"), true, "the parent resume must reattach the independently continued chain");
+  assert.equal(parentRequests.some((request) => JSON.stringify(request.messages).includes(PARENT_STOP_REPORT)), false, "the earlier user-owned report must never reach the parent after reattaching");
+  await until(() => !activeTurns.has(sessionId), "phase 6R parent turn did not settle");
+
   await eventWork;
   assert.equal(eventError, undefined, `fixture error: ${eventError?.stack ?? ""}`);
 
@@ -482,6 +648,8 @@ try {
     phase2: { parentRequests: stepped.phase2ParentRequests, reportDeliveries: phase2ReportCount, steerParentRequests: 0, childAdopted: stepped.childAdoptedSteer },
     phase3: { delivery: continued.delivery, parentRequests: 0, executionTurnOwned: true },
     phase4: { parentReceivedReattach: stepped.phase4Parent === "PARENT_RECEIVED_REATTACH_REPORT", reportDeliveries: countReportDeliveries(REATTACH_REPORT) },
+    phase5: { parentSawStopped: stepped.phase5Parent === "PARENT_SAW_STOPPED", continueDelivery: continuedStopped.delivery, seededOriginalTask: true, concurrentRefused: true, parentRequests: 0 },
+    phase6: { continueDelivery: continuedParentStop.delivery, parentRequestsThroughStopAndContinue: 0, reattachedReportDeliveries: countReportDeliveries(REATTACH_STOP_REPORT) },
     requestCounts: { provider: requests.length, parent: parentRequests.length, child: childRequests.length },
     finishedTurns: finishedTurns.map((turn) => turn.turnId),
   })}`);

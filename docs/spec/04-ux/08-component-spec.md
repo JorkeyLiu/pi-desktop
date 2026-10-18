@@ -2510,7 +2510,13 @@ as a conversation:
   (live parent turn when attached, the delegate's execution-accounting turn
   when user-owned; the attributed child echo stays in the child context),
   while settled and continuable it continues directly via
-  `pi-desktop/agent/continueSubagent` with retained history. There is no second
+  `pi-desktop/agent/continueSubagent`, whose next run is seeded from whatever
+  child rows remain or, when none do, from the chain's original task brief
+  alone. Every settled instance stays continuable, so a delegate whose last run
+  settled `stopped` / `aborted` keeps the live composer exactly like a
+  `completed` one; the read-only hint appears only when there is no instance to
+  continue (a `Task` call denied before it spawned, a tab whose `Task` chain can
+  no longer be resolved) or the session itself cannot prompt. There is no second
   parent-resume strategy and no independent durable child session; the model
   line is plain display.
 - Tab labels carry the agent name captured when the tab opened, with a

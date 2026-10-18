@@ -1491,8 +1491,10 @@ Project drag/drop follows these patterns:
   serves both states: a live delegate steers text-only via
   `pi-desktop/agent/steerSubagent` with the owning turn identity, while a
   settled continuable delegate continues directly via
-  `pi-desktop/agent/continueSubagent` with retained history — no second
-  parent-resume strategy. At the minimum panel width, long commands, paths, and
+  `pi-desktop/agent/continueSubagent`, seeding the next run from any remaining
+  child rows or the original task brief alone — no second
+  parent-resume strategy, and a `stopped` / `aborted` delegate stays continuable
+  for the same reason, so its composer keeps the send path. At the minimum panel width, long commands, paths, and
   tool summaries wrap inside the committed width instead of expanding the
   panel past the client area.
   A tab is never opened automatically when a delegate starts; only a node

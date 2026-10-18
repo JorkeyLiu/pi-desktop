@@ -122,6 +122,26 @@ test("creation-phase delegation copy is catalog-backed", () => {
   }
 });
 
+test("the no-instance reason is localized in every shipped catalog", () => {
+  // Every instantiated settled child continues, so the only reason a settled
+  // composer stays read-only is a delegation with no backend instance (a
+  // denied never-started call, or a tab whose Task chain is missing). The
+  // retired stopped/aborted/no-history keys are gone from every locale by the
+  // key-parity check above; this locks the replacement copy in each language.
+  for (const [id, catalog] of Object.entries(catalogs)) {
+    const flat = flattenCatalog(catalog);
+    assert.equal(typeof flat["panel.subagentNoInstance"], "string", id);
+    assert.ok(flat["panel.subagentNoInstance"].trim(), id);
+    if (id !== "en") {
+      assert.notEqual(
+        flat["panel.subagentNoInstance"],
+        english["panel.subagentNoInstance"],
+        `${id} must not fall back to English`,
+      );
+    }
+  }
+});
+
 test("settings rail labels stay concise and parallel across locales", () => {
   const chinese = flattenCatalog(zhCN);
   const keys = [

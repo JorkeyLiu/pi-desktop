@@ -641,10 +641,10 @@ export const en = {
     subagentMetricsCallsUnit_other: "calls",
     subagentMetricsContextUnknownHelp: "No context data reported yet. Shows once the subagent reports usage.",
     subagentMetricsEstimated: "(est.)",
-    subagentContinuePlaceholder: "Send a follow-up — continues with retained history…",
+    subagentContinuePlaceholder: "Send a follow-up — continues this subagent…",
     subagentContinueSend: "Send",
     subagentContinueSending: "Sending…",
-    subagentContinueHelp: "Continues this subagent with its retained history.",
+    subagentContinueHelp: "Continues this subagent as a new run.",
     subagentSteerPlaceholder: "Message the running subagent…",
     subagentSteerSend: "Send to subagent",
     subagentSteerSending: "Sending…",
@@ -2030,12 +2030,10 @@ sklm: {
     subagentTaskEmpty: "No task description.",
     subagentReadOnly: "Subagents are driven by the main agent — input is unavailable.",
     subagentStale: "This run was continued elsewhere — use the latest run.",
-    subagentNoHistory: "No retained history to continue — start a new task in the main chat.",
-    subagentEnded: {
-      stopped: "Stopped by request — it cannot continue.",
-      aborted: "Stopped — it cannot continue.",
-      denied: "Never started — nothing to continue.",
-    },
+    // A delegation with no backend instance (a denied never-started call, or a
+    // tab whose Task chain is missing). Every instantiated settled child can
+    // continue, so this is the only reason a settled composer stays read-only.
+    subagentNoInstance: "Never started — nothing to continue.",
     subagentEmpty: "Subagent details are no longer available.",
     resize: "Resize work panel",
     maximize: "Expand work panel",

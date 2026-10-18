@@ -135,10 +135,9 @@ describe("mapContinueSpawnError", () => {
     expect(mapContinueSpawnError("Unknown delegation")).toMatchObject({
       errorCode: "DELEGATION_NOT_FOUND"
     });
-    expect(mapContinueSpawnError('ended as "stopped" and cannot be resumed')).toMatchObject({
-      errorCode: "NOT_RESUMABLE"
-    });
-    expect(mapContinueSpawnError("no recorded history")).toMatchObject({
+    expect(
+      mapContinueSpawnError("has no recorded history and cannot be continued"),
+    ).toMatchObject({
       errorCode: "NOT_RESUMABLE"
     });
     expect(mapContinueSpawnError("The parent turn ended before delegation")).toMatchObject({

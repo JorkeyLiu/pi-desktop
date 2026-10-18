@@ -111,9 +111,8 @@ test("the delegation tab renders a message list with a child composer", () => {
   assert.match(workPanelCss, /\.subagent-transcript-composer-controls \{/);
   assert.match(workPanelCss, /\.subagent-transcript-model-static \{/);
   // Live send paths: a running delegate steers the child channel directly;
-  // a settled resumable delegate continues directly through the backend
-  // with its retained history — never a parent `Task(resume)` text prompt,
-  // never into the parent context.
+  // a settled instantiated delegate continues directly through the backend —
+  // never a parent `Task(resume)` text prompt, never into the parent context.
   assert.match(tabSource, /await api\.steerSubagent\(\{/);
   assert.match(tabSource, /captureSteerIdentity\(\{/);
   assert.match(tabSource, /shouldShowSubagentContinue\(\{/);
@@ -125,12 +124,13 @@ test("the delegation tab renders a message list with a child composer", () => {
   assert.doesNotMatch(tabSource, /askParentToResume/);
   assert.doesNotMatch(tabSource, /sendPrompt\(/);
   // Display-only where no action exists: the blocked composer names its own
-  // capability reason (stale/no-history/ended/remote), and the model picker
-  // never opens.
+  // capability reason (stale/no-instance/remote), while an instantiated
+  // settled child always continues regardless of its outcome. The model
+  // picker never opens.
   assert.match(tabSource, /aria-label=\{readonlyReason \?\? t\("panel\.subagentReadOnly"\)\}/);
   assert.match(tabSource, /panel\.subagentStale/);
-  assert.match(tabSource, /panel\.subagentNoHistory/);
-  assert.match(tabSource, /panel\.subagentEnded/);
+  assert.match(tabSource, /panel\.subagentNoInstance/);
+  assert.match(tabSource, /subagentChainInstantiated\(/);
 });
 
 test("the tab owns one scroll surface and pins to the latest output", () => {

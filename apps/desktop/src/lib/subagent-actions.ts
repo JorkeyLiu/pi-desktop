@@ -6,19 +6,11 @@ import type { SubagentOutcome } from "./subagent-topology";
  * call so an `await` never switches the active session.
  */
 
-/** Backend continue chain (ADR 0279): only these settle states continue. */
-export const SUBAGENT_CONTINUABLE_OUTCOMES: ReadonlySet<string> = new Set([
-  "completed",
-  "failed",
-  "timed_out",
-  "interrupted",
-]);
-
 export function isSubagentRunning(outcome: SubagentOutcome | string | null | undefined): boolean {
   return outcome === "running";
 }
 
-/** Settled means the child loop ended (resumable or not). */
+/** Settled means the child loop ended; every settled instance can continue. */
 export function isSubagentSettled(outcome: SubagentOutcome | string | null | undefined): boolean {
   return outcome !== undefined && outcome !== null && outcome !== "running";
 }
@@ -95,31 +87,36 @@ export function captureSteerIdentity(input: {
 
 /**
  * Whether the settled delegate can continue directly through the backend
- * `agent.continueSubagent` path (no parent prompt). Same settle set and same
- * chain-latest ownership as resume; `stopped`/`aborted`/`denied` stay
- * blocked and history-less tabs stay read-only. Unlike steering, the parent
- * turn need not be running: an idle parent omits `expectedTurnId` and a live
- * parent passes its current turn as a guard.
+ * `agent.continueSubagent` path (no parent prompt).
+ *
+ * Every instantiated settled child continues regardless of how it ended —
+ * `completed`, `failed`, `timed_out`, `interrupted`, `stopped`, `aborted`, and
+ * any future terminal outcome. The outcome is history, not a gate: nothing is
+ * permanently uncontinuable. A live run steers instead (never a second
+ * simultaneous run), and a call with no backend instance — a denied
+ * never-started call, or a tab whose Task chain is missing — has no child to
+ * continue. Unlike steering, the parent turn need not be running: an idle
+ * parent omits `expectedTurnId` and a live parent passes its current turn as a
+ * guard.
  */
 export function canContinueSubagent(
   outcome: SubagentOutcome | string | null | undefined,
-  hasHistory: boolean,
+  hasInstance: boolean,
 ): boolean {
-  if (!hasHistory) return false;
-  if (!outcome || typeof outcome !== "string") return false;
-  return SUBAGENT_CONTINUABLE_OUTCOMES.has(outcome);
+  if (!hasInstance) return false;
+  return isSubagentSettled(outcome);
 }
 
 export function shouldShowSubagentContinue(input: {
   outcome: SubagentOutcome | string | null | undefined;
-  hasHistory: boolean;
+  hasInstance: boolean;
   canPromptParent: boolean;
   readOnlySession: boolean;
   isStaleTab: boolean;
 }): boolean {
   if (input.isStaleTab) return false;
   if (!input.canPromptParent || input.readOnlySession) return false;
-  return canContinueSubagent(input.outcome, input.hasHistory);
+  return canContinueSubagent(input.outcome, input.hasInstance);
 }
 
 export type CapturedContinueIdentity =

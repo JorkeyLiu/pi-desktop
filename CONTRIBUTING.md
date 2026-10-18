@@ -30,23 +30,25 @@ For a suspected security vulnerability, do not open a public issue. Follow
 
 - `main` is the protected integration branch. Do not develop on it or push to
   it directly.
-- Every request uses one short-lived branch and one dedicated worktree,
-  including documentation, chores, and small fixes.
-- Create the branch from an up-to-date `origin/main` and use a name such as
-  `feat/provider-import`, `fix/session-refresh`, or
-  `docs/contributing-guide`.
+- Develop on a non-`main` branch: the current checkout when it is already on a
+  development branch, or a short-lived request branch created from an
+  up-to-date `origin/main`. Use a name such as `feat/provider-import`,
+  `fix/session-refresh`, or `docs/contributing-guide`.
+- A dedicated worktree per request is optional. Create one when isolation
+  helps, for example parallel or incompatible concurrent changes.
 - Before opening or updating a pull request, `origin/main` must be an ancestor
   of the request head. Run `pnpm check:pr-base`. Do not open or update a PR
   that is behind `origin/main`.
 - Preserve uncommitted work in the primary checkout. Do not reset, stash, move,
   or overwrite another contributor's work.
-- Do not reuse another request's branch or worktree. Remove only your own
-  worktree and branch after the change has been integrated.
+- Do not reuse, modify, or delete another contributor's branch or worktree.
+  Remove only your own worktree and branch after the change has been
+  integrated.
 - Use English for code, identifiers, comments, commits, repository
   documentation, and specifications. GitHub discussions may use the language
   of the original author.
 
-## Start an Isolated Request
+## Start a Request
 
 From the primary checkout, first inspect local work and fetch the current
 integration branch:
@@ -56,26 +58,25 @@ git status --short
 git fetch origin main
 ```
 
-If the primary `main` worktree is clean, synchronize it before creating the
-request worktree:
+Work on a non-`main` branch: stay on the current branch when it is already a
+development branch, or create a short-lived request branch from the fetched
+`origin/main`:
 
 ```bash
-git switch main
-git fetch origin main
-git merge --ff-only origin/main
+git switch -c <type>/<short-description> origin/main
+```
+
+When isolation helps — for example parallel or incompatible concurrent
+changes — use a dedicated worktree instead:
+
+```bash
 git worktree add -b <type>/<short-description> \
   ../PI-Desktop-worktrees/<short-description> origin/main
 cd ../PI-Desktop-worktrees/<short-description>
 ```
 
-That fast-forward fails once local `main` carries its own integration merge of
-a delivered request; synchronize with `git merge origin/main` instead, and
-resolve the divergence before starting new work without discarding commits.
-
-If the primary checkout has uncommitted work or is being used for another
-branch, leave it untouched and create the request worktree directly from the
-fetched `origin/main` instead. Never discard unrelated work to satisfy this
-sequence.
+Never discard, stash, move, or overwrite unrelated work to satisfy this
+sequence, and never delete another contributor's branch or worktree.
 
 ## Plan and Implement
 
@@ -190,8 +191,8 @@ temporary Pull Request Acceptance Scope above is in force; maintainer-planned
 work keeps every change type.
 
 Refresh against latest `origin/main` (`pnpm check:pr-base`) and run the
-required E2E suite from the request worktree first; then open a pull request
-against `main` with:
+required E2E suite from the task's working checkout first; then open a pull
+request against `main` with:
 
 - a concise summary and rationale;
 - affected specs, ADRs, and E2E scenarios;
@@ -211,6 +212,7 @@ From a clean primary checkout:
 git fetch origin main
 git switch main
 git merge origin/main
+# only if a worktree was created for this task:
 git worktree remove ../PI-Desktop-worktrees/<short-description>
 git branch -d <type>/<short-description>
 git worktree prune
@@ -218,7 +220,7 @@ git worktree prune
 
 After a remote merge, local `main` is synchronized with `git merge --ff-only
 origin/main` (or `git merge origin/main` if it has diverged). Do not merge the
-request branch into local `main` merely to open a PR.
+task branch into local `main` merely to open a PR.
 
 For code-bearing changes, record the required E2E result from a candidate that
 contains latest `origin/main` before the pull request is opened, and rerun the

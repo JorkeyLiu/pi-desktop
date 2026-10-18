@@ -6,36 +6,23 @@
  * only ever passes a `delegationId`, and the reverse map finds the chain.
  */
 
-import {
-  MAX_RESUMABLE_CHAINS_PER_AGENT,
-  MAX_RESUMABLE_READ_LINES,
-} from "@pi-desktop/shared";
+import { MAX_RESUMABLE_CHAINS_PER_AGENT } from "@pi-desktop/shared";
 import {
   formatResumableList,
-  isChainWithinReadBudget,
   type DelegationChain,
   type ResumableChain,
 } from "./delegation-history.js";
 
 /**
- * Settled statuses a chain can resume from. `interrupted` is a persisted
- * app-exit state, not an explicit stop: the run never settled, its rows are
- * retained history, and resuming continues them. Explicit `stopped`
- * (TaskStop/user Stop) and `aborted` stay non-resumable, as does `running`.
+ * How a chain's last run ended is a historical fact, never a barrier: every
+ * settled outcome (`completed`, `failed`, `timed_out`, `interrupted`,
+ * `stopped`, `aborted`) can be continued. The only liveness gate is a still
+ * running run — continuing it would fork a second execution on one chain.
  */
-const RESUMABLE_STATUSES = new Set([
-  "completed",
-  "failed",
-  "timed_out",
-  "interrupted",
-]);
-
 export type ChainLookupError =
   | { kind: "unknown" }
   | { kind: "running"; delegationId: string }
-  | { kind: "not-resumable"; status: string }
-  | { kind: "agent-mismatch"; expected: string; actual: string }
-  | { kind: "over-budget" };
+  | { kind: "agent-mismatch"; expected: string; actual: string };
 
 export class DelegationChainRegistry {
   private readonly chains = new Map<string, DelegationChain>();
@@ -46,7 +33,6 @@ export class DelegationChainRegistry {
     this.chains.clear();
     this.byDelegationId.clear();
     for (const chain of chains) this.install(chain);
-    this.evictOverflow();
   }
 
   lookup(delegationId: string): DelegationChain | undefined {
@@ -76,19 +62,10 @@ export class DelegationChainRegistry {
     if (latest && options.runningDelegationIds.has(latest)) {
       return { ok: false, error: { kind: "running", delegationId: latest } };
     }
-    // An unknown status only happens for a chain rebuilt from the transcript
-    // at launch, where live records are gone: its last run is settled by
-    // definition. A settled chain carries its own status, which survives
-    // `pruneFinishedDelegations` deleting the runtime's records.
-    if (chain.latestStatus && !RESUMABLE_STATUSES.has(chain.latestStatus)) {
-      return {
-        ok: false,
-        error: { kind: "not-resumable", status: chain.latestStatus },
-      };
-    }
-    if (!isChainWithinReadBudget(chain)) {
-      return { ok: false, error: { kind: "over-budget" } };
-    }
+    // No status or read-budget gate: a chain's settled outcome and how much it
+    // read are history, not a permanent ban. The caller seeds the continued
+    // run from the retained rows and lets the delegate's own budget protect
+    // its context.
     return { ok: true, chain };
   }
 
@@ -180,7 +157,6 @@ export class DelegationChainRegistry {
       latestStatus: status,
       lastActivityAt: Date.now(),
     });
-    this.evictOverflow();
   }
 
   drop(delegateSessionId: string): void {
@@ -190,25 +166,41 @@ export class DelegationChainRegistry {
     for (const id of chain.delegationIds) this.byDelegationId.delete(id);
   }
 
+  /**
+   * Chains the parent prompt may advertise, newest first. Every retained chain
+   * is addressable by `Task(resume)` regardless of this list; the bound exists
+   * only so a long session cannot grow the prompt without limit. The only
+   * exclusion is a still-running run, which the parent should steer or wait on
+   * instead of forking a second execution.
+   */
   resumableList(options: {
     runningDelegationIds: ReadonlySet<string>;
   }): ResumableChain[] {
-    const listed: ResumableChain[] = [];
+    const candidates: ResumableChain[] = [];
     for (const chain of this.chains.values()) {
       const latest = chain.latestDelegationId;
       if (!latest) continue;
+      // A run still working is steered or waited on, never offered as a
+      // continuation target. `runningDelegationIds` is the live authority;
+      // `latestStatus` covers a chain the caller did not enumerate.
+      if (chain.latestStatus === "running") continue;
       if (options.runningDelegationIds.has(latest)) continue;
-      if (chain.latestStatus && !RESUMABLE_STATUSES.has(chain.latestStatus)) {
-        continue;
-      }
-      if (!isChainWithinReadBudget(chain, MAX_RESUMABLE_READ_LINES)) continue;
-      listed.push({
+      candidates.push({
         ...chain,
         latestDelegationId: latest,
         latestObjective: chain.latestObjective ?? "",
       });
     }
-    return listed.sort((left, right) => right.lastActivityAt - left.lastActivityAt);
+    candidates.sort((left, right) => right.lastActivityAt - left.lastActivityAt);
+    const listed: ResumableChain[] = [];
+    const perAgent = new Map<string, number>();
+    for (const chain of candidates) {
+      const count = perAgent.get(chain.agentName) ?? 0;
+      if (count >= MAX_RESUMABLE_CHAINS_PER_AGENT) continue;
+      perAgent.set(chain.agentName, count + 1);
+      listed.push(chain);
+    }
+    return listed;
   }
 
   promptBlock(options: {
@@ -241,27 +233,6 @@ export class DelegationChainRegistry {
     this.chains.set(chain.delegateSessionId, chain);
     for (const id of chain.delegationIds) {
       this.byDelegationId.set(id, chain.delegateSessionId);
-    }
-  }
-
-  private evictOverflow(): void {
-    const byAgent = new Map<string, DelegationChain[]>();
-    for (const chain of this.chains.values()) {
-      const group = byAgent.get(chain.agentName) ?? [];
-      group.push(chain);
-      byAgent.set(chain.agentName, group);
-    }
-    for (const group of byAgent.values()) {
-      // A working chain is never evicted: dropping it would strand the delegate
-      // still writing into it, and the bound counts reusable chains anyway. Any
-      // overflow those chains caused is resolved the moment they settle,
-      // because `settle` runs this again (ADR 0279 §7).
-      const settled = group
-        .filter((chain) => chain.latestStatus !== "running")
-        .sort((left, right) => right.lastActivityAt - left.lastActivityAt);
-      for (const stale of settled.slice(MAX_RESUMABLE_CHAINS_PER_AGENT)) {
-        this.drop(stale.delegateSessionId);
-      }
     }
   }
 }

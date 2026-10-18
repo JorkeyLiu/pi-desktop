@@ -159,8 +159,8 @@ test("settled continuable tab offers direct continue while stale and remote tabs
     // Latest tab owns the direct continue action with a single composer.
     const latest = render("d2");
     assert.match(latest, /Completed/);
-    // Unified continue composer: retained-history helper, single Send.
-    assert.match(latest, /retained history/);
+    // Unified continue composer: a follow-up continues the same subagent, one Send.
+    assert.match(latest, /Continues this subagent as a new run/);
     assert.match(latest, /Send/);
     // No parent-prompt path remains: no ask-parent label, no follow-up
     // distinction, no resume help.
@@ -221,29 +221,39 @@ test("owner chip and blocked composers name their own capability reason", async 
     const stale = render("d1");
     assert.match(stale, /continued elsewhere/);
     assert.doesNotMatch(stale, /Send a follow-up/);
-    // History-less settled tab names the missing history.
+    // A tab whose Task calls are missing has no instance: it names the
+    // no-instance reason instead of a permanent cannot-continue line.
     seed(useAppStore, {
       messages: [taskMessage("t1", "call-1", "d9", "completed")],
       running: false,
     });
-    // History-less means no chain transcript: craft it by rendering an id with
-    // no Task call at all.
-    const noHistory = render("missing");
-    assert.match(noHistory, /No retained history to continue/);
-    // Explicit ends name their own stop reason, resolved in SSR.
-    const endedCopy = {
-      stopped: /Stopped by request — it cannot continue/,
-      aborted: /Stopped — it cannot continue/,
-      denied: /Never started — nothing to continue/,
-    };
-    for (const status of ["stopped", "aborted", "denied"]) {
+    const noInstance = render("missing");
+    assert.match(noInstance, /Never started — nothing to continue/);
+    // A child stopped before its first event is instantiated, so it continues
+    // (no child rows required) and never shows a cannot-continue line.
+    for (const status of ["stopped", "aborted"]) {
       seed(useAppStore, {
         messages: [taskMessage("t1", "call-1", "d3", status)],
         running: false,
       });
-      const blocked = render("d3");
-      assert.match(blocked, endedCopy[status]);
+      const stoppedChild = render("d3");
+      assert.match(stoppedChild, /Send a follow-up/);
+      assert.doesNotMatch(stoppedChild, /cannot continue/);
     }
+    // A denied never-started call has no delegation identity: no instance.
+    seed(useAppStore, {
+      messages: [message("t1", "tool", "", {
+        toolName: "Task",
+        toolCallId: "call-9",
+        toolStatus: "denied",
+        toolArgs: { agent: "explorer", task: "Investigate the cache" },
+        toolResult: { details: { denied: true } },
+      })],
+      running: false,
+    });
+    const denied = render("call-9");
+    assert.match(denied, /Never started — nothing to continue/);
+    assert.doesNotMatch(denied, /Send a follow-up/);
   } finally { await vite.close(); }
 });
 

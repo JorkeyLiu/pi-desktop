@@ -105,7 +105,7 @@ const results = [];
 try {
   for (const mode of ["error", "abort", "stop", "direct"]) {
     const s = scenario = { mode, ids: new Map(), settled: new Map(), waiting: new Set(),
-      errors: [], replayed: [], rejected: [], parentErrors: [] };
+      errors: [], replayed: [], rejected: [], parentErrors: [], resumeDeliveries: 0 };
     const runtime = new DesktopAgentRuntime({
       sessionId: `fixture-${mode}`, mode: "agent", provider: provider("parent"), thinkingLevel: "off", projectPath,
       commandShell: { id: "bash", label: "Bash", dialect: "posix", available: true, isDefault: true },
@@ -130,6 +130,8 @@ try {
         const message = event.type === "message_end" ? event.message : undefined;
         if (message?.toolName === "Task" && message.toolResult?.details?.status !== "running") {
           s.settled.set(message.toolCallId, message.toolResult.details);
+          // Each explicit parent resume delivers its report back to the parent.
+          if (message.toolCallId.startsWith("resume_")) s.resumeDeliveries += 1;
         }
       },
     });
@@ -160,16 +162,36 @@ try {
         if (mode === "error") assert.equal(s.settled.get(id).error.code, "SUBAGENT_PARENT_FAILED");
       }
       if (mode === "error") assert.equal(s.parentErrors.length, 1);
+      // A terminal parent failure, user abort, or TaskStop cancels that run:
+      // its live provider streams close and it retires waiting/delivery. It is
+      // never replayed on its own until the parent explicitly asks again.
+      await until(() => s.waiting.size === 0);
+      const cancelledDelegationIds = new Set(s.ids.values());
+      const cancelledStatuses = new Map(["task_A", "task_B"].map((id) => [id, s.settled.get(id).status]));
+      assert.equal(s.replayed.length, 0, "a cancelled run must not replay on its own");
+      assert.equal(s.rejected.length, 0);
+      // Whatever the last outcome, an explicit parent Task(resume) is a new
+      // parent-owned run: both delegates start again, each seeded from its own
+      // original task and retained Read history.
       await bounded(runtime.prompt("Resume both delegates"));
-      if (mode === "error") {
-        assert.equal(s.replayed.length, 2);
-        assert.equal(s.rejected.length, 0);
-        const histories = s.replayed.map((body) => JSON.stringify(body.messages));
-        assert.ok(histories.some((body) => body.includes("fixture-A.txt") && !body.includes("fixture-B.txt")));
-        assert.ok(histories.some((body) => body.includes("fixture-B.txt") && !body.includes("fixture-A.txt")));
-      } else {
-        assert.equal(s.replayed.length, 0);
-        assert.equal(s.rejected.length, 2);
+      assert.equal(s.replayed.length, 2);
+      assert.equal(s.rejected.length, 0);
+      const histories = s.replayed.map((body) => JSON.stringify(body.messages));
+      assert.ok(histories.some((body) => body.includes("Task A") && body.includes("fixture-A.txt") && !body.includes("fixture-B.txt")));
+      assert.ok(histories.some((body) => body.includes("Task B") && body.includes("fixture-B.txt") && !body.includes("fixture-A.txt")));
+      // Every fresh dependency is delivered back to the parent exactly once, as
+      // a new run on the chain, never as the cancelled execution.
+      assert.equal(s.resumeDeliveries, 2, "each resumed delegate must deliver its report once");
+      for (const key of ["resume_0", "resume_1"]) {
+        const resumed = s.settled.get(key);
+        assert.ok(resumed, `${key} must report its result to the parent`);
+        assert.equal(resumed.status, "completed");
+        assert.equal(cancelledDelegationIds.has(resumed.delegationId), false, `${key} must be a new run, not the cancelled execution`);
+      }
+      // The cancelled execution stays cancelled: its own Task rows keep their
+      // historical status and are not resurrected by the continuation.
+      for (const id of ["task_A", "task_B"]) {
+        assert.equal(s.settled.get(id).status, cancelledStatuses.get(id));
       }
       assert.deepEqual(s.errors, []);
       results.push({ mode, resumed: s.replayed.length, rejected: s.rejected.length });

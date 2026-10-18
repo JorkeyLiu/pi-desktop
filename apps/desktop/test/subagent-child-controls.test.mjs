@@ -126,7 +126,7 @@ test("resume-chain metrics aggregate spend once and keep latest occupancy", asyn
   } finally { await vite.close(); }
 });
 
-test("continuability excludes live/stopped/aborted and needs history", async () => {
+test("every instantiated settled child continues; live and instance-less do not", async () => {
   const vite = await createServer({
     root, configFile: false,
     server: { middlewareMode: true, hmr: false, ws: false },
@@ -135,15 +135,22 @@ test("continuability excludes live/stopped/aborted and needs history", async () 
   });
   try {
     const actions = await vite.ssrLoadModule("/src/lib/subagent-actions.ts");
-    assert.equal(actions.canContinueSubagent("failed", true), true);
-    assert.equal(actions.canContinueSubagent("timed_out", true), true);
-    assert.equal(actions.canContinueSubagent("interrupted", true), true);
-    assert.equal(actions.canContinueSubagent("completed", true), true);
+    // Outcome is history, never a gate: no instantiated settled child is
+    // permanently uncontinuable, including a child stopped before its first
+    // transcript event (no retained child rows required).
+    for (const outcome of [
+      "completed", "failed", "timed_out", "interrupted", "stopped", "aborted", "denied",
+    ]) {
+      assert.equal(actions.canContinueSubagent(outcome, true), true, outcome);
+    }
+    // A live child steers instead of starting a second simultaneous run.
     assert.equal(actions.canContinueSubagent("running", true), false);
-    assert.equal(actions.canContinueSubagent("stopped", true), false);
-    assert.equal(actions.canContinueSubagent("aborted", true), false);
-    assert.equal(actions.canContinueSubagent("denied", true), false);
+    assert.equal(actions.canContinueSubagent(undefined, true), false);
+    assert.equal(actions.canContinueSubagent(null, true), false);
+    // No backend instance to continue: a denied never-started call or a tab
+    // whose Task chain is missing.
     assert.equal(actions.canContinueSubagent("failed", false), false);
+    assert.equal(actions.canContinueSubagent("stopped", false), false);
     // No parent-prompt resume path remains: the direct backend continue owns
     // settled follow-ups, so no resume prompt builder may exist.
     assert.equal(typeof actions.buildSubagentResumePrompt, "undefined");
@@ -472,14 +479,18 @@ test("F5 chain-latest owns status and continue, stale tab never duplicates", asy
     // Old tab after continuation is running via the latest id, so it never
     // offers a duplicate continue; the latest tab owns the action when settled.
     assert.equal(actions.shouldShowSubagentContinue({
-      outcome: "running", hasHistory: true, canPromptParent: true, readOnlySession: false, isStaleTab: true,
+      outcome: "running", hasInstance: true, canPromptParent: true, readOnlySession: false, isStaleTab: true,
     }), false);
     assert.equal(actions.shouldShowSubagentContinue({
-      outcome: "completed", hasHistory: true, canPromptParent: true, readOnlySession: false, isStaleTab: true,
+      outcome: "completed", hasInstance: true, canPromptParent: true, readOnlySession: false, isStaleTab: true,
     }), false);
+    // A stopped settled child is continuable; a missing instance is not.
     assert.equal(actions.shouldShowSubagentContinue({
-      outcome: "completed", hasHistory: true, canPromptParent: true, readOnlySession: false, isStaleTab: false,
+      outcome: "stopped", hasInstance: true, canPromptParent: true, readOnlySession: false, isStaleTab: false,
     }), true);
+    assert.equal(actions.shouldShowSubagentContinue({
+      outcome: "completed", hasInstance: false, canPromptParent: true, readOnlySession: false, isStaleTab: false,
+    }), false);
     // Disabled matrix: permission, remote, settled, and a missing owner turn
     // all block. The parent session's generic running flag is not consulted:
     // a running child may outlive parent UI idleness, and a detached run

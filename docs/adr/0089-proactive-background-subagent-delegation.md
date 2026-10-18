@@ -1,7 +1,8 @@
 # ADR 0089: Proactive Background Subagent Delegation
 
 - Status: Accepted for implementation (resumable delegations amended by
-  ADR 0279)
+  ADR 0279; chain continuability — `stopped` / `aborted` chains stay continuable
+  — per ADR 0279 §15)
 - Date: 2026-08-16
 - Deciders: PI-Desktop core
 - Related: D201, D202, ADR 0062, ADR 0063, ADR 0048, ADR 0100, ADR 0279, E2E-142
@@ -67,7 +68,10 @@ instructs the model to converge or stop before ending a turn.~~ (Superseded
 2026-10 by D328 / ADR 0166: parent idle keeps the durable turn open and does
 not abort running delegates; only `TaskStop`, user Stop, disposal, or a
 terminal parent error — ADR 0189 — ends them. The idle resume delivers reports
-and honors the session's configured progress wake.)
+and honors the session's configured progress wake.) "Ends them" means ends that
+*running execution*: by ADR 0279 §15 a `stopped` / `aborted` delegate's chain is
+still continuable from its retained history, and the stop retires only that
+run's waiting and delivery.
 
 ### 2. The system prompt names positive trigger patterns
 

@@ -396,16 +396,21 @@ export type SubagentDeliveryOwner = "parent" | "user";
  * User text continuing one settled delegate as a new run of the SAME chain
  * (direct child followup).
  *
- * Running delegates use `AgentSteerSubagentRequest`; this request resumes a
- * settled chain (`completed`, `failed`, `timed_out`, `interrupted` with
- * retained history) without asking the parent model to emit `Task(resume)`
- * first. The runtime spawns the new run with the chain's model/tools/
- * permissions through the same spawn path as `Task(resume)`, persists a
- * user-origin `Task` marker row (`toolArgs.resume`, `toolArgs.source:
- * "user"`) for ledger and replay without entering the parent model context,
- * and attributes the followup text to the child. `expectedTurnId` is only a
- * stale guard: the server decides `parent` vs `user` delivery from the source
- * record (attached while the parent expects this chain, detached otherwise).
+ * Running delegates use `AgentSteerSubagentRequest`; this request continues a
+ * settled chain without asking the parent model to emit `Task(resume)` first.
+ * How the run ended is history, never a permanent continuation ban: every
+ * settled execution continues — the recorded outcomes `completed`, `failed`,
+ * `aborted`, and `timed_out`, including a run surfaced as `stopped` (explicit
+ * stop) or `interrupted` (app closed mid-run). A child stopped before its
+ * first transcript event has no retained rows and still continues, seeded from
+ * the chain's original brief. The runtime spawns the new run with the chain's
+ * model/tools/permissions through the same spawn path as `Task(resume)`,
+ * persists a user-origin `Task` marker row (`toolArgs.resume`,
+ * `toolArgs.source: "user"`) for ledger and replay without entering the parent
+ * model context, and attributes the followup text to the child. `expectedTurnId`
+ * is only a stale guard: the server decides `parent` vs `user` delivery from
+ * the source record (attached while the parent expects this chain, detached
+ * otherwise).
  */
 export type AgentContinueSubagentRequest = {
   sessionId: string;
