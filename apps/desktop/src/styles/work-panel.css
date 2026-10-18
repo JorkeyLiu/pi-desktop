@@ -569,7 +569,9 @@
   }
 }
 
-.subagent-transcript-composer-controls > .stop-btn {
+/* The panel composer's single slot shares the main composer icon size;
+   both halves (stop and send) use the same compact geometry. */
+.subagent-transcript-composer-controls > :is(.stop-btn, .send-btn) {
   width: 26px;
   height: 26px;
   flex-basis: 26px;

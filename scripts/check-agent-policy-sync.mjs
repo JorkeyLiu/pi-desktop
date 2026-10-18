@@ -57,25 +57,6 @@ const claude = claudeRaw ? normalize(claudeRaw) : "";
 /** @type {{ id: string, anyOf: string[] }[]} */
 const REQUIRED_ANCHORS = [
   {
-    id: "optional-worktree-isolation",
-    anyOf: [
-      "a fresh dedicated branch or worktree per request is optional",
-      "dedicated branch or worktree per request is optional",
-    ],
-  },
-  {
-    id: "protect-other-agent-work",
-    anyOf: ["reuse, modify, or delete another agent's branch or worktree"],
-  },
-  {
-    id: "never-develop-on-main",
-    anyOf: [
-      "never develop on `main`",
-      "never develop directly on `main`",
-      "develop directly on `main`",
-    ],
-  },
-  {
     id: "process-model",
     anyOf: [
       "renderer preload ipc electron main rust host core / node agent runtime",
@@ -95,16 +76,11 @@ const REQUIRED_ANCHORS = [
     anyOf: ["electron main must remain a thin orchestrator", "electron main stays a thin orchestrator"],
   },
   {
-    id: "no-local-main-before-e2e",
-    anyOf: ["merge task → local main"],
-  },
-  {
-    id: "pr-contains-latest-main",
-    anyOf: ["do not open or update a PR that is behind `origin/main`"],
-  },
-  {
-    id: "task-candidate-e2e",
-    anyOf: ["task-candidate e2e"],
+    id: "preserve-unrelated-work",
+    anyOf: [
+      "preserve changes from the user and other agents",
+      "preserve unrelated work",
+    ],
   },
   {
     id: "host-e2e-environment",
@@ -112,6 +88,10 @@ const REQUIRED_ANCHORS = [
       "do not run `pnpm install`, `npm install`, or create a second dependency or runtime environment solely to execute e2e",
       "never run `pnpm install` or `npm install`, or create a second dependency or runtime environment, solely for e2e",
     ],
+  },
+  {
+    id: "code-bearing-e2e",
+    anyOf: ["every code-bearing change must run the relevant e2e suites"],
   },
   {
     id: "architecture-ratchet-hotspots",

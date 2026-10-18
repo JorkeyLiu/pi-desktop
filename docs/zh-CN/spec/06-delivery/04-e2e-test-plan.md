@@ -86,8 +86,8 @@
 - 记录 MVP 必须验证的每个用户可见和协议可见的行为。
 - 提供映射到验收标准 (A–H) 和里程碑 (M1–M6) 的场景目录。
 - 作为可追溯性主干：场景 ID ↔ 验收标准 ↔ 规范。
-- 定义代码 pull request 的相关 E2E 合入门。
-- 让验证证据与准备合入的可执行提交保持关联。
+- 定义含代码改动的必需 E2E 验证。
+- 让验证证据与实际运行的来源保持关联，并涵盖之后对可执行内容的改动。
 
 ### E2E-LIVE-VOICE-four-stage-ui
 
@@ -135,7 +135,7 @@
   覆盖已挂载的生产控件、控制器、store、快捷键、i18n、清理顺序、工作授权，
   以及使用模拟 shell 导航和伪造外部边界的错误恢复。该测试不会挂载完整的
   AppShell/设置/插件路由，也不会实际使用服务商、设备、权限提示或音频输出。
-- **状态：** 请求候选 fixture 的 48/48 项交互检查通过。完整 AppShell、真实服务商
+- **状态：** 该 fixture 的 48/48 项交互检查通过。完整 AppShell、真实服务商
   和设备兼容性尚未验证。
 
 ## 2. 非目标
@@ -216,13 +216,15 @@ unit/integration 测试；代码 pull request 使用有选择且高价值的 E2E
 
 ---
 
-## E2E PR 合入门
+## E2E 含代码改动的验证
 
-每个代码 pull request 都必须在打开或更新前，在已经包含最新 `origin/main` 的候选上通过与其回归面相关的 E2E（`pnpm check:pr-base`）。不得打开落后于 `origin/main` 的 PR。不要为了跑 E2E 把任务合进本地 `main`。代码变更包括渲染器、Electron Main、Preload、Agent Runtime、Rust host-core、会话、转录、计划、插件、MCP、权限、供应商/模型运行时、持久化、进程生命周期、打包/启动，以及影响应用执行的构建或 CI 行为。仅文档更改在不影响可执行行为时可豁免。
+每个含代码的改动都必须针对已构建的改动运行与其回归面相关的 E2E。代码变更包括渲染器、Electron Main、Preload、Agent Runtime、Rust host-core、会话、转录、计划、插件、MCP、权限、供应商/模型运行时、持久化、进程生命周期、打包/启动，以及影响应用执行的构建或 CI 行为。仅文档更改在不影响可执行行为时可豁免。
+
+针对真实已构建的改动运行所选套件。记录被测来源、基线、结果和环境。
 
 ### E2E 环境复用
 
-task-candidate E2E 从任务工作检出运行，但使用主工作区已经准备好的宿主开发环境。必要时通过引用或链接复用兼容的 Node/pnpm 工具链、`node_modules`、Electron、Rust/Cargo 目标、包存储、构建缓存和忽略的配置。
+E2E 从工作检出运行，并使用其中已经准备好的宿主开发环境。必要时通过引用或链接复用兼容的 Node/pnpm 工具链、`node_modules`、Electron、Rust/Cargo 目标、包存储、构建缓存和忽略的配置。
 
 不得为了 E2E 单独运行 `pnpm install`、`npm install`，或创建第二套依赖/运行时环境。只隔离可变测试状态：临时 profile、数据目录、socket、端口、日志和工件。仅当宿主环境缺失或不兼容时才安装或重建依赖，并记录原因；干净的 CI 和发布 runner 可以按 lockfile 安装。
 
@@ -248,13 +250,13 @@ task-candidate E2E 从任务工作检出运行，但使用主工作区已经准�
 - 完成通知静默或静默回合契约（D193 / D446）：`pnpm test:e2e:session-completion`。
 - 同时涉及多个面的改动使用适用套件的并集。
 
-`pnpm test:e2e` 是 host RPC、IPC、Agent 执行、插件、持久化集成和共享运行时合约的默认跨系统烟雾测试。由于显示、平台、凭据、硬件或其他环境能力缺失而无法运行的必需套件，必须记录为 `NOT RUN`，并说明原因、替代验证和剩余风险。在具备条件且可信的环境中通过前，该 pull request 不具备合入条件。
+`pnpm test:e2e` 是 host RPC、IPC、Agent 执行、插件、持久化集成和共享运行时合约的默认跨系统烟雾测试。由于显示、平台、凭据、硬件或其他环境能力缺失而无法运行的必需套件，必须记录为 `NOT RUN`，并说明原因、替代验证和剩余风险。在通过该套件之前，该闸门不满足且交付仍未完成。
 
-必需结果必须对应准备合入的可执行提交。E2E 通过后如果可执行代码发生变化，必须重新运行受影响套件。报告命令、结果、测试提交以及相关环境限制；不得声称未运行的套件已通过。
+必需结果必须对应闸门运行的可执行来源；之后对可执行内容的任何改动都要求重新运行受影响套件。否则以记录的结果为准。报告每条命令、结果、被测来源以及相关环境限制；不得声称未运行的套件已通过。
 
 ## E2E 失败策略
 
-必需 E2E 失败时必须先分类为实现回归、测试回归、环境失败或已知的不稳定基础设施，修复产品或测试缺陷后重新运行受影响套件。不得删除场景、削弱断言或添加掩盖确定性失败的重试。所需平台尚未自动化时，保留已记录状态并说明仍需进行的平台验证。
+必需 E2E 失败会阻止宣告交付完成，直到该失败被分类为实现回归、测试回归、环境失败或已知的不稳定基础设施。修复产品或测试缺陷后重新运行受影响套件。不得删除场景、削弱断言或添加掩盖确定性失败的重试。所需平台尚未自动化时，保留已记录状态并说明仍需进行的平台验证。
 
 ## 7. MVP 场景目录
 
@@ -934,7 +936,7 @@ task-candidate E2E 从任务工作检出运行，但使用主工作区已经准�
 - **里程碑**：M2
 - **状态**：源代码覆盖（`composer-placeholder-context.test.mjs`）；斜杠菜单布局由 `pnpm build:js`
   后运行 `pnpm test:e2e:composer-autocomplete` 覆盖（真实 React/Chromium、生产 CSS、
-  确定性命令夹具，无需提供商）。完整提供商/会话场景仍为草案；分支执行不替代合并后 E2E
+  确定性命令夹具，无需提供商）。完整提供商/会话场景仍为草案；针对性执行不替代完整 E2E
 
 #### E2E-089：Composer 模型菜单向上打开并切换模型
 
@@ -3587,7 +3589,7 @@ IPC 请求无法关闭。
 - **里程碑**：M5
 - **状态详细信息**：`pnpm test:e2e:theme-surfaces` 使用真实 Chromium、生产 CSS
   和确定性 DOM 夹具覆盖上述普通表面、焦点状态及内置配色恢复，不覆盖插件安装/
-  生命周期。分支执行不能替代合并后 E2E；本场景其余表面仍需人工检查。
+  生命周期。针对性执行不能替代完整 E2E；本场景其余表面仍需人工检查。
 
 #### E2E-079：面向用户的英文和中文目录副本
 
@@ -5184,8 +5186,8 @@ eleven-tool-round desktop paths are verified by
   调用真实暂存文件写入器和受限文件读取器，核对字节并解码预览图片。
   需先构建桌面、安装 Electron，并有图形会话
   （Linux 可用 Xvfb）。测试不修改系统剪贴板，也不操作 Word；Word/各平台旅程
-  及完整提供商发送仍需人工验证。应在更新后的任务候选版本运行并记录修订；随后
-  按权威 `AGENTS.md` 工作流验证 PR 集成候选，无需先合入本地 main。
+  及完整提供商发送仍需人工验证。应针对已构建的改动运行并记录被测来源；随后
+  按权威 `AGENTS.md` 工作流在需要时验证已构建的改动。
 
 #### E2E-102a：Composer 文件引用结果使用紧凑的叶名称
 
@@ -5680,7 +5682,7 @@ eleven-tool-round desktop paths are verified by
 - **验收：** C / E / F / Quality / Security。
 - **里程碑：** M6+。
 - **自动化：** `pnpm test:e2e:todos` 从生产 Agent 的 ToolSearch/TodoWrite 路径进入，使用生产渲染器、真实 Host/SQLite 和隔离 Electron 配置验证清单旅程；仅替换外部模型流和 preload 传输，不使用真实 Provider 或用户配置。覆盖 Unicode 截断及警告重放、单一活动项归一化、全量清单渲染与 dock 内滚动、首次读取失败后不切换会话的主机恢复、已缓存快照重新同步及旧事件拒绝。运行时 `runtime-todos.test.ts` 使用确定性 Provider 验证 Agent 工具校验、超长内容归一化和续跑。
-- **状态：** 构建 Desktop 和 Host 后，在确切的请求候选中执行。Host-core 和渲染器定向测试是辅助检查，不能替代 Electron 用户旅程。
+- **状态：** 构建 Desktop 和 Host 后，针对已构建的改动执行。Host-core 和渲染器定向测试是辅助检查，不能替代 Electron 用户旅程。
 
 ## 8. 可追溯性矩阵
 | 验收 | 应用场景 |
@@ -7851,8 +7853,8 @@ runner 会在运行时的隔离临时目录中生成六个插件形态 fixture�
   自定义过的 `main.js` 不会被改写。
 - **关联规范**：`07-plugins/16-trusted-extensions.md` §3.2；ADR 0215。
 - **验收**：质量
-- **状态**：已实现导入到插件宿主的自动化夹具。合入最新 `origin/main` 后，在已提交的
-  任务候选上执行，并在交付证据中记录候选、基线、结果和环境。本夹具不覆盖原生选择器、
+- **状态**：已实现导入到插件宿主的自动化夹具。针对已构建的
+  改动运行，并在交付证据中记录被测来源、基线、结果和环境。本夹具不覆盖原生选择器、
   npm 依赖安装、Windows 运行或模型回合中的第三方扩展执行。
 
 #### E2E-PLUGIN-imported-pi-package-skills：显式导入包后按插件权限提供技能
@@ -8121,10 +8123,9 @@ runner 会在运行时的隔离临时目录中生成六个插件形态 fixture�
   `03-runtime/08-error-codes.md`、ADR 0239（D446 修订段）
 - **验收**：C（会话与流）、D（来源）、质量
 - **里程碑**：M6+
-- **状态**：由 `pnpm test:e2e:session-completion` 在任务工作检出中对已提交并
-  rebase 的候选版本自动验证。测试驱动真实 Host RPC、生产来源解析器、sidecar
+- **状态**：由 `pnpm test:e2e:session-completion` 对已构建的改动自动验证。测试驱动真实 Host RPC、生产来源解析器、sidecar
   和本地 SSE，并在 Host 结算前持久化运行时消息；不覆盖 Electron 队列/outbox
-  界面或真实提供商。候选与基线 SHA 及结果记录于验证报告；既有账本测试另用
+  界面或真实提供商。被测来源/基线与结果记录于验证报告；既有账本测试另用
   `pnpm test:e2e:collaboration` 运行。
 
 #### E2E-SESSION-hover-card-model-and-links：会话 hover 卡片展示可读模型并支持创建关系导航
@@ -8859,7 +8860,7 @@ runner 会在运行时的隔离临时目录中生成六个插件形态 fixture�
 - **规格**：03-runtime/06-host-rpc-protocol §2。
 - **验收**：A（运行时），C（会话）。
 - **里程碑**：M6+。
-- **状态**：已自动化；针对 task/PR 集成候选运行。
+- **状态**：已自动化；针对已构建的改动运行，并记录被测来源与基线。
 
 ### E2E-PROVIDER-ORDER: Reorder configured AI services
 
@@ -8995,7 +8996,7 @@ the latest destination. These assertions measure work counts, not device FPS.
 - **补充覆盖：** 共用模型／推理等级首层菜单、可搜索模型子菜单、键盘选择、保存重开 `high`、应用默认设置不变，以及运行会话中的已存推理等级。
 
 
-- **前提：** 独立桌面配置、构建后的任务候选版本、本地 SSE 模拟模型；不使用真实
+- **前提：** 独立桌面配置、已构建并已应用改动的候选、本地 SSE 模拟模型；不使用真实
   服务凭据或付费 API。
 - **步骤：** 点击页脚时钟；创建每天上午 09:00 的任务；选择另一个已保存项目、Auto 权限和非默认模型；编辑名称；暂停／启用；立即运行并在任务页面内读取刚准入运行的转写；从该页面打开结果会话，确认顶部栏提供返回定时任务的入口，返回后仍选中同一个任务与同一次运行；验证周期／四个时段主题下拉菜单、星期多选及选中标记、保存回显、空选择与固定时间；
   验证方向键、Home/End、Enter、Escape／Tab 和外部点击关闭；
@@ -9011,8 +9012,8 @@ the latest destination. These assertions measure work counts, not device FPS.
   ADR scheduled-desktop-automations；ADR 0305。
 - **验收：** 定时执行与可恢复的运行历史。
 - **里程碑：** MVP 后的桌面自动化。
-- **状态：** `node scripts/e2e-scheduled.mjs` 自动化覆盖；按 AGENTS.md 在任务候选
-  版本上运行，并记录已测提交与基线。
+- **状态：** `node scripts/e2e-scheduled.mjs` 自动化覆盖；针对已构建的改动
+  运行，并记录被测来源与基线。
 
 <a id="e2e-config-sync-webdav-portable-configuration"></a>
 
@@ -9066,7 +9067,7 @@ Follow the [current S3 acceptance scenario](/spec/06-delivery/04-e2e-test-plan#e
 
 ### E2E-PROVIDER-certificate-trust-and-terminal-errors
 
-- **前提：** 已构建、包含当前 `origin/main` 的任务候选版本，已安装 Electron，使用
+- **前提：** 已构建并已应用改动的候选，已安装 Electron，使用
   隔离的测试进程／配置和回环 HTTPS 夹具。不使用真实 provider、凭据或用户配置，
   也不写入操作系统证书库。
 - **步骤：** 运行 `node scripts/e2e-provider-certificates.mjs`。启动真实桌面
@@ -9207,7 +9208,7 @@ Follow the [current S3 acceptance scenario](/spec/06-delivery/04-e2e-test-plan#e
 
 ### E2E-IMAGE-generation-and-editing
 
-- **Preconditions:** Built task candidate containing latest origin/main; isolated
+- **Preconditions:** Built candidate with the change applied; isolated
   host data directory, local image HTTP fixture, no production credentials.
 - **Steps:** Choose a model in Advanced, cancel and verify no change; save and
   replace it through another provider's Advanced settings. Clear the binding via
@@ -9267,7 +9268,7 @@ Follow the [current S3 acceptance scenario](/spec/06-delivery/04-e2e-test-plan#e
 
 ### E2E-SCHEDULED-manual-workspace-binding
 
-- **Preconditions:** Built request candidate; isolated host data and two project
+- **Preconditions:** Built change; isolated host data and two project
   directories. No provider credentials or paid API.
 - **Steps:** Create Manual and Hourly tasks in project A and without a project;
   restart the host, switch to B, Run now, rename through the editor payload,
@@ -9532,7 +9533,7 @@ Follow the [current S3 acceptance scenario](/spec/06-delivery/04-e2e-test-plan#e
 - **步骤：** 1）在旧 `%LOCALAPPDATA%` 更新缓存中准备 `installer.exe`、`current.blockmap` 和待安装更新。2）设置 `PI_DESKTOP_UPDATE_CACHE_DIR` 为隔离缓存根目录后启动。3）确认 Main 将差分基线和待安装更新迁移至配置目录，并清理旧目录。4）完成更新并启动新版本。5）fixture 报告没有更新后检查配置目录。
 - **预期：** 缓存子目录名以 `app-update.yml` 为准；迁移保留待安装更新及差分基线。确认当前版本已是最新版本后，只移除 `pending/`，`installer.exe` 和 `current.blockmap` 仍供下次增量更新使用。未设置覆盖变量时默认路径保持不变；应用不会将下载写入 `Program Files`。
 - **规格：** `03-runtime/07-process-model.md`、ADR 0022。
-- **验收：** 缓存路径、迁移和清理单测通过；Windows task-candidate 验证应覆盖更新源传输、安装器交接和文件系统行为，且不连接真实发布源。
+- **验收：** 缓存路径、迁移和清理单测通过；Windows 候选验证应覆盖更新源传输、安装器交接和文件系统行为，且不连接真实发布源。
 - **里程碑：** M6+
 - **状态：** 单测和源码契约覆盖（`update-cache.test.mjs`、`auto-update.test.mjs`）；仍需 Windows 安装器/E2E 验证。
 
@@ -9637,7 +9638,7 @@ host-created files. The full app's file-preview viewer is covered separately.
 
 #### E2E-PLUGIN-fetch-redirect-policy
 
-- **Preconditions**: Current-main task candidate, built workspace packages,
+- **Preconditions**: Built change, built workspace packages,
   real Node plugin child process and two loopback HTTP fixtures; no real user
   profile, provider or credentials.
 - **Steps**: Load the example probe plugin and invoke its `probe.fetch` operation

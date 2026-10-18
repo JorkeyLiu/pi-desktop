@@ -2249,12 +2249,17 @@
   content: "";
 }
 
+/* Non-compact card/node slot: icon-only TooltipButton that composes with the
+   shared `.stop-btn` look; this rule (messages.css, after composer.css) pins
+   the 26px box and drops the old text-pill gap/nowrap. */
 .subagent-stop-button {
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 5px;
-  white-space: nowrap;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
 }
 
 .subagent-activity-header {
@@ -2285,8 +2290,9 @@
   min-height: 88px;
 }
 
+/* The card stop is icon-only, so reserve icon width, not text width. */
 .subagent-topology-node-actions:has(> .subagent-stop-button) :is(.subagent-topology-node-summary, .subagent-topology-node-steps) {
-  padding-right: 100px;
+  padding-right: 48px;
 }
 
 .subagent-topology-node-header {

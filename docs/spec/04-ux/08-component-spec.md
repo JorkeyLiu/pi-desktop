@@ -2505,7 +2505,10 @@ as a conversation:
   bubble), and the delegate's thinking, tool, and answer rows under that call
   render with the same message-list language, so a follow-up prompt reads as
   the next user turn.
-- The tab carries one Send composer for both states: while running it steers
+- The tab carries one action slot for both states, following the same
+  switching style as the main composer: running with an empty draft shows
+  icon-only Stop; a draft shows the icon Send button; settled shows Send
+  (disabled while the draft is empty). While running the composer steers
   text-only via `pi-desktop/agent/steerSubagent` with the owning turn identity
   (live parent turn when attached, the delegate's execution-accounting turn
   when user-owned; the attributed child echo stays in the child context),
@@ -2619,8 +2622,9 @@ as a conversation:
   state (`running`, `error`, `denied`, `success`). Clicking the node expands the
   existing brief/report/counters and nested rows; the report remains printed
   exactly once.
-- Local Desktop running nodes with a delegation handle expose a separate Stop
-  button; the delegate detail panel exposes the same action. The group header
+- Local Desktop running nodes with a delegation handle expose a separate
+  icon-only Stop control with a localized accessible name; the delegate detail
+  panel exposes the same action. The group header
   offers Stop all subagents for the current session. These actions do not open
   a model turn or stop the coordinator. Pending cancellation disables duplicate
   submission and reads Stopping; terminal nodes have no Stop action. Existing

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Policy-Sync: 2026-10-18.1
+Policy-Sync: 2026-10-18.2
 
 Mandatory rules for AI coding agents working in PI-Desktop.
 
@@ -76,17 +76,14 @@ workflow. Domain specifications remain authoritative for product
 behavior, architecture, protocol contracts, persistence semantics,
 security boundaries, and acceptance criteria.
 
-If a delivery document conflicts with the branch / isolation / integration
-/ E2E workflow defined in this file:
+If a delivery document conflicts with the validation and E2E workflow
+defined in this file:
 
 1. do not silently choose one
 2. treat the conflict as documentation drift
 3. follow the workflow in this file
 4. update the conflicting document as part of the same change when
    authorized
-
-In particular, do not merge task code into local `main` merely because
-an older document describes local-main E2E integration.
 
 ---
 
@@ -126,7 +123,7 @@ Unless the task explicitly requires behavior to change:
 * do not introduce breaking changes
 
 Refactoring must be behavior-preserving by default. Never hide a
-behavior change inside a `refactor` commit.
+behavior change behind a label that claims behavior preservation.
 
 If a breaking change is truly required, document:
 
@@ -193,125 +190,23 @@ or security boundary requires an ADR.
 
 ---
 
-## 5. Multi-Agent Isolation
+## 5. Multi-Agent Collaboration
 
-Assume multiple agents work concurrently.
+Assume multiple agents work concurrently in this repository.
 
-Development happens on a non-`main` branch. The primary checkout is a
-normal development workspace when it is on a non-`main` branch such as
-`jorkey/integration`. A fresh dedicated branch or worktree per request is
-optional: use isolation when it is genuinely useful — for example parallel
-or incompatible concurrent changes, or work that must not entangle another
-task's state. Local `main` stays a protected integration target, not a
-development or scratch workspace.
+* Preserve changes from the user and other agents. Never overwrite,
+  revert, move, or delete work you did not produce, even when it looks
+  unexplained or out of scope; it is not yours to clean up.
+* Keep your change scoped. Do not include unrelated changes in your
+  task, and do not depend on another agent's unfinished work.
+* Do your implementation, validation, and conflict resolution in your
+  own working checkout.
 
-### Never
-
-* develop directly on `main`
-* merge unvalidated task code into local `main`
-* use local `main` as a temporary integration branch
-* reuse, modify, or delete another agent's branch or worktree
-* reset or discard unrelated work
-* include unrelated changes in your task
-* depend on uncommitted work from another worktree
-
-### Optional worktree isolation
-
-When isolation helps, create a dedicated branch and worktree from current
-`main`:
-
-```bash
-git fetch origin main
-
-git worktree add \
-  -b <type>/<short-description> \
-  <worktree-path> \
-  origin/main
-
-cd <worktree-path>
-```
-
-Implementation, targeted validation, conflict resolution, and
-task-candidate E2E happen in the task's working checkout — the primary
-checkout on a non-`main` branch, or the optional task worktree.
-
-### E2E environment reuse
-
-Task-candidate E2E reuses the host development environment already
-provisioned in the primary checkout. Reuse the host Node/pnpm toolchain,
-compatible `node_modules`, Electron, Rust/Cargo targets, package-manager
-stores, build caches, and ignored local configuration by reference or link
-when needed.
-
-Do not run `pnpm install`, `npm install`, or create a second dependency or
-runtime environment solely to execute E2E. Keep only mutable test state
-(temporary profiles, data directories, sockets, ports, logs, and artifacts)
-isolated to the task's working checkout or its scratch directory. Install or rebuild
-dependencies only when the host environment is missing or incompatible, and
-record that reason. Clean CI and release runners may install from lockfiles.
-
-### Before candidate validation
-
-Refresh the task against the latest remote `main`.
-
-For a private branch that has not been pushed or shared:
-
-```bash
-git fetch origin main
-git rebase origin/main
-```
-
-If the branch has already been shared and rewriting history would be
-unsafe, do not force-push merely to rebase. Use a non-destructive
-integration strategy or rely on the PR integration candidate per § 16.
-
-Resolve conflicts in the task's working checkout. Never resolve task
-conflicts by touching another task's worktree or uncommitted work.
-
-### Before opening or updating a PR
-
-The request head must contain the latest `origin/main`. `origin/main`
-must be an ancestor of that head:
-
-```bash
-git fetch origin main
-git merge-base --is-ancestor origin/main HEAD
-pnpm check:pr-base
-```
-
-If that fails, refresh in the task's working checkout (`git rebase
-origin/main` on a private branch; a non-destructive merge when rewriting
-history would be unsafe), then re-run the check. Do not open or update a
-PR that is behind `origin/main`.
-
-### Fixed delivery order
-
-```text
-1. start from current origin/main on a non-main working branch
-   (primary checkout or an optional dedicated worktree)
-2. implement
-3. run targeted static/unit/integration checks
-4. review the task diff
-5. commit the task
-6. refresh the task branch against latest origin/main (`pnpm check:pr-base`)
-7. resolve conflicts
-8. run required task-candidate E2E
-9. push the request branch
-10. open/update the PR/MR
-11. validate the PR integration candidate
-12. merge into remote main through repository gates
-13. synchronize local main
-14. if you created a worktree, remove it and the merged local branch
-```
-
-Do not insert `merge task → local main` between steps 6 and 8. The task
-branch itself becomes the local integration candidate by incorporating
-the latest `origin/main`. Do not open or update a PR that is behind
-`origin/main`.
-
-A task-candidate E2E result is valid only when its tested commit and
-base revision are known. The PR integration gate then protects against
-`main` changing between local candidate validation and final merge.
+Git layout, branching, commits, pushes, and integration are the
+operator's choice, not a repository-imposed restriction on how you use
+Git. Conventions that help delivery are described in
+`docs/spec/06-delivery/03-ai-development-workflow.md`; use them when
+useful, and use a simpler flow when that is clearer.
 
 ---
 
@@ -690,6 +585,29 @@ when the user explicitly asks in the current task. UI / icon / style /
 main-renderer changes do not by themselves authorize it, and do not ask
 the user just because the change is UI-shaped.
 
+### Code-bearing E2E
+
+Every code-bearing change must run the relevant E2E suites, and the
+result must record the tested source, base, outcome, and environment. A
+suite that cannot run is recorded as `NOT RUN` with its reason,
+alternative validation, and remaining risk. Relevant E2E is part of the
+implementation, not a separate request, and applies to the change itself
+independent of any Git flow.
+
+### E2E environment reuse
+
+Reuse the host development environment already provisioned in the
+working checkout: the Node/pnpm toolchain, compatible `node_modules`,
+Electron, Rust/Cargo targets, package-manager stores, build caches, and
+ignored local configuration, by reference or link when needed.
+
+Do not run `pnpm install`, `npm install`, or create a second dependency
+or runtime environment solely to execute E2E. Keep only mutable test
+state — temporary profiles, data directories, sockets, ports, logs, and
+artifacts — isolated. Install or rebuild dependencies only when the host
+environment is missing or incompatible, and record that reason. Clean CI
+and release runners may install from lockfiles.
+
 ---
 
 ## 13. Specs Stay Synchronized
@@ -778,13 +696,12 @@ If (2) or (3) fail:
 * comment with the evidence in the pull request's language
 * prefer a minimal completion of the author's approach when that
   approach can actually reach the root cause
-* do not rewrite from scratch, force-push, or silently reimplement
+* do not rewrite from scratch or silently reimplement
   unless the user asks to take the work over
 
 If (1)–(3) hold:
 
 * preserve the contributor's work and authorship
-* do not force-push a contributor's branch
 * do not ask them to restart for minor style / completeness issues
 * missing specs, extra tests, i18n, naming, or formatting are
   follow-up only when they are not required to prove the root-cause
@@ -801,7 +718,6 @@ Landing blockers:
 * relevant test failure
 * required E2E failure
 * merge conflict
-* PR head does not contain the latest `origin/main`
 * data corruption risk
 * security violation
 * secret leakage
@@ -812,128 +728,47 @@ Landing blockers:
 
 A sound idea does not override a failing landing gate.
 
-### Two validation stages
-
-```text
-Task Candidate Validation
-        ↓
-PR Integration Validation
-```
-
-Task Candidate Validation runs in the task's working checkout after the
-request branch incorporates the latest available `origin/main`.
-
-PR Integration Validation verifies the actual code that is about to
-land, using:
-
-* GitHub PR merge ref
-* merge queue candidate
-* equivalent synthetic merge commit
-* another trusted integration candidate produced from current target
-  `main`
-
-Do not require the task to be merged into local `main` to perform E2E.
-
-A PR head commit and an integration candidate are equivalent only when
-they produce the same executable tree against the relevant target
-`main`. If `main` changed after task-candidate validation, the old
-local result remains useful evidence but does not by itself prove the
-new integration candidate.
-
 ---
 
-## 16. E2E Validates Integration Candidates, Not Branch Names
+## 16. E2E Validates the Change, Not the Git Layout
 
-E2E validates executable integration state. It does **not** validate
-whether Git reports the current branch name as `main`.
+E2E validates executable state — the change applied to the code that
+actually runs. It does not depend on a branch name, a merge base, or a
+particular Git flow. Whatever layout the operator uses, the required E2E
+must run against the real built change and record the tested source,
+base, result, and environment.
 
-The invariant:
+### 16.1 Recording E2E evidence
 
-```text
-latest applicable main + task changes = candidate executable state
-```
-
-not:
-
-```text
-current branch name == main
-```
-
-### 16.1 Task-candidate E2E
-
-Every code-bearing change runs relevant E2E suites against a candidate
-that contains:
-
-1. the request's commits
-2. the latest `origin/main` incorporated at candidate preparation
-3. all conflict resolutions required to combine them
-
-Normally:
-
-```bash
-git fetch origin main
-git rebase origin/main
-```
-
-then E2E from the task's working checkout.
-
-Record:
+Record, in the delivery report or the relevant coverage document:
 
 ```text
-Task candidate:
-Base main:
+Tested source:
+Base:
 E2E suites:
 Result:
 Environment:
 ```
 
-An E2E result applies only to the commit that actually ran. Do not
-modify local `main` to create this candidate.
+An E2E result applies only to the source tree that actually ran. If that
+executable content changes afterward — new commits, conflict resolution,
+or review fixes — rerun the affected suites.
 
-### 16.2 PR integration E2E
+### 16.2 Reruns and honest reporting
 
-The final landing decision uses PR integration E2E, run against the
-integration candidate defined above.
+A suite that cannot run is recorded as `NOT RUN` with its reason,
+alternative validation, and remaining risk; do not claim an unexecuted
+suite passed. Do not delete scenarios, weaken assertions, or add retries
+that hide a deterministic failure.
 
 ---
 
-## 17. Git Hygiene and Commit Messages
+## 17. Repository Hygiene
 
-The workspace may hold changes from the user or other agents. Do not
-overwrite, revert, move, or delete anything that is not from this task.
-
-### Hard prohibitions
-
-```text
-git reset --hard
-git checkout .
-git clean -fd
-git stash
-git add .
-git add -A
-git commit --no-verify
-```
-
-None of these run without an explicit user request for that exact
-command.
-
-### Commit rules
-
-* Commit only when the user asks.
-* Stage files by explicit path, then re-run `git status` to confirm
-  what is staged.
-* Message format: subject + blank line + body. Single-line commits are
-  rejected.
-* Subject uses the repo's semantic prefix (`feat(scope): ...`,
-  `fix(scope): ...`, `refactor(scope): ...`).
-* Body: 1–3 short paragraphs explaining **why**, not a re-listing of
-  the diff. Wrap around 72 columns.
-* Do not add `Co-Authored-By` or `Signed-off-by` unless the user
-  requests it.
-* Related issue goes as a trailer after a blank line: `fixes #N` or
-  `closes #N`.
-* Do not force-push. If a rebase conflict lands in a file not touched
-  by this task, stop and hand back to the user.
+Do not commit secrets, API keys, tokens, credentials, local databases,
+logs, or machine-specific paths, and do not commit `node_modules/`,
+build artifacts, or release packages. Review the change before finishing
+so it contains only the work the task intends.
 
 ---
 

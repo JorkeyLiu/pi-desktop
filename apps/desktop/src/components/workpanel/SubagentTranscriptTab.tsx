@@ -30,7 +30,11 @@ import { useFollowScroll } from "../../hooks/use-follow-scroll";
 import { useTranscriptView } from "../../hooks/use-transcript-view";
 import { useTranscriptSearchFocus } from "../../hooks/use-transcript-search-focus";
 import { IconArrowDown, IconBot } from "../icons";
-import { Button, HelpIcon, Textarea, TooltipButton } from "../ui";
+import { HelpIcon, Textarea, TooltipButton } from "../ui";
+import {
+  ComposerSendButton,
+  composerPrimaryAction,
+} from "../../features/chat/composer/ComposerPrimaryAction";
 import { DisclosureAnchorContext } from "../../lib/disclosure-anchor-context";
 import { TranscriptDisclosureProvider } from "../../features/chat/transcript/disclosure";
 import { buildSubagentTranscript } from "../../lib/subagent-transcript";
@@ -695,17 +699,16 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                   <span className="composer-model-thinking-dot" aria-hidden="true">·</span>
                   <span className="composer-model-thinking-level">{delegateSettings.thinkingLevel || "—"}</span>
                 </span>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  disabled={sendDisabled}
-                  onClick={sendComposer}
-                >
-                  {sendLabel}
-                </Button>
-                {running ? (
+                {composerPrimaryAction(running, draft.trim().length > 0) === "stop" ? (
                   <SubagentStopButton delegationId={activeDelegationId} running compact />
-                ) : null}
+                ) : (
+                  <ComposerSendButton
+                    tooltip={sendLabel}
+                    ariaLabel={sendLabel}
+                    disabled={sendDisabled}
+                    onClick={sendComposer}
+                  />
+                )}
               </div>
             </>
           ) : (

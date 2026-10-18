@@ -14,12 +14,15 @@ import { ContextUsageInspector } from "../../../components/ContextUsageInspector
 import { ComposerControlSlots } from "./ComposerControlSlots";
 import { TooltipButton } from "../../../components/ui";
 import {
-  IconArrowUp,
   IconPlus,
   IconSparkles,
   IconStop,
   IconUndo2,
 } from "../../../components/icons";
+import {
+  ComposerSendButton,
+  composerPrimaryAction,
+} from "./ComposerPrimaryAction";
 import { ModeIcon } from "./ComposerModeIcon";
 import { LiveVoiceControls } from "../../voice/live/LiveVoiceControls";
 import { ComposerModelPicker } from "./ComposerModelPicker";
@@ -235,7 +238,7 @@ export function ComposerToolbar({
             <IconUndo2 size={15} aria-hidden="true" />
           </TooltipButton>
         ) : null}
-        {runActive && !hasDraftContent ? (
+        {composerPrimaryAction(runActive, hasDraftContent) === "stop" ? (
           <TooltipButton
             type="button"
             className="stop-btn"
@@ -247,9 +250,7 @@ export function ComposerToolbar({
             <IconStop size={14} />
           </TooltipButton>
         ) : (
-          <TooltipButton
-            type="button"
-            className="send-btn"
+          <ComposerSendButton
             ariaLabel={modelReady ? t("chat.send") : t("settings.addProvider")}
             tooltip={
               runActive
@@ -264,9 +265,7 @@ export function ComposerToolbar({
               (!modelReady && !value.trim().startsWith("/"))
             }
             onClick={() => void submit()}
-          >
-            <IconArrowUp size={15} />
-          </TooltipButton>
+          />
         )}
       </div>
     </div>

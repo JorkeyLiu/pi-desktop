@@ -3,7 +3,7 @@ import { useSlotSessionId } from "../../../plugins/renderer-slots/use-slots";
 import { useEffect } from "react";
 import { create } from "zustand";
 import { useTranslation } from "react-i18next";
-import { Button, TooltipButton } from "../../../components/ui";
+import { TooltipButton } from "../../../components/ui";
 import { IconStop } from "../../../components/icons";
 import { api } from "../../../lib/api";
 import { useAppStore } from "../../../stores/app-store";
@@ -83,20 +83,19 @@ export function SubagentStopButton({
       </TooltipButton>
     );
   }
+  // Non-compact card/node slot: icon-only with a tooltip, per the renderer
+  // icon-only-action policy. `subagent-stop-button` keeps its 26px box while
+  // the shared `stop-btn` supplies the round icon-button look.
   return (
-    <Button
-      className="subagent-stop-button"
-      variant="secondary"
-      size="sm"
-      title={label}
-      aria-label={label}
+    <TooltipButton
+      type="button"
+      className="subagent-stop-button stop-btn"
+      tooltip={label}
+      ariaLabel={label}
       disabled={!!busy || stopping}
       onClick={() => void stop()}
     >
-      {stoppingRequest || stopping ? <span className="tool-spinner" aria-hidden /> : <IconStop size={9} />}
-      <span>{stoppingRequest || stopping
-        ? t("chat.stoppingSubagents")
-        : t(delegationId ? "chat.stopSubagent" : "chat.stopAllSubagentsShort")}</span>
-    </Button>
+      {stoppingRequest || stopping ? <span className="tool-spinner" aria-hidden /> : <IconStop size={13} />}
+    </TooltipButton>
   );
 }

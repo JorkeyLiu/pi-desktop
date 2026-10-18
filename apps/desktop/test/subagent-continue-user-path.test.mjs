@@ -257,7 +257,8 @@ test("header names the live report owner from backend fields, settled stays bare
 test("running steers, every settled child continues, only an instance-less call stays read-only", async () => {
   const { vite, render, useAppStore } = await setup();
   try {
-    // Running: steer composer via existing channel labels.
+    // Running: steer composer via existing channel labels, and with an empty
+    // draft the single action slot shows Stop instead of Send.
     seed(useAppStore, {
       messages: [taskMessage("t1", "call-1", "d1", "running")],
       running: true,
@@ -265,7 +266,9 @@ test("running steers, every settled child continues, only an instance-less call 
     const live = render("d1");
     assert.match(live, /Running/);
     assert.match(live, /Message the running subagent/);
-    assert.match(live, /Send to subagent/);
+    assert.match(live, /class="stop-btn"/);
+    assert.match(live, /aria-label="Stop Unnamed subagent"/);
+    assert.doesNotMatch(live, /Send to subagent/);
     // Settled continuable: direct continue composer, no parent prompt.
     seed(useAppStore, {
       messages: [taskMessage("t1", "call-1", "d2", "completed")],
@@ -509,6 +512,9 @@ window.piDesktop = { platform: "linux", on() { return () => {}; },
     if (channel === "pi-desktop/agent/continueSubagent") {
       return { ok: true, data: { accepted: true, delegationId: "d-new", turnId: "t-new" } };
     }
+    if (channel === "pi-desktop/agent/stop-subagents") {
+      return { ok: true, data: { pending: req.delegationIds ?? ["d1"] } };
+    }
     throw new Error("Unexpected channel " + channel);
   } };
 const base = { id: "s1", source: "local", title: "fixture" };
@@ -545,8 +551,9 @@ function header() { return document.querySelector('[data-testid="subagent-panel-
 function composerTextarea() { return document.querySelector('[data-testid="subagent-panel-footer"] textarea'); }
 function sendButton() {
   return [...document.querySelectorAll('[data-testid="subagent-panel-footer"] button')]
-    .find((button) => /^(Send|Sending)/.test(button.textContent.trim()));
+    .find((button) => /^Send/.test(button.getAttribute("aria-label") || ""));
 }
+function stopButton() { return document.querySelector('[data-testid="subagent-panel-footer"] .stop-btn'); }
 function setDraft(value) {
   const area = composerTextarea();
   check(area, "composer textarea missing");
@@ -584,11 +591,17 @@ window.continueProbe = async () => {
   await setPanelWidth(400);
   checkNoClip("settled 400px");
   check(document.body.textContent.includes("Context") && document.body.textContent.includes("Spent"), "400px context/spend labels missing");
+  // Settled with an empty draft keeps the single Send slot disabled and shows
+  // no Stop control.
+  const idleSend = sendButton();
+  check(idleSend && idleSend.disabled, "settled empty Send must be disabled");
+  check(!stopButton(), "settled must not show Stop");
   // Settled send continues the same chain directly; idle omits the turn guard.
   setDraft("go on");
   await settle();
   const send = sendButton();
   check(send && !send.disabled, "settled Send must enable when idle with local rights");
+  check(!stopButton(), "settled draft keeps the single Send, never Stop");
   calls.length = 0;
   flushSync(() => send.click());
   await settle(); await settle(); await new Promise((r) => setTimeout(r, 50)); await settle();
@@ -642,13 +655,30 @@ window.continueProbe = async () => {
   check(document.body.textContent.includes("Running"), "running status missing");
   check((document.querySelectorAll(".subagent-transcript-metrics").length) === 1, "running must keep one metrics region");
   checkNoClip("running 320px");
+  // Running with an empty draft is the single Stop slot: Send is absent.
+  check(stopButton(), "running empty must show the single Stop control");
+  check(!sendButton(), "running empty must not render Send");
   setDraft("keep going");
   await settle();
+  // A draft swaps the same single slot to Send and removes Stop.
+  check(sendButton() && !stopButton(), "draft must swap the single slot to Send");
   calls.length = 0;
   flushSync(() => sendButton().click());
   await settle(); await settle(); await new Promise((r) => setTimeout(r, 50)); await settle();
   const steered = calls.find((call) => call.channel === "pi-desktop/agent/steerSubagent");
   check(steered && steered.req.expectedTurnId === "turn-parent", "running Send must steer with turn guard");
+  // A successful steer clears the draft, returning the slot to Stop.
+  check(stopButton() && !sendButton(), "clearing the draft must return Stop");
+  // Stopping stays deduplicated: the shared stop control disables itself while
+  // a request is in flight and a second click issues no second request.
+  calls.length = 0;
+  const stop = stopButton();
+  flushSync(() => stop.click());
+  check(stop.disabled, "stop must disable while its request is in flight");
+  flushSync(() => stop.click());
+  await settle(); await settle(); await new Promise((r) => setTimeout(r, 50)); await settle();
+  const stops = calls.filter((call) => call.channel === "pi-desktop/agent/stop-subagents");
+  check(stops.length === 1, "a second stop click must not issue a second request, saw " + stops.length);
   flushSync(() => rootNode.unmount());
   return { passed: true };
 };

@@ -138,15 +138,64 @@ test("running delegation tab shows live status, steering echo attribution, and e
     assert.match(html, /keep going/);
     assert.match(html, /data-message-id="a1"/);
     assert.match(html, /working on it/);
-    // Latest delegation send/stop/status: enabled child composer + stop + metrics.
+    // Latest delegation send/stop/status: the single action slot shows Stop
+    // while running with an empty draft, never a Send control.
     assert.match(html, /Message the running subagent/);
-    assert.match(html, /Send to subagent/);
     assert.match(html, /stop-btn/);
+    assert.match(html, /aria-label="Stop Unnamed subagent"/);
+    assert.doesNotMatch(html, /Send to subagent/);
+    assert.doesNotMatch(html, /class="send-btn"/);
     // Disabled modes: the model label is display-only even while live.
     assert.match(html, /subagent-transcript-model-static/);
     assert.doesNotMatch(html, /aria-haspopup/);
     assert.doesNotMatch(html, /composer-model-thinking-chevron/);
     assert.match(html, /test-model/);
+  } finally { await vite.close(); }
+});
+
+test("subagent card stop controls are icon-only with localized accessible names", async () => {
+  const vite = await createServer({
+    root, configFile: false,
+    server: { middlewareMode: true, hmr: false, ws: false },
+    esbuild: { jsx: "automatic" }, appType: "custom",
+    optimizeDeps: { noDiscovery: true, include: [] },
+  });
+  try {
+    const i18n = createInstance();
+    await i18n.init({ lng: "en", resources: { en: { translation: flattenCatalog(catalogs.en) } } });
+    const { SubagentStopButton } = await vite.ssrLoadModule(
+      "/src/features/chat/transcript/SubagentStopButton.tsx",
+    );
+    const { SlotSessionProvider } = await vite.ssrLoadModule(
+      "/src/plugins/renderer-slots/use-slots.tsx",
+    );
+    const { useAppStore } = await vite.ssrLoadModule("/src/stores/app-store.ts");
+    Object.assign(useAppStore.getInitialState(), {
+      activeSessionId: "s1",
+      sessions: [{ id: "s1", source: "local", title: "fixture" }],
+    });
+    const renderStop = (props) =>
+      renderToStaticMarkup(
+        createElement(I18nextProvider, { i18n },
+          createElement(SlotSessionProvider, { sessionId: "s1" },
+            createElement(SubagentStopButton, props))),
+      );
+    // Card/node stop: icon-only TooltipButton, its localized name on the
+    // accessible name, and no visible label text left behind.
+    const named = renderStop({ delegationId: "d1", running: true, name: "explorer" });
+    assert.match(named, /class="subagent-stop-button stop-btn"/);
+    assert.match(named, /aria-label="Stop explorer"/);
+    const button = named.match(/<button[\s\S]*?<\/button>/)?.[0] ?? "";
+    assert.ok(button.length > 0, "card stop button missing");
+    assert.match(button, /<svg/);
+    assert.equal(button.replace(/<[^>]*>/g, "").trim(), "", "card stop must be icon-only");
+    // Session-wide stop-all keeps its own localized accessible name.
+    const all = renderStop({ running: true });
+    assert.match(all, /aria-label="Stop all subagents"/);
+    // The compact panel variant stays the same icon-only stop control.
+    const compact = renderStop({ delegationId: "d1", running: true, name: "explorer", compact: true });
+    assert.match(compact, /class="stop-btn"/);
+    assert.match(compact, /aria-label="Stop explorer"/);
   } finally { await vite.close(); }
 });
 

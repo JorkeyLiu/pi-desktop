@@ -4,13 +4,17 @@ import test from "node:test";
 import { loadStyles } from "./helpers/styles.mjs";
 
 const styles = await loadStyles();
-const [toolbarSource, modelPickerSource] = await Promise.all([
+const [toolbarSource, modelPickerSource, primaryActionSource] = await Promise.all([
   readFile(
     new URL("../src/features/chat/composer/ComposerToolbar.tsx", import.meta.url),
     "utf8",
   ),
   readFile(
     new URL("../src/features/chat/composer/ComposerModelPicker.tsx", import.meta.url),
+    "utf8",
+  ),
+  readFile(
+    new URL("../src/features/chat/composer/ComposerPrimaryAction.tsx", import.meta.url),
     "utf8",
   ),
 ]);
@@ -48,6 +52,7 @@ test("responsive rules preserve the semantic model trigger and action controls",
   assert.match(composerSource, /className=\"composer-model-thinking-chevron\"/);
   assert.match(composerSource, /ContextUsageInspector/);
   assert.match(composerSource, /composer-plugin-transform-btn/);
-  assert.match(composerSource, /className="send-btn"/);
   assert.match(composerSource, /className="stop-btn"/);
+  assert.match(composerSource, /<ComposerSendButton/);
+  assert.match(primaryActionSource, /className="send-btn"/);
 });

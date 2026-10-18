@@ -10,7 +10,7 @@
 
 ### E2E-QUEUE-send-now-wakes-subagents
 
-- **Preconditions:** Task working checkout with built workspace packages,
+- **Preconditions:** Working checkout with built workspace packages,
   compatible reused Host binary, temporary HOME/data/project, and a local SSE
   model fixture. Production Composer queue service, Main IPC, AgentHost, Rust
   Host and agent sidecar are used; no installed app or real account is used.
@@ -41,7 +41,7 @@
 
 ### E2E-STORAGE-custom-location-and-maintenance
 
-- **Preconditions:** Task working checkout, current remote-main base, shared
+- **Preconditions:** Working checkout, shared
   compatible host toolchain, built host-core and desktop, isolated temporary data
   and Chromium profiles. No user's running desktop, provider, or network is used.
 - **Steps:** Through the production Settings page, choose/cancel a destination,
@@ -238,7 +238,7 @@
   recovery with simulated shell navigation and fake external edges. This does
   not mount full AppShell/settings/plugin routes or exercise a real provider,
   device, permission prompt, or audio output.
-- **Status:** Task-candidate fixture passed 48/48 interaction checks. Full
+- **Status:** The fixture passed 48/48 interaction checks. Full
   AppShell, real-provider, and device compatibility remain unverified.
 
 ### E2E-LIVE-WORK-session-admission
@@ -558,7 +558,7 @@
   defaults, and the saved thinking level on the executed session.
 
 
-- **Preconditions:** Isolated desktop profile, built task candidate, local SSE
+- **Preconditions:** Isolated desktop profile, built change, local SSE
   fixture model; no real provider credentials or paid API.
 - **Steps:** Open the footer clock; create a daily Morning task at 09:00; select
   another saved project, Auto permission and a non-default configured model; edit its name;
@@ -600,7 +600,7 @@
 - **Acceptance:** Scheduled task execution and recoverable run history.
 - **Milestone:** Post-MVP desktop automations.
 - **Status:** Automated in `node scripts/e2e-scheduled.mjs`; run against the
-  request candidate per AGENTS.md, with tested head and base recorded.
+  built change, with tested source and base recorded.
 
 
 
@@ -627,10 +627,9 @@
 - Document every user-visible and protocol-visible behavior that MVP must verify.
 - Provide a scenario catalog that maps to acceptance criteria (A–H) and milestones (M1–M6).
 - Serve as the traceability backbone: scenario ID ↔ acceptance criterion ↔ spec.
-- Define the required E2E gate for code-bearing task candidates containing the
-  latest `origin/main`, before the pull request; do not merge into local `main`.
-- Keep validation evidence tied to the commit the gate ran on, plus any later
-  commit that changes the landed executable content.
+- Define the required E2E validation for code-bearing changes.
+- Keep validation evidence tied to the source the gate ran on, plus any later
+  change to the executable content.
 
 ### E2E-PROVIDER-adaptive-thinking-protocol
 
@@ -745,30 +744,25 @@ Each scenario is documented in this format:
 
 ---
 
-## E2E Main Integration Validation
+## E2E Validation for Code-Bearing Changes
 
-Every code-bearing change must pass the E2E suites relevant to its regression
-surface on a candidate that already contains the latest `origin/main`, before
-the request branch is pushed and the pull request is opened. Code-bearing
-changes include Renderer, Electron Main, Preload, Agent Runtime, Rust
-host-core, sessions, transcripts, plans, plugins, MCP, permissions,
-provider/model runtime, persistence, process lifecycle, packaging/runtime
-startup, and build or CI behavior that affects application execution.
-Documentation-only changes are exempt when they do not alter executable
-behavior.
+Every code-bearing change must run the E2E suites relevant to its regression
+surface against the built change. Code-bearing changes include Renderer,
+Electron Main, Preload, Agent Runtime, Rust host-core, sessions, transcripts,
+plans, plugins, MCP, permissions, provider/model runtime, persistence, process
+lifecycle, packaging/runtime startup, and build or CI behavior that affects
+application execution. Documentation-only changes are exempt when they do not
+alter executable behavior.
 
-Run the selected suites from the task's working checkout after `pnpm check:pr-base`
-passes. An E2E run on a branch that is behind `origin/main` is exploratory and
-does not satisfy this gate. Do not merge the task into local `main` to create
-the candidate.
+Run the selected suites against the real built change. Record the tested
+source, base, result, and environment.
 
 ### E2E environment reuse
 
-Task-candidate E2E runs from the task's working checkout after the candidate is
-prepared, but uses the host development environment already provisioned in the
-primary checkout. Reuse the compatible Node/pnpm toolchain, `node_modules`,
-Electron, Rust/Cargo targets, package-manager stores, build caches, and ignored
-configuration by reference or link when needed.
+E2E runs from the working checkout and uses the host development environment
+already provisioned there. Reuse the compatible Node/pnpm toolchain,
+`node_modules`, Electron, Rust/Cargo targets, package-manager stores, build
+caches, and ignored configuration by reference or link when needed.
 
 Do not run `pnpm install`, `npm install`, or create a second dependency/runtime
 environment solely for E2E. Isolate only mutable test state: temporary
@@ -808,28 +802,24 @@ agent execution, plugins, persistence integration, and shared runtime
 contracts. A required suite that cannot run because of a missing display,
 platform, credential, hardware resource, or other environment capability must
 be recorded as `NOT RUN` with its reason, alternative validation, and remaining
-risk. The pull request may still be opened with that record so the change can
-be validated in a capable environment, but the gate is not satisfied and
-delivery remains incomplete until the suite passes against the integrated
-`main` that carries the change.
+risk. The gate is not satisfied and delivery remains incomplete until the suite
+passes against the built change.
 
-Required results must apply to the executable commit the gate ran on, and any
-later commit that changes the landed executable content requires a rerun of
-the affected suites (landing fixes, conflict resolution, or commits added
-during review). Otherwise the recorded result stands. Report each command,
-result, tested commit, and any relevant environment limitation; never claim an
+Required results must apply to the executable source the gate ran on, and any
+later change to the executable content requires a rerun of
+the affected suites. Otherwise the recorded result stands. Report each command,
+result, tested source, and any relevant environment limitation; never claim an
 unexecuted suite passed.
 
 ## E2E Failure Policy
 
-A failed required E2E blocks the branch push, the pull request, and declaring
-the integrated delivery complete until the failure is classified as an
-implementation regression, test regression, environment failure, or known
-flaky infrastructure. Fix the product or test defect and rerun the affected
-suite against the integrated `main`. Do not delete scenarios, weaken
-assertions, or add retries that hide a deterministic failure. When a scenario
-is not automated on the required platform, keep its status documented and
-identify the platform validation still needed.
+A failed required E2E blocks declaring the change delivered until the failure
+is classified as an implementation regression, test regression, environment
+failure, or known flaky infrastructure. Fix the product or test defect and
+rerun the affected suite. Do not delete scenarios, weaken assertions, or add
+retries that hide a deterministic failure. When a scenario is not automated on
+the required platform, keep its status documented and identify the platform
+validation still needed.
 
 ## 7. MVP Scenario Catalog
 
@@ -2534,7 +2524,7 @@ identify the platform validation still needed.
   slash-menu layout covered by `pnpm test:e2e:composer-autocomplete` after
   `pnpm build:js` (real React/Chromium and production CSS, deterministic command
   fixtures; no provider required). Full provider/session scenario Draft;
-  branch runs do not replace post-integration E2E
+  targeted runs do not replace the full E2E
 
 ##### Connected MCP slash selection (#1377)
 
@@ -3585,7 +3575,7 @@ window; opening a normal panel afterward must still work.
 
 #### E2E-PLUGIN-fetch-redirect-policy
 
-- **Preconditions**: Current-main task candidate, built workspace packages,
+- **Preconditions**: Built change, built workspace packages,
   real Node plugin child process and two loopback HTTP fixtures; no real user
   profile, provider or credentials.
 - **Steps**: Load the example probe plugin and invoke its `probe.fetch` operation
@@ -6426,7 +6416,7 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 - **Status detail**: `pnpm test:e2e:theme-surfaces` exercises these ordinary fills,
   focus states, and built-in restoration with real Chromium, production CSS,
   and deterministic DOM fixtures; plugin installation/lifecycle is not covered.
-  Branch runs do not replace post-integration E2E. Other surfaces in this
+  Branch runs do not replace the full E2E. Other surfaces in this
   scenario retain manual visual checks.
 
 #### E2E-079: User-facing catalog copy in English and Chinese
@@ -7847,13 +7837,16 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
      delegate rows, `user: follow-up prompt`, delegate rows — the same
      message-list language as the main transcript (user bubbles, tool rows,
      thinking rows, markdown answers).
-   5. Verify the foot carries one Send composer: a live delegate steers
-      text-only (`steerSubagent` with the owning turn) and a settled
-      continuable delegate continues directly (`continueSubagent`, seeded from
-      the rows that remain or the original brief) — including a delegate whose
-      last run settled `stopped` or `aborted`; only a tab with no continuable
-      child instance (a `Task` call denied before spawn, or an unresolvable
-      chain) keeps the disabled read-only hint, in every supported locale.
+    5. Verify the foot carries one Send composer: a live delegate steers
+       text-only (`steerSubagent` with the owning turn) and a settled
+       continuable delegate continues directly (`continueSubagent`, seeded from
+       the rows that remain or the original brief) — including a delegate whose
+       last run settled `stopped` or `aborted`; only a tab with no continuable
+       child instance (a `Task` call denied before spawn, or an unresolvable
+       chain) keeps the disabled read-only hint, in every supported locale.
+       The running composer follows the same single-slot switching as the main
+       composer: running with an empty draft shows icon-only Stop; a draft shows
+       the Send button.
   6. Wait for the failed delegate to settle, open its tab, and verify the
      ended tab persists until manually closed.
   7. Switch to another session and back. Verify the tabs are restored per
@@ -8438,9 +8431,8 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   file reader, compares saved bytes and decodes the preview image. Requires
   a desktop build, installed Electron and a graphical session (Xvfb on Linux).
   It does not modify the OS clipboard or automate Word; Word/platform journeys
-  and full provider dispatch remain manual. Run against the refreshed request
-  candidate and record its revision; PR integration validation follows the
-  authoritative `AGENTS.md` workflow without merging into local main first.
+  and full provider dispatch remain manual. Run against the built change and
+  record the tested source and base.
 
 #### E2E-102h: Composer picker imports files into session scratch
 
@@ -9786,7 +9778,7 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 
 ### E2E-CONFIG-SYNC-s3-portable-configuration
 
-- **Preconditions:** A built task candidate, isolated Host processes with
+- **Preconditions:** A built change, isolated Host processes with
   separate data, HOME and agent directories, and a local S3 fixture with strong
   ETags and conditional PUT. No real model provider or running desktop instance.
   A live S3 run is separately opt-in and requires explicit authorization.
@@ -9906,7 +9898,7 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   cached-snapshot reconciliation, and stale-event rejection. Runtime
   `runtime-todos.test.ts` exercises Agent tool validation, overlong content
   normalization, and continuation through a deterministic provider.
-- **Status**: Run against the exact request candidate after building the
+- **Status**: Run against the built change after building the
   desktop and host. Host-core and targeted renderer tests are companion checks,
   not substitutes for the Electron journey.
 
@@ -14534,11 +14526,11 @@ are withdrawn with ADR 0165.
   `03-runtime/08-error-codes.md`, ADR 0239 (D446 amendment)
 - **Acceptance**: C (conversation & stream), D (provenance), Quality
 - **Milestone**: M6+
-- **Status**: Automated by `pnpm test:e2e:session-completion` on the committed,
-  rebased candidate in the task's working checkout. The harness drives real Host
+- **Status**: Automated by `pnpm test:e2e:session-completion` on the built
+  change. The harness drives real Host
   RPCs, the production provenance resolver, sidecar, and local SSE, and persists
   runtime messages before Host settlement. It does not exercise Electron's
-  queue/outbox UI or a live provider. Candidate/base SHAs and results belong in
+  queue/outbox UI or a live provider. Tested source/base and results belong in
   the validation report; existing ledger coverage runs separately through
   `pnpm test:e2e:collaboration`.
 
@@ -15211,9 +15203,9 @@ plugin-form fixtures in an isolated temporary directory at runtime.
   initializes. A customized `main.js` is not rewritten.
 - **Specs linked**: `07-plugins/16-trusted-extensions.md` §3.2; ADR 0215.
 - **Acceptance**: Quality
-- **Status**: Automated import-to-plugin-host fixture. Run against the committed
-  task candidate after incorporating the latest `origin/main`; record the tested
-  candidate, base, result, and environment in delivery evidence. Native picker,
+- **Status**: Automated import-to-plugin-host fixture. Run against the built
+  change; record the tested source, base, result, and environment in delivery
+  evidence. Native picker,
   npm dependency installation, Windows execution, and third-party extension
   execution during a provider turn are not covered by this fixture.
 
@@ -16577,7 +16569,7 @@ plugin-form fixtures in an isolated temporary directory at runtime.
   ordered failure diagnostics, and the successful child report. Completed-tool
   preservation and independent retry budgets use real-transport runtime tests.
   The configuration-editor journey passed under WSL; task-transcript reload
-  acceptance remains outstanding. Required post-integration suites: `test:e2e`,
+  acceptance remains outstanding. Required suites: `test:e2e`,
   `test:e2e:subagents`, `test:e2e:subagent-models`.
 
 #### E2E-PLUGIN-provider-catalog-add-service: Select a plugin provider from its custom Add Service category
@@ -16950,7 +16942,7 @@ plugin-form fixtures in an isolated temporary directory at runtime.
 - **Specs:** 03-runtime/06-host-rpc-protocol §2.
 - **Acceptance:** A (runtime), C (sessions).
 - **Milestone:** M6+.
-- **Status:** Automated; run against the task/PR integration candidate.
+- **Status:** Automated; run against the built change and record the tested source and base.
 
 
 ### E2E-PROVIDER-ORDER: Reorder configured AI services
@@ -17125,7 +17117,7 @@ the latest destination. These assertions measure work counts, not device FPS.
 
 ### E2E-PROVIDER-certificate-trust-and-terminal-errors
 
-- **Preconditions:** Built request candidate incorporating current `origin/main`,
+- **Preconditions:** Built candidate with the change applied,
   Electron installed, isolated test process/profile and loopback HTTPS fixture.
   No real provider, credentials, user profile, or OS certificate-store writes.
 - **Steps:** Run `node scripts/e2e-provider-certificates.mjs`. Launch the actual
@@ -17289,7 +17281,7 @@ the latest destination. These assertions measure work counts, not device FPS.
 
 ### E2E-IMAGE-generation-and-editing
 
-- **Preconditions:** Built task candidate containing latest origin/main; isolated
+- **Preconditions:** Built candidate with the change applied; isolated
   host data directory, local image HTTP fixture, no production credentials.
 - **Steps:** Choose a model in Advanced, cancel and verify no change; save and
   replace it through another provider's Advanced settings. Clear the binding via
@@ -17361,7 +17353,7 @@ the latest destination. These assertions measure work counts, not device FPS.
 
 ### E2E-SCHEDULED-manual-workspace-binding
 
-- **Preconditions:** Built request candidate; isolated host data and two project
+- **Preconditions:** Built change; isolated host data and two project
   directories. No provider credentials or paid API.
 - **Steps:** Create Manual and Hourly tasks in project A and without a project;
   restart the host, switch to B, Run now, rename through the editor payload,
@@ -17851,7 +17843,8 @@ host-created files. The full app's file-preview viewer is covered separately.
 
 - Environment: isolated Desktop profile, real Main/sidecar/Host and a local
   streaming provider fixture; no real API account or user data.
-- Start two delegates, open A's detail panel and stop A. Verify B and the parent
+- Start two delegates, open A's detail panel and stop A with its icon-only
+  Stop control. Verify B and the parent
   remain active, A's partial output remains readable, and no model request was
   needed. Stop all from the group header; B stops and the parent remains active.
 - Terminal cards remove their Stop controls and persisted Task snapshots record

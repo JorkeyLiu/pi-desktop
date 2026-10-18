@@ -28,55 +28,24 @@ For a suspected security vulnerability, do not open a public issue. Follow
 
 ## Collaboration Rules
 
-- `main` is the protected integration branch. Do not develop on it or push to
-  it directly.
-- Develop on a non-`main` branch: the current checkout when it is already on a
-  development branch, or a short-lived request branch created from an
-  up-to-date `origin/main`. Use a name such as `feat/provider-import`,
-  `fix/session-refresh`, or `docs/contributing-guide`.
-- A dedicated worktree per request is optional. Create one when isolation
-  helps, for example parallel or incompatible concurrent changes.
-- Before opening or updating a pull request, `origin/main` must be an ancestor
-  of the request head. Run `pnpm check:pr-base`. Do not open or update a PR
-  that is behind `origin/main`.
-- Preserve uncommitted work in the primary checkout. Do not reset, stash, move,
-  or overwrite another contributor's work.
-- Do not reuse, modify, or delete another contributor's branch or worktree.
-  Remove only your own worktree and branch after the change has been
-  integrated.
+- Preserve uncommitted work you did not produce. Do not reset, stash, move, or
+  overwrite another contributor's work.
+- Keep each change scoped to one logical concern and out of unrelated work.
 - Use English for code, identifiers, comments, commits, repository
   documentation, and specifications. GitHub discussions may use the language
   of the original author.
 
+Git layout, branching, commits, pushes, and integration are the operator's
+choice. No repository rule requires a particular branch, worktree, ancestry,
+rebase, merge, or push flow; use whatever layout is convenient.
+
 ## Start a Request
 
-From the primary checkout, first inspect local work and fetch the current
-integration branch:
-
-```bash
-git status --short
-git fetch origin main
-```
-
-Work on a non-`main` branch: stay on the current branch when it is already a
-development branch, or create a short-lived request branch from the fetched
-`origin/main`:
-
-```bash
-git switch -c <type>/<short-description> origin/main
-```
-
-When isolation helps — for example parallel or incompatible concurrent
-changes — use a dedicated worktree instead:
-
-```bash
-git worktree add -b <type>/<short-description> \
-  ../PI-Desktop-worktrees/<short-description> origin/main
-cd ../PI-Desktop-worktrees/<short-description>
-```
-
-Never discard, stash, move, or overwrite unrelated work to satisfy this
-sequence, and never delete another contributor's branch or worktree.
+Inspect the current workspace state before editing, and preserve any existing
+work you did not produce. Use whatever branch or workspace layout is
+convenient. If you want an isolated workspace, a dedicated branch, clone, or
+worktree from an up-to-date base is a reasonable option, but it is not
+required.
 
 ## Plan and Implement
 
@@ -126,11 +95,10 @@ Run only the relevant subset when the change is low risk. Documentation-only
 changes normally need no runtime tests; at minimum, review the rendered
 Markdown and run `git diff --check`.
 
-Code-bearing changes require the relevant E2E suite on a candidate that
-contains latest `origin/main` before the request branch is pushed and the pull
-request is opened. A run on a stale request branch is useful for debugging but
-does not replace that gate. Record any unavailable required suite as `NOT RUN`
-with its reason, alternative validation, and remaining risk.
+Code-bearing changes require the relevant E2E suite against the built change,
+and the result should record the tested source, base, result, and environment.
+Record any unavailable required suite as `NOT RUN` with its reason, alternative
+validation, and remaining risk.
 
 ## Pull Request Acceptance Scope (temporary)
 
@@ -172,15 +140,7 @@ inside a pull request.
 
 ## Commit and Pull Request
 
-Use one logical commit where practical and follow Conventional Commits:
-
-```text
-docs(security): clarify vulnerability reporting
-fix(host-core): preserve session ownership during restart
-feat(composer): add model selection shortcut
-```
-
-Before committing, review the complete diff. Never commit:
+Review the complete diff before finishing. Never commit:
 
 - API keys, tokens, passwords, credentials, or private user data.
 - Local databases, logs, configuration, or machine-specific paths.
@@ -190,42 +150,16 @@ Outside contributions are limited to `fix` and `perf` pull requests while the
 temporary Pull Request Acceptance Scope above is in force; maintainer-planned
 work keeps every change type.
 
-Refresh against latest `origin/main` (`pnpm check:pr-base`) and run the
-required E2E suite from the task's working checkout first; then open a pull
-request against `main` with:
+Run the required E2E suite against the built change first; then open or update a
+pull request with:
 
 - a concise summary and rationale;
 - affected specs, ADRs, and E2E scenarios;
-- An outside pull request of any other change type — `feat`, `refactor`,
-  `docs`, `test`,
+- the tested source, base, result, and environment for any E2E run;
 - compatibility, migration, security, and remaining-risk notes when relevant.
 
-Do not force-push contributor branches, bypass required checks, or merge a
-failing change. Keep review feedback and follow-up commits focused on the
-request.
-
-## After Merge
-
-From a clean primary checkout:
-
-```bash
-git fetch origin main
-git switch main
-git merge origin/main
-# only if a worktree was created for this task:
-git worktree remove ../PI-Desktop-worktrees/<short-description>
-git branch -d <type>/<short-description>
-git worktree prune
-```
-
-After a remote merge, local `main` is synchronized with `git merge --ff-only
-origin/main` (or `git merge origin/main` if it has diverged). Do not merge the
-task branch into local `main` merely to open a PR.
-
-For code-bearing changes, record the required E2E result from a candidate that
-contains latest `origin/main` before the pull request is opened, and rerun the
-affected suites when the remote merge lands executable content that differs
-from that commit.
+Do not bypass required checks or merge a failing change. Keep review feedback
+and follow-up work focused on the request.
 
 ## Issue and Security Reports
 
