@@ -270,6 +270,8 @@ export class SubagentRun {
     claim: (error, phase) => this.claimProviderRetry(error, phase),
   };
   private readonly runAbortController = new AbortController();
+  /** Set once `run()` settles; steering a settled run is a no-op rejection. */
+  private finished = false;
 
   constructor(opts: SubagentRunOptions) {
     this.opts = opts;
@@ -303,6 +305,7 @@ export class SubagentRun {
   async run(): Promise<SubagentRunResult> {
     const { signal } = this.opts;
     if (signal?.aborted) {
+      this.finished = true;
       return this.result("aborted", "The delegated task was aborted before it started.");
     }
     const onAbort = () => {
@@ -345,6 +348,7 @@ export class SubagentRun {
         signal: this.runSignal(),
       });
       if (this.runSignal().aborted) {
+        this.finished = true;
         return this.result("aborted", "The delegated task was aborted.");
       }
       if (initialContext.kind === "overflow") {
@@ -374,6 +378,7 @@ export class SubagentRun {
     } finally {
       signal?.removeEventListener("abort", onAbort);
       this.finalizeCurrentAssistant();
+      this.finished = true;
     }
 
     if (signal?.aborted) {
@@ -425,6 +430,61 @@ export class SubagentRun {
   private modelBinding() {
     return this.bindingFor(this.provider, this.thinkingLevel);
   }
+
+  /** True once `run()` settled; steering afterwards must be rejected, not queued. */
+  isSettled(): boolean {
+    return this.finished;
+  }
+
+  /**
+   * Feed one user turn into the live child conversation (child steer).
+   *
+   * The text enters only this delegate's agent loop: the runtime emits the
+   * attributed transcript echo itself, so the parent's model context never
+   * sees it. Tools are untouched — nested `Task` and `asktool` stay denied.
+   * Throws when the run already settled, so a stale steer fails loudly
+   * instead of queuing onto a dead loop.
+   */
+  steer(text: string): void {
+    if (this.finished) {
+      throw new Error("The subagent run already settled.");
+    }
+    this.agent.steer({ role: "user", content: text, timestamp: Date.now() });
+  }
+
+  /**
+   * Live progress without touching the usage ledger.
+   *
+   * `contextTokens` is the current estimated occupancy of this run's model
+   * context, computed with the same budget semantics the compaction guard
+   * uses — an estimate, not spend. `usage` is the cumulative billed spend
+   * reported by this run's provider requests. Unknown estimator shapes
+   * (rows the heuristic cannot score) leave occupancy unknown rather than
+   * failing the read.
+   */
+  progress(): {
+    toolCalls: number;
+    turns: number;
+    usage?: MessageUsage;
+    contextTokens?: number;
+  } {
+    let contextTokens: number | undefined;
+    try {
+      contextTokens = contextBudgetFor(
+        this.agent.state.model,
+        this.agent.state.messages,
+      ).tokens;
+    } catch {
+      contextTokens = undefined;
+    }
+    return {
+      toolCalls: this.toolCalls,
+      turns: this.turns,
+      ...(this.usage ? { usage: this.usage } : {}),
+      ...(contextTokens !== undefined ? { contextTokens } : {}),
+    };
+  }
+
   private dedupeToolCalls(messages: AgentMessage[]): AgentMessage[] {
     const drop = dedupeToolCallMessages(messages);
     reportDuplicateToolCallDrop(this.opts.sessionId, drop);

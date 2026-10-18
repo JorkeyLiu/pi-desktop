@@ -85,9 +85,14 @@ test("the work panel renders the delegation tab like every other resource", () =
   assert.doesNotMatch(appSource, /subagentPanelOpen/);
 });
 
-test("the delegation tab renders a message list with a read-only composer", () => {
+test("the delegation tab renders a message list with a child composer", () => {
   assert.match(tabSource, /data-testid="subagent-transcript-tab"/);
-  assert.match(tabSource, /buildSubagentTranscript\(messages, delegationId\)/);
+  // Chain-latest owns the view (F5): after d1 -> d2 the old tab follows the
+  // same chain, so transcript, status, send, stop and resume all resolve
+  // through the latest id — a stale tab never duplicates the action.
+  assert.match(tabSource, /subagentChainLatestDelegationId\(messages, delegationId\)/);
+  assert.match(tabSource, /isStaleSubagentTab\(messages, delegationId\)/);
+  assert.match(tabSource, /buildSubagentTranscript\(messages, activeDelegationId\)/);
   assert.match(tabSource, /className="message-row user"/);
   assert.match(tabSource, /className="message-user-text selectable"/);
   assert.match(tabSource, /className="message-row assistant"/);
@@ -95,17 +100,37 @@ test("the delegation tab renders a message list with a read-only composer", () =
   assert.match(tabSource, /<Textarea/);
   assert.match(tabSource, /disabled/);
   assert.match(tabSource, /rows=\{2\}/);
-  assert.match(tabSource, /placeholder=\{t\("panel\.subagentReadOnly"\)\}/);
+  assert.match(tabSource, /readonlyReason \?\? t\("panel\.subagentReadOnly"\)/);
   assert.match(tabSource, /className="subagent-transcript-composer-controls"/);
-  assert.match(tabSource, /subagent-transcript-model-picker/);
+  assert.match(tabSource, /subagent-transcript-model-static/);
+  assert.doesNotMatch(tabSource, /subagent-transcript-model-picker/);
   assert.match(tabSource, /delegateModelId\(result\)/);
   assert.match(tabSource, /delegateThinkingLevel\(result\)/);
-  assert.match(tabSource, /<SubagentStopButton delegationId=\{delegationId\} running compact \/>/);
+  assert.match(tabSource, /<SubagentStopButton delegationId=\{activeDelegationId\} running compact \/>/);
   assert.doesNotMatch(tabSource, /subagent-transcript-actions/);
   assert.match(workPanelCss, /\.subagent-transcript-composer-controls \{/);
-  assert.match(workPanelCss, /\.subagent-transcript-model-picker \{/);
-  // Display-only: no send path may exist in the composer.
-  assert.doesNotMatch(tabSource, /onSubmit|onSend|api\.send/);
+  assert.match(workPanelCss, /\.subagent-transcript-model-static \{/);
+  // Live send paths: a running delegate steers the child channel directly;
+  // a settled resumable delegate continues directly through the backend
+  // with its retained history — never a parent `Task(resume)` text prompt,
+  // never into the parent context.
+  assert.match(tabSource, /await api\.steerSubagent\(\{/);
+  assert.match(tabSource, /captureSteerIdentity\(\{/);
+  assert.match(tabSource, /shouldShowSubagentContinue\(\{/);
+  assert.match(tabSource, /captureContinueIdentity\(\{/);
+  assert.match(tabSource, /await api\.continueSubagent\(\{/);
+  assert.match(tabSource, /shouldClearSteerDraft\(\{/);
+  assert.doesNotMatch(tabSource, /shouldShowSubagentResume\(\{/);
+  assert.doesNotMatch(tabSource, /buildSubagentResumePrompt/);
+  assert.doesNotMatch(tabSource, /askParentToResume/);
+  assert.doesNotMatch(tabSource, /sendPrompt\(/);
+  // Display-only where no action exists: the blocked composer names its own
+  // capability reason (stale/no-history/ended/remote), and the model picker
+  // never opens.
+  assert.match(tabSource, /aria-label=\{readonlyReason \?\? t\("panel\.subagentReadOnly"\)\}/);
+  assert.match(tabSource, /panel\.subagentStale/);
+  assert.match(tabSource, /panel\.subagentNoHistory/);
+  assert.match(tabSource, /panel\.subagentEnded/);
 });
 
 test("the tab owns one scroll surface and pins to the latest output", () => {

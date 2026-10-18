@@ -100,11 +100,24 @@ export function registerSettingsIpc({
     await applyNetworkProxyFromAppSettings(validatedSettings);
     if (sidecar) {
       try {
+        // Forward persistent wake defaults only when this save touched them:
+        // the sidecar then refreshes every live runtime (in-flight waits
+        // rebind) while future launches read the same persisted values.
+        const hasWakeupWrite =
+          validatedSettings !== null &&
+          typeof validatedSettings === "object" &&
+          Object.prototype.hasOwnProperty.call(validatedSettings, "subagentWakeup");
         await sidecar.call("sidecar.configure", {
           hostBinary: host.binaryPath,
           dataDir,
           networkProxy: currentNetworkProxy(),
           systemProxyRelayUrl: currentSystemProxyRelayUrl(),
+          ...(hasWakeupWrite
+            ? {
+                subagentWakeup: (result as { subagentWakeup?: unknown })
+                  .subagentWakeup,
+              }
+            : {}),
         });
       } catch {
         // Sidecar will pick up PI_DESKTOP_PROXY_JSON on the next spawn.

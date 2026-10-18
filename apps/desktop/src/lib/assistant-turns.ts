@@ -27,7 +27,8 @@ export type AssistantActivityItem =
 export type SubagentRunItem =
   | { kind: "thinking"; message: UiMessage }
   | { kind: "tool"; message: UiMessage }
-  | { kind: "answer"; message: UiMessage };
+  | { kind: "answer"; message: UiMessage }
+  | { kind: "steering-user"; message: UiMessage };
 
 /**
  * Everything one delegate did inside a single `Task` call (ADR 0062).
@@ -103,6 +104,15 @@ function collectSubagentRuns(
     if (message.agentName && !run.agentName) run.agentName = message.agentName;
     if (message.role === "tool") {
       run.items.push({ kind: "tool", message });
+      continue;
+    }
+    // Child steering echoes are attributed user rows (role=user under a Task
+    // call), never delegate answers. They stay in the run so the chain keeps
+    // its steering context, but render as the user side.
+    if (message.role === "user") {
+      if (messageContentFacts(message).hasContent || message.error) {
+        run.items.push({ kind: "steering-user", message });
+      }
       continue;
     }
     // A delegate turn can carry reasoning and text at once, and both are worth

@@ -116,6 +116,10 @@ export const IPC = {
     agentCompact: "pi-desktop/agent/compact",
     agentAbort: "pi-desktop/agent/abort",
     agentStopSubagents: "pi-desktop/agent/stop-subagents",
+    /** User text steered into one live delegate; see `AgentSteerSubagentRequest`. */
+    agentSteerSubagent: "pi-desktop/agent/steerSubagent",
+    /** User text continuing one settled delegate; see `AgentContinueSubagentRequest`. */
+    agentContinueSubagent: "pi-desktop/agent/continueSubagent",
     agentStop: "pi-desktop/agent/stop",
     agentQueuePush: "pi-desktop/agent/queue/push",
     agentQueueList: "pi-desktop/agent/queue/list",

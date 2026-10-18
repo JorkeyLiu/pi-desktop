@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentEventEnvelope, UiMessage } from "@pi-desktop/shared";
 
 import type { LaunchResolver } from "./launch-resolver.js";
@@ -62,6 +62,8 @@ class FakeSidecar implements RuntimeSidecarLink {
   exit: ((info: { intentional: boolean; code: number | null; signal: NodeJS.Signals | null }) => void) | null = null;
   roots = new Map<string, string | undefined>();
   rejectPrompt = false;
+  rejectContinue: Error | null = null;
+  continueDelivery: "parent" | "user" = "parent";
   running = false;
   /** Error `agent.compact` answers with; `null` accepts the compaction. */
   compactError: Error | null = null;
@@ -79,6 +81,16 @@ class FakeSidecar implements RuntimeSidecarLink {
         return { supportsVision: false } as T;
       case "agent.steer":
         return { accepted: true, turnId: params.expectedTurnId } as T;
+      case "agent.steerSubagent":
+        return { accepted: true, delegationId: params.delegationId, turnId: params.expectedTurnId } as T;
+      case "agent.continueSubagent":
+        if (this.rejectContinue) throw this.rejectContinue;
+        return {
+          accepted: true,
+          delegationId: "del-2",
+          turnId: params.expectedTurnId,
+          delivery: this.continueDelivery,
+        } as T;
       case "agent.compact":
         this.beforeCompact?.();
         if (this.compactError) throw this.compactError;
@@ -124,6 +136,7 @@ const launch: LaunchResolver = {
         sessionId,
         mode: "agent",
         provider: { id: "p1", name: "P1", modelId: "m1", apiKey: "k", supportsReasoning: false, supportedThinkingLevels: ["off"] },
+        commandShell: { id: "bash", label: "Bash", dialect: "posix", available: true, isDefault: true },
       },
     };
   },
@@ -360,6 +373,122 @@ describe("RuntimeService prompt lifecycle", () => {
     expect(await service.steer({ sessionId: "s1", turnId: "turn-1", content: "also", principal: owner })).toEqual({ accepted: true });
     expect(sidecar.calls.at(-1)?.params).toMatchObject({ expectedTurnId: "turn-1", content: "also" });
     expect(await service.steer({ sessionId: "s1", turnId: "turn-9", content: "no", principal: owner })).toEqual({ accepted: false });
+  });
+
+  it("steers a live delegate under the owning turn and refuses stale or empty targets", async () => {
+    const { sidecar, service } = build();
+    await service.prompt({ sessionId: "s1", content: "hello", effectivePermissionMode: "ask", principal: owner });
+    await expect(
+      service.steerSubagent({ sessionId: "s1", delegationId: "del-1", turnId: "turn-1", content: "Focus on auth." }),
+    ).resolves.toEqual({ accepted: true });
+    expect(sidecar.calls.at(-1)).toMatchObject({
+      method: "agent.steerSubagent",
+      params: { sessionId: "s1", delegationId: "del-1", expectedTurnId: "turn-1", content: "Focus on auth." },
+    });
+    // Stale turn: refused before the sidecar is touched.
+    const before = sidecar.calls.length;
+    await expect(
+      service.steerSubagent({ sessionId: "s1", delegationId: "del-1", turnId: "turn-9", content: "late" }),
+    ).resolves.toEqual({ accepted: false });
+    await expect(
+      service.steerSubagent({ sessionId: "s1", delegationId: " ", turnId: "turn-1", content: "lost" }),
+    ).resolves.toEqual({ accepted: false });
+    await expect(
+      service.steerSubagent({ sessionId: "s1", delegationId: "del-1", turnId: "turn-1", content: "  " }),
+    ).resolves.toEqual({ accepted: false });
+    expect(sidecar.calls.length).toBe(before);
+  });
+
+  it("forwards an attached continuation under the live turn and guards stale guards", async () => {
+    const { sidecar, service } = build();
+    await service.prompt({ sessionId: "s1", content: "hello", effectivePermissionMode: "ask", principal: owner });
+    sidecar.continueDelivery = "parent";
+    await expect(
+      service.continueSubagent({ sessionId: "s1", delegationId: "del-1", content: "Go deeper.", expectedTurnId: "turn-1" }),
+    ).resolves.toEqual({ accepted: true, delegationId: "del-2", turnId: "turn-1", delivery: "parent" });
+    expect(sidecar.calls.at(-1)).toMatchObject({
+      method: "agent.continueSubagent",
+      params: { sessionId: "s1", delegationId: "del-1", expectedTurnId: "turn-1", content: "Go deeper." },
+    });
+    const before = sidecar.calls.length;
+    await expect(
+      service.continueSubagent({ sessionId: "s1", delegationId: "del-1", content: "Go deeper.", expectedTurnId: "turn-9" }),
+    ).rejects.toMatchObject({ errorCode: "TURN_NOT_FOUND" });
+    await expect(
+      service.continueSubagent({ sessionId: "s1", delegationId: "del-1", content: "Go deeper." }),
+    ).rejects.toMatchObject({ errorCode: "AGENT_BUSY" });
+    expect(sidecar.calls.length).toBe(before);
+  });
+
+  it("opens a child-only execution turn for a detached continuation and ends it silently", async () => {
+    const { host, sidecar, service, events, ended } = build();
+    sidecar.continueDelivery = "user";
+    const result = await service.continueSubagent({ sessionId: "s1", delegationId: "del-1", content: "On your own." });
+    expect(result).toEqual({ accepted: true, delegationId: "del-2", turnId: "turn-1", delivery: "user" });
+    // Accounting only: a durable turn began, but no parent prompt ran and no
+    // main user row was persisted.
+    expect(host.calls.filter((call) => call.method === "session.beginTurn")).toHaveLength(1);
+    expect(sidecar.calls.some((call) => call.method === "agent.prompt")).toBe(false);
+    expect(host.messages.get("s1") ?? []).toHaveLength(0);
+    expect(service.isChildExecutionTurn("s1", "turn-1")).toBe(true);
+    // The child's terminal finalizes its durable row without a parent conclusion.
+    sidecar.notify?.("agent.event", {
+      sessionId: "s1",
+      turnId: "turn-1",
+      ts: Date.now(),
+      event: { type: "agent_end", messageIds: [] },
+    });
+    await vi.waitFor(() => {
+      expect(host.calls.some((call) => call.method === "session.endTurn")).toBe(true);
+    });
+    expect(host.calls.find((call) => call.method === "session.endTurn")?.params).toMatchObject({
+      turnId: "turn-1",
+      status: "completed",
+    });
+    expect(events.some((envelope) => envelope.event.type === "agent_end")).toBe(false);
+    expect(ended).toContainEqual(expect.objectContaining({ sessionId: "s1", turnId: "turn-1", reason: "completed" }));
+    expect(service.isChildExecutionTurn("s1", "turn-1")).toBe(false);
+  });
+
+  it("idle continuation after restart carries launch hydration without a parent prompt", async () => {
+    // Post-restart: a fresh service owns no live turn and the sidecar owns no
+    // live runtime. The continuation must still hydrate from the persisted
+    // transcript/chain with the normal launch preparation — never by running
+    // a parent prompt first.
+    const { host, sidecar, service } = build();
+    sidecar.continueDelivery = "user";
+    const result = await service.continueSubagent({ sessionId: "s1", delegationId: "del-1", content: "After restart." });
+    expect(result).toEqual({ accepted: true, delegationId: "del-2", turnId: "turn-1", delivery: "user" });
+    const last = sidecar.calls.at(-1);
+    expect(last?.method).toBe("agent.continueSubagent");
+    expect(last?.params).toMatchObject({
+      sessionId: "s1",
+      delegationId: "del-1",
+      content: "After restart.",
+      expectedTurnId: "turn-1",
+      mode: "agent",
+    });
+    expect((last?.params as Record<string, unknown>).provider).toMatchObject({ id: "p1", modelId: "m1" });
+    expect((last?.params as Record<string, unknown>).commandShell).toMatchObject({ available: true });
+    // Accounting only: a durable turn began, but no parent prompt ran and no
+    // main user row was persisted — the child's usage owns the execution turn.
+    expect(host.calls.filter((call) => call.method === "session.beginTurn")).toHaveLength(1);
+    expect(sidecar.calls.some((call) => call.method === "agent.prompt")).toBe(false);
+    expect(host.messages.get("s1") ?? []).toHaveLength(0);
+    expect(service.isChildExecutionTurn("s1", "turn-1")).toBe(true);
+  });
+
+  it("closes the accounting turn when a detached continuation is rejected", async () => {
+    const { host, sidecar, service } = build();
+    sidecar.rejectContinue = Object.assign(new Error("Unknown delegation"), { errorCode: "DELEGATION_NOT_FOUND" });
+    await expect(
+      service.continueSubagent({ sessionId: "s1", delegationId: "missing", content: "Go." }),
+    ).rejects.toMatchObject({ errorCode: "DELEGATION_NOT_FOUND" });
+    expect(host.calls.some((call) => call.method === "session.endTurn")).toBe(true);
+    // The session did not leak busy: a fresh prompt starts normally.
+    await expect(
+      service.prompt({ sessionId: "s1", content: "hello", effectivePermissionMode: "ask", principal: owner }),
+    ).resolves.toMatchObject({ turnId: "turn-2" });
   });
 
   it("refuses native Pi sessions and attachments the headless runtime cannot serve", async () => {

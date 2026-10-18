@@ -21,7 +21,6 @@ import { remoteMutationIdentity } from "./remote-workspace.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import {
-  settledDelegationMessage,
   taskMessageSnapshot,
 } from "./delegation-message.js";
 import {
@@ -69,7 +68,6 @@ import type {
 } from "./extensions/runner.js";
 import type {
   AgentActivity,
-  AgentActivityAgent,
   AgentActivityAgentPhase,
   AgentActivityError,
   AgentEventEnvelope,
@@ -104,7 +102,6 @@ import {
   checkpointGeneration,
   contextCompactionMark,
   cumulativeDelta,
-  DEFAULT_SUBAGENT_PERMISSION,
   askToolOptionLabel,
   formatAskToolOutput,
   formatSessionMessage,
@@ -121,8 +118,13 @@ import {
   splitInlineContent,
   subagentModelKey,
   subagentToolsLabel,
+  normalizeSubagentWakeupSettings,
   type ProposalKind,
+  type ResolvedSubagentWakeupSettings,
+  type SubagentDeliveryOwner,
   type SubagentPermission,
+  type SubagentWakeReason,
+  type SubagentWakeupSettings,
 } from "@pi-desktop/shared";
 import { createStreamCoalescer, type StreamCoalescer } from "./stream-coalescer.js";
 import type { RuntimeHost } from "./host-client.js";
@@ -183,21 +185,12 @@ import {
 import {
   contextBudgetFor,
   automaticCompactionThresholdFor,
-  contextBudgetLimitsFor,
   retainedUserMessageBudget,
   type ContextBudget,
 } from "./context-budget.js";
 import { PathMutex } from "./path-lock.js";
 import { DelegationChainRegistry } from "./delegation-chain.js";
-import {
-  extractReadFiles,
-  isReadOnlyToolName,
-  originalTaskFromTranscript,
-  rebuildChainsFromTranscript,
-  selectChainRows,
-  seedDelegateMessages,
-  type DelegationChain,
-} from "./delegation-history.js";
+import { rebuildChainsFromTranscript } from "./delegation-history.js";
 import {
   clampOutputToContext,
   effectiveModelContextWindow,
@@ -205,7 +198,6 @@ import {
 } from "./output-cap.js";
 import {
   composeSubagentSystemPrompt,
-  MAX_SUBAGENT_REPORT_CHARS,
   SubagentRun,
   SUBAGENT_LIST_TOOL_NAME,
   SUBAGENT_STOP_TOOL_NAME,
@@ -214,6 +206,60 @@ import {
   type SubagentRunResult,
   type SubagentToolOutcome,
 } from "./subagent.js";
+import {
+  createDelegationCoordinator,
+  markProgramDelivery,
+  type CoordinatorRecord,
+} from "./delegation-coordinator.js";
+import {
+  createSubagentWakeState,
+  createWakeWaiterRegistry,
+  type SubagentWakeState,
+  type WakeWaitOutcome,
+} from "./subagent-wakeup.js";
+import {
+  appendDelegationRow,
+  assembleWaitResult,
+  beginDelegationWait,
+  delegationSummary,
+  endDelegationWait,
+  formatDelegationHeartbeat,
+  progressSnapshotEvent,
+  refreshDelegationProgress,
+  refreshDelegationWait,
+  settlementSnapshotEvent,
+  snapshotWaitRecord,
+  toolRowFromEnvelope,
+  userOwnedTerminalEvent,
+  type DelegationRowHost,
+  type DelegationWaitHost,
+} from "./subagent-progress.js";
+import {
+  applyDelegationActivity,
+  applyValidatedSteer,
+  finalizeWaitResult,
+  listDelegationRecords,
+  programWaitResult,
+  settleDelegationRecord,
+  stopSubagentRecords,
+  validateSubagentSteer,
+} from "./subagent-control.js";
+import {
+  noHistoryResumeErrorMessage,
+  resolveResumeChain,
+  resumedChainProvider,
+  seedResumedDelegate,
+  type ResumeModelContext,
+} from "./subagent-resume.js";
+import {
+  buildContinueSpawnEmissions,
+  delegateNeedsWorktree,
+  isUserContinueTaskRow,
+  mapContinueSpawnError,
+  prepareSubagentContinue,
+  resolveContinueSpawnTarget,
+  scopeDelegateTools,
+} from "./subagent-continue.js";
 import {
   composeModeSystemPrompt,
   DEFAULT_RUNTIME_SYSTEM_PROMPT,
@@ -459,22 +505,6 @@ function isMissingToolResultPlaceholder(
   );
 }
 
-/** Narrow view of the `tool_end` agent event; the envelope carries the rest. */
-type ToolEndEvent = {
-  type: "tool_end";
-  toolCallId: string;
-  result: unknown;
-  isError?: boolean;
-};
-
-/** Narrow view of the `tool_start` agent event; the envelope carries the rest. */
-type ToolStartEvent = {
-  type: "tool_start";
-  toolCallId: string;
-  toolName: string;
-  args?: unknown;
-};
-
 export const ASK_TOOL_NAME = "asktool";
 /**
  * Delegation lifecycle (ADR 0089): `Task` starts a subagent in the background
@@ -488,21 +518,6 @@ const DELEGATION_MODEL_OPT_IN_GUIDANCE =
   'To authorize a model override, open Settings → Models, edit the service or account, expand its model Advanced settings, enable "Available for AI delegation", and save. Use an exact key from the delegation catalog; never guess a provider/model key.';
 const DELEGATION_DEFAULT_MODEL_GUIDANCE =
   "Omit the `model` parameter on Task to use the definition's default model, or inherit the parent conversation's selected model when no default is pinned. Repeating the definition's own Default model key is the same as omitting `model`.";
-/**
- * `TaskWait` blocks the turn, and the model picks the timeout, so the ceiling
- * is what bounds how long a session can look hung with no way to intervene.
- * Expiry is not a failure and does not stop the delegates (D328) — the wait
- * returns a heartbeat plus any finished reports, and the runtime delivers the
- * rest when they finish even if the parent already stopped calling tools.
- */
-const TASKWAIT_DEFAULT_TIMEOUT_SECONDS = 600;
-const TASKWAIT_MAX_TIMEOUT_SECONDS = 900;
-/**
- * A `TaskWait` result is the parent's context; like a delegate's report, it
- * must not become the context problem delegation exists to avoid.
- */
-const MAX_TASKWAIT_RESULT_CHARS = 50_000;
-
 export type DelegationStatus =
   | "running"
   | SubagentRunStatus
@@ -522,6 +537,8 @@ export type DelegationRecord = {
   /** Original Task transcript snapshot, available after its immediate result. */
   taskMessage?: UiMessage;
   taskTurnId?: string;
+  /** `Task` tool call that spawned this delegate; owns its transcript rows. */
+  parentToolCallId: string;
   agentName: string;
   modelId: string;
   thinkingLevel: SubagentThinkingLevel;
@@ -532,6 +549,12 @@ export type DelegationRecord = {
   completion: Promise<void>;
   resolveCompletion: () => void;
   abort: () => void;
+  /**
+   * Retained live handle of the delegate loop. Powers live progress reads
+   * (context occupancy) and child steering; never outlives the record.
+   * Absent only for records rebuilt without a live run.
+   */
+  run?: SubagentRun;
   /** True when `TaskStop` asked for this stop, so an aborted run reads as
    * `stopped` rather than `aborted`. */
   stopRequested: boolean;
@@ -539,6 +562,15 @@ export type DelegationRecord = {
   parentErrorInterrupted?: boolean;
   turns: number;
   toolCalls: number;
+  /** Cumulative billed spend reported by the delegate's provider requests,
+   * merged by physical operation identity (never double-charged). */
+  usage?: MessageUsage;
+  /** Current estimated context occupancy of the delegate, when known.
+   * An estimate, not spend: it says how full the child's window is. */
+  contextTokens?: number;
+  /** Wake watermarks shared by consecutive waits, so a re-wait cannot fire
+   * on progress a previous wait already reported. */
+  wake: SubagentWakeState;
   lastToolName?: string;
   lastPhase?: AgentActivityAgentPhase;
   lastActivityAt: number;
@@ -559,45 +591,14 @@ export type DelegationRecord = {
   /** `toolCallId`s of this run's calls that have not ended yet: dropped when the
    * run settles, so an aborted call cannot pin its captured arguments. */
   pendingToolCallIds?: Set<string>;
+  /** Accepted child-steer message ids: a retried id is already applied. */
+  steeredMessageIds?: Set<string>;
+  /** Report owner: `parent` delivers via TaskWait/idle; `user` never auto-delivers. */
+  delivery: SubagentDeliveryOwner;
+  /** Lifecycle owner: live parent turn when attached, child execution turn when detached. */
+  executionTurnId?: string;
 };
 
-
-function delegationSummary(record: DelegationRecord): Record<string, unknown> {
-  return {
-    delegationId: record.delegationId,
-    agent: record.agentName,
-    modelId: record.modelId,
-    thinkingLevel: record.thinkingLevel,
-    status: record.status,
-    startedAt: record.startedAt,
-    turns: record.result?.turns ?? record.turns,
-    toolCalls: record.result?.toolCalls ?? record.toolCalls,
-    ...(record.lastToolName ? { lastToolName: record.lastToolName } : {}),
-    ...(record.completedAt ? { completedAt: record.completedAt } : {}),
-    ...(record.result?.modelFailures ? { modelFailures: record.result.modelFailures } : {}),
-    ...(record.result?.error ? { error: record.result.error } : {}),
-    // A delegate that compacted or lost history says so in its lifecycle
-    // details, not only in the report text (ADR 0299, decision 4).
-    ...(record.result?.contextCompactions
-      ? { contextCompactions: record.result.contextCompactions }
-      : {}),
-    ...(record.result?.contextDegraded
-      ? { contextDegraded: record.result.contextDegraded }
-      : {}),
-    ...(record.result?.scratchReportPath
-      ? { scratchReportPath: record.result.scratchReportPath }
-      : {}),
-    ...(record.resumedFrom ? { resumedFrom: record.resumedFrom } : {}),
-    ...(record.modelChangedFrom
-      ? { modelChangedFrom: record.modelChangedFrom }
-      : {}),
-  };
-}
-
-function elapsedSeconds(record: DelegationRecord, now = Date.now()): number {
-  const end = record.completedAt ?? now;
-  return Math.max(1, Math.round((end - record.startedAt) / 1000));
-}
 
 function agentActivityEqual(
   left?: AgentActivity,
@@ -606,77 +607,8 @@ function agentActivityEqual(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function waitingSubagentSnapshot(
-  record: DelegationRecord,
-): AgentActivityAgent {
-  return {
-    name: record.agentName,
-    ...(record.lastPhase ? { lastPhase: record.lastPhase } : {}),
-    ...(record.lastToolName ? { lastToolName: record.lastToolName } : {}),
-  };
-}
-
-function waitingSubagentsActivity(
-  targets: DelegationRecord[],
-  since: number,
-): Extract<AgentActivity, { phase: "waiting-subagents" }> {
-  const running = targets.filter((record) => record.status === "running");
-  return {
-    phase: "waiting-subagents",
-    since,
-    subagentCount: running.length,
-    ...(running.length > 0
-      ? { agents: running.map(waitingSubagentSnapshot) }
-      : {}),
-  };
-}
-
-function formatDelegationHeartbeat(record: DelegationRecord): string {
-  const parts = [
-    `${record.agentName} (${record.delegationId})`,
-    record.status,
-    `${elapsedSeconds(record)}s`,
-  ];
-  const turns = record.result?.turns ?? record.turns;
-  const toolCalls = record.result?.toolCalls ?? record.toolCalls;
-  if (turns > 0) parts.push(`${turns} turns`);
-  if (toolCalls > 0) parts.push(`${toolCalls} tool calls`);
-  if (record.lastToolName) parts.push(`last tool ${record.lastToolName}`);
-  return parts.join(", ");
-}
-
 const DELEGATION_RESUME_PROMPT =
   "The following subagents have finished. Integrate their reports and continue the user's original task. Call TaskStop only if you have decided a still-running delegate should not continue.";
-
-/** Join delegation results into one bounded text block for the model. */
-function formatDelegationResults(
-  results: Array<{ delegationId: string; agent: string; status: string; report: string }>,
-  note?: string,
-): { text: string; includedDelegationIds: Set<string> } {
-  const parts: string[] = [];
-  const includedDelegationIds = new Set<string>();
-  let total = 0;
-  let omitted = 0;
-  for (const result of results) {
-    const block = `## ${result.agent} (${result.delegationId}) — ${result.status}\n${result.report}`;
-    if (total + block.length > MAX_TASKWAIT_RESULT_CHARS) {
-      omitted += 1;
-      continue;
-    }
-    parts.push(block);
-    includedDelegationIds.add(result.delegationId);
-    total += block.length + 2;
-  }
-  if (omitted > 0) {
-    parts.push(
-      `[${omitted} more result${omitted === 1 ? "" : "s"} omitted to protect this context; call TaskWait with their delegationIds to re-read one.]`,
-    );
-  }
-  return {
-    text: [note, ...parts].filter((part) => part?.trim()).join("\n\n"),
-    includedDelegationIds,
-  };
-}
 const COMPACTION_FALLBACK_MAX_SUMMARY_CHARS = 12_000;
 /**
  * Room held back from a fallback's tail for the recovery notice the checkpoint
@@ -1002,6 +934,13 @@ export type AgentRuntimeOptions = {
   /** Latest host-owned checkpoint used only to rebuild model context. */
   compaction?: ContextCompactionRecord;
   compactionSettings?: ContextCompactionSettings;
+  /**
+   * Persistent delegation-wake defaults (AppSettings.subagentWakeup, already
+   * normalized by the launcher). Seeds the session base every wait kind
+   * shares before the first call; later launches refresh it through
+   * `setSubagentWakeup`.
+   */
+  subagentWakeup?: SubagentWakeupSettings;
   /**
    * Which compaction family to use. Tests set it explicitly; production reads
    * `PI_DESKTOP_COMPACTION_STRATEGY` and otherwise summarizes.
@@ -1824,6 +1763,13 @@ export class DesktopAgentRuntime {
   /** Row ids already in `transcriptHistory` from live delegate events, so a
    * retried stream appends once. */
   private readonly appendedDelegationRowIds = new Set<string>();
+  /** User-origin continuation idempotency: caller messageId -> new run id. */
+  private readonly continuedSubagentIds = new Map<string, string>();
+  /** Delivery claimed by `continueSubagent`, keyed by its `Task(resume)` call. */
+  private readonly continueDeliveryByToolCall = new Map<
+    string,
+    { delivery: SubagentDeliveryOwner; executionTurnId: string }
+  >();
   /** Name and arguments of a delegate's in-flight call: `tool_end` carries the
    * result only, and the row a resume replays needs both. */
   private readonly delegateToolCalls = new Map<
@@ -1881,6 +1827,17 @@ export class DesktopAgentRuntime {
   private agentActivity?: AgentActivity;
   /** Targets of the in-flight parent wait; live snapshots refresh this set. */
   private delegationWaitTargets?: DelegationRecord[];
+  /**
+   * Wake configuration the session's waits use. Replaced only by launch
+   * options and `setSubagentWakeup` (live settings change). It exclusively
+   * owns wait timing for `TaskWait`, `TaskList`, and the idle resume alike;
+   * no per-call control can shadow or rewrite it.
+   */
+  private sessionWakeup: ResolvedSubagentWakeupSettings =
+    normalizeSubagentWakeupSettings(undefined);
+  /** One-shot listeners re-evaluating an in-flight wake-aware wait. */
+  private readonly wakeWaiters: ReturnType<typeof createWakeWaiterRegistry>;
+  private delegationCoordinator?: ReturnType<typeof createDelegationCoordinator>;
   private providerResponseStatus?: number;
   private providerRetryHeaders?: Record<string, string>;
   /**
@@ -2016,6 +1973,7 @@ export class DesktopAgentRuntime {
 
   constructor(opts: AgentRuntimeOptions) {
     this.sessionId = opts.sessionId;
+    this.wakeWaiters = createWakeWaiterRegistry(opts.sessionId);
     this.turnId = opts.turnId;
     this.mode = opts.mode;
     this.planningState = proposalKindForMode(this.mode) ? "planning" : "inactive";
@@ -2053,6 +2011,7 @@ export class DesktopAgentRuntime {
     this.projectInstructions = opts.projectInstructions;
     this.projectMemory = opts.projectMemory?.trim() || undefined;
     this.compactionEnabled = compactionEnabled(opts.compactionSettings);
+    this.sessionWakeup = normalizeSubagentWakeupSettings(opts.subagentWakeup);
     this.compactionStrategy = resolveCompactionStrategy(opts.compactionStrategy);
 
     this.rebuildToolCatalog();
@@ -3050,6 +3009,10 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       // report, and replaying a delegate's messages would both contradict that
       // and reintroduce the context cost delegation exists to avoid.
       if (m.parentToolCallId) continue;
+      // A user-origin continuation marker is ledger, not a parent call: the
+      // parent never issued this `Task`, so its model context must not see
+      // it. Chain replay still finds it through the chain's tool call ids.
+      if (isUserContinueTaskRow(m)) continue;
       const timestamp = Date.parse(m.createdAt) || Date.now();
       if (m.role === "system" && m.modelSystem) {
         toolCarrier = undefined;
@@ -4429,107 +4392,24 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     );
   }
 
-  /**
-   * Resolve a `Task.resume` id to its chain, or fail with a message that tells
-   * the model how to proceed (ADR 0276). The parent only ever sees
-   * `delegationId`; the chain identity behind it stays internal.
-   */
-  private resolveResumeChain(
-    resume: string,
-    agentName: string,
-  ):
-    | { ok: true; chain: DelegationChain }
-    | { ok: false; message: string } {
-    const lookup = this.delegationChains.resolveResume({
-      resume,
-      agentName,
-      runningDelegationIds: this.runningDelegationIds(),
-    });
-    if (lookup.ok) return lookup;
-    const error = lookup.error;
-    switch (error.kind) {
-      case "unknown":
-        return { ok: false, message: this.unknownResumeMessage(resume) };
-      case "running":
-        return {
-          ok: false,
-          message: `Delegation ${error.delegationId} is still running. Call TaskWait to converge with it first, or start a new delegation. Resuming a running delegation is not queued.`,
-        };
-      case "not-resumable":
-        return {
-          ok: false,
-          message:
-            error.status === "interrupted"
-              ? `Delegation ${resume} was interrupted — the app closed while it worked — so there is nothing to continue. Start a new delegation instead.`
-              : `Delegation ${resume} ended as "${error.status}" and cannot be resumed. Only completed or failed delegations continue; start a new delegation instead.`,
-        };
-      case "agent-mismatch":
-        return {
-          ok: false,
-          message: `Delegation ${resume} belongs to the ${error.expected} subagent, not ${error.actual}. Resume it with the matching agent name, or start a new delegation.`,
-        };
-      case "over-budget":
-        return {
-          ok: false,
-          message: `Delegation ${resume} has read too much to resume cheaply. Start a new delegation and point it at the specific files it should re-read.`,
-        };
-    }
-  }
-
-  private unknownResumeMessage(resume: string): string {
-    return this.delegationChains.unknownResumeError(
-      resume,
-      this.delegationChains.resumableList({
-        runningDelegationIds: this.runningDelegationIds(),
-      }),
-    );
-  }
-
-  /**
-   * A chain resolved but has nothing to replay. The caller drops it first, so
-   * the id can never be advertised as reusable in its own error (ADR 0279 §4).
-   */
-  private noHistoryResumeMessage(resume: string): string {
-    return this.delegationChains.noHistoryResumeError(
-      resume,
-      this.delegationChains.resumableList({
-        runningDelegationIds: this.runningDelegationIds(),
-      }),
-    );
-  }
-
-  /**
-   * The binding a resumed run keeps (ADR 0279 §4). A live chain records the
-   * `providerId/modelId` key it resolved, which is preferred here; a chain
-   * rebuilt from the transcript only knows the model id. Both paths are limited
-   * to this definition's pins, session inheritance, and current override grants.
-   */
-  private async resumedChainProvider(
-    chain: DelegationChain,
-    definition: SubagentDefinition,
-  ): Promise<RuntimeProviderConfig | undefined> {
-    const modelId = chain.latestModelId?.trim().toLowerCase();
-    if (!modelId) return undefined;
-    const keys = new Set(this.availableSubagentModelKeys());
-    if (definition.model) keys.add(subagentModelKey(definition.model));
-    for (const pin of definition.fallbackModels ?? []) keys.add(subagentModelKey(pin));
-    const binding = (key: string) => keys.has(key)
-      ? this.subagentProviders[key] ?? this.subagentOverrideProviders[key]
-      : undefined;
-    const matches = (candidate: RuntimeProviderConfig | undefined) =>
-      candidate?.modelId.trim().toLowerCase() === modelId;
-    if (chain.latestModelKey) {
-      const keyed = binding(chain.latestModelKey) ??
-        await this.resolveSubagentModel(chain.latestModelKey);
-      // A known binding must not silently become a different account with the
-      // same model id after its grant disappears.
-      return matches(keyed) ? keyed : undefined;
-    }
-    return [
-      this.subagentProvider(definition),
-      this.provider,
-      ...[...keys].map(binding),
-    ].find(matches);
+  /** Model bindings a resumed run may keep (ADR 0279 §4). */
+  private resumeModelContext(): ResumeModelContext {
+    return {
+      definitionKeys: (definition) => {
+        const keys = new Set<string>();
+        if (definition.model) keys.add(subagentModelKey(definition.model));
+        for (const pin of definition.fallbackModels ?? []) {
+          keys.add(subagentModelKey(pin));
+        }
+        return keys;
+      },
+      availableOverrideKeys: () => this.availableSubagentModelKeys(),
+      bindingFor: (key) =>
+        this.subagentProviders[key] ?? this.subagentOverrideProviders[key],
+      definitionProvider: (definition) => this.subagentProvider(definition),
+      sessionProvider: this.provider,
+      resolveModel: (key) => this.resolveSubagentModel(key),
+    };
   }
 
   /** The delegation-model key a resolved binding is registered under, if any. */
@@ -4545,34 +4425,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       if (candidate === provider) return key;
     }
     return undefined;
-  }
-
-  /**
-   * Rebuild the delegate's prior conversation from its transcript rows. The
-   * rows carry `parentToolCallId` for exactly the chain's `Task` calls, so the
-   * replay never picks up the parent's own rows or a sibling delegate's.
-   */
-  private seedResumedDelegate(
-    chain: DelegationChain,
-    provider: RuntimeProviderConfig,
-  ): AgentMessage[] | undefined {
-    const originalTask =
-      chain.originalTask ??
-      originalTaskFromTranscript(this.transcriptHistory, chain);
-    if (!originalTask) return undefined;
-    const rows = selectChainRows(this.transcriptHistory, chain);
-    if (rows.length === 0) return undefined;
-    // The seed is truncated against the delegate's own budget (ADR 0299 §7),
-    // derived from the same model the resumed run will use, so the first
-    // request fits the window instead of overflowing on arrival.
-    const model = buildProviderModel(provider);
-    return seedDelegateMessages({
-      originalTask,
-      rows,
-      provider,
-      model,
-      budget: contextBudgetLimitsFor(model),
-    });
   }
 
   /**
@@ -4738,7 +4590,12 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         // The delegate runs in the background (ADR 0089): `Task` returns
         // immediately with a delegation id, and TaskWait converges later.
         const resumeLookup = resume
-          ? this.resolveResumeChain(resume, definition.name)
+          ? resolveResumeChain(
+              this.delegationChains,
+              this.runningDelegationIds(),
+              resume,
+              definition.name,
+            )
           : undefined;
         if (resume && resumeLookup && !resumeLookup.ok) {
           return this.subagentToolError(toolCallId, resumeLookup.message);
@@ -4751,14 +4608,23 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         // lifecycle details, because refusing would strand the chain forever.
         const resumeEpoch = this.turnEpoch;
         const resumedProvider = resumedChain
-          ? await this.resumedChainProvider(resumedChain, definition)
+          ? await resumedChainProvider(
+              resumedChain,
+              definition,
+              this.resumeModelContext(),
+            )
           : undefined;
         if (this.disposed || this.runCancelled || this.turnHadError || resumeEpoch !== this.turnEpoch) {
           return this.subagentToolError(toolCallId, "The parent turn ended before delegation could resume.");
         }
         // Authorization may yield while a parallel Task starts this chain.
         if (resume) {
-          const current = this.resolveResumeChain(resume, definition.name);
+          const current = resolveResumeChain(
+            this.delegationChains,
+            this.runningDelegationIds(),
+            resume,
+            definition.name,
+          );
           if (!current.ok) return this.subagentToolError(toolCallId, current.message);
         }
         if (this.runningDelegations().length >= MAX_SUBAGENT_CONCURRENCY) {
@@ -4773,7 +4639,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             ? resumedChain.latestModelId
             : undefined;
         const initialMessages = resumedChain
-          ? this.seedResumedDelegate(resumedChain, provider)
+          ? seedResumedDelegate(this.transcriptHistory, resumedChain, provider)
           : undefined;
         if (resume && !initialMessages) {
           // The chain resolved but has nothing left to replay. Drop it so the
@@ -4785,13 +4651,17 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           }
           return this.subagentToolError(
             toolCallId,
-            this.noHistoryResumeMessage(resume),
+            noHistoryResumeErrorMessage(
+              this.delegationChains,
+              this.runningDelegationIds(),
+              resume,
+            ),
           );
         }
         const delegationId = randomUUID();
         // ADR 0329: in an isolated session a delegate that can write files gets
         // its own worktree, keyed by its chain so a resume reuses it.
-        const worktreeKey = this.delegateNeedsWorktree(declaredToolNames)
+        const worktreeKey = delegateNeedsWorktree(this.workspaceRoot, declaredToolNames)
           ? resumedChain?.delegateSessionId ?? delegationId
           : undefined;
         if (worktreeKey) {
@@ -4846,8 +4716,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           ...(providerKey ? { latestModelKey: providerKey } : {}),
           resumedFrom: resumedChain,
         });
+        // A direct user continuation claims delivery before spawning, so the
+        // record is tagged at creation — a fast settle cannot beat the claim.
+        const claimed = this.continueDeliveryByToolCall.get(toolCallId);
+        if (claimed) this.continueDeliveryByToolCall.delete(toolCallId);
         const record: DelegationRecord = {
           delegationId,
+          parentToolCallId: toolCallId,
           taskTurnId: this.turnId,
           agentName: definition.name,
           modelId: provider.modelId,
@@ -4860,10 +4735,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           stopRequested: false,
           turns: 0,
           toolCalls: 0,
+          wake: createSubagentWakeState(0),
           lastActivityAt: startedAt,
           lastPhase: "waiting-model",
           startedEpoch: this.turnEpoch,
           reportDelivered: false,
+          delivery: (claimed?.delivery ?? "parent") as SubagentDeliveryOwner,
+          executionTurnId: claimed?.executionTurnId ?? this.turnId,
           delegateSessionId: chain.delegateSessionId,
           ...(worktreeKey ? { worktreeKey } : {}),
           ...(resumedChain ? { resumedFrom: resume } : {}),
@@ -4872,7 +4750,11 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         this.delegations.set(delegationId, record);
         let subagentRun: SubagentRun;
         try {
-          const scopedTools = this.scopeDelegateTools(tools, definition, delegationId, worktreeKey);
+          const scopedTools = scopeDelegateTools(tools, definition, delegationId, worktreeKey, {
+            mutationOwners: this.mutationOwners,
+            permissionScopes: this.delegatePermissionScopes,
+            worktrees: this.delegateWorktrees,
+          });
           subagentRun = new SubagentRun({
             definition,
             sessionId: this.sessionId,
@@ -4942,6 +4824,9 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
 
         let runPromise: Promise<SubagentRunResult>;
         try {
+          // Retained on the record: live progress reads and child steering
+          // reach the loop through this handle, never through a second agent.
+          record.run = subagentRun;
           runPromise = subagentRun.run();
         } catch (error) {
           runPromise = Promise.reject(error);
@@ -4983,50 +4868,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             startedAt,
             modelId: provider.modelId,
             thinkingLevel,
+            toolCalls: 0,
+            turns: 0,
             ...(resumedChain ? { resumedFrom: resume } : {}),
           },
         };
       },
     };
-  }
-
-  /** Wrap a delegate's tools with its permission and mutation-recovery scope. */
-  private scopeDelegateTools(
-    tools: AgentTool[],
-    definition: SubagentDefinition,
-    mutationOwner: string,
-    worktreeKey?: string,
-  ): AgentTool[] {
-    const scope = definition.permission ?? DEFAULT_SUBAGENT_PERMISSION;
-    return tools.map((tool) => ({
-      ...tool,
-      execute: async (toolCallId, args, signal, onUpdate) => {
-        this.mutationOwners.set(toolCallId, mutationOwner);
-        if (scope !== DEFAULT_SUBAGENT_PERMISSION) {
-          this.delegatePermissionScopes.set(toolCallId, scope);
-        }
-        if (worktreeKey) this.delegateWorktrees.set(toolCallId, worktreeKey);
-        try {
-          return await tool.execute(toolCallId, args, signal, onUpdate);
-        } finally {
-          this.delegatePermissionScopes.delete(toolCallId);
-          this.delegateWorktrees.delete(toolCallId);
-          this.mutationOwners.delete(toolCallId);
-        }
-      },
-    }));
-  }
-
-  /**
-   * Only inside an isolated session, and only for delegates that can edit
-   * files (Write/Edit); Bash-only and read-only delegates share the session
-   * worktree (ADR 0329, Q11).
-   */
-  private delegateNeedsWorktree(toolNames: readonly string[]): boolean {
-    return (
-      this.workspaceRoot !== undefined &&
-      toolNames.some((name) => name === "Write" || name === "Edit")
-    );
   }
 
   /**
@@ -5046,6 +4894,15 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       );
       if (note) result = { ...result, report: result.report ? `${result.report}\n\n${note}` : note };
     }
+    // Fold the live loop's final counters before publishing: the run's own
+    // result may predate the last streamed usage row, and settlement must not
+    // lose live turns/tool calls/spend or the closing context estimate.
+    refreshDelegationProgress(record);
+    if (record.turns > (result.turns ?? 0)) result = { ...result, turns: record.turns };
+    if (record.toolCalls > (result.toolCalls ?? 0)) {
+      result = { ...result, toolCalls: record.toolCalls };
+    }
+    if (record.usage && !result.usage) result = { ...result, usage: record.usage };
     this.settleDelegation(record, result);
   }
 
@@ -5074,62 +4931,44 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     record: DelegationRecord,
     result: SubagentRunResult,
   ): void {
-    if (record.status !== "running") return;
-    if (result.status === "aborted" && record.parentErrorInterrupted && !record.stopRequested) {
-      const message = `The parent turn failed and interrupted this delegation. Continue it with Task(resume: "${record.delegationId}").`;
-      result = {
-        ...result,
-        status: "failed",
-        report: truncateTextWithMarker(`${message}\n\n${result.report}`, MAX_SUBAGENT_REPORT_CHARS, "\n[report truncated]\n"),
-        error: { code: "SUBAGENT_PARENT_FAILED", message, resumeId: record.delegationId },
-      };
-    }
-    record.status =
-      record.stopRequested && result.status === "aborted"
-        ? "stopped"
-        : result.status;
-    record.result = result;
-    record.completedAt = Date.now();
-    // Resolve before event publication or bookkeeping: none of those side
-    // effects may strand TaskWait or the parent's idle auto-resume.
-    record.resolveCompletion();
-    try {
-      if (result.usage) {
-        this.turnSubagentUsage = addUsage(this.turnSubagentUsage, result.usage);
-      }
-      this.delegationChains.settle(record.delegateSessionId, record.status);
-      // An aborted call never sends `tool_end`, so a settled run drops whatever
-      // its calls left behind rather than pinning those arguments for the session.
-      for (const toolCallId of record.pendingToolCallIds ?? []) {
-        this.delegateToolCalls.delete(toolCallId);
-        this.delegateMutationTerminations.delete(toolCallId);
-      }
-      record.pendingToolCallIds = undefined;
-      this.publishDelegationSettlement(record);
-    } catch {
-      process.stderr.write(
-        `[agent-runtime] delegation settlement side effect failed (session=${this.sessionId} delegation=${record.delegationId})\n`,
-      );
-    } finally {
-      this.clearMutationRecovery(record.delegationId);
-      this.refreshDelegationWait();
-      this.refreshResumablePrompt();
-      this.pruneFinishedDelegations();
+    const userOwned = (record.delivery ?? "parent") === "user";
+    const wasRunning = record.status === "running";
+    settleDelegationRecord(record, result, {
+      sessionId: this.sessionId,
+      addTurnUsage: (usage) => {
+        // A detached run's spend belongs to its own execution turn, carried
+        // by its own events — never folded into an unrelated parent turn.
+        if (!userOwned) {
+          this.turnSubagentUsage = addUsage(this.turnSubagentUsage, usage);
+        }
+      },
+      settleChain: (delegateSessionId, status) =>
+        this.delegationChains.settle(delegateSessionId, status),
+      dropPendingToolCalls: (toolCallIds) => {
+        for (const toolCallId of toolCallIds) {
+          this.delegateToolCalls.delete(toolCallId);
+          this.delegateMutationTerminations.delete(toolCallId);
+        }
+      },
+      publishSettlement: () => this.publishDelegationSettlement(record),
+      clearMutationRecovery: (delegationId) =>
+        this.clearMutationRecovery(delegationId),
+      refreshWait: () => this.refreshDelegationWait(),
+      refreshPrompt: () => this.refreshResumablePrompt(),
+      prune: () => this.pruneFinishedDelegations(),
+      notifyWaiters: () => this.wakeWaiters.notify(),
+    });
+    // Close the detached run's own execution turn (child-only: durable row
+    // finalizes, no parent conclusion fans out).
+    if (userOwned && wasRunning && !this.disposed) {
+      const terminal = userOwnedTerminalEvent(record);
+      if (terminal) this.emit(terminal.event, terminal.turnId);
     }
   }
 
   private publishDelegationSettlement(record: DelegationRecord): void {
-    if (!record.taskMessage) return;
-    const original = record.taskMessage.toolResult;
-    const details = isRecord(original) && isRecord(original.details) ? original.details : undefined;
-    if (record.status === "running" && details?.modelId === record.modelId && details?.thinkingLevel === record.thinkingLevel) return;
-    this.emit(
-      {
-        type: "message_end",
-        message: settledDelegationMessage(record.taskMessage, delegationSummary(record)),
-      },
-      record.taskTurnId,
-    );
+    const emission = settlementSnapshotEvent(record);
+    if (emission) this.emit(emission.event, emission.turnId);
   }
 
   /** Cap retained history so a long session cannot grow the registry forever.
@@ -5150,6 +4989,18 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     );
   }
 
+  /** Parent-owned running delegates: the only ones parent accounting sees. */
+  private runningParentDelegations(): DelegationRecord[] {
+    return this.runningDelegations().filter(
+      (record) => (record.delivery ?? "parent") === "parent",
+    );
+  }
+
+  /** Any live delegate, regardless of delivery (dispose/factory guards). */
+  hasRunningDelegations(): boolean {
+    return this.runningDelegations().length > 0;
+  }
+
   /** Abort every running delegation (user Stop, dispose, parent fatal error). */
   private abortRunningDelegations(parentErrorInterrupted = false): void {
     for (const record of this.runningDelegations()) {
@@ -5159,22 +5010,24 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
   }
 
   private currentTurnDelegations(): DelegationRecord[] {
-    return this.runningDelegations().filter(
+    return this.runningParentDelegations().filter(
       (record) => record.startedEpoch === this.turnEpoch,
     );
   }
 
   /**
-   * Current-turn delegates whose report the parent has not seen yet: still
-   * running, or settled before the parent idled and never read through
+   * Current-turn parent delegates whose report the parent has not seen yet:
+   * still running, or settled before the parent idled and never read through
    * `TaskWait`. A delegate that finished in a few hundred milliseconds is
    * "done and unpublished", not "unfinished"; keying the idle resume on
    * running delegates alone dropped such reports (#226). Stopped and
-   * aborted runs are not auto-delivered.
+   * aborted runs are not auto-delivered. User-owned runs never pend here:
+   * their reports belong to the user's followup, not the parent's context.
    */
   private pendingCurrentTurnDelegations(): DelegationRecord[] {
     return [...this.delegations.values()].filter(
       (record) =>
+        (record.delivery ?? "parent") === "parent" &&
         record.startedEpoch === this.turnEpoch &&
         !record.reportDelivered &&
         record.status !== "stopped" &&
@@ -5184,6 +5037,9 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
 
   private abortDelegationsFromPreviousTurns(): void {
     for (const record of this.runningDelegations()) {
+      // A detached user-owned run survives a new parent turn: starting parent
+      // work must never silently abort the user's own followup.
+      if ((record.delivery ?? "parent") !== "parent") continue;
       if (record.startedEpoch !== this.turnEpoch) record.abort();
     }
   }
@@ -5205,61 +5061,31 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
   /** D328 keeps the turn open on parent idle, not on a fatal parent error. */
   private keepTurnOpenForDelegates(): boolean {
     return (
-      (this.runningDelegations().length > 0 ||
+      (this.runningParentDelegations().length > 0 ||
         this.pendingCurrentTurnDelegations().length > 0) &&
       !this.runCancelled &&
       !this.turnHadError
     );
   }
 
-  private noteDelegationActivity(
-    record: DelegationRecord,
-    envelope: AgentEventEnvelope,
-  ): void {
-    record.lastActivityAt = Date.now();
-    const event = envelope.event;
-    if (event.type === "turn_start") {
-      record.turns += 1;
-      this.touchDelegationPhase(record, "waiting-model");
-      return;
-    }
-    if (event.type === "tool_start") {
-      record.toolCalls += 1;
-      this.touchDelegationPhase(record, "tool", event.toolName);
-      // The row a later `resume` replays needs the call's arguments, and
-      // `tool_end` carries only the result (ADR 0279 §3).
-      this.delegateToolCalls.set(event.toolCallId, {
-        name: event.toolName,
-        args: (envelope.event as ToolStartEvent).args,
-      });
-      (record.pendingToolCallIds ??= new Set()).add(event.toolCallId);
-      return;
-    }
-    if (event.type === "tool_end") {
-      this.touchDelegationPhase(record, "waiting-model");
-      this.appendDelegationRow(record, envelope, this.toolRowFromEnvelope(envelope));
-      // The call is finished; its arguments are no longer needed.
-      this.delegateToolCalls.delete(event.toolCallId);
-      record.pendingToolCallIds?.delete(event.toolCallId);
-      return;
-    }
-    if (event.type === "message_end" && event.message.role === "assistant") {
-      this.appendDelegationRow(record, envelope, event.message);
-    }
-    if (
-      (event.type === "message_start" || event.type === "message_update") &&
-      event.message.role === "assistant"
-    ) {
-      const thinking = Boolean(
-        event.message.thinking?.trim() ||
-          (event.type === "message_update" && event.deltaThinking),
-      );
-      const text = Boolean(
-        event.message.content?.trim() ||
-          (event.type === "message_update" && event.deltaText),
-      );
-      if (thinking && !text) this.touchDelegationPhase(record, "thinking");
-    }
+  private noteDelegationActivity(record: DelegationRecord, envelope: AgentEventEnvelope): void {
+    applyDelegationActivity(
+      {
+        touchPhase: (target, phase, toolName) =>
+          this.touchDelegationPhase(target, phase, toolName),
+        delegateToolCalls: this.delegateToolCalls,
+        appendRow: (target, envelope, message) =>
+          this.appendDelegationRow(target, envelope, message),
+        toolRow: (envelope) => this.toolRowFromEnvelope(envelope),
+        publishProgress: (target) => {
+          const emission = progressSnapshotEvent(target);
+          if (emission) this.emit(emission.event, emission.turnId);
+        },
+        notifyWaiters: () => this.wakeWaiters.notify(),
+      },
+      record,
+      envelope,
+    );
   }
 
   /**
@@ -5267,51 +5093,26 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
    * `Task.resume` in the same session replays the chain without waiting on
    * persistence (ADR 0276). A retried stream reuses the row id and appends once.
    */
+  private rowHost(): DelegationRowHost {
+    return {
+      appendedRowIds: this.appendedDelegationRowIds,
+      transcriptHistory: this.transcriptHistory,
+      delegateToolCalls: this.delegateToolCalls,
+      noteReads: (delegateSessionId, files, lineCount) =>
+        this.delegationChains.noteReads(delegateSessionId, files, lineCount),
+    };
+  }
+
   private appendDelegationRow(
     record: DelegationRecord,
     envelope: AgentEventEnvelope,
     row: UiMessage,
   ): void {
-    const tagged: UiMessage = {
-      ...row,
-      parentToolCallId: envelope.parentToolCallId ?? row.parentToolCallId,
-      nestedParentToolCallId: envelope.nestedParentToolCallId ?? row.nestedParentToolCallId,
-      agentName: envelope.agentName ?? row.agentName,
-    };
-    const key =
-      tagged.role === "tool"
-        ? `tool:${tagged.toolCallId ?? ""}`
-        : `message:${tagged.id ?? ""}`;
-    if (key.endsWith(":")) return;
-    if (this.appendedDelegationRowIds.has(key)) return;
-    this.appendedDelegationRowIds.add(key);
-    this.transcriptHistory.push(tagged);
-    if (tagged.role === "tool" && isReadOnlyToolName(tagged.toolName ?? "")) {
-      const { files, lineCount } = extractReadFiles([tagged]);
-      this.delegationChains.noteReads(record.delegateSessionId, files, lineCount);
-    }
+    appendDelegationRow(this.rowHost(), record, envelope, row);
   }
 
   private toolRowFromEnvelope(envelope: AgentEventEnvelope): UiMessage {
-    const event = envelope.event as ToolEndEvent;
-    const call = this.delegateToolCalls.get(event.toolCallId);
-    const ts = new Date(envelope.ts ?? Date.now()).toISOString();
-    return {
-      id: `delegate-tool-${event.toolCallId}`,
-      role: "tool",
-      content: "",
-      createdAt: ts,
-      toolCompletedAt: ts,
-      toolCallId: event.toolCallId,
-      toolName: call?.name ?? "",
-      toolArgs: call?.args,
-      toolResult: event.result,
-      toolStatus: event.isError ? "error" : "success",
-      isError: Boolean(event.isError),
-      parentToolCallId: envelope.parentToolCallId,
-      nestedParentToolCallId: envelope.nestedParentToolCallId,
-      agentName: envelope.agentName,
-    };
+    return toolRowFromEnvelope(this.rowHost(), envelope);
   }
 
   private touchDelegationPhase(
@@ -5326,41 +5127,28 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     this.refreshDelegationWait();
   }
 
+  private waitHost(): DelegationWaitHost {
+    return {
+      getTargets: () => this.delegationWaitTargets,
+      setTargets: (targets) => {
+        this.delegationWaitTargets = targets;
+      },
+      getActivity: () => this.agentActivity,
+      setActivity: (activity) => this.setAgentActivity(activity),
+      clearActivity: () => this.clearAgentActivity(),
+    };
+  }
+
   private beginDelegationWait(targets: DelegationRecord[]): void {
-    const running = targets.filter((record) => record.status === "running");
-    if (running.length === 0) return;
-    this.delegationWaitTargets = targets;
-    const since =
-      this.agentActivity?.phase === "waiting-subagents"
-        ? this.agentActivity.since
-        : Date.now();
-    this.setAgentActivity(waitingSubagentsActivity(targets, since));
+    beginDelegationWait(this.waitHost(), targets);
   }
 
   private refreshDelegationWait(): void {
-    if (
-      !this.delegationWaitTargets ||
-      this.agentActivity?.phase !== "waiting-subagents"
-    ) {
-      return;
-    }
-    const running = this.delegationWaitTargets.filter(
-      (record) => record.status === "running",
-    );
-    if (running.length === 0) return;
-    this.setAgentActivity(
-      waitingSubagentsActivity(
-        this.delegationWaitTargets,
-        this.agentActivity.since,
-      ),
-    );
+    refreshDelegationWait(this.waitHost());
   }
 
   private endDelegationWait(): void {
-    this.delegationWaitTargets = undefined;
-    if (this.agentActivity?.phase === "waiting-subagents") {
-      this.clearAgentActivity();
-    }
+    endDelegationWait(this.waitHost());
   }
 
   /**
@@ -5368,6 +5156,14 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
    * reports back so the main agent can continue (D328). User Stop / dispose
    * set `runCancelled` and abort the delegates instead. A parent fatal error
    * aborts leftover delegates and returns without a resume prompt (D352).
+   *
+   * The idle wait reuses the shared program checkpoint: the same
+   * `programCoordinator.waitForProgramTargets` as explicit `TaskWait` with an
+   * `any` query (`minCompleted: 1`), so any attached completed report hands
+   * to the parent immediately without waiting for all. No independent
+   * deadline or transient period of its own. Completion always delivers
+   * exactly once. With no pending delegates the wait resolves immediately
+   * and never auto-prompts.
    */
   private async resumeAfterDelegations(): Promise<void> {
     if (this.disposed || this.runCancelled || this.turnHadError) {
@@ -5386,9 +5182,23 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       this.beginDelegationWait(targets);
       const waitAbort = new AbortController();
       this.steeringWaitAbort = waitAbort;
+      let wakeReason: SubagentWakeReason | undefined;
+      let timedOut = false;
       try {
         if (!this.pendingSteering.size) {
-          await this.waitForDelegations(targets, targets.length, null, waitAbort.signal);
+          // Same shared checkpoint as TaskWait: query `any/min1` so one
+          // settled report resolves immediately while siblings run on.
+          const outcome = await this.programCoordinator().waitForProgramTargets(
+            { mode: "any", minCompleted: 1 },
+            {
+              registerWakeWaiter: (listener) => this.wakeWaiters.register(listener),
+              signal: waitAbort.signal,
+            },
+          );
+          wakeReason =
+            outcome.wakeReason ??
+            (outcome.timedOut && outcome.deadlineKind === "time" ? "time" : undefined);
+          timedOut = outcome.timedOut && !outcome.wakeReason;
         }
       } finally {
         if (this.steeringWaitAbort === waitAbort) this.steeringWaitAbort = undefined;
@@ -5408,31 +5218,49 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         if (this.turnHadError) this.terminateParentTurn();
         return;
       }
+      if (wakeReason === "tool-calls" || wakeReason === "context-tokens" || wakeReason === "time") {
+        // Interim progress, not a completion: heartbeat through the existing
+        // turn owner, deliver nothing, keep waiting.
+        const still = this.currentTurnDelegations();
+        if (still.length === 0) continue;
+        const text = [
+          wakeReason === "tool-calls"
+            ? "Subagent progress update: a delegate made more tool calls. This is not a completion — keep waiting for their reports, which arrive when they finish."
+            : wakeReason === "context-tokens"
+              ? "Subagent progress update: a delegate's context estimate crossed its threshold. This is not a completion — keep waiting for their reports, which arrive when they finish."
+              : "Subagent progress update: delegates are still working. This is not a completion — keep waiting for their reports, which arrive when they finish.",
+          still.map(formatDelegationHeartbeat).join("\n"),
+        ].join("\n\n");
+        this.requestStartedAt = Date.now();
+        await this.agent.prompt(text);
+        await this.waitForIdleAndSteering();
+        if (!(await this.runPendingRecoveries())) return;
+        if (this.turnHadError || epoch !== this.turnEpoch) {
+          if (this.turnHadError) this.terminateParentTurn();
+          return;
+        }
+        continue;
+      }
       const settled = targets.filter(
         (record) => record.status !== "running" && !record.reportDelivered,
       );
-      if (settled.length === 0) return;
-      const results = settled.map((record) => ({
-        delegationId: record.delegationId,
-        agent: record.agentName,
-        status: record.status,
-        report:
-          record.result?.report ?? `(${record.status} without a report)`,
-      }));
+      if (settled.length === 0) {
+        // A pure time heartbeat resolved without progress or settlement:
+        // loop again rather than prompting on an empty pass. With nothing
+        // pending the loop guard above already returned.
+        if (timedOut) continue;
+        return;
+      }
+      const assembled = assembleWaitResult(settled.map(snapshotWaitRecord));
       const still = this.currentTurnDelegations();
       const heartbeat =
         still.length > 0
           ? `Still running:\n${still.map(formatDelegationHeartbeat).join("\n")}`
           : "";
-      const formatted = formatDelegationResults(results);
-      for (const record of settled) {
-        if (formatted.includedDelegationIds.has(record.delegationId)) {
-          record.reportDelivered = true;
-        }
-      }
+      markProgramDelivery(settled, assembled.includedDelegationIds);
       const text = [
         DELEGATION_RESUME_PROMPT,
-        formatted.text,
+        assembled.text,
         heartbeat,
       ]
         .filter((part) => part.trim())
@@ -5454,12 +5282,12 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       name: SUBAGENT_WAIT_TOOL_NAME,
       label: "Task Wait",
       description:
-        "Wait for one or more subagents started by Task and return their reports. `delegationIds` defaults to every running subagent; use mode \"any\" with `minCompleted` to converge as soon as the first (or first N) finish. Settled delegations return immediately, so re-reading a report by id is cheap. New user input interrupts the wait without canceling delegates; handle it before waiting again. A wait timeout is not a failure: unfinished delegates keep working and the runtime delivers their reports when they finish.",
+        "Wait for one or more subagents started by Task and return their reports; the program wait returns with the reports, never an immediate poll. `delegationIds` defaults to every pending subagent; use mode \"any\" with `minCompleted` to converge as soon as the first (or first N) finish. Settled delegations return immediately, so re-reading a report by id is cheap. New user input interrupts the wait without canceling delegates; handle it before waiting again. Timing follows the session subagent wakeup; completion always delivers exactly once.",
       parameters: Type.Object({
         delegationIds: Type.Optional(
           Type.Array(
             Type.String({ description: "Delegation ids returned by Task." }),
-            { description: "Defaults to all running subagents." },
+            { description: "Defaults to all pending subagents." },
           ),
         ),
         mode: Type.Optional(
@@ -5473,65 +5301,74 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             description: "With mode \"any\": wait until at least this many finished.",
           }),
         ),
-        timeoutSeconds: Type.Optional(
-          Type.Number({
-            minimum: 1,
-            maximum: TASKWAIT_MAX_TIMEOUT_SECONDS,
-            description: `Max seconds to wait; defaults to ${TASKWAIT_DEFAULT_TIMEOUT_SECONDS}.`,
-          }),
-        ),
       }),
       executionMode: "sequential",
       execute: async (_toolCallId, params, signal) => {
-        const ids =
-          isRecord(params) && Array.isArray(params.delegationIds)
-            ? params.delegationIds.map(String)
-            : [];
-        const mode = isRecord(params) && params.mode === "any" ? "any" : "all";
+        const record = isRecord(params) ? params : {};
+        const ids = Array.isArray(record.delegationIds)
+          ? record.delegationIds.map(String)
+          : [];
+        const mode: "all" | "any" = record.mode === "any" ? "any" : "all";
         const minCompleted =
-          isRecord(params) && typeof params.minCompleted === "number"
-            ? Math.max(1, Math.floor(params.minCompleted))
+          typeof record.minCompleted === "number" && Number.isFinite(record.minCompleted)
+            ? Math.max(1, Math.floor(record.minCompleted))
             : 1;
-        const timeoutSeconds =
-          isRecord(params) && typeof params.timeoutSeconds === "number"
-            ? Math.min(
-                Math.max(1, Math.floor(params.timeoutSeconds)),
-                TASKWAIT_MAX_TIMEOUT_SECONDS,
-              )
-            : TASKWAIT_DEFAULT_TIMEOUT_SECONDS;
+        const query = ids.length
+          ? { ids, mode, minCompleted }
+          : { mode, minCompleted };
 
-        const targets = ids.length
-          ? ids
-              .map((id) => this.delegations.get(id))
-              .filter((record): record is DelegationRecord => record !== undefined)
-          : this.runningDelegations();
-        if (targets.length === 0) {
-          const text = ids.length
-            ? "None of the requested delegation ids exist in this session. Call TaskList to see them."
-            : "No subagents are currently running.";
-          return {
-            content: [{ type: "text", text }],
-            details: { delegations: [] },
-          };
+        // The parent waits only on its own delegates; user-owned runs are
+        // never targets and naming one does not consume it.
+        const parentOwned = (entry: DelegationRecord): boolean =>
+          (entry.delivery ?? "parent") === "parent";
+        let targets: DelegationRecord[];
+        let unknownIds: string[] = [];
+        if (ids.length) {
+          const named = ids
+            .map((id) => this.delegations.get(id))
+            .filter(
+              (entry): entry is DelegationRecord =>
+                entry !== undefined && parentOwned(entry),
+            );
+          unknownIds = ids.filter((id) => {
+            const entry = this.delegations.get(id);
+            return entry === undefined || !parentOwned(entry);
+          });
+          if (named.length === 0) {
+            return {
+              content: [{ type: "text", text: "None of the requested delegation ids exist in this session. Call TaskList to see them." }],
+              details: { delegations: [], ...(unknownIds.length ? { unknownIds } : {}) },
+            };
+          }
+          // Explicit settled re-reads (already delivered, stopped, or a prior
+          // turn) stay a cheap read through the current view; the coordinator
+          // waits only on the pending subset below.
+          targets = named;
+        } else {
+          targets = this.programCoordinator().selectProgramTargets({
+            mode,
+            minCompleted,
+          }) as DelegationRecord[];
+          if (targets.length === 0) {
+            return {
+              content: [{ type: "text", text: "No subagents are currently running." }],
+              details: { delegations: [] },
+            };
+          }
         }
-        const unknownIds = ids.filter((id) => !this.delegations.has(id));
-        const targetCompleted =
-          mode === "all"
-            ? targets.length
-            : Math.min(Math.max(minCompleted, 1), targets.length);
-        const deadline = Date.now() + timeoutSeconds * 1000;
+        const hasRunning = targets.some(
+          (entry) => entry.status === "running" && parentOwned(entry),
+        );
         this.beginDelegationWait(targets);
         const waitAbort = new AbortController();
         this.steeringWaitAbort = waitAbort;
-        let timedOut = false;
+        let wakeOutcome: WakeWaitOutcome = { timedOut: false, deadlineKind: null, wakeDelegationIds: [] };
         try {
-          if (!this.pendingSteering.size) {
-            timedOut = await this.waitForDelegations(
-              targets,
-              targetCompleted,
-              deadline,
-              signal ? AbortSignal.any([signal, waitAbort.signal]) : waitAbort.signal,
-            );
+          if (!this.pendingSteering.size && hasRunning) {
+            wakeOutcome = await this.programCoordinator().waitForProgramTargets(query, {
+              registerWakeWaiter: (listener) => this.wakeWaiters.register(listener),
+              signal: signal ? AbortSignal.any([signal, waitAbort.signal]) : waitAbort.signal,
+            });
           }
         } finally {
           if (this.steeringWaitAbort === waitAbort) this.steeringWaitAbort = undefined;
@@ -5539,110 +5376,28 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         }
         const interrupted = this.pendingSteering.size > 0 && !signal?.aborted &&
           !this.runCancelled && !this.disposed && !this.turnHadError;
-        // A settled report included in this bounded result reached the parent;
-        // the idle resume must not deliver it a second time. Omitted reports
-        // stay pending so the idle resume can deliver them later. Running
-        // delegates keep their shot: a timeout or early `any` convergence has
-        // not consumed it.
-        const results = targets.map((record) => ({
-          delegationId: record.delegationId,
-          agent: record.agentName,
-          status: record.status,
-          modelId: record.modelId,
-          thinkingLevel: record.thinkingLevel,
-          startedAt: record.startedAt,
-          ...(record.completedAt ? { completedAt: record.completedAt } : {}),
-          ...(record.result?.error ? { error: record.result.error } : {}),
-          ...(record.result?.scratchReportPath
-            ? { scratchReportPath: record.result.scratchReportPath }
-            : {}),
-          report:
-            record.status === "running"
-              ? formatDelegationHeartbeat(record)
-              : (record.result?.report ?? `(${record.status} without a report)`),
-        }));
-        const note = interrupted
-          ? "Interrupted by new user input. Unfinished subagents keep working; handle the user's message before waiting again."
-          : timedOut
-            ? `Still running after ${timeoutSeconds}s: ${results.filter((r) => r.status !== "running").length}/${targets.length} finished. This is not a failure — unfinished delegates keep working and the runtime will deliver their reports when they finish. Call TaskStop only to cancel.\n${targets
-                .filter((record) => record.status === "running")
-                .map(formatDelegationHeartbeat)
-                .join("\n")}`
-            : mode === "any"
-              ? `Converged after ${results.filter((r) => r.status !== "running").length} of ${targets.length} finished.`
-              : undefined;
-        const unknownNote =
-          unknownIds.length > 0
-            ? `Unknown delegation ids (not found in this session): ${unknownIds.join(", ")}.`
-            : undefined;
-        const formatted = formatDelegationResults(
-          results,
-          [note, unknownNote].filter(Boolean).join("\n") || undefined,
-        );
-        for (const record of targets) {
-          if (
-            record.status !== "running" &&
-            formatted.includedDelegationIds.has(record.delegationId)
-          ) {
-            record.reportDelivered = true;
-          }
-        }
-        return {
-          content: [
-            {
-              type: "text",
-              text: formatted.text,
-            },
-          ],
-          details: {
-            status: interrupted ? "interrupted" : timedOut ? "timeout" : "completed",
-            ...(unknownIds.length ? { unknownIds } : {}),
-            delegations: results,
-          },
-        };
+        const plan = this.programCoordinator().planProgramWait(query);
+        const effectiveKind = wakeOutcome.deadlineKind ?? plan.deadlineKind;
+        const effectiveSeconds =
+          plan.wake.kind === "time" ? (plan.wake.value ?? null) : null;
+        const wakeReason = interrupted
+          ? undefined
+          : (wakeOutcome.wakeReason ??
+            (wakeOutcome.timedOut && effectiveKind === "time" ? "time" : undefined));
+        const timedOut = !interrupted && wakeOutcome.timedOut;
+        return finalizeWaitResult({
+          targets,
+          snapshots: targets.map(snapshotWaitRecord),
+          interrupted,
+          timedOut,
+          deadlineSeconds: effectiveSeconds ?? null,
+          ...(wakeReason ? { wakeReason } : {}),
+          wakeDelegationIds: wakeOutcome.wakeDelegationIds,
+          mode,
+          unknownIds,
+        });
       },
     };
-  }
-
-  /**
-   * Resolve once `targetCompleted` of the targets are settled, or the deadline
-   * passes, or the calling run aborts. Returns true on timeout/abort.
-   * `deadline` null waits until they settle (D328 auto-resume).
-   */
-  private waitForDelegations(
-    targets: DelegationRecord[],
-    targetCompleted: number,
-    deadline: number | null,
-    signal?: AbortSignal,
-  ): Promise<boolean> {
-    const settledCount = () =>
-      targets.filter((record) => record.status !== "running").length;
-    if (settledCount() >= targetCompleted) return Promise.resolve(false);
-    if (signal?.aborted) return Promise.resolve(true);
-    return new Promise<boolean>((resolve) => {
-      let done = false;
-      const finish = (timedOut: boolean) => {
-        if (done) return;
-        done = true;
-        if (timer !== undefined) clearTimeout(timer);
-        signal?.removeEventListener("abort", onAbort);
-        resolve(timedOut);
-      };
-      const check = () => {
-        if (settledCount() >= targetCompleted) finish(false);
-      };
-      for (const record of targets) {
-        if (record.status === "running") {
-          record.completion.then(check);
-        }
-      }
-      const onAbort = () => finish(true);
-      signal?.addEventListener("abort", onAbort, { once: true });
-      const timer =
-        deadline === null
-          ? undefined
-          : setTimeout(() => finish(true), Math.max(0, deadline - Date.now()));
-    });
   }
 
   /** `TaskList`: report on the session's delegations (ADR 0089). */
@@ -5651,77 +5406,270 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       name: SUBAGENT_LIST_TOOL_NAME,
       label: "Task List",
       description:
-        "List the subagents started by Task in this session with their status. Use it to check progress without waiting, or before TaskStop to choose what to stop.",
+        "List the subagents started by Task in this session with their status. With expected pending delegates it waits through the program wait and returns with their reports; otherwise it reports the current snapshot without waiting. Use it to check progress, or before TaskStop to choose what to stop.",
       parameters: Type.Object({}),
       executionMode: "sequential",
-      execute: async () => {
-        const delegations = [...this.delegations.values()].sort(
-          (left, right) => left.startedAt - right.startedAt,
-        );
-        const text =
-          delegations.length === 0
-            ? "No subagents have been started in this session."
-            : delegations
-                .map((record) => `- ${formatDelegationHeartbeat(record)}`)
-                .join("\n");
-        return {
-          content: [{ type: "text", text }],
-          details: { delegations: delegations.map(delegationSummary) },
+      execute: async (_toolCallId, params, signal) => {
+        void params;
+        void signal;
+        const pending = this.pendingCurrentTurnDelegations();
+        if (!pending.some((record) => !record.reportDelivered)) {
+          return listDelegationRecords([...this.delegations.values()]);
+        }
+        const targets = [...pending];
+        this.beginDelegationWait(targets);
+        const waitAbort = new AbortController();
+        this.steeringWaitAbort = waitAbort;
+        let wakeOutcome: WakeWaitOutcome = {
+          timedOut: false,
+          deadlineKind: null,
+          wakeDelegationIds: [],
         };
+        try {
+          if (!this.pendingSteering.size) {
+            wakeOutcome = await this.programCoordinator().waitForProgramTargets(
+              { mode: "any", minCompleted: 1 },
+              {
+                registerWakeWaiter: (listener) =>
+                  this.wakeWaiters.register(listener),
+                signal: waitAbort.signal,
+              },
+            );
+          }
+        } finally {
+          if (this.steeringWaitAbort === waitAbort) this.steeringWaitAbort = undefined;
+          this.endDelegationWait();
+        }
+        const interrupted = this.pendingSteering.size > 0 &&
+          !this.runCancelled && !this.disposed && !this.turnHadError;
+        const plan = this.programCoordinator().planProgramWait({
+          mode: "any",
+          minCompleted: 1,
+        });
+        return programWaitResult({
+          targets,
+          wakeOutcome,
+          planDeadlineKind: plan.deadlineKind,
+          planWakeSeconds: plan.wake.kind === "time" ? (plan.wake.value ?? null) : null,
+          interrupted,
+        });
       },
     };
   }
 
   /** Shared cancellation path for TaskStop and explicit desktop controls. */
   async stopSubagents(ids: string[] = []) {
-    const targets = ids.length
-      ? [...new Set(ids)]
-          .map((id) => this.delegations.get(id))
-          .filter(
-            (record): record is DelegationRecord =>
-              record !== undefined && record.status === "running",
-          )
-      : this.runningDelegations();
-    for (const record of targets) {
-      record.stopRequested = true;
-      record.abort();
-    }
-    // Cancellation is cooperative: bound the wait so a worker that ignores
-    // abort cannot wedge the caller. Still-running workers are
-    // explicitly returned as pending, never mislabeled as stopped.
-    let stopTimeout: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([
-      Promise.all(targets.map((record) => record.completion)),
-      new Promise<void>((resolve) => {
-        stopTimeout = setTimeout(resolve, 5_000);
-      }),
-    ]);
-    if (stopTimeout !== undefined) clearTimeout(stopTimeout);
-    const pending = targets.filter((record) => record.status === "running");
-    const stopped = targets.filter((record) => record.status === "stopped");
-    const settled = targets.filter(
-      (record) => record.status !== "running" && record.status !== "stopped",
-    );
-    const text =
-      targets.length === 0
-        ? "No matching running subagents to stop."
-        : pending.length > 0
-          ? `Cancellation requested for ${targets.length} subagent${targets.length === 1 ? "" : "s"}; ${pending.length} have not confirmed termination and remain running.`
-          : settled.length > 0
-            ? `Cancellation settled for ${targets.length} subagent${targets.length === 1 ? "" : "s"}: ${stopped.length} stopped and ${settled.length} had already finished.`
-            : `Stopped ${stopped.length} subagent${stopped.length === 1 ? "" : "s"}.`;
-    return {
-      content: [{ type: "text" as const, text }],
-      details: {
-        stopped: stopped.map(delegationSummary),
-        ...(pending.length > 0
-          ? { stopPending: pending.map(delegationSummary) }
-          : {}),
-        ...(settled.length > 0
-          ? { settled: settled.map(delegationSummary) }
-          : {}),
+    return stopSubagentRecords([...this.delegations.values()], ids);
+  }
+
+  /**
+   * Steer one live delegate with user text. Attached runs steer through the
+   * live parent turn; detached user runs through their own execution turn.
+   * The text enters only the child's conversation, never parent context.
+   */
+  steerSubagent(request: {
+    delegationId: string;
+    expectedParentTurnId: string;
+    text: string;
+    messageId?: string;
+  }): { accepted: true; delegationId: string; turnId: string } {
+    const delegationId =
+      typeof request.delegationId === "string" ? request.delegationId.trim() : "";
+    const record = delegationId ? this.delegations.get(delegationId) : undefined;
+    const delivery = (record?.delivery ?? "parent") as SubagentDeliveryOwner;
+    const ownerTurnId =
+      delivery === "user"
+        ? (record?.executionTurnId ?? record?.taskTurnId)
+        : this.turnId;
+    const validated = validateSubagentSteer(
+      record
+        ? {
+            delegationId: record.delegationId,
+            parentToolCallId: record.parentToolCallId,
+            agentName: record.agentName,
+            status: record.status,
+            stopRequested: record.stopRequested,
+            settled: record.run?.isSettled?.() === true,
+            hasLiveLoop: typeof record.run?.steer === "function",
+            delivery,
+            ...(record.executionTurnId ?? record.taskTurnId
+              ? { executionTurnId: (record.executionTurnId ?? record.taskTurnId) as string }
+              : {}),
+          }
+        : undefined,
+      {
+        delegationId: request.delegationId,
+        text: request.text,
+        messageId: request.messageId,
       },
+      {
+        expectedParentTurnId: request.expectedParentTurnId,
+        currentTurnId: this.turnId,
+        turnAlive:
+          !this.disposed &&
+          !this.runCancelled &&
+          !this.turnHadError &&
+          this.getStatus().isRunning,
+      },
+      record ? (record.steeredMessageIds ??= new Set()) : undefined,
+    );
+    if (validated.outcome === "already-applied") {
+      return {
+        accepted: true as const,
+        delegationId: validated.delegationId,
+        turnId: ownerTurnId!,
+      };
+    }
+    // The echo is emitted only on the accepted path, exactly once per id.
+    const target = record!;
+    applyValidatedSteer(validated, {
+      sessionId: this.sessionId,
+      ownerTurnId: ownerTurnId!,
+      parentToolCallId: target.parentToolCallId,
+      agentName: target.agentName,
+      steerLoop: (text) => target.run!.steer(text),
+      markSteered: (id) => {
+        (target.steeredMessageIds as Set<string>).add(id);
+      },
+      appendRow: (envelope, message) => this.appendDelegationRow(target, envelope, message),
+      emit: (envelope) => this.onEvent(envelope),
+    });
+    return {
+      accepted: true as const,
+      delegationId: validated.delegationId,
+      turnId: ownerTurnId!,
     };
+  }
+
+  /**
+   * Continue one settled delegate as a new run of the same chain, authorized
+   * directly by the user. Delivery follows the source record (`parent` while
+   * the parent expects this chain, `user` otherwise); spawning reuses the
+   * `Task(resume)` tool implementation.
+   */
+  async continueSubagent(request: {
+    delegationId: string;
+    expectedParentTurnId?: string;
+    text: string;
+    messageId?: string;
+  }): Promise<{
+    accepted: true;
+    delegationId: string;
+    turnId?: string;
+    delivery: SubagentDeliveryOwner;
+  }> {
+    const prepared = prepareSubagentContinue(
+      {
+        delegationId: request.delegationId,
+        text: request.text,
+        messageId: request.messageId,
+        expectedParentTurnId: request.expectedParentTurnId,
+      },
+      {
+        turnId: this.turnId,
+        turnEpoch: this.turnEpoch,
+        disposed: this.disposed,
+        runCancelled: this.runCancelled,
+        turnHadError: this.turnHadError,
+        isRunning: this.getStatus().isRunning,
+        lookupChain: (id) => this.delegationChains.lookup(id),
+        lookupRecord: (id) => this.delegations.get(id),
+        runningDelegationIds: this.runningDelegationIds(),
+        seenContinuations: this.continuedSubagentIds,
+        adoptExecutionTurn: (turnId) => this.adoptExecutionTurn(turnId),
+        mintTurnId: () => randomUUID(),
+      },
+    );
+    if (prepared.outcome === "already-applied") {
+      const prior = this.delegations.get(prepared.newDelegationId);
+      const delivery = (prior?.delivery ?? "user") as SubagentDeliveryOwner;
+      const turnId = prior?.executionTurnId ?? prior?.taskTurnId ?? this.turnId;
+      return {
+        accepted: true as const,
+        delegationId: prepared.newDelegationId,
+        ...(turnId ? { turnId } : {}),
+        delivery,
+      };
+    }
+    const { validated, delivery, executionTurnId } = prepared;
+    const { definition, taskTool } = resolveContinueSpawnTarget({
+      definitions: this.subagents,
+      nameOf: (candidate) => candidate.name,
+      agentName: validated.chain.agentName,
+      taskTool: this.toolCatalog.get(SUBAGENT_TOOL_NAME),
+    });
+    // Claim delivery before spawning: the spawn reads and consumes the claim
+    // when it creates the record, so a fast settle is tagged in time.
+    this.continueDeliveryByToolCall.set(validated.toolCallId, { delivery, executionTurnId });
+    let outcome: unknown;
+    try {
+      outcome = await taskTool.execute(validated.toolCallId, {
+        agent: definition.name,
+        task: validated.text,
+        resume: validated.delegationId,
+      });
+    } catch (error) {
+      this.continueDeliveryByToolCall.delete(validated.toolCallId);
+      throw error;
+    }
+    const details = (outcome as { details?: Record<string, unknown> })?.details;
+    const newDelegationId =
+      details && typeof details.delegationId === "string"
+        ? (details.delegationId as string)
+        : "";
+    if (!newDelegationId) {
+      this.continueDeliveryByToolCall.delete(validated.toolCallId);
+      const toolError =
+        details && typeof (details as { error?: unknown }).error === "string"
+          ? String((details as { error?: unknown }).error)
+          : "";
+      throw mapContinueSpawnError(toolError || "Delegation could not be continued.");
+    }
+    const record = this.delegations.get(newDelegationId);
+    const spawned = buildContinueSpawnEmissions({
+      sessionId: this.sessionId,
+      executionTurnId,
+      agentName: definition.name,
+      validated,
+      newDelegationId,
+    });
+    if (record) {
+      record.delivery = delivery;
+      record.executionTurnId = executionTurnId;
+      record.taskMessage = spawned.taskMessage;
+    }
+    if (validated.idempotencyKey) {
+      this.continuedSubagentIds.set(validated.idempotencyKey, newDelegationId);
+    }
+    this.transcriptHistory.push(spawned.taskMessage);
+    if (record) {
+      this.appendDelegationRow(record, spawned.appendEnvelope, validated.childMessage);
+    } else {
+      this.transcriptHistory.push(validated.childMessage);
+    }
+    this.onEvent(spawned.markerStart);
+    this.onEvent(spawned.markerEnd);
+    this.onEvent(spawned.followupStart);
+    this.onEvent(spawned.followupEnd);
+    return {
+      accepted: true as const,
+      delegationId: newDelegationId,
+      turnId: executionTurnId,
+      delivery,
+    };
+  }
+
+  /** Adopt a host-begun execution turn for a detached run (accounting only). */
+  private adoptExecutionTurn(turnId: string): void {
+    this.turnId = turnId;
+    this.turnEpoch += 1;
+    this.runCancelled = false;
+    this.turnHadError = false;
+    this.acceptingSteering = true;
+    this.gracefulStopRequested = false;
+    this.turnSubagentUsage = undefined;
+    this.delegationWaitTargets = undefined;
+    this.abortDelegationsFromPreviousTurns();
   }
 
   /** `TaskStop`: stop running delegations (ADR 0089). */
@@ -6606,6 +6554,26 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     this.pendingModelCompaction = false;
     this.rebuildToolCatalog();
     this.setAgentTools(this.activeTools());
+  }
+
+  /**
+   * Replace the session's configured wake base and re-evaluate in-flight
+   * waits against it. The session base exclusively owns wait timing, so a
+   * live change governs every in-flight `TaskWait`, `TaskList`, and idle wait.
+   */
+  setSubagentWakeup(input?: SubagentWakeupSettings | null): void {
+    if (this.disposed) throw new Error("runtime disposed");
+    this.sessionWakeup = normalizeSubagentWakeupSettings(input ?? undefined);
+    this.programCoordinator().handleSelectedWakeUpdate();
+    this.wakeWaiters.notify();
+  }
+
+  private programCoordinator(): ReturnType<typeof createDelegationCoordinator> {
+    this.delegationCoordinator ??= createDelegationCoordinator({
+      getSelectedWake: () => this.sessionWakeup,
+      getRecords: () => this.pendingCurrentTurnDelegations() as CoordinatorRecord[],
+    });
+    return this.delegationCoordinator;
   }
 
   private contextBudget(messages: AgentMessage[]): ContextBudget {
@@ -8476,13 +8444,23 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
               ? this.delegations.get(details.delegationId)
               : undefined;
             if (record) {
-              record.taskMessage = taskMessageSnapshot({
+              const snapshot = taskMessageSnapshot({
                 ...activeTool,
                 toolCallId: event.toolCallId,
                 result: event.result,
                 endedAt,
                 ...(toolUsage ? { toolUsage } : {}),
               });
+              // A user-origin marker stays a marker: the snapshot rebuilds
+              // from the live tool call, which never carried `source: "user"`.
+              record.taskMessage =
+                (record.delivery ?? "parent") === "user"
+                  ? {
+                      ...snapshot,
+                      toolArgs: { ...(snapshot.toolArgs as Record<string, unknown> | undefined), source: "user" },
+                      steering: true,
+                    }
+                  : snapshot;
               // A fast delegate may settle before its Task tool_end arrives.
               this.publishDelegationSettlement(record);
             }
@@ -9134,7 +9112,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         this.agent.state.isStreaming ||
         this.compactionInProgress ||
         this.agentActivity !== undefined ||
-        (!this.turnHadError && !this.runCancelled && this.runningDelegations().length > 0),
+        (!this.turnHadError && !this.runCancelled && this.runningParentDelegations().length > 0),
       currentTurnId: this.turnId,
       modelId: this.provider.modelId,
       pendingToolConfirmations: 0,
@@ -9157,6 +9135,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     this.resolvePendingAskTools();
     this.abortRunningDelegations();
     this.delegationWaitTargets = undefined;
+    this.wakeWaiters.clear();
     this.pathInstructionClaims.clear();
     this.failedHostToolCalls.clear();
     this.mutationFailureCounts.clear();

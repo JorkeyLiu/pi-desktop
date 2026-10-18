@@ -57,6 +57,13 @@ export function createSessionCoordination({
    * the frozen record already owns the turn.
    */
   const pendingAbortReasons = new Map<string, TurnEndReason>();
+  /**
+   * Composite turn keys of child-only execution-accounting turns opened for
+   * detached user continuations. They finalize their own durable row but fan
+   * out no parent conclusion to Agent Host or the renderer. A key leaves the
+   * set when its turn finalizes.
+   */
+  const childExecutionTurns = new Set<string>();
 
   async function acquireSessionOperation(sessionId: string): Promise<() => void> {
     const id = sessionId.trim();
@@ -244,9 +251,23 @@ export function createSessionCoordination({
     });
   }
 
+  /**
+   * Whether the turn is a child-only execution owner (no parent conclusion).
+   */
+  function isChildExecutionTurn(sessionId: string, turnId: string | null | undefined): boolean {
+    if (typeof turnId !== "string") return false;
+    const id = sessionId.trim();
+    const turn = turnId.trim();
+    if (!id || !turn) return false;
+    return childExecutionTurns.has(planSubmissionTurnKey(id, turn));
+  }
+
   return {
     /** The live turn map itself: turn identity is read and released through it. */
     activeTurns,
+    /** Child-only execution turns, keyed like every other turn record. */
+    childExecutionTurns,
+    isChildExecutionTurn,
     sessionOperationTails,
     turnSettlements,
     activeTurnUsages,

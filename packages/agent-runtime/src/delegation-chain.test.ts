@@ -94,7 +94,7 @@ describe("resolveResume", () => {
   });
 
   it("reports a settled chain whose status is not resumable", () => {
-    for (const status of ["stopped", "aborted", "interrupted"]) {
+    for (const status of ["stopped", "aborted"]) {
       const registry = new DelegationChainRegistry();
       start(registry, { delegateSessionId: "res-1", delegationId: "del-1" });
       registry.settle("res-1", status);
@@ -109,7 +109,7 @@ describe("resolveResume", () => {
   });
 
   it("accepts every settled status a delegate can end on", () => {
-    for (const status of ["completed", "failed", "timed_out"]) {
+    for (const status of ["completed", "failed", "timed_out", "interrupted"]) {
       const registry = new DelegationChainRegistry();
       start(registry, { delegateSessionId: "res-1", delegationId: "del-1" });
       registry.settle("res-1", status);

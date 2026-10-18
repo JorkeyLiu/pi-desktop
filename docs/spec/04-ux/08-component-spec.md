@@ -2505,9 +2505,14 @@ as a conversation:
   bubble), and the delegate's thinking, tool, and answer rows under that call
   render with the same message-list language, so a follow-up prompt reads as
   the next user turn.
-- The composer at the foot is a disabled two-row textarea whose placeholder
-  says subagents are driven by the main agent and cannot take input; the tab
-  is display-only and has no send path.
+- The tab carries one Send composer for both states: while running it steers
+  text-only via `pi-desktop/agent/steerSubagent` with the owning turn identity
+  (live parent turn when attached, the delegate's execution-accounting turn
+  when user-owned; the attributed child echo stays in the child context),
+  while settled and continuable it continues directly via
+  `pi-desktop/agent/continueSubagent` with retained history. There is no second
+  parent-resume strategy and no independent durable child session; the model
+  line is plain display.
 - Tab labels carry the agent name captured when the tab opened, with a
   strip-order `#n` suffix when the same name occurs more than once; a
   localization fallback covers a delegate with no name.
@@ -2558,19 +2563,21 @@ as a conversation:
 - A delegate's terminal Task snapshot updates its topology node, settled count,
   elapsed time, and open detail dock immediately, even while siblings or the
   parent remain active. A completed delegate is green and stops spinning.
-  Terminal Task state takes precedence over older lifecycle polling snapshots
+  Terminal Task state takes precedence over older lifecycle snapshots
   that still say `running`; the same outcome survives transcript reload.
 - A topology group stays live — open once, ticking elapsed, labelled working —
   while any of *its* delegates is still running, even when the parent has
   already moved on to a later processing group in the same turn. Elapsed time
   uses that card's own delegation `startedAt`/`completedAt`, not the immediate
-  `Task` tool-call duration and not a later fan-out in the same turn. After
-  the parent turn has ended, leftover `running` nodes reconstruct as
-  `aborted` (the runtime aborts them at run end) unless a `TaskStop` row
-  already marked them `stopped`. `TaskStop`'s `details.stopped[]` is a
-  lifecycle status source, same as `TaskWait`/`TaskList` `delegations[]`; a
-  snapshot that still says `running` is presented as `stopped`. A finished
-  session therefore never keeps a live “Subagent working” card.
+  `Task` tool-call duration and not a later fan-out in the same turn. The runtime
+  keeps the durable parent turn open while delegates run: leftover `running` nodes
+  stay running across parent idle, and end only via `TaskStop`, user Stop, disposal,
+  or a terminal parent error — never via turn-end abort. `TaskStop`'s
+  `details.stopped[]` is a lifecycle status source, same as `TaskWait`/`TaskList`
+  `delegations[]`; a snapshot that still says `running` is presented as `stopped`.
+  A finished session therefore never keeps a live “Subagent working” card. This is the
+  single UI projection of the current wait; historical `TaskWait`/`TaskList` rows stay
+  inspectable, and result delivery reads separately from progress heartbeats.
 - The brief spawn window before a delegate settles is presented as a creating
   state rather than a generic running one. Because the parent `Task` returns
   its structured handle (`delegationId`, `startedAt`) only at its own
@@ -2586,14 +2593,23 @@ as a conversation:
   delegate dependencies and forbids nested `Task`, so the renderer must not
   invent delegate-to-delegate edges or a downstream summary node.
 - Each node shows the definition name, effective model id, short description,
-  explicit outcome, runtime duration and step count. The duration uses the
+  explicit outcome, runtime duration and step count. Live and settled delegation
+  views share one header metrics region reporting tool calls/turns plus two
+  separated localized figures: the current estimated context occupancy (how
+  full the child's window is) and the cumulative billed spend (ledger-deduped,
+  never double-charged). Occupancy and spend are never merged into one number.
+  Unknown occupancy renders as a dash with its helper, never as zero. Provenance
+  falls back per segment from the `Task` summary to the lifecycle roster to the
+  latest valid child assistant usage (estimated); the latest segment decides, so
+  a latest segment with no occupancy reports unknown rather than reusing an old
+  gauge. The duration uses the
   delegation registry's
   `startedAt`/`completedAt` timestamps (and ticks live while the node is
   running), not the immediate `Task` tool-call duration, and uses the same
   automatically carried `h`/`m`/`s` format as the processing-group header.
   Outcome prefers the
   structured `Task` result
-  (`completed`, `truncated`, `timed_out`, `aborted`, `stopped`, `failed`) and falls back to transport
+  (`completed`, `truncated`, `aborted`, `stopped`, `failed`) and falls back to transport
   state (`running`, `error`, `denied`, `success`). Clicking the node expands the
   existing brief/report/counters and nested rows; the report remains printed
   exactly once.

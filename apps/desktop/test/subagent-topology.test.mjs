@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 register(pathToFileURL(join(here, "helpers/ts-import-hooks.mjs")));
 const {
+  collapsedWaitCheckpoints,
   collectDelegationFailures,
   collectDelegationStatuses,
   collectDelegationTimings,
@@ -15,10 +16,14 @@ const {
   delegationRosterOutcome,
   delegationRosterSummary,
   delegationTimingBounds,
+  foldedWaitCheckpointGroups,
   isDelegationActivityItem,
+  isLiveWaitCheckpoint,
+  isWaitResultDelivery,
   lifecycleKindOf,
   subagentOutcome,
   summarizeSubagentActivity,
+  taskWaitLifecycle,
 } = await import("../src/lib/subagent-topology.ts");
 
 function task(id, toolStatus, resultStatus, timing = {}) {
@@ -514,4 +519,114 @@ test("settled Task snapshots outrank stale lifecycle polling during a parallel f
   });
   // History reconstruction must preserve success, rather than infer abortion.
   assert.equal(collectDelegationStatuses(items, { turnLive: false }).get("first"), "completed");
+});
+
+function waitRow(id, status, wakeReason, rosterIds = ["d1"], toolName = "TaskWait") {
+  return {
+    kind: "tool",
+    message: {
+      id,
+      role: "tool",
+      content: "",
+      createdAt: "2026-08-10T00:00:00.000Z",
+      toolName,
+      toolCallId: id,
+      toolStatus: "success",
+      toolArgs: { delegationIds: rosterIds },
+      toolResult: {
+        details: {
+          ...(status ? { status } : {}),
+          ...(wakeReason ? { wakeReason } : {}),
+          delegations: rosterIds.map((delegationId) => ({
+            delegationId,
+            agent: "explorer",
+            status: "running",
+          })),
+        },
+      },
+    },
+  };
+}
+
+test("a TaskWait row exposes its backend-owned wait lifecycle, never a generic waited label", () => {
+  // Result delivery vs progress checkpoint vs explicit stop read from
+  // details.status/wakeReason — never painted as a generic "waited" event.
+  assert.deepEqual(taskWaitLifecycle(waitRow("w1", "completed", "completion").message), { kind: "completed" });
+  assert.deepEqual(taskWaitLifecycle(waitRow("w2", "wakeup", "time").message), { kind: "progress", reason: "time" });
+  assert.deepEqual(taskWaitLifecycle(waitRow("w3", "wakeup", "tool-calls").message), { kind: "progress", reason: "tool-calls" });
+  assert.deepEqual(taskWaitLifecycle(waitRow("w4", "wakeup", "context-tokens").message), { kind: "progress", reason: "context-tokens" });
+  assert.deepEqual(taskWaitLifecycle(waitRow("w5", "timeout", undefined).message), { kind: "timeout" });
+  assert.deepEqual(taskWaitLifecycle(waitRow("w6", "interrupted", undefined).message), { kind: "interrupted" });
+  // Legacy rows without status stay inspectable but earn no lifecycle badge.
+  assert.deepEqual(taskWaitLifecycle(waitRow("w7", undefined, undefined).message), { kind: "unknown" });
+  assert.deepEqual(taskWaitLifecycle(lifecycle("TaskList", { delegations: [] }).message), null);
+  assert.equal(isLiveWaitCheckpoint(waitRow("w2", "wakeup", "time").message), true);
+  assert.equal(isLiveWaitCheckpoint(waitRow("w1", "completed", "completion").message), false);
+  assert.equal(isWaitResultDelivery(waitRow("w1", "completed", "completion").message), true);
+  assert.equal(isWaitResultDelivery(waitRow("w2", "wakeup", "time").message), false);
+});
+
+test("an active TaskList reads the same program-wait lifecycle, a cheap snapshot stays a roster check", () => {
+  const list = (id, status, wakeReason) =>
+    waitRow(id, status, wakeReason, ["d1"], "TaskList").message;
+  // The blocking TaskList path returns the coordinator's status fields, so it
+  // reads as program waiting/progress/result exactly like a TaskWait.
+  assert.deepEqual(taskWaitLifecycle(list("l1", "completed", "completion")), { kind: "completed" });
+  assert.deepEqual(taskWaitLifecycle(list("l2", "wakeup", "time")), { kind: "progress", reason: "time" });
+  assert.deepEqual(taskWaitLifecycle(list("l3", "wakeup", "tool-calls")), { kind: "progress", reason: "tool-calls" });
+  assert.deepEqual(taskWaitLifecycle(list("l4", "wakeup", "context-tokens")), { kind: "progress", reason: "context-tokens" });
+  assert.deepEqual(taskWaitLifecycle(list("l5", "timeout", undefined)), { kind: "timeout" });
+  assert.deepEqual(taskWaitLifecycle(list("l6", "interrupted", undefined)), { kind: "interrupted" });
+  // The cheap snapshot never waited: no lifecycle, so the row keeps "Checked
+  // subagents" as a roster check (historic payload compatibility).
+  assert.equal(taskWaitLifecycle(lifecycle("TaskList", {
+    delegations: [{ delegationId: "d1", agent: "explorer", status: "running" }],
+  }).message), null);
+  assert.equal(taskWaitLifecycle(lifecycle("TaskList", {}).message), null);
+  // Neither TaskStop nor a Task start is a wait of any kind.
+  assert.equal(taskWaitLifecycle(lifecycle("TaskStop", { stopped: [] }).message), null);
+  assert.equal(taskWaitLifecycle(task("d1", "running").message), null);
+});
+
+test("repeated progress checkpoints on one live delegation fold to the latest row only", () => {
+  const first = waitRow("w1", "wakeup", "time");
+  const second = waitRow("w2", "wakeup", "tool-calls");
+  const folded = collapsedWaitCheckpoints([first, second]);
+  // One stable ongoing state: the earlier checkpoint collapses, the latest
+  // still renders, and history itself is never deleted by the projection.
+  assert.ok(folded.has("w1"));
+  assert.ok(!folded.has("w2"));
+  // Result deliveries, timeouts, interruptions, and cheap TaskList snapshots
+  // never fold.
+  const delivered = waitRow("w3", "completed", "completion");
+  const timedOut = waitRow("w4", "timeout", undefined);
+  const listed = lifecycle("TaskList", {
+    delegations: [{ delegationId: "d1", agent: "explorer", status: "running" }],
+  });
+  assert.deepEqual([...collapsedWaitCheckpoints([first, delivered])], []);
+  // A lone checkpoint is the live interval's single row: nothing folds until
+  // the same delegation is waited on again. Timeouts, interruptions, and
+  // cheap TaskList snapshots are distinct history and never fold anything.
+  assert.deepEqual([...collapsedWaitCheckpoints([first, timedOut])], []);
+  assert.deepEqual([...collapsedWaitCheckpoints([first, listed])], []);
+  // A different delegation set is a different wait and stays separate.
+  const other = waitRow("w5", "wakeup", "time", ["d2"]);
+  assert.deepEqual([...collapsedWaitCheckpoints([first, other])], []);
+});
+
+test("folded checkpoints keep every earlier row inspectable, including an active TaskList wait", () => {
+  const first = waitRow("w1", "wakeup", "time");
+  const firstList = waitRow("w2", "wakeup", "tool-calls", ["d1"], "TaskList");
+  const latest = waitRow("w3", "wakeup", "context-tokens");
+  const projection = foldedWaitCheckpointGroups([first, firstList, latest]);
+  // Every non-latest checkpoint is folded out of the top level...
+  assert.deepEqual([...projection.folded].sort(), ["w1", "w2"]);
+  // ...and preserved, in order, under the group's first row so the disclosure
+  // can render it. Nothing is deleted from history.
+  const group = projection.groups.get("w1");
+  assert.ok(group, "the folded group is anchored at its first row");
+  assert.deepEqual(group.map((message) => message.id), ["w1", "w2"]);
+  assert.equal((group[0].toolResult.details.delegations?.[0]?.delegationId), "d1");
+  // A group with a single row never folds and owns no disclosure.
+  assert.equal(foldedWaitCheckpointGroups([latest]).groups.size, 0);
 });

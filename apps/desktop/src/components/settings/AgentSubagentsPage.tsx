@@ -1,8 +1,13 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { SubagentDefinition, UserSubagentRecord } from "@pi-desktop/shared";
+import type { AppSettings, SubagentDefinition, UserSubagentRecord } from "@pi-desktop/shared";
 import { api } from "../../lib/api";
 import { useAppStore } from "../../stores/app-store";
+import {
+  createSerializedSaver,
+  mergeSettingsPatch,
+} from "../../lib/subagent-settings-save";
+import { SubagentWakeSettings } from "./SubagentWakeSettings";
 import { useHostCollection } from "../../hooks/use-host-collection";
 import {
   AgentCapabilityPage,
@@ -61,6 +66,22 @@ function builtinDisplayName(
 export function AgentSubagentsPage() {
   const { t } = useTranslation();
   const showToast = useAppStore((state) => state.showToast);
+  const settings = useAppStore((state) => state.settings);
+  const refreshProviders = useAppStore((state) => state.refreshProviders);
+  const saveQueue = useRef(createSerializedSaver());
+  const saveSettings = useCallback(
+    async (patch: Partial<AppSettings>) => {
+      await saveQueue.current.enqueue(async () => {
+        const current = useAppStore.getState().settings;
+        if (!current) return;
+        const nextSettings = mergeSettingsPatch(current, patch);
+        await api.setSettings(nextSettings);
+        useAppStore.setState({ settings: nextSettings });
+        await refreshProviders().catch(() => undefined);
+      });
+    },
+    [refreshProviders],
+  );
   const {
     data: { owned, builtins },
     setData: setSubagents,
@@ -410,6 +431,7 @@ export function AgentSubagentsPage() {
         />
       }
     >
+      {settings ? <SubagentWakeSettings settings={settings} saveSettings={saveSettings} /> : null}
       <CapabilityPanel
         loading={loading}
         refreshing={refreshing}

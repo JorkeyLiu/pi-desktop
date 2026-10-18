@@ -1212,3 +1212,46 @@ describe("SubagentRun retries before fallback", () => {
     }
   });
 });
+
+describe("SubagentRun progress and steer", () => {
+  it("reports live counters, cumulative usage and an occupancy estimate", () => {
+    const { run } = createRun();
+    expect(run.isSettled()).toBe(false);
+    run.handleEvent({ type: "turn_start" });
+    run.handleEvent({
+      type: "tool_execution_start",
+      toolCallId: "c-1",
+      toolName: "Read",
+      args: { path: "a.ts" },
+    });
+    run.handleEvent({
+      type: "message_end",
+      message: assistantMessage({
+        content: [{ type: "text", text: "half done" }],
+      }),
+    });
+    const progress = run.progress();
+    expect(progress.toolCalls).toBe(1);
+    expect(progress.turns).toBe(1);
+    // Billed spend as the provider reported it; occupancy as estimated.
+    expect(progress.usage?.totalTokens).toBe(15);
+    expect(typeof progress.contextTokens).toBe("number");
+  });
+
+  it("forwards one user turn into the live loop and refuses a settled run", async () => {
+    const { run } = createRun();
+    run.agent.steer = vi.fn();
+    run.steer("Dig deeper into auth.");
+    expect(run.agent.steer).toHaveBeenCalledTimes(1);
+    expect(run.agent.steer).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "user", content: "Dig deeper into auth." }),
+    );
+
+    // Settles without provider traffic: the pre-aborted signal ends run()
+    // before any request, and steering afterwards fails loudly.
+    const settled = createRun({ signal: AbortSignal.abort() });
+    await settled.run.run();
+    expect(settled.run.isSettled()).toBe(true);
+    expect(() => settled.run.steer("too late")).toThrow("already settled");
+  });
+});

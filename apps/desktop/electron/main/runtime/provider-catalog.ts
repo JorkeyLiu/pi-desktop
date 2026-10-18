@@ -3,6 +3,8 @@ import {
   SESSION_THINKING_LEVELS,
   defaultCommandShellForPlatform,
   isCommandShellId,
+  isSubagentWakeupSettings,
+  normalizeSubagentWakeupSettings,
   validateNetworkProxy,
   validateSpeechSettings,
   type CommandShellId,
@@ -258,8 +260,37 @@ export function createProviderCatalogRuntime({
         (value as { speech?: unknown }).speech,
       );
     }
+    if (Object.prototype.hasOwnProperty.call(value, "subagentWakeup")) {
+      const wakeup = (value as { subagentWakeup?: unknown }).subagentWakeup;
+      validateSubagentWakeupWrite(wakeup);
+      // New writes persist canonical: a transitional legacy shape reads
+      // back normalized so launch/sidecar always start from one selector.
+      if (wakeup !== undefined && wakeup !== null) {
+        (value as { subagentWakeup?: unknown }).subagentWakeup =
+          normalizeSubagentWakeupSettings(
+            wakeup as Parameters<typeof normalizeSubagentWakeupSettings>[0],
+          );
+      }
+    }
     return settings;
   };
+
+  /**
+   * Stored wakeup sections keep the canonical `{ kind, value }` shape:
+   * `null`/`undefined` clears back to product defaults, a well-shaped
+   * canonical or legacy object is normalized to canonical and persisted,
+   * and a mistyped value is rejected. Range clamping happens at read time
+   * (`normalizeSubagentWakeupSettings`), so an out-of-range write still
+   * lands and reads back clamped.
+   */
+  function validateSubagentWakeupWrite(wakeup: unknown): void {
+    if (wakeup === undefined || wakeup === null) return;
+    if (!isSubagentWakeupSettings(wakeup)) {
+      throw Object.assign(new Error("subagentWakeup is invalid"), {
+        errorCode: ErrorCodes.INVALID_ARGUMENT,
+      });
+    }
+  }
 
   const listRuntimeProviders = async (includeDisabled = true) => {
     const host = getHost();

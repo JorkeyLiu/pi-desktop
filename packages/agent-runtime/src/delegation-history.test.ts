@@ -814,7 +814,7 @@ describe("rebuildChainsFromTranscript restart status (ADR 0279)", () => {
     }
   });
 
-  it("normalizes a Task row the app closed mid-run to interrupted", () => {
+  it("normalizes a Task row the app closed mid-run to resumable interrupted", () => {
     const chains = rebuildChainsFromTranscript([
       restartedTaskRow("call-1", {
         delegationId: "d1",
@@ -823,10 +823,9 @@ describe("rebuildChainsFromTranscript restart status (ADR 0279)", () => {
       }),
     ]);
     expect(chains[0].latestStatus).toBe("interrupted");
-    expect(resolveRebuilt(chains, "d1")).toEqual({
-      ok: false,
-      error: { kind: "not-resumable", status: "interrupted" },
-    });
+    // An app exit is not an explicit stop: with retained history the chain
+    // resumes. The no-history error surfaces at seed time, not here.
+    expect(resolveRebuilt(chains, "d1").ok).toBe(true);
   });
 
   it("normalizes an errored Task row without a status to failed", () => {

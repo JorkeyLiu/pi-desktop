@@ -752,6 +752,23 @@ system while preserving their different data ownership:
   and focus lift a control without adding a persistent in-flow divider; invalid
   form state is announced from the shared error region.
 
+- Subagent wake defaults are the persistent program-owned `AppSettings.subagentWakeup`
+  (`{ kind: "time" | "tool-calls" | "context-tokens" | "off", value?: number }`,
+  default time 600 within 1–900 seconds; tool-calls 1–10000 incremental calls
+  per child; context-tokens 1000–1000000 upward crossing with rearm; `off`
+  disables progress resumption only). The user selects ONE kind; the program owns when
+  the model resumes under one cadence across explicit `TaskWait`, `TaskList` fresh-progress
+  reads, and the implicit idle resume — child callbacks never trigger the model early.
+  An attached child's result / completion delivery always resumes the parent and has no off
+  switch. The Subagents destination carries the section as a single row
+  (kind dropdown plus numeric unit) with a helper that results always resume the parent;
+  there is no completion toggle and no per-call model override. Persistence is host
+  `AppSettings` through the settings-set boundary (shape-validated, range-clamped on read;
+  legacy stored `onCompletion: false` is ignored), and launch plus the live runtime setter
+  apply the selection to waits and the idle resume (see
+  `../03-runtime/02-agent-runtime.md` §5f). The user-configured `time` value (max 900)
+  cannot be shortened or restarted by the model; there is no global child-run timeout.
+
 ### Instructions (`instructions` tab)
 - Edit the global instruction Markdown used by every PI-Desktop Agent session.
 - Show the resolved instruction-file path and save through the host-backed

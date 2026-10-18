@@ -17,7 +17,18 @@ import {
   type ResumableChain,
 } from "./delegation-history.js";
 
-const RESUMABLE_STATUSES = new Set(["completed", "failed", "timed_out"]);
+/**
+ * Settled statuses a chain can resume from. `interrupted` is a persisted
+ * app-exit state, not an explicit stop: the run never settled, its rows are
+ * retained history, and resuming continues them. Explicit `stopped`
+ * (TaskStop/user Stop) and `aborted` stay non-resumable, as does `running`.
+ */
+const RESUMABLE_STATUSES = new Set([
+  "completed",
+  "failed",
+  "timed_out",
+  "interrupted",
+]);
 
 export type ChainLookupError =
   | { kind: "unknown" }

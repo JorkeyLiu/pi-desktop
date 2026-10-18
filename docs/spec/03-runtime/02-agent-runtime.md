@@ -888,12 +888,15 @@ intentional override.
 mode and only when the catalog is non-empty, and all four belong to the Agent
 core set rather than the on-demand catalog of §7.1:
 
-- `Task(agent, task, description?, model?, resume?)` — validates its arguments (an
-  unknown `agent`, an empty `task`, an unresolvable model pin and a definition
-  whose tools are all unavailable each return a tool error explaining the
-  failure rather than throwing), starts the delegate **in the background**, and
-  returns immediately with a `delegationId`. Starting fails with a tool error
-  when the session already runs `MAX_SUBAGENT_CONCURRENCY` (10) delegates.
+- `Task(agent, task, description?, model?, resume?)` — target/goal form: `agent` names the
+  target kind, `task` is the goal text, `description` is the short label, `model` is the
+  optional model override, `resume` is the explicit chain reattach. The model decides goals
+  and results; it carries no timing. Validation (unknown `agent`, empty `task`, unresolvable
+  model pin, fully-unavailable definition tools) returns a tool error rather than throwing.
+  The delegate starts **in the background** and returns immediately with a `delegationId`.
+  Starting fails with a tool error when the session already runs `MAX_SUBAGENT_CONCURRENCY`
+  (10) delegates. Legacy model timing args (`timeoutSeconds`, per-call `subagentWakeup`)
+  from older provider tool calls are ignored safely and never reintroduce an override.
 
   The `Task` tool accepts an optional `model` parameter
   (`"provider/modelId"`) that overrides the delegate's model for that run.
@@ -928,25 +931,119 @@ core set rather than the on-demand catalog of §7.1:
   used for that run. The level is resolved after inheritance and target-model
   capability clamping; `omit` records that no provider thinking override was
   sent.
-- `TaskWait(delegationIds?, mode?, minCompleted?, timeoutSeconds?)` — converges
-  on running delegations (defaults to all of them) and returns their reports;
-  `mode: "any"` with `minCompleted` converges as soon as the first N settle.
-  Settled delegations return immediately, so re-reading a report by id is
-  cheap. The joined result is bounded to `MAX_TASKWAIT_RESULT_CHARS` (50k); if
-  the bound omits finished reports, those reports remain undelivered and the
-  runtime sends them on the idle resume (or they can be re-read by id).
-  `timeoutSeconds` defaults to 600 and is clamped to 900: the wait blocks the
-  turn, so the ceiling is what bounds how long a session can look hung. Expiry
-  is not a failure and does not stop the delegates (D328) — the wait returns a
-  heartbeat (agent, status, elapsed, turns, last tool) plus any finished
-  reports. The runtime keeps the parent turn open and delivers remaining
-  reports when they finish, even if the parent already stopped calling tools.
-  Only `TaskStop` or user Stop aborts a delegate.
-- `TaskList()` — reports every delegation of the session with status and a
-  running heartbeat.
-- `TaskStop(delegationIds?)` — stops running delegations (defaults to all);
+- `TaskWait(delegationIds?, mode?, minCompleted?)` — result-dependency selector only.
+  Converges on running delegations (defaults to all); `mode: "any"` with `minCompleted`
+  converges as soon as the first N settle. Settled re-read is cheap and immediate.
+  The joined result is bounded to `MAX_TASKWAIT_RESULT_CHARS` (50k); if the bound omits
+  finished reports, those reports remain pending undelivered and the runtime sends them on
+  the idle resume (or they can be re-read by id) — one delivery path, never dropped by
+  truncation. A program wake is not a failure and does not stop delegates (D328): the wait
+  returns a heartbeat (agent, status, elapsed, turns, last tool) plus any finished reports.
+  The runtime keeps the parent turn open and delivers remaining reports when they finish,
+  even if the parent already stopped calling tools. Only `TaskStop` or user Stop aborts a
+  delegate. The wait resolves event-driven (settlement plus per-activity re-evaluation, no
+  polling timer) and a progress wake never spins: a tool-call wake advances its per-delegate
+  watermark and a context wake disarms until occupancy drops back below the threshold, so
+  waiting again after a wake cannot fire on unchanged state. There is no second agent loop:
+  progress wakes surface as heartbeats through the same turn owner without consuming any
+  report delivery. `TaskWait` is the tool-pending path (the parent model is still inside the
+  tool call); the idle-await is the parent-model-loop-ended path with the durable parent turn
+  still open — either way the wake continues the SAME turn via the tool return or a runtime
+  prompt. `timeout` / progress / `wait-any` never detach unfinished delegates.
+- `TaskList()` — fresh-progress read under the same program coordinator gate while the parent
+  expects running children; settled re-read is cheap. It never starts, restarts, or shortens
+  the program cadence.
+- `TaskStop(delegationIds?)` — cancels obsolete work (defaults to all running);
   waits for each abort to settle, then persists `status: "stopped"` with
   `completedAt` on `details.stopped[]`. Stopped delegations read as `stopped`.
+- Direct user continuation (`agent.continueSubagent`, no parent `Task(resume)`
+  needed) — resumes a settled chain through the same `Task(resume)` spawn.
+  The parent receives a run's report only while it still expects THAT chain:
+  the source run is parent-owned, started in the current parent epoch,
+  undelivered, not stopped/aborted, and its owning turn is still alive.
+  Steering a running delegate keeps it attached; a program wake, `any`
+  threshold, or progress checkpoint never detaches unfinished delegates. Once the
+  source report was delivered or its owning turn ended, the continuation is
+  `user`-owned: no parent model prompt, no parent context, no parent wake,
+  and no charge to the old parent turn. Parent-facing accounting (`TaskList`,
+  `TaskWait` targets/unknownIds, pending, `isRunning`) excludes `user`-owned
+  runs; a detached source never attaches to an unrelated live parent — the
+  request fails with `AGENT_BUSY` and the draft is preserved. Detached runs
+  execute under their own child-only execution-accounting turn opened with the
+  existing `session.beginTurn` (no new schema, no child session): no parent
+  prompt runs, no main user row is written, the renderer stays idle, usage is
+  carried by the child's own events, and the run's own terminal silently closes
+  only that row (no task notification, no parent prompt or context). The
+  session holds a single active turn, so a parent send stays `AGENT_BUSY`
+  until the detached run settles or stops. A running user-owned run steers
+  through its execution owner, never through the parent's generic running
+  flag. `expectedTurnId` is only a stale guard (the source record decides
+  ownership); a caller `messageId` dedups retries and post-restart hydration
+  rebuilds history from the transcript with no parent provider call. Only an
+  explicit parent `Task(resume)` reattaches the chain as a new parent-owned run.
+
+**Program coordinator (one cadence, model resumes on program terms).** One persistent
+`AppSettings.subagentWakeup` selects a single program trigger:
+`{ kind: "time" | "tool-calls" | "context-tokens" | "off", value?: number }`
+(default `{ kind: "time", value: 600 }`). `time` is a periodic heartbeat in seconds
+(1–900); `tool-calls` resumes after each additional N tool calls a running delegate
+makes (1–10000, counted per child from its own watermark); `context-tokens` resumes when
+a running delegate's estimated context occupancy crosses upward past N tokens
+(1000–1000000) and rearms only after occupancy drops back below the threshold. The user
+selects ONE kind at a time; `off` disables progress resumption only. The program owns when
+the model resumes: one cadence/checkpoint applies uniformly across explicit `TaskWait`,
+`TaskList` fresh-progress reads while the parent expects running children, and the implicit
+idle resume. Child tool/context callbacks update coordinator state only — they never trigger
+the model early and never bypass the gate. The model carries no timing: `Task` / `TaskWait` /
+`TaskList` accept no `timeoutSeconds` or per-call wake override, and any legacy timing args
+persisted in older provider tool calls are ignored safely without reintroducing an override.
+The user-configured `time` value (max 900) cannot be shortened or restarted by the model;
+there is no global child-run timeout derived from it. Internal cancellation and provider
+timeouts stay program-owned and never surface as a model timeout. An attached child's
+result / completion delivery always resumes the parent and cannot be configured off; a
+`user`-owned run never resumes, delivers, or bills the parent. The persisted normalizer still
+accepts the legacy stored shape and clamps out-of-range values on read; a legacy stored
+`onCompletion: false` is ignored so mandatory attached-completion delivery is restored. The
+session base is normalized at launch by Electron main (`session-launch`) and the headless
+`launch-resolver`, validated by shape at the settings-set boundary (mistyped values rejected,
+out-of-range values persist and read back clamped), and carried as sidecar launch/runtime
+options plus a live setter for settings changes. There is no Rust or storage-schema change:
+unknown settings fields pass through host-core untouched. The live sidebar streams the same
+metrics independently and never requires model inference.
+
+**State ownership.** Execution (`running`), result (`pending` vs `delivered`), and turn
+liveness are distinct: a delegate can be settled-pending while the parent turn stays open;
+parent `waiting` means the model is active inside a durable open turn, not blocked on a
+harness timer; user-owned delivery runs under its own distinct execution turn (see direct
+continuation below).
+
+**Wait outcome.** A `TaskWait` result carries `status` (`completed`, `wakeup`, or
+`interrupted`), plus `wakeReason` (`time`, `completion`, `tool-calls`, or `context-tokens`)
+and `wakeDelegationIds` naming the delegates that crossed, when a program resume caused the
+return. There is no model-timeout status: a time heartbeat is a `wakeup` with
+`wakeReason: "time"`. Result headers and heartbeats append a compact metrics line (tool
+calls, estimated occupancy, billed spend). Result delivery is one path: attached settled
+reports are consumed exactly once by the wait or the idle resume, `off` only silences
+progress resumption — it never withholds an attached result, and bounded-output omission
+leaves reports `pending`, never dropped. `user`-owned runs never auto-deliver to the parent.
+Completion priority is attached-only: the parent receives a run's report only while it still
+expects THAT chain (source parent-owned, started in the current parent epoch, undelivered,
+not stopped/aborted, owning turn alive). A program wake or `wait-any` threshold never
+detaches unfinished delegates.
+
+**Live metrics.** `Task` launch results, `TaskList` / `TaskWait` delegation
+entries, settlement details, and the idle-resume prompt each report the shared
+`SubagentProgressMetrics` per delegate:
+`toolCalls` / `turns`, the current estimated context occupancy
+(`contextTokens`), and the cumulative billed spend (`usage`). Occupancy is an
+estimate recomputed from the delegate's live messages with the same estimator
+the compaction budget uses — it says how full the child's window is. Spend is
+the provider-reported usage merged by physical operation identity across live
+envelope reports, run progress reads, and settlement, so re-reports and replays
+never double-charge. The two are reported separately and must not be confused.
+A running delegate's `Task` transcript row is re-snapshotted once per child
+turn with live metrics, without executing the tool again or adding usage to the
+parent turn.
 
 **Explicit desktop cancellation.** A running delegate can be stopped from its
 card or detail panel. The subagent group header also offers session-wide stop-all.
@@ -993,12 +1090,13 @@ The built-in `explorer` declares `Read`,
 `BrowserPreview` only opens a live-reloading workspace HTML page; responsive,
 keyboard-focus, and reduced-motion checks require project-provided browser
 tests or other tooling. Its statuses are `completed`, `failed`,
-`aborted`, `timed_out` and the registry-only `stopped`;
+`aborted` and the registry-only `stopped` (`timed_out` is a vestigial
+pre-D328 record value only, treated as `failed` for resume; no timeout is armed);
 the terminal ones surface through `TaskWait`, whose text is
 the report (bounded to `MAX_SUBAGENT_REPORT_CHARS`, 12k; when exceeded, persisted to session scratch with a pointer notice per ADR 0062) and whose details
 carry `delegationId`, `agent`, `modelId`, `thinkingLevel`, `status`, `startedAt`,
 `completedAt` when settled, `turns`, `toolCalls`, and `scratchReportPath` when
-the full report was spilled to scratch; on failure or timeout they carry
+the full report was spilled to scratch; on failure they carry
 `error` (including resume ID hints on `SUBAGENT_OUTPUT_TRUNCATED`). The same effective model and thinking fields are included in the
 immediate `Task` result and in lifecycle snapshots so live and restored
 delegation views do not re-derive them from definitions or parent settings.
@@ -1057,10 +1155,14 @@ name normalized on rebuild — so resumability survives a sidecar restart.
 Chain identity (`delegateSessionId`) stays internal; the parent only
 ever passes a `delegationId`, and the reverse map resolves it.
 
-Only `completed` and `failed` chains are resumable; `stopped` and `aborted` runs
-are terminal and revive only by starting a new delegation, and a run the app
-closed while it still worked rebuilds as `interrupted`, which is not resumable
-either. A chain whose read-only tool output exceeds `MAX_RESUMABLE_READ_LINES`
+Only `completed` and `failed` chains are resumable, plus `timed_out` (treated as
+`failed`) and `interrupted`: a run the app closed while it still worked keeps
+its retained rows as chain history, so resuming continues them rather than
+starting cold — but only when those rows still exist. A chain whose rows are
+gone (truncated branch, or a delegation that died before writing any) is
+dropped and reports no-history, for `interrupted` like every other status.
+`stopped` and `aborted` runs
+are terminal and revive only by starting a new delegation. A chain whose read-only tool output exceeds `MAX_RESUMABLE_READ_LINES`
 (50000) leaves the reusable list without an in-chain trim, so a resume never
 silently drops history. The registry keeps at most
 `MAX_RESUMABLE_CHAINS_PER_AGENT` (2) reusable chains per definition name and
@@ -1095,6 +1197,28 @@ snapshots. The immediate `Task` result and the lifecycle details add
 `resumedFrom` for audit; the transcript renders a chain as one continuous
 multi-turn conversation under its latest `Task` card, with no separate
 "resumed" marker.
+
+**Live child steering.** User text steers one running delegate through the
+retained loop handle on its delegation record — never through a second agent
+loop. The text enters only that child's conversation with the child's existing
+tools and permission scope; nested `Task` and `asktool` stay denied because
+steering changes the child's input, never its tool set. The runtime persists an
+attributed user echo (`parentToolCallId` / `agentName`, `steering: true`) into
+the child transcript: the parent's model-context rebuild skips tagged rows, so
+the text never enters the parent context, while chain replay selects those rows
+for a later `Task(resume)`, which sees exactly what the steered run saw. The
+request names the turn that owns it: the live parent turn for an attached run,
+the delegate's own execution-accounting turn for a detached user-owned run
+(kept from the accepted steer/continue response, never the parent's generic
+running flag). It is refused once that owner ended; a delegate that settled
+first continues via `agent.continueSubagent` instead. A settled delegate
+continues directly with retained history — no parent prompt. Only an explicit
+parent-model `Task(resume)` reattaches a chain as a new parent-owned run.
+The renderer exposes one Send composer: while running it steers text-only via
+`agent.steerSubagent` with the owning turn identity; while settled and
+continuable it continues via `agent.continueSubagent`; there is no second
+parent-resume strategy and the model line is plain display. The Subagents
+settings destination carries the persistent wake defaults.
 
 **Model pins.** `model: <provider>/<model>` in the frontmatter is resolved once
 per launch in Electron main, where credentials and the Pi catalog snapshot live, against

@@ -38,6 +38,7 @@ import {
 } from "./provider-retry.js";
 import { getGlobalDispatcher } from "undici";
 import { describeProviderFetchFailure } from "./provider-transport-recovery.js";
+import { scopeDelegateTools } from "./subagent-continue.js";
 /**
  * The delegate loop itself is covered in `subagent.test.ts`; here only the
  * `Task` wiring around it is under test, so `SubagentRun` is replaced by a
@@ -53,6 +54,8 @@ const subagentRuns = vi.hoisted(() => ({
   instances: [] as Array<{ resolve: (r: unknown) => void; settled: boolean }>,
   /** Settles the oldest unresolved deferred run (tests control order). */
   resolveRun: undefined as ((result: unknown) => void) | undefined,
+  /** Texts steered into live mock runs, in order. */
+  steered: [] as string[],
 }));
 vi.mock("./subagent.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./subagent.js")>();
@@ -67,6 +70,16 @@ vi.mock("./subagent.js", async (importOriginal) => {
         subagentRuns.calls.push(options);
         // Per-instance: concurrent delegates must abort on their own signal.
         this.signal = (options as { signal?: AbortSignal }).signal;
+      }
+      /** Live progress shape; the runtime guards its absence on real runs. */
+      progress() {
+        return { toolCalls: 0, turns: 0 };
+      }
+      isSettled() {
+        return false;
+      }
+      steer(text: string) {
+        subagentRuns.steered.push(String(text));
       }
       run() {
         if (subagentRuns.deferred) {
@@ -179,6 +192,7 @@ function createRuntime(
     subagents: SubagentDefinition[];
     subagentProviders: Record<string, RuntimeProviderConfig>;
     subagentModelKeys: string[];
+    subagentWakeup: import("@pi-desktop/shared").SubagentWakeupSettings;
     pluginSkills: import("./plugin-skills-prompt.js").PluginSkillDef[];
     commandShell: CommandShellOption;
     jevApiKey: string;
@@ -209,6 +223,7 @@ function createRuntime(
     subagents: overrides.subagents,
     subagentProviders: overrides.subagentProviders,
     subagentModelKeys: overrides.subagentModelKeys,
+    subagentWakeup: overrides.subagentWakeup,
     projectInstructions: overrides.projectInstructions,
     projectMemory: overrides.projectMemory,
     pluginSkills: overrides.pluginSkills,
@@ -954,7 +969,6 @@ describe("DesktopAgentRuntime configuration matching", () => {
     const runtime = createRuntime({ host });
     const internal = runtime as unknown as {
       agent: Agent;
-      scopeDelegateTools: (tools: AgentTool[], definition: SubagentDefinition, owner: string) => AgentTool[];
       resetRunRecoveryState: () => void;
       pendingMutationTermination?: unknown;
     };
@@ -963,7 +977,16 @@ describe("DesktopAgentRuntime configuration matching", () => {
       name: "writer", description: "Edits files", prompt: "Edit the file", source: "user", tools: ["Edit"],
       ...(permission === "accept-edits" ? { permission } : {}),
     };
-    const [delegate] = internal.scopeDelegateTools([edit], definition, "writer-run");
+    const maps = runtime as unknown as {
+      mutationOwners: Map<string, string>;
+      delegatePermissionScopes: Map<string, unknown>;
+      delegateWorktrees: Map<string, string>;
+    };
+    const [delegate] = scopeDelegateTools([edit], definition, "writer-run", undefined, {
+      mutationOwners: maps.mutationOwners,
+      permissionScopes: maps.delegatePermissionScopes,
+      worktrees: maps.delegateWorktrees,
+    });
     const args = { path: "src/example.ts", tag: "ABCD", ops: "PUT 1.=1:" };
     try {
       expect(await delegate.execute("child-1", args)).not.toHaveProperty("terminate", true);
@@ -8535,7 +8558,6 @@ describe("DesktopAgentRuntime subagents", () => {
     const waiting = wait.execute("wait-1", {
       mode: "any",
       minCompleted: 1,
-      timeoutSeconds: 5,
     });
     subagentRuns.resolveRun!({
       agentName: "explorer",
@@ -9011,7 +9033,10 @@ describe("DesktopAgentRuntime subagents", () => {
   });
 
   it("lists a heartbeat for a running delegate", async () => {
-    const runtime = createRuntime({ subagents: [explorer] });
+    const runtime = createRuntime({
+      subagents: [explorer],
+      subagentWakeup: { kind: "time", value: 1 },
+    });
     subagentRuns.calls.length = 0;
     subagentRuns.instances.length = 0;
     subagentRuns.deferred = true;
@@ -9021,16 +9046,25 @@ describe("DesktopAgentRuntime subagents", () => {
       (candidate: { name: string }) => candidate.name === "TaskList",
     );
 
-    const started = await task.execute("task-1", {
-      agent: "explorer",
-      task: "Find it.",
-    });
-    const listed = await list.execute("list-1", {});
-    expect(listed.content[0].text).toContain("running");
-    expect(listed.content[0].text).toContain("explorer");
-    expect(listed.content[0].text).toContain(
-      (started.details as { delegationId: string }).delegationId,
-    );
+    vi.useFakeTimers();
+    try {
+      const started = await task.execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      // TaskList waits on the pending delegate: the configured 1s period
+      // returns the interim heartbeat without settling or consuming it.
+      const listing = list.execute("list-1", {});
+      await vi.advanceTimersByTimeAsync(1_000);
+      const listed = await listing;
+      expect(listed.content[0].text).toContain("running");
+      expect(listed.content[0].text).toContain("explorer");
+      expect(listed.content[0].text).toContain(
+        (started.details as { delegationId: string }).delegationId,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
 
     subagentRuns.deferred = false;
     await runtime.dispose();
@@ -11446,6 +11480,1217 @@ describe("DesktopAgentRuntime delegation wait settlement safety", () => {
     }
   }, 1_000);
 });
+
+describe("DesktopAgentRuntime subagent wakeup, progress and child steer", () => {
+  const explorer: SubagentDefinition = {
+    name: "explorer",
+    description: "Search the workspace and report findings.",
+    tools: ["Read", "Glob", "Grep"],
+    prompt: "Report file paths and line numbers.",
+    source: "builtin",
+  };
+
+  function taskTool(runtime: DesktopAgentRuntime) {
+    return (runtime as any).agent.state.tools.find(
+      (tool: any) => tool.name === "Task",
+    );
+  }
+
+  function waitTool(runtime: DesktopAgentRuntime) {
+    return (runtime as any).agent.state.tools.find(
+      (tool: any) => tool.name === "TaskWait",
+    );
+  }
+
+  function childEnvelope(
+    record: { delegationId: string },
+    event: unknown,
+    parentToolCallId = "task-1",
+  ) {
+    return {
+      sessionId: "session-1",
+      turnId: "turn-1",
+      ts: Date.now(),
+      event,
+      parentToolCallId,
+      agentName: "explorer",
+    };
+  }
+
+  function emitChildToolStart(
+    runtime: DesktopAgentRuntime,
+    delegationId: string,
+    toolCallId: string,
+    parentToolCallId = "task-1",
+  ) {
+    const record = (runtime as any).delegations.get(delegationId);
+    const options = subagentRuns.calls[0];
+    options.onEvent(
+      childEnvelope(
+        record,
+        {
+          type: "tool_start",
+          toolCallId,
+          toolName: "Read",
+          args: { path: "a.ts" },
+        },
+        parentToolCallId,
+      ),
+    );
+  }
+
+  function emitChildMessageEnd(
+    runtime: DesktopAgentRuntime,
+    delegationId: string,
+    usage: unknown,
+    text: string,
+    parentToolCallId = "task-1",
+  ) {
+    const record = (runtime as any).delegations.get(delegationId);
+    const message = {
+      id: `child-${Math.random().toString(36).slice(2)}`,
+      role: "assistant",
+      content: text,
+      createdAt: new Date().toISOString(),
+      status: "complete",
+      modelId: "local-model",
+      providerId: "local",
+      parentToolCallId,
+      agentName: "explorer",
+      ...(usage ? { usage } : {}),
+    };
+    const options = subagentRuns.calls[0];
+    options.onEvent(
+      childEnvelope(record, { type: "message_end", message }, parentToolCallId),
+    );
+    return message;
+  }
+
+  it("reports launch metrics and live progress on TaskList", async () => {
+    // TaskList waits on the pending delegate through the shared coordinator;
+    // a crossed tool threshold returns the interim heartbeat immediately.
+    const runtime = createRuntime({
+      subagents: [explorer],
+      subagentWakeup: { kind: "tool-calls", value: 2 },
+    });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    try {
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      expect(started.details).toMatchObject({
+        status: "running",
+        toolCalls: 0,
+        turns: 0,
+      });
+      emitChildToolStart(runtime, delegationId, "child-1");
+      emitChildToolStart(runtime, delegationId, "child-2");
+      emitChildMessageEnd(
+        runtime,
+        delegationId,
+        { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+        "half done",
+      );
+      const list = (runtime as any).agent.state.tools.find(
+        (tool: any) => tool.name === "TaskList",
+      );
+      const listed = await list.execute("list-1", {});
+      expect(listed.details.delegations).toHaveLength(1);
+      expect(listed.details.delegations[0]).toMatchObject({
+        delegationId,
+        status: "running",
+        toolCalls: 2,
+        usage: { totalTokens: 12 },
+      });
+      expect(listed.content[0].text).toContain("2 tool calls");
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("merges repeated child usage reports without double-charging the ledger", async () => {
+    const runtime = createRuntime({ subagents: [explorer] });
+    subagentRuns.calls.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    try {
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      const usage = {
+        operationId: "op-child-1",
+        usageOrigin: "pi",
+        inputTokens: 10,
+        outputTokens: 2,
+        totalTokens: 12,
+      };
+      // Same physical request reported twice (stream + final) plus the
+      // settlement carrying the same operation: the ledger counts it once.
+      emitChildMessageEnd(runtime, delegationId, usage, "half");
+      emitChildMessageEnd(runtime, delegationId, usage, "half again");
+      subagentRuns.resolveRun!({
+        agentName: "explorer",
+        status: "completed",
+        report: "done",
+        turns: 1,
+        toolCalls: 0,
+        usage,
+      });
+      await vi.waitFor(
+        () => {
+          expect(
+            (runtime as any).delegations.get(delegationId).status,
+          ).toBe("completed");
+        },
+        { timeout: 5000 },
+      );
+      expect(
+        (runtime as any).delegations.get(delegationId).usage.totalTokens,
+      ).toBe(12);
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("wakes TaskWait on tool-call thresholds with a reason and never spins", async () => {
+    const runtime = createRuntime({
+      subagents: [explorer],
+      subagentWakeup: { kind: "tool-calls", value: 3 },
+    });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    try {
+      // The session base alone owns timing: no per-call wake hint is accepted.
+      expect((runtime as any).sessionWakeup).toMatchObject({
+        kind: "tool-calls",
+        value: 3,
+      });
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      const waiting = waitTool(runtime).execute("wait-1", {
+        delegationIds: [delegationId],
+      });
+      emitChildToolStart(runtime, delegationId, "child-1");
+      emitChildToolStart(runtime, delegationId, "child-2");
+      emitChildToolStart(runtime, delegationId, "child-3");
+      const woken = await waiting;
+      expect(woken.details.status).toBe("wakeup");
+      expect(woken.details.wakeReason).toBe("tool-calls");
+      expect(woken.details.wakeDelegationIds).toEqual([delegationId]);
+      expect(woken.details.delegations[0]).toMatchObject({
+        delegationId,
+        status: "running",
+        toolCalls: 3,
+      });
+      expect(woken.content[0].text).toContain("3 tool calls");
+      expect(
+        (runtime as any).delegations.get(delegationId).reportDelivered,
+      ).toBe(false);
+      // The watermark advanced: re-waiting cannot spin on progress a previous
+      // wait already reported. Two more calls stay quiet; the third wakes.
+      const again = waitTool(runtime).execute("wait-2", {
+        delegationIds: [delegationId],
+      });
+      let againSettled = false;
+      void again.then(() => {
+        againSettled = true;
+      });
+      emitChildToolStart(runtime, delegationId, "child-4");
+      emitChildToolStart(runtime, delegationId, "child-5");
+      await Promise.resolve();
+      expect(againSettled).toBe(false);
+      emitChildToolStart(runtime, delegationId, "child-6");
+      const second = await again;
+      expect(second.details.status).toBe("wakeup");
+      expect(second.details.wakeReason).toBe("tool-calls");
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  }, 15_000);
+
+  it("reports a periodic time wake without cancelling the delegates", async () => {
+    const runtime = createRuntime({
+      subagents: [explorer],
+      subagentWakeup: { kind: "time", value: 1 },
+    });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    try {
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      const woken = await waitTool(runtime).execute("wait-1", {
+        delegationIds: [delegationId],
+      });
+      expect(woken.details.status).toBe("wakeup");
+      expect(woken.details.wakeReason).toBe("time");
+      // The configured progress wait is reported, from the session base.
+      expect(woken.content[0].text).toContain("Still running after 1s");
+      // The period never cancels: the delegate is still running afterwards.
+      expect((runtime as any).delegations.get(delegationId).status).toBe(
+        "running",
+      );
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  }, 15_000);
+
+  it("waits without a period until settlement when progress is off", async () => {
+    const runtime = createRuntime({
+      subagents: [explorer],
+      subagentWakeup: { kind: "off" },
+    });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    try {
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      const waiting = waitTool(runtime).execute("wait-1", {
+        delegationIds: [delegationId],
+      });
+      subagentRuns.resolveRun!({
+        agentName: "explorer",
+        status: "completed",
+        report: "Found it in src/app.ts:12.",
+        turns: 1,
+        toolCalls: 1,
+      });
+      const converged = await waiting;
+      expect(converged.details.status).toBe("completed");
+      expect(converged.details.wakeReason).toBe("completion");
+      expect(converged.content[0].text).toContain("src/app.ts:12");
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("delivers a settled report exactly once across repeated waits", async () => {
+    const runtime = createRuntime({ subagents: [explorer] });
+    subagentRuns.calls.length = 0;
+    subagentRuns.deferred = false;
+    subagentRuns.result = {
+      agentName: "explorer",
+      status: "completed",
+      report: "Found it.",
+      turns: 1,
+      toolCalls: 1,
+    };
+    try {
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      await vi.waitFor(() => {
+        expect(
+          (runtime as any).delegations.get(delegationId).status,
+        ).toBe("completed");
+      });
+      const held = await waitTool(runtime).execute("wait-held", {
+        delegationIds: [delegationId],
+      });
+      expect(held.details.status).toBe("completed");
+      expect(held.content[0].text).toContain("Found it.");
+      // The first wait delivers exactly once; observing it again is a re-read.
+      expect(
+        (runtime as any).delegations.get(delegationId).reportDelivered,
+      ).toBe(true);
+      const converged = await waitTool(runtime).execute("wait-take", {
+        delegationIds: [delegationId],
+      });
+      expect(
+        (runtime as any).delegations.get(delegationId).reportDelivered,
+      ).toBe(true);
+      expect(converged.details.status).toBe("completed");
+    } finally {
+      subagentRuns.result = undefined;
+      await runtime.dispose();
+    }
+  });
+
+  it("seeds the session wake base from launch defaults before any TaskWait", async () => {
+    const runtime = createRuntime({
+      subagents: [explorer],
+      subagentWakeup: { kind: "tool-calls", value: 4 },
+    });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    try {
+      expect((runtime as any).sessionWakeup).toEqual({
+        kind: "tool-calls",
+        value: 4,
+      });
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      // The wait uses the configured session base as-is.
+      const waiting = waitTool(runtime).execute("wait-1", {
+        delegationIds: [delegationId],
+      });
+      emitChildToolStart(runtime, delegationId, "child-1");
+      emitChildToolStart(runtime, delegationId, "child-2");
+      emitChildToolStart(runtime, delegationId, "child-3");
+      emitChildToolStart(runtime, delegationId, "child-4");
+      const woken = await waiting;
+      expect(woken.details.wakeReason).toBe("tool-calls");
+      expect(woken.details.status).toBe("wakeup");
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("ignores a per-call wake hint and uses only the session base", async () => {
+    const runtime = createRuntime({
+      subagents: [explorer],
+      subagentWakeup: { kind: "tool-calls", value: 5 },
+    });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    try {
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      // The model can no longer pass a wake selection: the hint is ignored
+      // and the session base's threshold of 5 alone governs the wait.
+      const waiting = waitTool(runtime).execute("wait-1", {
+        delegationIds: [delegationId],
+        subagentWakeup: { kind: "tool-calls", value: 2 },
+      });
+      emitChildToolStart(runtime, delegationId, "child-1");
+      emitChildToolStart(runtime, delegationId, "child-2");
+      let settled = false;
+      void waiting.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      emitChildToolStart(runtime, delegationId, "child-3");
+      emitChildToolStart(runtime, delegationId, "child-4");
+      emitChildToolStart(runtime, delegationId, "child-5");
+      const woken = await waiting;
+      expect(woken.details.wakeReason).toBe("tool-calls");
+      expect((runtime as any).sessionWakeup).toMatchObject({
+        kind: "tool-calls",
+        value: 5,
+      });
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("ignores an explicit TaskWait timeout; the session period owns timing", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = createRuntime({ subagents: [explorer] });
+      subagentRuns.calls.length = 0;
+      subagentRuns.instances.length = 0;
+      subagentRuns.deferred = true;
+      subagentRuns.resolveRun = undefined;
+      try {
+        const started = await taskTool(runtime).execute("task-1", {
+          agent: "explorer",
+          task: "Find it.",
+        });
+        const delegationId = (started.details as any).delegationId as string;
+        const waiting = waitTool(runtime).execute("wait-1", {
+          delegationIds: [delegationId],
+          timeoutSeconds: 1,
+        });
+        let settled = false;
+        void waiting.then(() => {
+          settled = true;
+        });
+        // The legacy 1s bound is ignored: nothing returns at its expiry.
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(settled).toBe(false);
+        // The session's configured 600s period owns the wake.
+        await vi.advanceTimersByTimeAsync(599_000);
+        const woken = await waiting;
+        expect(woken.details.status).toBe("wakeup");
+        expect(woken.details.wakeReason).toBe("time");
+        expect(woken.content[0].text).toContain("Still running after 600s");
+        expect(woken.content[0].text).toContain(`explorer (${delegationId})`);
+        expect((runtime as any).delegations.get(delegationId).status).toBe(
+          "running",
+        );
+      } finally {
+        subagentRuns.deferred = false;
+        await runtime.dispose();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 15_000);
+
+  it("applies live wakeup changes to the next wait without touching history", async () => {
+    const runtime = createRuntime({ subagents: [explorer] });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    try {
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      runtime.setSubagentWakeup({ kind: "tool-calls", value: 2 });
+      expect((runtime as any).sessionWakeup).toMatchObject({
+        kind: "tool-calls",
+        value: 2,
+      });
+      const waiting = waitTool(runtime).execute("wait-1", {
+        delegationIds: [delegationId],
+      });
+      emitChildToolStart(runtime, delegationId, "child-1");
+      emitChildToolStart(runtime, delegationId, "child-2");
+      const woken = await waiting;
+      expect(woken.details.wakeReason).toBe("tool-calls");
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("delivers pending reports through idle even when progress is off", async () => {
+    const prompts: string[] = [];
+    const runtime = createRuntime({
+      subagents: [explorer],
+      turnId: "parent-turn",
+    });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = false;
+    subagentRuns.result = {
+      agentName: "explorer",
+      status: "completed",
+      report: "Found it.",
+      turns: 1,
+      toolCalls: 1,
+      usage: {
+        operationId: "op-release-1",
+        usageOrigin: "pi",
+        inputTokens: 10,
+        outputTokens: 2,
+        totalTokens: 12,
+      },
+    };
+    (runtime as any).agent.prompt = vi.fn(async (text: string) => {
+      prompts.push(text);
+    });
+    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
+    try {
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      await vi.waitFor(() => {
+        expect(
+          (runtime as any).delegations.get(delegationId).status,
+        ).toBe("completed");
+      });
+      // Progress off: no interim wakes, but settlement still delivers once.
+      runtime.setSubagentWakeup({ kind: "off" });
+      await (runtime as any).resumeAfterDelegations();
+      expect(
+        (runtime as any).delegations.get(delegationId).reportDelivered,
+      ).toBe(true);
+      expect(
+        (runtime as any).delegations.get(delegationId).usage.totalTokens,
+      ).toBe(12);
+      expect(prompts.join("\n")).toContain("Found it.");
+      const reread = await waitTool(runtime).execute("wait-reread", {
+        delegationIds: [delegationId],
+      });
+      expect(reread.content[0].text).toContain("Found it.");
+      expect(
+        (runtime as any).delegations.get(delegationId).usage.totalTokens,
+      ).toBe(12);
+      // A second idle pass prompts nothing: no pending child, no auto-prompt.
+      const before = prompts.length;
+      await (runtime as any).resumeAfterDelegations();
+      expect(prompts.length).toBe(before);
+    } finally {
+      subagentRuns.result = undefined;
+      await runtime.dispose();
+    }
+  });
+
+  it("dedups a retried child steer and keeps the echo out of parent context", async () => {
+    const seen: unknown[] = [];
+    const runtime = createRuntime({
+      subagents: [explorer],
+      turnId: "parent-turn",
+      onEvent: (envelope) => seen.push(envelope),
+    });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    subagentRuns.steered.length = 0;
+    const prompts: string[] = [];
+    (runtime as any).agent.prompt = vi.fn(async (text: string) => {
+      prompts.push(text);
+    });
+    try {
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      const messageId = "123e4567-e89b-12d3-a456-426614174000";
+      const first = runtime.steerSubagent({
+        delegationId,
+        expectedParentTurnId: "parent-turn",
+        text: "Focus on auth.",
+        messageId,
+      });
+      expect(first).toEqual({
+        accepted: true,
+        delegationId,
+        turnId: "parent-turn",
+      });
+      // A retried id is already applied: accepted without re-steering.
+      const second = runtime.steerSubagent({
+        delegationId,
+        expectedParentTurnId: "parent-turn",
+        text: "Focus on auth.",
+        messageId,
+      });
+      expect(second).toEqual({
+        accepted: true,
+        delegationId,
+        turnId: "parent-turn",
+      });
+      expect(subagentRuns.steered).toEqual(["Focus on auth."]);
+      const history = (runtime as any).transcriptHistory as UiMessage[];
+      const echoes = history.filter(
+        (row) => row.role === "user" && row.content === "Focus on auth.",
+      );
+      expect(echoes).toHaveLength(1);
+      expect(echoes[0]).toMatchObject({
+        parentToolCallId: "task-1",
+        agentName: "explorer",
+        steering: true,
+      });
+      // The steering never wakes the parent model: no prompt carried it.
+      expect(prompts.join("\n")).not.toContain("Focus on auth.");
+      // A stale parent turn is refused, not steered.
+      try {
+        runtime.steerSubagent({
+          delegationId,
+          expectedParentTurnId: "other-turn",
+          text: "late",
+        });
+        expect.unreachable();
+      } catch (error: unknown) {
+        expect((error as { errorCode?: string }).errorCode).toBe(
+          "TURN_NOT_FOUND",
+        );
+      }
+      expect(subagentRuns.steered).toEqual(["Focus on auth."]);
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("unblocks TaskWait on TaskStop and reports the stop", async () => {
+    const runtime = createRuntime({ subagents: [explorer] });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    try {
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      const waiting = waitTool(runtime).execute("wait-1", {
+        delegationIds: [delegationId],
+      });
+      await (runtime as any).stopSubagents([delegationId]);
+      const stopped = await waiting;
+      expect(stopped.details.delegations[0]).toMatchObject({
+        delegationId,
+        status: "stopped",
+      });
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("wakes the idle parent on thresholds through the existing turn owner", async () => {
+    const runtime = createRuntime({ subagents: [explorer] });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    subagentRuns.steered.length = 0;
+    const prompts: string[] = [];
+    (runtime as any).agent.prompt = vi.fn(async (text: string) => {
+      prompts.push(text);
+    });
+    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
+    try {
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      // A live settings change configures the session base the wait uses.
+      runtime.setSubagentWakeup({ kind: "tool-calls", value: 2 });
+      const waiting = waitTool(runtime).execute("wait-1", {
+        delegationIds: [delegationId],
+      });
+      emitChildToolStart(runtime, delegationId, "child-1");
+      emitChildToolStart(runtime, delegationId, "child-2");
+      const woken = await waiting;
+      expect(woken.details.wakeReason).toBe("tool-calls");
+      expect((runtime as any).sessionWakeup).toMatchObject({
+        kind: "tool-calls",
+        value: 2,
+      });
+      // The parent idles; the idle resume keeps the configured thresholds
+      // and heartbeats through the same turn owner without consuming reports.
+      const idle = (runtime as any).resumeAfterDelegations();
+      emitChildToolStart(runtime, delegationId, "child-3");
+      emitChildToolStart(runtime, delegationId, "child-4");
+      await vi.waitFor(() => {
+        expect(prompts.length).toBeGreaterThanOrEqual(1);
+      });
+      expect(prompts[0]).toContain("progress update");
+      expect(prompts[0]).toContain("explorer");
+      expect(
+        (runtime as any).delegations.get(delegationId).reportDelivered,
+      ).toBe(false);
+      subagentRuns.resolveRun!({
+        agentName: "explorer",
+        status: "completed",
+        report: "Found it in src/app.ts:12.",
+        turns: 2,
+        toolCalls: 4,
+      });
+      await idle;
+      expect(prompts.length).toBe(2);
+      expect(prompts[1]).toContain("src/app.ts:12");
+      expect(
+        (runtime as any).delegations.get(delegationId).reportDelivered,
+      ).toBe(true);
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("rebinds an in-flight TaskWait to live threshold settings without spurious wakes", async () => {
+    const runtime = createRuntime({ subagents: [explorer] });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    try {
+      runtime.setSubagentWakeup({ kind: "off" });
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      let settled = false;
+      const waiting = waitTool(runtime)
+        .execute("wait-1", { delegationIds: [delegationId] })
+        .then((result: unknown) => {
+          settled = true;
+          return result as {
+            details: { wakeReason?: string; wakeDelegationIds?: string[] };
+          };
+        });
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(settled).toBe(false);
+      // Enabling the threshold alone must not resolve the wait.
+      runtime.setSubagentWakeup({ kind: "tool-calls", value: 2 });
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(settled).toBe(false);
+      emitChildToolStart(runtime, delegationId, "child-1");
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(settled).toBe(false);
+      emitChildToolStart(runtime, delegationId, "child-2");
+      const woken = (await waiting) as {
+        details: { wakeReason?: string; wakeDelegationIds?: string[] };
+      };
+      expect(settled).toBe(true);
+      expect(woken.details.wakeReason).toBe("tool-calls");
+      expect(woken.details.wakeDelegationIds).toEqual([delegationId]);
+      // The session base alone rebinds an in-flight wait: lowering the base
+      // mid-wait applies to progress the wait had already observed.
+      const second = await taskTool(runtime).execute("task-2", {
+        agent: "explorer",
+        task: "Find more.",
+      });
+      const secondId = (second.details as any).delegationId as string;
+      const secondOptions = subagentRuns.calls[1];
+      const emitSecond = (toolCallId: string) => {
+        secondOptions.onEvent(
+          childEnvelope(
+            { delegationId: secondId },
+            { type: "tool_start", toolCallId, toolName: "Read", args: { path: "a.ts" } },
+            "task-2",
+          ),
+        );
+      };
+      runtime.setSubagentWakeup({ kind: "tool-calls", value: 5 });
+      let secondSettled = false;
+      const secondWait = waitTool(runtime)
+        .execute("wait-2", { delegationIds: [secondId] })
+        .then((result: unknown) => {
+          secondSettled = true;
+          return result as {
+            details: { wakeReason?: string; wakeDelegationIds?: string[] };
+          };
+        });
+      emitSecond("child-a");
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(secondSettled).toBe(false);
+      runtime.setSubagentWakeup({ kind: "tool-calls", value: 1 });
+      const secondWoken = (await secondWait) as {
+        details: { wakeReason?: string; wakeDelegationIds?: string[] };
+      };
+      expect(secondWoken.details.wakeReason).toBe("tool-calls");
+      expect(secondWoken.details.wakeDelegationIds).toEqual([secondId]);
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("re-arms the period deadline from live settings and still cancels", async () => {
+    const runtime = createRuntime({ subagents: [explorer] });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    try {
+      runtime.setSubagentWakeup({ kind: "off" });
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      const waiting = waitTool(runtime).execute("wait-1", {
+        delegationIds: [delegationId],
+      });
+      runtime.setSubagentWakeup({ kind: "time", value: 1 });
+      const woken = await waiting;
+      expect(woken.details.wakeReason).toBe("time");
+      expect((runtime as any).delegations.get(delegationId).status).toBe(
+        "running",
+      );
+      // True cancellation still unblocks a live-bound wait.
+      const held = waitTool(runtime).execute("wait-held", {
+        delegationIds: [delegationId],
+      });
+      await (runtime as any).stopSubagents([delegationId]);
+      const stopped = await held;
+      expect(stopped.details.delegations[0]).toMatchObject({
+        delegationId,
+        status: "stopped",
+      });
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  }, 15_000);
+
+  it("shares the time selection between TaskWait and idle: progress then completion", async () => {
+    const runtime = createRuntime({
+      subagents: [explorer],
+      subagentWakeup: { kind: "time", value: 1 },
+    });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    const prompts: string[] = [];
+    (runtime as any).agent.prompt = vi.fn(async (text: string) => {
+      prompts.push(text);
+    });
+    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
+    try {
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      // Direct TaskWait with the shared time selection heartbeats first.
+      const woken = await waitTool(runtime).execute("wait-1", {
+        delegationIds: [delegationId],
+      });
+      expect(woken.details.wakeReason).toBe("time");
+      expect(woken.details.status).toBe("wakeup");
+      expect(
+        (runtime as any).delegations.get(delegationId).reportDelivered,
+      ).toBe(false);
+      // The idle path shares the same selection: another time pass
+      // heartbeats without delivery, then settlement completes exactly once.
+      const idle = (runtime as any).resumeAfterDelegations();
+      await vi.waitFor(
+        () => {
+          expect(prompts.length).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: 8000 },
+      );
+      expect(prompts[0]).toContain("progress update");
+      expect(
+        (runtime as any).delegations.get(delegationId).reportDelivered,
+      ).toBe(false);
+      subagentRuns.resolveRun!({
+        agentName: "explorer",
+        status: "completed",
+        report: "Found it in src/app.ts:12.",
+        turns: 1,
+        toolCalls: 0,
+      });
+      await idle;
+      expect(
+        (runtime as any).delegations.get(delegationId).reportDelivered,
+      ).toBe(true);
+      expect(prompts.join("\n")).toContain("src/app.ts:12");
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  }, 20_000);
+
+  it("preserves subset, mode, and minCompleted with the selected threshold", async () => {
+    const runtime = createRuntime({
+      subagents: [explorer],
+      subagentWakeup: { kind: "tool-calls", value: 2 },
+    });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    try {
+      const first = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "First.",
+      });
+      const second = await taskTool(runtime).execute("task-2", {
+        agent: "explorer",
+        task: "Second.",
+      });
+      const firstId = (first.details as any).delegationId as string;
+      const secondId = (second.details as any).delegationId as string;
+      // The selected tool threshold governs the awaited subset: progress on
+      // it wakes regardless of unknown ids or the any/minCompleted query.
+      const waiting = waitTool(runtime).execute("wait-1", {
+        delegationIds: [firstId, "missing-id"],
+        mode: "any",
+        minCompleted: 1,
+      });
+      emitChildToolStart(runtime, firstId, "child-1");
+      emitChildToolStart(runtime, firstId, "child-2");
+      const woken = await waiting;
+      expect(woken.details.wakeReason).toBe("tool-calls");
+      expect(woken.details.wakeDelegationIds).toEqual([firstId]);
+      expect(woken.details.unknownIds).toEqual(["missing-id"]);
+      // Threshold heartbeats never mark a running delegate delivered.
+      expect(
+        (runtime as any).delegations.get(firstId).reportDelivered,
+      ).toBe(false);
+      expect(
+        (runtime as any).delegations.get(secondId).reportDelivered,
+      ).toBe(false);
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("steers a live delegate with attribution and guards", async () => {
+    const seen: unknown[] = [];
+    const runtime = createRuntime({
+      subagents: [explorer],
+      turnId: "parent-turn",
+      onEvent: (envelope) => seen.push(envelope),
+    });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    subagentRuns.steered.length = 0;
+    try {
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      const accepted = runtime.steerSubagent({
+        delegationId,
+        expectedParentTurnId: "parent-turn",
+        text: "Focus on auth.",
+      });
+      expect(accepted).toEqual({
+        accepted: true,
+        delegationId,
+        turnId: "parent-turn",
+      });
+      expect(subagentRuns.steered).toEqual(["Focus on auth."]);
+      // Attributed echo: child transcript and replay, never parent context.
+      const history = (runtime as any).transcriptHistory as UiMessage[];
+      const echo = history.find(
+        (row) => row.role === "user" && row.content === "Focus on auth.",
+      );
+      expect(echo).toMatchObject({
+        parentToolCallId: "task-1",
+        agentName: "explorer",
+        steering: true,
+      });
+      const echoes = (seen as AgentEventEnvelope[]).filter(
+        (envelope) =>
+          (envelope.event.type === "message_start" ||
+            envelope.event.type === "message_end") &&
+          envelope.event.message.role === "user" &&
+          envelope.event.message.content === "Focus on auth.",
+      );
+      expect(echoes).toHaveLength(2);
+      expect(echoes[0]).toMatchObject({
+        parentToolCallId: "task-1",
+        agentName: "explorer",
+      });
+      // The child's tool set is unchanged: nested Task and asktool stay out.
+      const names = subagentRuns.calls[0].tools.map(
+        (tool: { name: string }) => tool.name,
+      );
+      expect(names).not.toContain("Task");
+      expect(names).not.toContain("asktool");
+      // Stale parent turn, unknown id, and empty text are rejections.
+      expect(() =>
+        runtime.steerSubagent({
+          delegationId,
+          expectedParentTurnId: "other-turn",
+          text: "late",
+        }),
+      ).toThrow("target turn has ended");
+      try {
+        runtime.steerSubagent({
+          delegationId,
+          expectedParentTurnId: "other-turn",
+          text: "late",
+        });
+        expect.unreachable();
+      } catch (error: any) {
+        expect(error.errorCode).toBe("TURN_NOT_FOUND");
+      }
+      try {
+        runtime.steerSubagent({
+          delegationId: "missing",
+          expectedParentTurnId: "parent-turn",
+          text: "lost",
+        });
+        expect.unreachable();
+      } catch (error: any) {
+        expect(error.errorCode).toBe("DELEGATION_NOT_FOUND");
+      }
+      // A stopping delegate refuses steering; a settled one names resume.
+      await (runtime as any).stopSubagents([delegationId]);
+      await vi.waitFor(() => {
+        expect(
+          (runtime as any).delegations.get(delegationId).status,
+        ).toBe("stopped");
+      });
+      try {
+        runtime.steerSubagent({
+          delegationId,
+          expectedParentTurnId: "parent-turn",
+          text: "too late",
+        });
+        expect.unreachable();
+      } catch (error: any) {
+        expect(error.errorCode).toBe("DELEGATION_NOT_RUNNING");
+      }
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("resumes an interrupted chain hydrated from the transcript", async () => {
+    const taskRow = (toolCallId: string, details: Record<string, unknown>) => ({
+      id: toolCallId,
+      role: "tool",
+      content: JSON.stringify({ details }),
+      createdAt: new Date(1_700_000_000_000).toISOString(),
+      toolCallId,
+      toolName: "Task",
+      toolArgs: { agent: "explorer", task: "Map the parser." },
+      toolStatus: "running",
+      toolResult: { details },
+      status: "complete",
+    });
+    const history = [
+      taskRow("task-old", {
+        delegationId: "del-old",
+        agent: "explorer",
+        status: "running",
+      }),
+      {
+        id: "child-a1",
+        role: "assistant",
+        content: "saw the parser",
+        createdAt: new Date(1_700_000_001_000).toISOString(),
+        status: "complete",
+        parentToolCallId: "task-old",
+        agentName: "explorer",
+      },
+      {
+        id: "delegate-tool-t1",
+        role: "tool",
+        content: "",
+        createdAt: new Date(1_700_000_002_000).toISOString(),
+        toolCallId: "t1",
+        toolName: "Read",
+        toolArgs: { path: "src/parser.ts" },
+        toolResult: { content: [{ type: "text", text: "body" }] },
+        toolStatus: "success",
+        parentToolCallId: "task-old",
+        agentName: "explorer",
+        status: "complete",
+      },
+    ] as unknown as UiMessage[];
+    const runtime = createRuntime({ subagents: [explorer], history });
+    subagentRuns.calls.length = 0;
+    subagentRuns.deferred = false;
+    subagentRuns.result = undefined;
+    try {
+      const resumed = await taskTool(runtime).execute("task-new", {
+        agent: "explorer",
+        task: "Keep mapping.",
+        resume: "del-old",
+      });
+      expect(resumed.details.error).toBeUndefined();
+      expect(resumed.details).toMatchObject({
+        status: "running",
+        resumedFrom: "del-old",
+      });
+      // Retained history seeds the continued run.
+      expect(
+        subagentRuns.calls[0].initialMessages.length,
+      ).toBeGreaterThan(0);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("refuses resume for an explicitly stopped chain and for missing history", async () => {
+    const stoppedRow = {
+      id: "task-stopped",
+      role: "tool",
+      content: "{}",
+      createdAt: new Date(1_700_000_000_000).toISOString(),
+      toolCallId: "task-stopped",
+      toolName: "Task",
+      toolArgs: { agent: "explorer", task: "Map the parser." },
+      toolStatus: "success",
+      toolResult: {
+        details: { delegationId: "del-stopped", agent: "explorer", status: "stopped" },
+      },
+      status: "complete",
+    } as unknown as UiMessage;
+    const runtime = createRuntime({ subagents: [explorer], history: [stoppedRow] });
+    subagentRuns.calls.length = 0;
+    subagentRuns.deferred = false;
+    try {
+      const refused = await taskTool(runtime).execute("task-new", {
+        agent: "explorer",
+        task: "Keep mapping.",
+        resume: "del-stopped",
+      });
+      expect(String(refused.details.error)).toContain("stopped");
+      expect(subagentRuns.calls).toHaveLength(0);
+    } finally {
+      await runtime.dispose();
+    }
+
+    // Interrupted but rowless: resolves, then reports the missing history
+    // clearly and drops the id so it is never advertised as reusable.
+    const ghostRow = {
+      id: "task-ghost",
+      role: "tool",
+      content: "{}",
+      createdAt: new Date(1_700_000_000_000).toISOString(),
+      toolCallId: "task-ghost",
+      toolName: "Task",
+      toolArgs: { agent: "explorer", task: "Map the parser." },
+      toolStatus: "running",
+      toolResult: {
+        details: { delegationId: "del-ghost", agent: "explorer", status: "running" },
+      },
+      status: "complete",
+    } as unknown as UiMessage;
+    const ghost = createRuntime({ subagents: [explorer], history: [ghostRow] });
+    subagentRuns.calls.length = 0;
+    try {
+      const missing = await (
+        ghost as any
+      ).agent.state.tools
+        .find((tool: any) => tool.name === "Task")
+        .execute("task-ghost-2", {
+          agent: "explorer",
+          task: "Keep mapping.",
+          resume: "del-ghost",
+        });
+      expect(String(missing.details.error)).toContain("no recorded history");
+      expect(subagentRuns.calls).toHaveLength(0);
+    } finally {
+      await ghost.dispose();
+    }
+  });
+});
+
 
 /**
  * The Google adapters reject any `fetch` that is not `globalThis.fetch`, so a

@@ -7,12 +7,14 @@ import {
   isActiveInProject,
   isCommandShellCatalog,
   normalizeMode,
+  normalizeSubagentWakeupSettings,
   resolveBindingLimits,
   trustedExtensionAgentKeyFromProviderId,
   type CommandShellCatalog,
   type ModelBinding,
   type Mode,
   type SessionThinkingLevel,
+  type SubagentWakeupSettings,
   type UserSkillRecord,
   type UserSubagentRecord,
 } from "@pi-desktop/shared";
@@ -376,6 +378,10 @@ export function createHeadlessLaunchResolver(options: HeadlessLaunchResolverOpti
         ...(overrides.turnId ? { turnId: overrides.turnId } : {}),
         thinkingLevel,
         infiniteProviderRetry: settings.infiniteProviderRetry === true,
+        // Persistent wake defaults, normalized once (see session-launch).
+        subagentWakeup: normalizeSubagentWakeupSettings(
+          (settings as { subagentWakeup?: SubagentWakeupSettings }).subagentWakeup,
+        ),
         commandShell,
         scratchDir: join(dataDir, "scratch", sessionId),
         attachmentsDir: join(dataDir, "attachments"),

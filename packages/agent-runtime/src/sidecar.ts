@@ -27,6 +27,8 @@ import {
   normalizeThinkingLevel,
 } from "./sidecar-config.js";
 import { matchesExpectedTurnId } from "./turn-target.js";
+import { applySubagentWakeupConfigure } from "./sidecar-subagent-wakeup.js";
+import { parseContinueSidecarParams, continueHydrationSource } from "./subagent-continue.js";
 import { applyNodeNetworkProxy } from "./node-proxy.js";
 import { applyAdditiveDefaultCaCertificates } from "./system-ca.js";
 import { NATIVE_PI_SESSION_PREFIX } from "./native-pi-session-id.js";
@@ -41,6 +43,7 @@ import type {
   AgentEventEnvelope,
   AskToolResolution,
   SubagentDefinition,
+  SubagentWakeupSettings,
   ContextCompactionRecord,
   ContextCompactionSettings,
   CommandShellOption,
@@ -130,6 +133,8 @@ type RuntimeParams = {
   projectInstructions?: ProjectInstructions;
   projectMemory?: string;
   compactionSettings?: ContextCompactionSettings;
+  /** Persistent delegation-wake defaults (AppSettings.subagentWakeup). */
+  subagentWakeup?: SubagentWakeupSettings;
   attachmentsDir?: string;
   userMessageId?: string;
   sessionMessage?: SessionMessageOrigin;
@@ -246,6 +251,15 @@ async function runtimeFor(
     ? existing
     : undefined;
   if (existing && !reusable) {
+    // A config change must never silently dispose the user's running
+    // detached followup: refuse the launch and keep the child observable
+    // instead of aborting it behind the caller's back.
+    if (existing.hasRunningDelegations()) {
+      throw Object.assign(new Error("session already has an active turn"), {
+        rpcCode: -32000,
+        errorCode: "AGENT_BUSY",
+      });
+    }
     await existing.dispose();
     runtimes.delete(sessionId);
   }
@@ -253,6 +267,7 @@ async function runtimeFor(
     reusable.setPluginSkills(pluginSkills);
     reusable.setCompactionSettings(params.compactionSettings);
     reusable.setInfiniteProviderRetry(params.infiniteProviderRetry === true);
+    reusable.setSubagentWakeup(params.subagentWakeup);
     reusable.setMode(mode);
     return reusable;
   }
@@ -305,6 +320,7 @@ async function runtimeFor(
     history,
     compaction,
     compactionSettings: params.compactionSettings,
+    subagentWakeup: params.subagentWakeup,
     pluginTools,
     pluginSkills,
     trustedExtensions,
@@ -390,6 +406,12 @@ async function handle(method: string, params: any): Promise<unknown> {
             : undefined,
         );
       }
+      // Persistent wake defaults: a settings save carrying the field refreshes
+      // every live runtime through the existing setter (in-flight waits
+      // rebind, per-call overrides and explicit timeouts preserved); a payload
+      // without the field leaves waits untouched. Future launches read the
+      // same persisted values and normalize identically.
+      applySubagentWakeupConfigure(runtimes, params);
       return { ok: true, mode: "host-proxy" };
     }
     case "sidecar.health":
@@ -553,6 +575,53 @@ async function handle(method: string, params: any): Promise<unknown> {
       }
       const result = await runtime.stopSubagents(ids as string[] | undefined);
       return { pending: result.details.stopPending?.flatMap(record => typeof record.delegationId === "string" ? [record.delegationId] : []) ?? [] };
+    }
+    case "agent.steerSubagent": {
+      const runtime = runtimes.get(String(params.sessionId ?? ""));
+      if (!runtime) {
+        throw Object.assign(new Error("No active runtime for this session"), { errorCode: "TURN_NOT_FOUND" });
+      }
+      const delegationId = String(params.delegationId ?? "");
+      const expectedTurnId = String(params.expectedTurnId ?? "");
+      const content = String(params.content ?? "");
+      const messageId = typeof params.messageId === "string" && params.messageId.trim()
+        ? params.messageId.trim()
+        : undefined;
+      if (!delegationId.trim() || !expectedTurnId.trim() || !content.trim()) {
+        throw Object.assign(new Error("delegationId, expectedTurnId and content required"), { errorCode: "INVALID_ARGUMENT" });
+      }
+      if (delegationId.length > 128 || expectedTurnId.length > 128 || content.length > 20_000) {
+        throw Object.assign(new Error("steerSubagent payload out of bounds"), { errorCode: "INVALID_ARGUMENT" });
+      }
+      // The runtime revalidates turn ownership after this dispatch, so a
+      // stale target fails there rather than steering the wrong turn.
+      return runtime.steerSubagent({ delegationId, expectedParentTurnId: expectedTurnId, text: content, ...(messageId ? { messageId } : {}) });
+    }
+    case "agent.continueSubagent": {
+      const parsed = parseContinueSidecarParams(params);
+      let runtime = runtimes.get(parsed.sessionId);
+      if (!runtime) {
+        // Post-restart: no live sidecar runtime. Hydrate an idle one from the
+        // persisted transcript/chain with the host's normal launch preparation
+        // (same model binding, permissions, workspace) — no parent model
+        // prompt runs before the child starts. Without a launch payload the
+        // previous `TURN_NOT_FOUND` stands; admission and busy rules still
+        // apply inside `runtimeFor` and `continueSubagent`.
+        const hydration = continueHydrationSource(params);
+        if (!hydration) {
+          throw Object.assign(new Error("No active runtime for this session"), { errorCode: "TURN_NOT_FOUND" });
+        }
+        runtime = await runtimeFor(hydration as RuntimeParams);
+      }
+      // The runtime validates the chain, decides parent vs user delivery
+      // from the source record, and adopts a host-begun execution turn when
+      // detached. A stale or busy target fails there with a coded error.
+      return runtime.continueSubagent({
+        delegationId: parsed.delegationId,
+        ...(parsed.expectedTurnId ? { expectedParentTurnId: parsed.expectedTurnId } : {}),
+        text: parsed.content,
+        ...(parsed.messageId ? { messageId: parsed.messageId } : {}),
+      });
     }
     case "agent.stop": {
       const sessionId = String(params.sessionId);

@@ -1,14 +1,35 @@
 import { toolResultPayload } from "../../lib/tool-presentation";
 import { SubagentStopButton } from "../../features/chat/transcript/SubagentStopButton";
-import { collectDelegationStatuses, subagentOutcome } from "../../lib/subagent-topology";
-import { Fragment, useLayoutEffect, useMemo } from "react";
+import {
+  collectDelegationStatuses,
+  subagentOutcome,
+  type SubagentOutcome,
+} from "../../lib/subagent-topology";
+import { aggregateChainMetricsFromMessages } from "../../lib/subagent-metrics";
+import {
+  captureContinueIdentity,
+  captureSteerIdentity,
+  resolveSteerOwnerTurn,
+  shouldClearSteerDraft,
+  shouldShowSubagentContinue,
+  subagentSteerBlockedReason,
+} from "../../lib/subagent-actions";
+import {
+  isStaleSubagentTab,
+  subagentChainDeliveryOwner,
+  subagentChainLatestDelegationId,
+} from "../../lib/subagent-chain";
+import { sessionAllows } from "../../lib/remote-session-safety";
+import { api } from "../../lib/api";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/app-store";
+import { useChatSessionCapability } from "../../hooks/use-chat-session-capability";
 import { useFollowScroll } from "../../hooks/use-follow-scroll";
 import { useTranscriptView } from "../../hooks/use-transcript-view";
 import { useTranscriptSearchFocus } from "../../hooks/use-transcript-search-focus";
-import { IconArrowDown, IconBot, IconChevronDown } from "../icons";
-import { Textarea, TooltipButton } from "../ui";
+import { IconArrowDown, IconBot } from "../icons";
+import { Button, HelpIcon, Textarea, TooltipButton } from "../ui";
 import { DisclosureAnchorContext } from "../../lib/disclosure-anchor-context";
 import { TranscriptDisclosureProvider } from "../../features/chat/transcript/disclosure";
 import { buildSubagentTranscript } from "../../lib/subagent-transcript";
@@ -28,14 +49,12 @@ import { delegateModelId, delegateThinkingLevel } from "../../features/chat/tran
  *
  * Every `Task` call of the delegation chain opens a turn: the prompt the
  * parent sent renders as a user row, and the rows the delegate produced under
- * that call render with the main transcript's own message-list language —
- * tool rows, thinking rows, and answer bubbles alike. Follow-up `Task` calls
- * on the same delegation append further turns, so a resumed delegate reads as
- * one continuing user/assistant exchange.
- *
- * The tab allows explicit cancellation; the composer at the foot is a disabled textarea
- * whose placeholder says the delegate is driven by the main agent. There is
- * deliberately no send path.
+ * that call render with the main transcript's own message-list language.
+ * One unified composer serves both states: a live delegate steers text into
+ * the child via `agent.steerSubagent` (never into the parent context), and a
+ * settled continuable delegate continues directly via
+ * `agent.continueSubagent` with its retained history. There is no parent
+ * `Task(resume)` text prompt and no ask-parent/follow-up distinction.
  */
 export function SubagentTranscriptTab({ delegationId }: { delegationId: string }) {
   return (
@@ -45,44 +64,339 @@ export function SubagentTranscriptTab({ delegationId }: { delegationId: string }
   );
 }
 
+function formatCompactTokens(value: number, language: string): string {
+  try {
+    return new Intl.NumberFormat(language || undefined, {
+      notation: "compact",
+      maximumFractionDigits: 1,
+    }).format(value);
+  } catch {
+    if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+    if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+    return `${value}`;
+  }
+}
+
+function formatCount(value: number, language: string): string {
+  try {
+    return new Intl.NumberFormat(language || undefined).format(value);
+  } catch {
+    return `${value}`;
+  }
+}
+
 function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const language = i18n.language || "en";
   const activeSessionId = useAppStore((state) => state.activeSessionId);
   // A tab only renders inside a presented panel, which always has a session;
   // the empty key keeps the hook's contract while nothing is active.
   const transcript = useTranscriptView(activeSessionId ?? "");
   const { messages } = transcript;
-  const delegateRunning = useMemo(() => {
-    const items = messages
-      .filter(message => message.role === "tool")
-      .map(message => ({ kind: "tool" as const, message }));
-    const statuses = collectDelegationStatuses(items);
-    return items.some(({ message }) => {
-      const payload = toolResultPayload(message);
-      return payload && typeof payload === "object" &&
-        "delegationId" in payload && payload.delegationId === delegationId &&
-        subagentOutcome(message, statuses) === "running";
-    });
-  }, [messages, delegationId]);
+  const session = useAppStore((state) =>
+    state.sessions.find((item) => item.id === state.activeSessionId),
+  );
+  const source = session?.source;
+  const isRemote = source === "remote" || (activeSessionId?.startsWith("remote:") ?? false);
+  const isNative = source === "pi-native" || (activeSessionId?.startsWith("native-pi:") ?? false);
+  const readOnlySession = isRemote || isNative;
+  const canSteerParent = useChatSessionCapability("canSteer");
+  const canPromptParent = useChatSessionCapability("canPrompt");
+  const enterToSend = useAppStore((state) => state.settings?.enterToSend ?? true);
+  const expectedTurnId = useAppStore((state) =>
+    state.activeSessionId ? state.agentStatuses[state.activeSessionId]?.currentTurnId : undefined,
+  );
+  const isRunning = useAppStore(
+    (state) => (activeSessionId ? state.runningSessions[activeSessionId] ?? false : false),
+  );
+
+  const toolItems = useMemo(
+    () =>
+      messages
+        .filter((message) => message.role === "tool")
+        .map((message) => ({ kind: "tool" as const, message })),
+    [messages],
+  );
+  const statuses = useMemo(
+    () => collectDelegationStatuses(toolItems, { turnLive: isRunning }),
+    [toolItems, isRunning],
+  );
+  // Chain-latest active delegation (F5): after d1 -> d2 the old tab follows
+  // the same chain, so status/send/stop/continue all target the latest id.
+  const activeDelegationId = useMemo(
+    () => subagentChainLatestDelegationId(messages, delegationId),
+    [messages, delegationId],
+  );
+  const staleTab = useMemo(
+    () => isStaleSubagentTab(messages, delegationId),
+    [messages, delegationId],
+  );
+  const outcome = useMemo<SubagentOutcome>(() => {
+    const chain = messages.filter(
+      (message) => message.role === "tool" && toolResultPayload(message) &&
+        typeof toolResultPayload(message) === "object" &&
+        (toolResultPayload(message) as { delegationId?: unknown }).delegationId === activeDelegationId,
+    );
+    const last = chain.at(-1);
+    if (last) return subagentOutcome(last, statuses);
+    const direct = statuses.get(activeDelegationId);
+    return direct ?? "aborted";
+  }, [messages, activeDelegationId, statuses]);
+  const running = outcome === "running";
+  // Backend-owned report routing for the chain-latest run: `parent` when the
+  // parent still expects this delegate, `user` once the user took over the
+  // chain. Read from persisted Task fields, never from parent UI state.
+  const deliveryOwner = useMemo(
+    () => subagentChainDeliveryOwner(messages, activeDelegationId),
+    [messages, activeDelegationId],
+  );
+
   const delegateSettings = useMemo(() => {
     const result = messages.find((message) => {
       if (message.role !== "tool") return false;
       const payload = toolResultPayload(message);
       return payload && typeof payload === "object" && !Array.isArray(payload) &&
-        "delegationId" in payload && payload.delegationId === delegationId;
+        "delegationId" in payload && payload.delegationId === activeDelegationId;
     });
     return {
       modelId: result ? delegateModelId(result) : "",
       thinkingLevel: result ? delegateThinkingLevel(result) : undefined,
     };
-  }, [messages, delegationId]);
-  const isRunning = useAppStore(
-    (state) => (activeSessionId ? state.runningSessions[activeSessionId] ?? false : false),
-  );
+  }, [messages, activeDelegationId]);
   const transcriptResult = useMemo(
-    () => buildSubagentTranscript(messages, delegationId),
-    [messages, delegationId],
+    () => buildSubagentTranscript(messages, activeDelegationId),
+    [messages, activeDelegationId],
   );
+  const chainMetrics = useMemo(
+    () => aggregateChainMetricsFromMessages(messages, activeDelegationId),
+    [messages, activeDelegationId],
+  );
+  const hasHistory = transcriptResult !== null;
+  // Settled delegates continue directly through the backend; `stopped`,
+  // `aborted`, and `denied` stay blocked and history-less tabs stay read-only.
+  // The chain-latest tab owns the action so a stale tab never duplicates it.
+  const continuable = shouldShowSubagentContinue({
+    outcome,
+    hasHistory,
+    canPromptParent,
+    readOnlySession,
+    isStaleTab: staleTab,
+  });
+
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const sendingRef = useRef(false);
+  // Latest chain target as of the most recent render: a d1 -> d2 continuation
+  // arriving mid-dispatch moves the composer to d2, so the await below must
+  // not clear a draft that no longer belongs to the delegation it sent to.
+  const activeDelegationRef = useRef(activeDelegationId);
+  activeDelegationRef.current = activeDelegationId;
+  const showToast = useAppStore((state) => state.showToast);
+
+  // Stale identity/draft guards: a tab/session switch never carries the old
+  // draft or error into the new context.
+  useEffect(() => {
+    sendingRef.current = false;
+    setSending(false);
+    setDraft("");
+    setSendError(null);
+  }, [delegationId, activeSessionId]);
+
+  // Owner turn kept from accepted steer/continue responses, keyed by the run
+  // they own. It covers the status-lag window after a detached continuation:
+  // the host has adopted the execution turn before the status row catches up.
+  // Entries are keyed per delegation so a d1 -> d2 continuation never steers
+  // the new run with the old run's turn; a mismatch is the backend's
+  // rejection to make, with the draft preserved.
+  const ownerTurnRef = useRef(new Map<string, string>());
+  const keepOwnerTurn = (id: string, turnId: string | undefined) => {
+    if (!id || !turnId?.trim()) return;
+    if (ownerTurnRef.current.size > 200) ownerTurnRef.current.clear();
+    ownerTurnRef.current.set(id, turnId.trim());
+  };
+  // The turn owning a steer of this delegate: a kept execution turn first,
+  // else the status's current turn (the live parent turn when attached, the
+  // adopted execution turn when detached). Never the parent session's
+  // generic running flag: a running child may outlive parent UI idleness.
+  const ownerTurnId = resolveSteerOwnerTurn({
+    keptTurnId: ownerTurnRef.current.get(activeDelegationId),
+    currentTurnId: expectedTurnId,
+  });
+
+  const steerBlock = subagentSteerBlockedReason({
+    readOnlySession,
+    canSteerParent,
+    running,
+    expectedTurnId: ownerTurnId,
+  });
+  const steerBlockedReason =
+    steerBlock === "read-only"
+      ? t("chat.subagentSteerReadOnly")
+      : steerBlock === "unavailable"
+        ? t("chat.subagentSteerUnavailable")
+        : null;
+  const steerEnabled = running && !steerBlockedReason && !sending;
+  // Settled send needs only local prompt rights, never a running parent turn;
+  // a live parent additionally guards with its current turn id.
+  const continueEnabled = !running && continuable && !sending;
+
+  const sendSteer = async () => {
+    const content = draft.trim();
+    if (!content || sendingRef.current) return;
+    // Capture turn identity, session, and the chain-latest delegation before
+    // the await so a tab/session switch during dispatch never steers the
+    // wrong child and never clears the new context's draft. The owner turn
+    // is the kept execution turn when this run detached, else the status's
+    // current turn; the backend validates it either way.
+    const capturedSessionId = useAppStore.getState().activeSessionId;
+    const capturedDelegationId = activeDelegationId;
+    const liveTurnId = capturedSessionId
+      ? useAppStore.getState().agentStatuses[capturedSessionId]?.currentTurnId
+      : undefined;
+    const capturedOwnerTurn = resolveSteerOwnerTurn({
+      keptTurnId: ownerTurnRef.current.get(capturedDelegationId),
+      currentTurnId: liveTurnId,
+    });
+    const target = useAppStore.getState().sessions.find((item) => item.id === capturedSessionId);
+    const captured = captureSteerIdentity({
+      sessionId: capturedSessionId ?? undefined,
+      turnId: capturedOwnerTurn,
+      source: target?.source,
+      sessionStartsWithRemote: capturedSessionId?.startsWith("remote:") ?? false,
+      sessionStartsWithNative: capturedSessionId?.startsWith("native-pi:") ?? false,
+      canSteer: sessionAllows(target ?? { id: capturedSessionId ?? "" }, "canSteer"),
+    });
+    if (!captured.ok) {
+      setSendError(
+        captured.reason === "read-only"
+          ? t("chat.subagentSteerReadOnly")
+          : t("chat.subagentSteerUnavailable"),
+      );
+      return;
+    }
+    const { sessionId, turnId } = captured;
+    sendingRef.current = true;
+    setSending(true);
+    setSendError(null);
+    const messageId = crypto.randomUUID();
+    try {
+      const response = await api.steerSubagent({
+        sessionId,
+        delegationId: capturedDelegationId,
+        expectedTurnId: turnId,
+        content,
+        messageId,
+      });
+      // Keep the owning turn for the next steer of this run: for a detached
+      // run it is the execution turn the status row may not show yet.
+      keepOwnerTurn(capturedDelegationId, response.turnId);
+      // Echo is persisted backend and rendered in the chain; clear only on
+      // success and only when the composer still targets the same session
+      // and chain-latest delegation. A tab/session switch or a d1 -> d2
+      // continuation during dispatch moves the target, so the draft is
+      // preserved. Failures preserve it.
+      if (
+        shouldClearSteerDraft({
+          sendSucceeded: true,
+          capturedSessionId: sessionId,
+          currentSessionId: useAppStore.getState().activeSessionId,
+          capturedDelegationId,
+          currentDelegationId: activeDelegationRef.current,
+        })
+      ) {
+        setDraft("");
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setSendError(detail);
+      showToast(detail, { variant: "error" });
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
+  };
+
+  const sendContinue = async () => {
+    const content = draft.trim();
+    if (!content || sendingRef.current) return;
+    // Capture session, live parent turn (when any), and the chain-latest
+    // delegation before the await so a tab/session switch or a d1 -> d2
+    // continuation during dispatch never continues the wrong delegate and
+    // never clears the new context's draft.
+    const capturedSessionId = useAppStore.getState().activeSessionId;
+    const liveTurnId = capturedSessionId
+      ? useAppStore.getState().agentStatuses[capturedSessionId]?.currentTurnId
+      : undefined;
+    const parentLive = capturedSessionId
+      ? (useAppStore.getState().runningSessions[capturedSessionId] ?? false)
+      : false;
+    const capturedDelegationId = activeDelegationId;
+    const target = useAppStore.getState().sessions.find((item) => item.id === capturedSessionId);
+    const captured = captureContinueIdentity({
+      sessionId: capturedSessionId ?? undefined,
+      // A live parent guards with its current turn; an idle parent omits it.
+      turnId: parentLive ? liveTurnId : undefined,
+      source: target?.source,
+      sessionStartsWithRemote: capturedSessionId?.startsWith("remote:") ?? false,
+      sessionStartsWithNative: capturedSessionId?.startsWith("native-pi:") ?? false,
+      canPrompt: sessionAllows(target ?? { id: capturedSessionId ?? "" }, "canPrompt"),
+    });
+    if (!captured.ok) {
+      setSendError(
+        captured.reason === "read-only"
+          ? t("chat.subagentSteerReadOnly")
+          : t("chat.subagentSteerUnavailable"),
+      );
+      return;
+    }
+    sendingRef.current = true;
+    setSending(true);
+    setSendError(null);
+    // One idempotent id per send attempt; a retry after failure mints its own.
+    const messageId = crypto.randomUUID();
+    try {
+      const response = await api.continueSubagent({
+        sessionId: captured.sessionId,
+        delegationId: capturedDelegationId,
+        content,
+        messageId,
+        ...(captured.turnId ? { expectedTurnId: captured.turnId } : {}),
+      });
+      // The continued run arrives backend-side as a new chain segment under
+      // the returned delegation id; keep its owning turn (present for both
+      // attached and detached runs) so a prompt steer of the new run names
+      // the right owner before the status row catches up.
+      keepOwnerTurn(response.delegationId, response.turnId);
+      // The continued run arrives backend-side as a new chain segment; clear
+      // only on success and only when the composer still targets the same
+      // session and chain-latest delegation. Failures preserve the draft.
+      if (
+        shouldClearSteerDraft({
+          sendSucceeded: true,
+          capturedSessionId: captured.sessionId,
+          currentSessionId: useAppStore.getState().activeSessionId,
+          capturedDelegationId,
+          currentDelegationId: activeDelegationRef.current,
+        })
+      ) {
+        setDraft("");
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setSendError(detail);
+      showToast(detail, { variant: "error" });
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
+  };
+
+  const sendComposer = () => {
+    if (running) void sendSteer();
+    else void sendContinue();
+  };
+
   const {
     scrollRef,
     contentRef,
@@ -124,9 +438,120 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     scheduleFollowScroll();
   }, [messages, scheduleFollowScroll]);
 
+  const contextKnown = chainMetrics?.contextTokens !== undefined;
+  const contextValue = contextKnown
+    ? formatCompactTokens(chainMetrics.contextTokens as number, language)
+    : "—";
+  const spendValue = chainMetrics?.usage
+    ? formatCompactTokens(chainMetrics.usage.totalTokens, language)
+    : null;
+  const turnsLabel = chainMetrics
+    ? `${formatCount(chainMetrics.turns, language)} ${t("chat.subagentMetricsTurnsUnit", { count: chainMetrics.turns })} · ${formatCount(chainMetrics.toolCalls, language)} ${t("chat.subagentMetricsCallsUnit", { count: chainMetrics.toolCalls })}`
+    : null;
+  const modelLabel = [delegateSettings.modelId, delegateSettings.thinkingLevel]
+    .filter(Boolean)
+    .join(" · ");
+  // Concise report routing while live: who receives this run's report — the
+  // parent model (`parent`, still expected by the program) or only the user
+  // (`user`, taken over after the parent stopped expecting the chain, e.g. a
+  // detached continuation owning its own execution turn). Settled runs omit
+  // it; their report already landed where it belongs.
+  const ownerLabel = running
+    ? t(deliveryOwner === "user" ? "chat.subagentDeliveryUser" : "chat.subagentDeliveryParent")
+    : null;
+  const ownerTitle =
+    deliveryOwner === "user"
+      ? t("chat.subagentDeliveryUserHelp")
+      : t("chat.subagentDeliveryParentHelp");
+  // Explicit capability reasons: every blocked composer names its own cause
+  // without exposing harness internals. Stale tabs never duplicate the
+  // chain-latest action; history-less continuations stay read-only; remote,
+  // native, and permission blocks keep their existing copy.
+  const readonlyReason = !running && !continuable
+    ? staleTab
+      ? t("panel.subagentStale")
+      : !hasHistory
+        ? t("panel.subagentNoHistory")
+        : outcome === "stopped" || outcome === "aborted" || outcome === "denied"
+          ? t(`panel.subagentEnded.${outcome}`)
+          : readOnlySession
+            ? t("chat.subagentSteerReadOnly")
+            : t("panel.subagentReadOnly")
+    : null;
+  const composerPlaceholder = running
+    ? (steerBlockedReason ?? t("chat.subagentSteerPlaceholder"))
+    : t("chat.subagentContinuePlaceholder");
+  const sendLabel = sending
+    ? running
+      ? t("chat.subagentSteerSending")
+      : t("chat.subagentContinueSending")
+    : running
+      ? t("chat.subagentSteerSend")
+      : t("chat.subagentContinueSend");
+  const sendDisabled = running
+    ? !steerEnabled || !draft.trim()
+    : !continueEnabled || !draft.trim();
+
   return (
     <DisclosureAnchorContext.Provider value={disclosureAnchorNotifier}>
       <div className="subagent-transcript-tab" data-testid="subagent-transcript-tab">
+        <div className="subagent-transcript-header" data-testid="subagent-panel-header">
+          <span className="subagent-transcript-status" role="status">
+            {t(`chat.subagentStatus.${outcome}`)}
+            {ownerLabel ? (
+              <span
+                className="subagent-transcript-owner"
+                data-testid="subagent-delivery-owner"
+                title={ownerTitle}
+              >
+                {" · "}
+                {ownerLabel}
+              </span>
+            ) : null}
+          </span>
+          {chainMetrics ? (
+            <div
+              className="subagent-transcript-metrics"
+              role="group"
+              aria-label={t("chat.subagentMetricsLabel")}
+              title={turnsLabel ?? undefined}
+            >
+              <span className="subagent-transcript-metric">
+                <span className="subagent-transcript-metric-label">
+                  {t("chat.subagentMetricsContextLabel")}
+                </span>
+                <span className="subagent-transcript-metric-value" data-testid="subagent-metrics-context">
+                  {contextValue}
+                </span>
+                {chainMetrics.contextEstimated ? (
+                  <span className="subagent-transcript-metric-flag">
+                    {t("chat.subagentMetricsEstimated")}
+                  </span>
+                ) : null}
+              </span>
+              {spendValue !== null ? (
+                <span className="subagent-transcript-metric">
+                  <span className="subagent-transcript-metric-label">
+                    {t("chat.subagentMetricsSpendLabel")}
+                  </span>
+                  <span className="subagent-transcript-metric-value" data-testid="subagent-metrics-spend">
+                    {spendValue}
+                  </span>
+                </span>
+              ) : null}
+              {turnsLabel ? (
+                <span className="subagent-transcript-metric">
+                  <span className="subagent-transcript-metric-value" data-testid="subagent-metrics-activity">
+                    {turnsLabel}
+                  </span>
+                </span>
+              ) : null}
+              {!contextKnown ? (
+                <HelpIcon label={t("chat.subagentMetricsContextUnknownHelp")} />
+              ) : null}
+            </div>
+          ) : null}
+        </div>
         <div
           ref={scrollRef}
           data-scroll-owner="follow"
@@ -162,6 +587,23 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                         message={row.message}
                         streaming={isRunning && row.message.status === "streaming"}
                       />
+                    ) : row.kind === "steering-user" ? (
+                      <div
+                        className="message-row user"
+                        data-message-id={row.message.id}
+                        key={`steering-${row.message.id}`}
+                      >
+                        <div className="message-col">
+                          <div className="message-bubble">
+                            <div className="message-user-text selectable">
+                              {row.message.content}
+                            </div>
+                            {row.message.error ? (
+                              <AssistantErrorMessage message={row.message} />
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
                     ) : (
                       <div
                         className="message-row assistant"
@@ -203,31 +645,70 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
             <IconArrowDown size={14} />
           </TooltipButton>
         ) : null}
-        <footer className="subagent-transcript-composer">
-          <Textarea
-            disabled
-            rows={2}
-            aria-label={t("panel.subagentReadOnly")}
-            placeholder={t("panel.subagentReadOnly")}
-          />
-          <div className="subagent-transcript-composer-controls">
-            <button
-              type="button"
-              className="icon-btn composer-model-thinking-chip subagent-transcript-model-picker"
+        <footer className="subagent-transcript-composer" data-testid="subagent-panel-footer">
+          {running || continuable ? (
+            <>
+              <Textarea
+                rows={2}
+                value={draft}
+                disabled={running ? !steerEnabled : sending}
+                aria-label={composerPlaceholder}
+                placeholder={composerPlaceholder}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    (enterToSend || event.metaKey || event.ctrlKey)
+                  ) {
+                    event.preventDefault();
+                    sendComposer();
+                  }
+                }}
+              />
+              {sendError ? (
+                <div className="subagent-transcript-error" role="alert">
+                  {sendError}
+                </div>
+              ) : null}
+              {!running ? (
+                <div className="subagent-transcript-helper">
+                  {t("chat.subagentContinueHelp")}
+                </div>
+              ) : null}
+              <div className="subagent-transcript-composer-controls">
+                <span
+                  className="subagent-transcript-model-static"
+                  aria-label={`${t("chat.model")}: ${delegateSettings.modelId || "—"}. ${t("chat.reasoningLevel")}: ${delegateSettings.thinkingLevel || "—"}`}
+                  title={modelLabel || undefined}
+                >
+                  <span className="composer-model-thinking-icon" aria-hidden="true"><IconBot size={14} /></span>
+                  <span className="composer-model-thinking-model">{delegateSettings.modelId || "—"}</span>
+                  <span className="composer-model-thinking-dot" aria-hidden="true">·</span>
+                  <span className="composer-model-thinking-level">{delegateSettings.thinkingLevel || "—"}</span>
+                </span>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={sendDisabled}
+                  onClick={sendComposer}
+                >
+                  {sendLabel}
+                </Button>
+                {running ? (
+                  <SubagentStopButton delegationId={activeDelegationId} running compact />
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <Textarea
               disabled
-              aria-haspopup="listbox"
-              aria-label={`${t("chat.model")}: ${delegateSettings.modelId || "—"}. ${t("chat.reasoningLevel")}: ${delegateSettings.thinkingLevel || "—"}`}
-            >
-              <span className="composer-model-thinking-icon" aria-hidden="true"><IconBot size={14} /></span>
-              <span className="composer-model-thinking-model">{delegateSettings.modelId || "—"}</span>
-              <span className="composer-model-thinking-dot" aria-hidden="true">·</span>
-              <span className="composer-model-thinking-level">{delegateSettings.thinkingLevel || "—"}</span>
-              <IconChevronDown size={12} aria-hidden="true" className="composer-model-thinking-chevron" />
-            </button>
-            {delegateRunning ? (
-              <SubagentStopButton delegationId={delegationId} running compact />
-            ) : null}
-          </div>
+              rows={2}
+              aria-label={readonlyReason ?? t("panel.subagentReadOnly")}
+              placeholder={readonlyReason ?? t("panel.subagentReadOnly")}
+              title={readonlyReason ?? undefined}
+            />
+          )}
         </footer>
       </div>
     </DisclosureAnchorContext.Provider>

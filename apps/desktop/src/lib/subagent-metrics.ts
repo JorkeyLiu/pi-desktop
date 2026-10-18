@@ -1,0 +1,349 @@
+import { addUsage, formatSubagentProgressMetrics } from "@pi-desktop/shared";
+import type {
+  MessageUsage,
+  SubagentProgressMetrics,
+  UiMessage,
+} from "@pi-desktop/shared";
+import { subagentChainCallIds } from "./subagent-chain";
+import { contextOccupancyTokens } from "./context-usage";
+import { delegationLifecycleKind } from "./tool-display";
+import { delegationIdForMessage } from "./subagent-panel";
+import { toolResultPayload } from "./tool-presentation";
+
+export type SubagentContextProvenance =
+  | "snapshot"
+  | "lifecycle"
+  | "child"
+  | "unknown";
+
+export type SubagentMetrics = Pick<
+  SubagentProgressMetrics,
+  "toolCalls" | "turns" | "contextTokens" | "usage"
+> & {
+  /**
+   * Where the occupancy figure came from. `snapshot` is a Task result's own
+   * `contextTokens`; `lifecycle` is a TaskWait/TaskList/TaskStop roster entry
+   * for the same delegation; `child` is the latest valid child assistant
+   * provider usage reported through the renderer's own occupancy semantics
+   * (an honest estimate, flagged below); `unknown` means no valid historical
+   * estimate exists and callers must render `—`, never invent 0.
+   */
+  contextProvenance?: SubagentContextProvenance;
+  /** True when the occupancy is an estimate rather than a runtime report. */
+  contextEstimated?: boolean;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asNonNegativeInt(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  return Math.floor(value);
+}
+
+function asUsage(value: unknown): MessageUsage | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const total = record.totalTokens;
+  if (typeof total !== "number" || !Number.isFinite(total)) {
+    // Ledger-deduped usage always carries totalTokens; anything else is not spend.
+    if (!record.operations && !record.operationId) return undefined;
+  }
+  return value as MessageUsage;
+}
+
+/**
+ * Live/settled progress from one Task result payload (`delegationSummary`).
+ * Returns null when the payload carries no metrics at all, so callers render
+ * nothing instead of a zero row. A metric-only payload (context and/or spend
+ * without counters) is accepted: counters default to 0 while the reported
+ * fields survive. `contextTokens` is occupancy (how full the child window
+ * is); `usage.totalTokens` is cumulative billed spend — never mixed.
+ */
+export function parseSubagentMetrics(payload: unknown): SubagentMetrics | null {
+  const record = asRecord(payload);
+  if (!record) return null;
+  const toolCalls = asNonNegativeInt(record.toolCalls);
+  const turns = asNonNegativeInt(record.turns);
+  const contextTokens = asNonNegativeInt(record.contextTokens);
+  const usage = asUsage(record.usage);
+  if (
+    toolCalls === undefined &&
+    turns === undefined &&
+    contextTokens === undefined &&
+    usage === undefined
+  ) {
+    return null;
+  }
+  return {
+    toolCalls: toolCalls ?? 0,
+    turns: turns ?? 0,
+    ...(contextTokens !== undefined ? { contextTokens } : {}),
+    ...(usage ? { usage } : {}),
+  };
+}
+
+/**
+ * Aggregate one resume chain (initial Task + its `Task(resume …)` follow-ups).
+ * Spend merges by physical operation identity via the shared ledger, so a
+ * re-report or replay never double-charges. Occupancy is the latest segment's
+ * own value (a gauge, not a sum): when the latest entry carries no occupancy,
+ * the chain reports unknown rather than masking it with an older segment.
+ * Tool calls/turns accumulate across the chain.
+ */
+export function aggregateSubagentChainMetrics(
+  entries: readonly (SubagentMetrics | null | undefined)[],
+): SubagentMetrics | null {
+  let toolCalls = 0;
+  let turns = 0;
+  let seen = false;
+  let usage: MessageUsage | undefined;
+  let contextTokens: number | undefined;
+  let contextProvenance: SubagentContextProvenance | undefined;
+  let contextEstimated: boolean | undefined;
+  for (const entry of entries) {
+    if (!entry) continue;
+    seen = true;
+    toolCalls += entry.toolCalls;
+    turns += entry.turns;
+    usage = addUsage(usage, entry.usage);
+    // Latest segment wins, even when it reports no occupancy: an older
+    // gauge must not mask a latest segment that went unmeasured.
+    contextTokens = entry.contextTokens;
+    contextProvenance = entry.contextProvenance ?? (entry.contextTokens !== undefined ? "snapshot" : undefined);
+    contextEstimated = entry.contextEstimated;
+  }
+  if (!seen) return null;
+  // Latest segment decides provenance too: an honest `unknown` when it
+  // reports no occupancy, never an absent field callers must re-derive.
+  const provenance: SubagentContextProvenance = contextProvenance ?? "unknown";
+  return {
+    toolCalls,
+    turns,
+    ...(contextTokens !== undefined ? { contextTokens } : {}),
+    ...(usage ? { usage } : {}),
+    contextProvenance: provenance,
+    ...(contextEstimated ? { contextEstimated: true } : {}),
+  };
+}
+
+function compactTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return `${value}`;
+}
+
+/**
+ * Task call ids in the same resume chain as `delegationId`: the initial call
+ * plus every `Task(resume …)` follow-up, forward and backward. Shared with
+ * `buildSubagentTranscript` through `subagent-chain` so metrics and
+ * transcript agree on both the delegation-id and bare-call-id resume forms.
+ * Re-exported here so existing imports keep working.
+ */
+export { subagentChainCallIds } from "./subagent-chain";
+
+function hasUsageIdentity(usage: MessageUsage | undefined): boolean {
+  if (!usage) return false;
+  if (typeof usage.operationId === "string" && usage.operationId) return true;
+  return Array.isArray(usage.operations) && usage.operations.length > 0;
+}
+
+function isValidChildAssistant(message: UiMessage): boolean {
+  if (message.role !== "assistant") return false;
+  if (!message.usage) return false;
+  // Same occupancy semantics as the renderer's context-usage utilities:
+  // input + output + cache traffic on that request, never a summed spend.
+  // A trailing provider estimate (output-only content) is honest occupancy
+  // only when usage exists; without usage the row stays unknown.
+  return contextOccupancyTokens(message.usage) > 0;
+}
+
+/** Latest valid child assistant usage under one Task call, if any. */
+function latestChildAssistantUsage(
+  messages: readonly UiMessage[],
+  callId: string,
+): { occupancy: number; usage: MessageUsage } | null {
+  let latest: { occupancy: number; usage: MessageUsage } | null = null;
+  for (const message of messages) {
+    if (message.parentToolCallId !== callId) continue;
+    if (!isValidChildAssistant(message)) continue;
+    const usage = message.usage as MessageUsage;
+    latest = { occupancy: contextOccupancyTokens(usage), usage };
+  }
+  return latest;
+}
+
+/**
+ * Latest lifecycle roster entry per delegation id, in transcript order.
+ * TaskWait/TaskList report `details.delegations[]`; TaskStop reports
+ * `details.stopped[]`. Later rows win, matching status collection.
+ */
+function collectLifecycleMetrics(
+  messages: readonly UiMessage[],
+): Map<string, SubagentMetrics> {
+  const perDelegation = new Map<string, SubagentMetrics>();
+  for (const message of messages) {
+    if (message.role !== "tool") continue;
+    if (!delegationLifecycleKind(message.toolName)) continue;
+    const payload = asRecord(toolResultPayload(message));
+    if (!payload) continue;
+    for (const key of ["delegations", "stopped"] as const) {
+      const entries = payload[key];
+      if (!Array.isArray(entries)) continue;
+      for (const entry of entries) {
+        const record = asRecord(entry);
+        if (!record) continue;
+        const id = record.delegationId;
+        if (typeof id !== "string" || !id) continue;
+        const parsed = parseSubagentMetrics(record);
+        if (parsed) {
+          perDelegation.set(id, { ...parsed, contextProvenance: "lifecycle" });
+        }
+      }
+    }
+  }
+  return perDelegation;
+}
+
+/**
+ * Aggregate metrics across one resume chain from persisted Task payloads,
+ * with lifecycle and child-usage fallback for legacy rows that never
+ * reported tokens.
+ *
+ * Preference per segment, latest segment deciding occupancy:
+ * 1. the Task snapshot's own `contextTokens` (`snapshot`);
+ * 2. the matching TaskWait/TaskList/TaskStop roster entry for the same
+ *    `delegationId` (`lifecycle`);
+ * 3. the segment's latest valid child assistant provider usage, reported
+ *    through the same occupancy semantics as the renderer's context-usage
+ *    utilities (`child`, estimated);
+ * 4. otherwise unknown — legacy rows with no token carrier render `—`.
+ *
+ * Spend folds Task, lifecycle, and child assistant usage through the shared
+ * operation ledger so re-reports collapse by `operationId`; legacy child
+ * usage without an identity is only folded when the snapshots carry no spend
+ * of their own, so one physical run is never charged twice. Occupancy is
+ * never summed and never derived from summed spend.
+ */
+export function aggregateChainMetricsFromMessages(
+  messages: readonly UiMessage[],
+  delegationId: string,
+): SubagentMetrics | null {
+  const chain = subagentChainCallIds(messages, delegationId);
+  if (chain.size === 0) return null;
+  const orderedCalls = messages.filter(
+    (message) =>
+      message.role === "tool" &&
+      message.toolCallId &&
+      chain.has(message.toolCallId) &&
+      (message.toolName === "Task" || message.toolName === "task" ||
+        message.toolName === "subagent" ||
+        (typeof message.toolName === "string" &&
+          /^(task|subagent)$/i.test(message.toolName.replace(/[^a-z0-9]/gi, "")))),
+  );
+  // Fall back to any tool row carrying the chain call id when the tool-name
+  // check above misses a namespaced Task variant.
+  const calls = orderedCalls.length > 0
+    ? orderedCalls
+    : messages.filter(
+      (message) =>
+        message.role === "tool" && message.toolCallId && chain.has(message.toolCallId),
+    );
+  if (calls.length === 0) return null;
+
+  const lifecycleEntries = collectLifecycleMetrics(messages);
+  const entries: SubagentMetrics[] = [];
+  let snapshotSpend: MessageUsage | undefined;
+  let childSpend: MessageUsage | undefined;
+  let latestOccupancy: number | undefined;
+  let latestProvenance: SubagentContextProvenance = "unknown";
+  let latestEstimated = false;
+
+  for (const call of calls) {
+    const callId = call.toolCallId as string;
+    const taskParsed = parseSubagentMetrics(toolResultPayload(call));
+    const delegation = delegationIdForMessage(call);
+    const lifecycleParsed = lifecycleEntries.get(delegation) ?? null;
+    const segmentParsed = taskParsed ?? lifecycleParsed;
+    if (segmentParsed) {
+      entries.push(segmentParsed);
+      snapshotSpend = addUsage(snapshotSpend, segmentParsed.usage);
+    }
+    // Child estimate for this segment: latest valid child assistant usage.
+    const childUsage = latestChildAssistantUsage(messages, callId);
+    if (childUsage) {
+      childSpend = addUsage(childSpend, childUsage.usage);
+    }
+    const segmentOccupancy =
+      taskParsed?.contextTokens ??
+      lifecycleParsed?.contextTokens ??
+      (childUsage ? childUsage.occupancy : undefined);
+    const segmentProvenance: SubagentContextProvenance =
+      taskParsed?.contextTokens !== undefined
+        ? "snapshot"
+        : lifecycleParsed?.contextTokens !== undefined
+          ? "lifecycle"
+          : childUsage
+            ? "child"
+            : "unknown";
+    // Latest segment decides: assign on every segment so the final value is
+    // the latest segment's own occupancy, even when it is unknown.
+    latestOccupancy = segmentOccupancy;
+    latestProvenance = segmentProvenance;
+    latestEstimated = segmentProvenance === "child";
+  }
+
+  // Spend: snapshots first; fold child spend through the ledger when it
+  // carries operation identity (dedup-safe), or when snapshots have no spend
+  // at all (legacy fallback). Legacy child usage never stacks on top of
+  // snapshot spend for the same physical run.
+  let usage = snapshotSpend;
+  if (childSpend) {
+    if (hasUsageIdentity(childSpend)) {
+      usage = addUsage(usage, childSpend);
+    } else if (!usage) {
+      usage = childSpend;
+    }
+  }
+
+  const base = aggregateSubagentChainMetrics(entries);
+  if (!base && !usage && latestOccupancy === undefined) return null;
+  const toolCalls = base?.toolCalls ?? 0;
+  const turns = base?.turns ?? 0;
+  if (!base && toolCalls === 0 && turns === 0 && !usage && latestOccupancy === undefined) {
+    return null;
+  }
+  return {
+    toolCalls,
+    turns,
+    ...(latestOccupancy !== undefined ? { contextTokens: latestOccupancy } : {}),
+    ...(usage ? { usage } : {}),
+    contextProvenance: latestProvenance,
+    ...(latestEstimated ? { contextEstimated: true } : {}),
+  };
+}
+
+/**
+ * One-line token summary for topology nodes, panel headers/footers.
+ * Keeps occupancy and spend lexically separate: `ctx ~` vs `spent`.
+ */
+export function formatSubagentMetricsLine(metrics: SubagentMetrics): string {
+  const spend = metrics.usage ? `spent ${compactTokens(metrics.usage.totalTokens)}` : null;
+  const occupancy =
+    metrics.contextTokens !== undefined
+      ? `ctx ~${compactTokens(metrics.contextTokens)}`
+      : null;
+  const base = formatSubagentProgressMetrics({
+    toolCalls: metrics.toolCalls,
+    ...(metrics.contextTokens !== undefined ? { contextTokens: metrics.contextTokens } : {}),
+    ...(metrics.usage ? { usage: metrics.usage } : {}),
+  });
+  const turns = metrics.turns > 0 ? `${metrics.turns} turn${metrics.turns === 1 ? "" : "s"}` : null;
+  // Shared formatter already covers tool calls + occupancy + spend; prepend turns.
+  if (turns && base) return `${turns} · ${base}`;
+  if (turns) return spend && occupancy ? `${turns} · ${occupancy} · ${spend}` : turns;
+  return base;
+}

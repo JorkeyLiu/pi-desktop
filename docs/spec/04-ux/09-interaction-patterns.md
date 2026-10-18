@@ -814,8 +814,9 @@ may be retained while exactly one workspace supplies the visible shell context.
   the queue and composer draft unchanged.
 - Send now promotes its row in click order and asks the Host to deliver it as
   steering input into the active turn. It does not request a stop. An active
-  `TaskWait` returns early so the parent handles the new input while its
-  delegates keep working. Other started tools retain their normal boundaries.
+  `TaskWait` returns `interrupted` so the parent handles the new input while its
+  delegates keep working under the same durable turn. Other started tools retain
+  their normal boundaries.
   An idle Send now dispatches immediately. Refused input or an input admitted
   under a different permission mode stays queued for the next turn. Promoted
   rows retain Remove until delivery and show Waiting to send. Removal
@@ -1486,10 +1487,12 @@ Project drag/drop follows these patterns:
   A tab shows the delegation as a message list: every `Task` call of the
   resume chain renders its prompt as a user row, and the rows the delegate
   produced under that call render with the main transcript's message-list
-  language, so a follow-up prompt reads as the next user turn. The tab is
-  display-only: a disabled two-row composer sits at the foot with an in-field
-  hint that subagents are driven by the main agent and cannot take input; no
-  send path exists. At the minimum panel width, long commands, paths, and
+  language, so a follow-up prompt reads as the next user turn. One Send composer
+  serves both states: a live delegate steers text-only via
+  `pi-desktop/agent/steerSubagent` with the owning turn identity, while a
+  settled continuable delegate continues directly via
+  `pi-desktop/agent/continueSubagent` with retained history — no second
+  parent-resume strategy. At the minimum panel width, long commands, paths, and
   tool summaries wrap inside the committed width instead of expanding the
   panel past the client area.
   A tab is never opened automatically when a delegate starts; only a node

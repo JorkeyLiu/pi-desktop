@@ -51,8 +51,7 @@ for (const delegate of [false, true]) {
 }
 
 
-describe("usage ledger ingress", () => {
-  it("unions child reports and parent aggregates, replays idempotently, and isolates late turns", async () => {
+describe("usage ledger ingress", () => {  it("unions child reports and parent aggregates, replays idempotently, and isolates late turns", async () => {
     const writes: Array<{ method: string; params: unknown }> = [];
     const pipeline = new TurnEventPipeline({
       getHost: () => ({ async call<T>(method: string, params: unknown): Promise<T> {
@@ -76,5 +75,111 @@ describe("usage ledger ingress", () => {
     await pipeline.dispose();
     expect(writes.filter((write) => write.method === "session.recordUsage")).toHaveLength(5);
     expect(writes.at(-1)?.params).toMatchObject({ turnId: "old-turn", usage: { operationId: "late" } });
+  });
+});
+
+describe("child steer echo persistence", () => {
+  it("persists an attributed child user row without parent-turn effects", async () => {
+    const written: Array<{ message: UiMessage; turnId: string }> = [];
+    const finished: string[] = [];
+    const pipeline = new TurnEventPipeline({
+      getHost: () => ({
+        async call<T>(method: string, params: unknown): Promise<T> {
+          if (method === "session.appendMessage") {
+            written.push(params as { message: UiMessage; turnId: string });
+          }
+          return {} as T;
+        },
+      }),
+      ownership: {
+        activeTurnId: () => "turn-1",
+        isStaleTerminalEvent: () => false,
+        finishTurn: async (sessionId) => { finished.push(sessionId); },
+      },
+      emit: () => undefined,
+      log: () => undefined,
+    });
+    pipeline.handle({
+      sessionId: "s",
+      turnId: "turn-1",
+      ts: 1_000,
+      parentToolCallId: "task-1",
+      agentName: "explorer",
+      event: {
+        type: "message_end",
+        message: {
+          id: "steer-1",
+          role: "user",
+          content: "Focus on auth.",
+          createdAt: "2026-09-30T00:00:00.000Z",
+          status: "complete",
+          steering: true,
+          parentToolCallId: "task-1",
+          agentName: "explorer",
+        },
+      },
+    });
+    await pipeline.dispose();
+    // Durable for the transcript and chain replay, tagged so the parent's
+    // model rebuild keeps skipping it; the parent turn itself is untouched.
+    expect(written).toHaveLength(1);
+    expect(written[0]?.turnId).toBe("turn-1");
+    expect(written[0]?.message).toMatchObject({
+      id: "steer-1",
+      role: "user",
+      parentToolCallId: "task-1",
+      agentName: "explorer",
+    });
+    expect(finished).toEqual([]);
+  });
+});
+
+describe("detached execution-turn persistence", () => {
+  it("honors the explicit envelope turn on child rows instead of the active parent", async () => {
+    const written: Array<{ message: UiMessage; turnId: string }> = [];
+    const pipeline = new TurnEventPipeline({
+      getHost: () => ({
+        async call<T>(method: string, params: unknown): Promise<T> {
+          if (method === "session.appendMessage") {
+            written.push(params as { message: UiMessage; turnId: string });
+          }
+          return {} as T;
+        },
+      }),
+      ownership: {
+        activeTurnId: () => "parent-turn",
+        isStaleTerminalEvent: () => false,
+        finishTurn: async () => undefined,
+      },
+      emit: () => undefined,
+      log: () => undefined,
+    });
+    const assistant = (id: string): UiMessage => ({
+      id,
+      role: "assistant",
+      content: "working",
+      createdAt: "2026-09-30T00:00:00.000Z",
+      status: "complete",
+    });
+    pipeline.handle({
+      sessionId: "s",
+      turnId: "exec-turn",
+      ts: 1_000,
+      parentToolCallId: "task-9",
+      agentName: "explorer",
+      event: { type: "message_end", message: assistant("child-a") },
+    });
+    pipeline.handle({
+      sessionId: "s",
+      turnId: "parent-turn",
+      ts: 1_001,
+      event: { type: "message_end", message: assistant("parent-a") },
+    });
+    await pipeline.dispose();
+    expect(written).toHaveLength(2);
+    // The child's row lands under its own execution turn, never folded into
+    // whatever parent turn happens to be active.
+    expect(written.find((row) => row.message.id === "child-a")?.turnId).toBe("exec-turn");
+    expect(written.find((row) => row.message.id === "parent-a")?.turnId).toBe("parent-turn");
   });
 });

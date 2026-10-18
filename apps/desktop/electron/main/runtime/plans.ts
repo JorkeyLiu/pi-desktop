@@ -112,6 +112,7 @@ const {
   peekAbortReason,
   clearAbortReason,
   releaseTurnClaims,
+  childExecutionTurns,
 } = coordination;
 /** The Agent Host turn state for one settled turn. */
 function hostTurnStatus(
@@ -189,9 +190,12 @@ function finishTurn(
   const runId = scheduledRunsBySession.get(id);
   if (runId) scheduledRunsBySession.delete(id);
   const wasPlanSubmission = planSubmissionTurnIds.has(finalizationKey);
+  // A child-only execution turn ends silently: no task notification, no
+  // parent conclusion — its settlement row already updated the delegate tab.
+  const isChildTurn = childExecutionTurns.has(finalizationKey);
   const createNotification =
     options.createNotification ??
-    (!wasPlanSubmission && shouldCreateTaskNotification(id));
+    (!isChildTurn && !wasPlanSubmission && shouldCreateTaskNotification(id));
   const recoverInflight = options.recoverInflight === true;
 
   const runFinalization = async (): Promise<void> => {
@@ -281,6 +285,7 @@ function finishTurn(
   const releaseFinalization = (): void => {
     if (!record || turnFinalizations.get(finalizationKey) !== record) return;
     turnFinalizations.delete(finalizationKey);
+    childExecutionTurns.delete(finalizationKey);
     // The turn is over: its cancellation lock must not outlive it, or a later
     // turn on this session would inherit a stale cancellation.
     clearAbortReason(id, turnId);

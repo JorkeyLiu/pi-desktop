@@ -345,3 +345,94 @@ export type AgentStopSubagentsRequest = {
 export type AgentStopSubagentsResponse = {
   pending: string[];
 };
+
+/**
+ * User text steered into one live delegate (child steer).
+ *
+ * The delegate keeps running under its own tools: steering appends a user
+ * turn to the child's conversation, never to the parent's model context. The
+ * text is echoed into the child transcript with `parentToolCallId` /
+ * `agentName` attribution so chain replay (`Task.resume`) sees exactly what
+ * the resumed run saw. Nested `Task` and `asktool` stay denied inside the
+ * child: steering changes its input, never its tool set.
+ */
+export type AgentSteerSubagentRequest = {
+  sessionId: string;
+  /** `delegationId` returned by `Task` for the running delegate. */
+  delegationId: string;
+  /**
+   * Turn owning this steering: the live parent turn for an attached delegate,
+   * the delegate's execution-accounting turn for a detached user-owned run.
+   * Refused once that owner ends.
+   */
+  expectedTurnId: string;
+  /** The user's text for the child. Attachments ride the parent turn. */
+  content: string;
+  /** Renderer-chosen id for the echoed user row (D288-style dedup). */
+  messageId?: string;
+};
+
+export type AgentSteerSubagentResponse = {
+  accepted: true;
+  delegationId: string;
+  turnId: string;
+};
+
+/**
+ * Who receives a delegation run's report.
+ *
+ * - `parent`: the run was spawned by the parent model (`Task`/`Task(resume)`)
+ *   or by an attached user continuation the parent still expects. Its report
+ *   delivers through `TaskWait`/idle resume exactly once.
+ * - `user`: the run was continued directly by the user after the parent
+ *   stopped expecting this chain (report delivered, parent turn ended, or
+ *   detached). Its report never auto-delivers to the parent model; only an
+ *   explicit parent `Task(resume)` reattaches the chain. Absent means
+ *   `parent` (backward-compatible default).
+ */
+export type SubagentDeliveryOwner = "parent" | "user";
+
+/**
+ * User text continuing one settled delegate as a new run of the SAME chain
+ * (direct child followup).
+ *
+ * Running delegates use `AgentSteerSubagentRequest`; this request resumes a
+ * settled chain (`completed`, `failed`, `timed_out`, `interrupted` with
+ * retained history) without asking the parent model to emit `Task(resume)`
+ * first. The runtime spawns the new run with the chain's model/tools/
+ * permissions through the same spawn path as `Task(resume)`, persists a
+ * user-origin `Task` marker row (`toolArgs.resume`, `toolArgs.source:
+ * "user"`) for ledger and replay without entering the parent model context,
+ * and attributes the followup text to the child. `expectedTurnId` is only a
+ * stale guard: the server decides `parent` vs `user` delivery from the source
+ * record (attached while the parent expects this chain, detached otherwise).
+ */
+export type AgentContinueSubagentRequest = {
+  sessionId: string;
+  /** Any `delegationId` on the chain to continue. */
+  delegationId: string;
+  /** The user's followup text for the child. */
+  content: string;
+  /** Renderer-chosen id for idempotent retries (D288-style dedup). */
+  messageId?: string;
+  /**
+   * Stale guard naming the turn the caller saw. Attached continuations name
+   * the live parent turn; detached continuations name the execution-accounting
+   * turn the host opened (or omit it when the host owns no turn yet).
+   */
+  expectedTurnId?: string;
+};
+
+export type AgentContinueSubagentResponse = {
+  accepted: true;
+  /** The new run's `delegationId` (same chain, new run). */
+  delegationId: string;
+  /**
+   * Turn owning the continuation: the live parent turn when attached, the
+   * child execution-accounting turn when detached. Omitted only when the
+   * runtime minted a local execution owner the host did not begin.
+   */
+  turnId?: string;
+  /** Who receives this run's report. */
+  delivery: SubagentDeliveryOwner;
+};

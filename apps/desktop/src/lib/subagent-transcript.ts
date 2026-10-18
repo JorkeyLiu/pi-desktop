@@ -1,11 +1,7 @@
 import type { UiMessage } from "@pi-desktop/shared";
-import {
-  delegationChainMaps,
-  messageThinking,
-  type SubagentRunItem,
-} from "./assistant-turns";
+import { messageThinking, type SubagentRunItem } from "./assistant-turns";
 import { isDelegationStartTool } from "./tool-display";
-import { delegationIdForMessage } from "./subagent-panel";
+import { subagentChainCallIds } from "./subagent-chain";
 
 /** One user/assistant exchange of a delegate session. */
 export type SubagentTranscriptTurn = { task: string; rows: SubagentRunItem[] };
@@ -34,29 +30,9 @@ function requestedAgentName(call: UiMessage): string {
   return typeof agent === "string" ? agent : "";
 }
 
-/** Task calls whose `resume` argument resolves to one of `priorCallIds`. */
-function resumedCalls(
-  messages: readonly UiMessage[],
-  priorCallIds: ReadonlySet<string>,
-  callByDelegationId: ReadonlyMap<string, string>,
-): Set<string> {
-  const next = new Set<string>();
-  for (const message of messages) {
-    if (message.role !== "tool" || !isDelegationStartTool(message.toolName)) {
-      continue;
-    }
-    const args = message.toolArgs;
-    const resume =
-      args && typeof args === "object" && !Array.isArray(args)
-        ? (args as { resume?: unknown }).resume
-        : undefined;
-    if (typeof resume !== "string" || !resume.trim()) continue;
-    // The runtime records `resume` as a prior delegation id; a bare call id
-    // is accepted too, so the chain stays legible before any result lands.
-    const target = callByDelegationId.get(resume.trim()) ?? resume.trim();
-    if (priorCallIds.has(target) && message.toolCallId) next.add(message.toolCallId);
-  }
-  return next;
+/** Chain membership shared with metrics so both views agree (F4). */
+function chainCallIds(messages: readonly UiMessage[], delegationId: string): Set<string> {
+  return subagentChainCallIds(messages, delegationId);
 }
 
 /**
@@ -75,26 +51,7 @@ export function buildSubagentTranscript(
   delegationId: string,
 ): SubagentTranscript | null {
   const target = delegationId.trim();
-  const { childOf, callByDelegationId } = delegationChainMaps(messages);
-  // A resumed call may cite the prior delegation id (the runtime's shape) or
-  // a bare prior call id. `childOf` covers the delegation-id form; the bare
-  // form is resolved here so the chain still closes before results land.
-  const resumeLink = new Map(childOf);
-  for (const message of messages) {
-    if (message.role !== "tool" || !isDelegationStartTool(message.toolName)) {
-      continue;
-    }
-    const args = message.toolArgs;
-    const resume =
-      args && typeof args === "object" && !Array.isArray(args)
-        ? (args as { resume?: unknown }).resume
-        : undefined;
-    if (typeof resume !== "string" || !resume.trim()) continue;
-    const priorId = callByDelegationId.get(resume.trim()) ?? resume.trim();
-    if (message.toolCallId && !resumeLink.has(priorId)) {
-      resumeLink.set(priorId, message.toolCallId);
-    }
-  }
+  if (!target) return null;
   const calls = messages.filter(
     (message) =>
       message.role === "tool" &&
@@ -102,30 +59,9 @@ export function buildSubagentTranscript(
       Boolean(message.toolCallId),
   );
   // The chain is the connected component of resumed calls around the call
-  // this delegation id names; forward and backward walks share that set.
-  let chain = new Set(
-    calls
-      .filter((call) => delegationIdForMessage(call) === target)
-      .map((call) => call.toolCallId as string),
-  );
+  // this delegation id names; shared with metrics so both views agree.
+  const chain = chainCallIds(messages, target);
   if (chain.size === 0) return null;
-  for (;;) {
-    const forward = resumedCalls(messages, chain, callByDelegationId);
-    const backward = new Set(
-      [...chain].flatMap((callId) => {
-        const prior = [...resumeLink.entries()]
-          .filter(([, next]) => next === callId)
-          .map(([priorId]) => priorId);
-        return prior;
-      }),
-    );
-    const grown = new Set([
-      ...chain,
-      ...[...forward, ...backward].filter((id) => !chain.has(id)),
-    ]);
-    if (grown.size === chain.size) break;
-    chain = grown;
-  }
 
   // Attribution prefers what the delegate's own rows carried; a chain whose
   // delegate has not produced a row yet falls back to the requested agent.
@@ -150,6 +86,16 @@ export function buildSubagentTranscript(
       if (message.parentToolCallId !== callId) continue;
       if (message.role === "tool") {
         rows.push({ kind: "tool", message });
+        continue;
+      }
+      // Child steering echoes are attributed user rows: they enter only the
+      // child's conversation via `agent.steerSubagent` and are already part
+      // of chain replay (`selectChainRows`), so they render as the user side
+      // here without changing replay membership.
+      if (message.role === "user") {
+        if ((message.content || "").trim() || message.error) {
+          rows.push({ kind: "steering-user", message });
+        }
         continue;
       }
       // A delegate turn can carry reasoning and text at once, and both are

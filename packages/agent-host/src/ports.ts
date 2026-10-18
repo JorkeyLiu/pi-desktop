@@ -1,4 +1,6 @@
 import type {
+  AgentContinueSubagentRequest,
+  AgentContinueSubagentResponse,
   AgentPromptAttachment,
   AskToolResolution,
   VoiceOrigin,
@@ -67,6 +69,25 @@ export interface RuntimePort {
   /** Inject one more user message into a running turn. Optional: a runtime that
    * cannot steer delivers a promoted block as consecutive turns instead. */
   steer?(request: TurnSteerRequest): Promise<{ accepted: boolean }>;
+  /**
+   * Steer one live delegate with user text. Optional port parity with the
+   * desktop IPC channel; detached user-owned runs steer through their own
+   * execution turn. Returns `accepted: false` instead of throwing.
+   */
+  steerSubagent?(request: {
+    sessionId: string;
+    delegationId: string;
+    turnId: string;
+    content: string;
+    sessionMessageId?: string;
+  }): Promise<{ accepted: boolean }>;
+  /**
+   * Continue one settled delegate as a new run of the same chain, authorized
+   * directly by the user. The runtime decides `parent` vs `user` delivery
+   * from the source record; detached runs execute under a child-only
+   * execution turn that never prompts the parent model.
+   */
+  continueSubagent?(request: AgentContinueSubagentRequest): Promise<AgentContinueSubagentResponse>;
   prompt(request: TurnStartRequest): Promise<{ turnId: string }>;
   stop(sessionId: string): Promise<{ requested: boolean }>;
   abort(sessionId: string, turnId?: string): Promise<void>;

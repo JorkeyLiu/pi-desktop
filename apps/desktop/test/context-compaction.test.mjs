@@ -35,6 +35,8 @@ const [
   contextBudget,
   delegationHistory,
   compactionTail,
+  subagentProgress,
+  subagentResume,
 ] = await Promise.all([
   read("../../../packages/shared/src/protocol.ts"),
   readSharedTypesSource(),
@@ -58,6 +60,8 @@ const [
   read("../../../packages/agent-runtime/src/context-budget.ts"),
   read("../../../packages/agent-runtime/src/delegation-history.ts"),
   read("../../../packages/agent-runtime/src/compaction-tail.ts"),
+  read("../../../packages/agent-runtime/src/subagent-progress.ts"),
+  read("../../../packages/agent-runtime/src/subagent-resume.ts"),
 ]);
 
 test("context compaction is wired through protocol v11 and the manual IPC path", () => {
@@ -154,12 +158,12 @@ test("a delegate gets the session's turn-boundary budget protection (ADR 0299)",
   // lifecycle details the parent sees carry both flags (ADR 0299 decision 4).
   assert.match(subagent, /contextCompactions\?: number/);
   assert.match(subagent, /contextDegraded\?: boolean/);
-  assert.match(runtime, /contextCompactions: record\.result\.contextCompactions/);
-  assert.match(runtime, /contextDegraded: record\.result\.contextDegraded/);
+  assert.match(subagentProgress, /contextCompactions: record\.result\.contextCompactions/);
+  assert.match(subagentProgress, /contextDegraded: record\.result\.contextDegraded/);
   // A resumed chain is seeded within the delegate's own budget (decision 7):
   // the oldest tool call/result pairs leave first, and a stripped carrier
   // stops claiming "toolUse".
-  assert.match(runtime, /budget: contextBudgetLimitsFor\(model\)/);
+  assert.match(subagentResume, /budget: contextBudgetLimitsFor\(model\)/);
   assert.match(delegationHistory, /truncateSeededMessages/);
   assert.match(delegationHistory, /\.\.\.message, content, stopReason: "stop"/);
   // The compaction itself uses the runtime-owned preparation, the session's

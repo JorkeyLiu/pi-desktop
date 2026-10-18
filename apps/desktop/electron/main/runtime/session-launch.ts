@@ -7,6 +7,7 @@ import {
   imageGenerationBindings,
   isImageGenerationModel,
   normalizeMode,
+  normalizeSubagentWakeupSettings,
   trustedExtensionAgentKeyFromProviderId,
   type CommandShellCatalog,
   type McpServerRecord,
@@ -14,6 +15,7 @@ import {
   type Mode,
   type Risk,
   type SessionThinkingLevel,
+  type SubagentWakeupSettings,
   type UserSkillRecord,
   type UserSubagentRecord,
 } from "@pi-desktop/shared";
@@ -706,6 +708,12 @@ export function createSessionLaunchRuntime({
         ...(overrides.turnId ? { turnId: overrides.turnId } : {}),
         thinkingLevel,
         infiniteProviderRetry: settings.infiniteProviderRetry === true,
+        // Persistent wake defaults: normalized once here so every runtime —
+        // fresh or reused — starts from the configured base, and `TaskWait`
+        // merges only the fields its own call validly overrides.
+        subagentWakeup: normalizeSubagentWakeupSettings(
+          (settings as { subagentWakeup?: SubagentWakeupSettings }).subagentWakeup,
+        ),
         ...(jevApiKey ? { jevApiKey } : {}),
         commandShell,
         scratchDir: join(dataDir, "scratch", sessionId),

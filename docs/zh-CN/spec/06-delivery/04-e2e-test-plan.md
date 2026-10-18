@@ -241,7 +241,7 @@ task-candidate E2E 从请求工作树运行，但使用主工作区已经准备�
 - Plan host/runtime：`pnpm test:e2e` 和 `pnpm test:e2e:plan`。
 - Plan UI：`pnpm test:e2e:plan` 和 `pnpm test:e2e:plan-ui`。
 - host/sidecar 监督、崩溃恢复或重启：`pnpm test:e2e` 和 `pnpm test:e2e:supervision`。
-- 子代理生命周期：`pnpm test:e2e` 和 `pnpm test:e2e:subagents`。
+- 子代理生命周期：`pnpm test:e2e:subagent-lifecycle`（真实 host-core/sidecar/Main 上的程序等待各阶段），以及 `pnpm test:e2e` 和 `pnpm test:e2e:subagents`。
 - 导入扩展依赖安装或 registry 边界改动：`pnpm test:e2e:plugin-import-deps`。
 - 受信任扩展或插件扩展改动：`pnpm test:e2e:trusted-extensions`。
 - 会话通信 / Session Orchestrator：`pnpm test:e2e:collaboration`。

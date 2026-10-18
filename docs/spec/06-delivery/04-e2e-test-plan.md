@@ -794,7 +794,9 @@ The minimum selection is:
 - Plan UI behavior: `pnpm test:e2e:plan` and `pnpm test:e2e:plan-ui`.
 - Host supervision, crash recovery, or restart behavior: `pnpm test:e2e` and
   `pnpm test:e2e:supervision`.
-- Subagent lifecycle: `pnpm test:e2e` and `pnpm test:e2e:subagents`.
+- Subagent lifecycle: `pnpm test:e2e:subagent-lifecycle` (the program-wait
+  phases over real host-core/sidecar/Main), plus `pnpm test:e2e` and
+  `pnpm test:e2e:subagents`.
 - Imported-extension dependency installation or registry-boundary changes: `pnpm test:e2e:plugin-import-deps`.
 - Trusted extension or plugin-extension changes: `pnpm test:e2e:trusted-extensions`.
 - Session collaboration / Session Orchestrator: `pnpm test:e2e:collaboration`.
@@ -7845,8 +7847,11 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
      delegate rows, `user: follow-up prompt`, delegate rows — the same
      message-list language as the main transcript (user bubbles, tool rows,
      thinking rows, markdown answers).
-  5. Verify the composer at the foot is a disabled two-row textarea whose
-     placeholder reads the read-only hint, in every supported locale.
+   5. Verify the foot carries one Send composer: a live delegate steers
+      text-only (`steerSubagent` with the owning turn) and a settled
+      continuable delegate continues directly (`continueSubagent` with retained
+      history); a non-continuable tab keeps the disabled read-only hint, in
+      every supported locale.
   6. Wait for the failed delegate to settle, open its tab, and verify the
      ended tab persists until manually closed.
   7. Switch to another session and back. Verify the tabs are restored per
@@ -7854,8 +7859,9 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 - **Expected**: No auto-open on delegate start; N subagents = N coexisting
   closable tabs with deduplicated `name#n` labels; the tab body is the
   delegation's user/assistant message stream with follow-up prompts as user
-  turns; the composer is disabled with the in-field hint and has no send
-  path; ended delegates' tabs persist until closed; tabs are session-scoped.
+  turns; one Send composer serves both states (live steer, settled direct
+  `continueSubagent`; never an independent child session and no second
+  parent-resume strategy); ended delegates' tabs persist until closed; tabs are session-scoped.
 - **Specs linked**: `04-ux/08-component-spec.md` (delegation tab),
   `04-ux/09-interaction-patterns.md` (work panel tabs)
 - **Acceptance**: Quality
@@ -7906,7 +7912,10 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   - The expanded card shows one main-agent root connected to `scout` and
     `pinned` in parent-row order, with no invented edge between delegates. Each
     node shows its agent, short description, explicit outcome, duration and step
-    count. Expanding a node shows the brief, report exactly once, and
+    count, with estimated context occupancy and cumulative billed spend as
+    separate figures in one header region (unknown occupancy as a dash; latest
+    segment decides provenance: Task summary, then roster, then latest valid
+    child assistant usage). Expanding a node shows the brief, report exactly once, and
     `status`/`turns`/`toolCalls`. Delegate rows appear only inside that node,
     never in the turn stream or the minimap.
   - At narrow, default, and wide panel widths, topology titles, descriptions,
@@ -11769,10 +11778,11 @@ This test plan spec is accepted when:
   4. Prompt a turn that starts three delegates and then calls `TaskWait` with
      `mode: "any"`, `minCompleted: 1`; confirm it returns as soon as the first
      settles and that the still-running delegates keep running.
-  5. Prompt a turn that starts a delegate and then ends the turn without
-     `TaskWait`/`TaskStop`; confirm the delegate is stopped at run end and its
-     node reads `aborted`, and that the next turn's model context contains no
-     delegate rows.
+  5. Prompt a turn that starts a delegate and then ends the parent tool loop without
+     `TaskWait`/`TaskStop`; confirm the durable turn stays open, the delegate keeps
+     running (node reads `running`, not `aborted`), the idle resume delivers its report
+     into the same turn, and that the next turn's model context contains no
+     delegate rows (reports arrive only via `TaskWait` / idle resume).
   6. Prompt ten `Task` calls in one turn and one more; confirm the eleventh
      fails as a tool error naming the 10-delegate cap, and that `TaskStop`
      frees a slot so an eleventh delegation can start.
@@ -11789,11 +11799,11 @@ This test plan spec is accepted when:
      catalog; confirm the definition still loads but carries a warning, and
      that its delegate still resolves under the session's effective mode (a
      `Write` inside the workspace still raises a permission card).
-  10. Prompt a turn that starts a delegate, lets `TaskWait` time out so the
-      node still says running, then calls `TaskStop`; confirm the topology
-      node and the `TaskStop` row both read `stopped` (not `running`). End the
-      turn and reload the session; confirm the card is not labelled working
-      and does not keep ticking elapsed.
+  10. Prompt a turn that starts a delegate, lets the program `time` heartbeat return
+      so the node still says running, then calls `TaskStop` (cancel-obsolete path);
+      confirm the topology node and the `TaskStop` row both read `stopped`
+      (not `running`). End the turn and reload the session; confirm the card is not
+      labelled working and does not keep ticking elapsed.
   11. Inject synchronous `SubagentRun` initialization failure; confirm the
       `Task` result is an error and `TaskList` has no permanently running row.
   12. In a runtime fixture, make settled-row publication throw and confirm the
@@ -11802,7 +11812,7 @@ This test plan spec is accepted when:
       reports idle without a timeout loop.
 - **Expected**: `Task` returns immediately with a `delegationId` and the parent
   keeps working; `TaskWait` converges with per-delegation reports and statuses;
-  every terminal child state wakes the parent even if transcript publication
+  every terminal child state resumes the parent even if transcript publication
   fails. A synchronous child initialization failure returns a tool error and
   leaves no `running` delegation. User Stop/Dispose abort the parent wait as
   well as delegates, and cancelled sessions do not remain `AGENT_BUSY` solely
@@ -11812,8 +11822,9 @@ This test plan spec is accepted when:
   `auto` also covers explicit external paths without a duplicate authorization
   prompt while `ask` and `accept-edits` retain their approval boundaries; a
   global definition's declared scope is dropped; the per-session running cap
-  of 10 is enforced; no delegate outlives its turn; reloaded transcripts keep
-  their delegation topology.
+  of 10 is enforced; a delegate outlives the parent tool loop under the open durable
+  turn and ends only via `TaskStop`, user Stop, disposal, or terminal parent error;
+  reloaded transcripts keep their delegation topology.
 - **Specs linked**: `03-runtime/02-agent-runtime.md` §5f/§5f.1/§7.1,
   `03-runtime/03-tools-and-permissions.md` §10.2,
   `08-meta/decisions-log.md` (D242 amends D231), ADR 0089 and ADR 0100
@@ -12087,10 +12098,10 @@ This test plan spec is accepted when:
     still running, with the instruction to converge through `TaskWait` first;
     nothing is started, nothing is queued, and the running delegate keeps
     working.
-  - Step 5 refuses `stopped`, `aborted`, and the run the app closed while it was
-    still working (which reads as `interrupted` after relaunch) as not
-    resumable, each naming that reason and the fresh-delegation path instead. No
-    run starts.
+   - Step 5 refuses `stopped` and `aborted` as not resumable, each naming that
+     reason and the fresh-delegation path instead, while the run the app closed
+     while it was still working (which reads as `interrupted` after relaunch)
+     resumes from its retained chain history. No run starts for the refused ids.
   - Step 6 resumes the failed chain like a completed one: the reads it already
     made seed the new run, and its failed assistant row is not replayed.
   - Step 7 is refused as a tool error: a resumed run keeps the chain's model, and
@@ -12288,7 +12299,11 @@ This test plan spec is accepted when:
   5) Confirm the delegation card's own subagent count is unchanged by all three
   lifecycle rows. 6) Repeat in Chinese.
 - **Expected**: Every lifecycle row summarizes by agent name — never by its
-  `delegationIds` argument, and no bare UUID appears in a collapsed row. Its
+  `delegationIds` argument, and no bare UUID appears in a collapsed row. A
+  `TaskList` that blocked through the program coordinator reads the same
+  backend-owned wait outcome as a `TaskWait` (results arrived vs progress
+  checkpoint vs interrupted); a cheap snapshot with no pending delegates has no
+  wait lifecycle and stays a roster check. Its
   badge uses the shared subagent status vocabulary: running while any member
   runs, `Failed` / “失败” once a member failed even though a sibling completed,
   and `Stopped by request` / “已按请求停止” for the stopped delegate — including
@@ -12311,10 +12326,22 @@ This test plan spec is accepted when:
 - **Steps**: 1) Start a delegate and let the parent stop calling tools while
   it still runs; confirm the durable turn stays open and the delegate is not
   aborted. 2) Let the delegate finish and confirm the parent is prompted with
-  its report without the user sending “continue”. 3) Let a `TaskWait` expire
-  while the delegate is still running and read the heartbeat the parent
-  receives. 4) `TaskList` a running delegate and confirm elapsed / last-tool
-  fields. 5) `TaskStop` and user Stop still abort. 6) Run a delegate whose
+   its report without the user sending “continue”. 3) Let the program `time`
+   heartbeat return while the delegate is still running and read the heartbeat
+   the parent receives (no model timeout arg is passed). 3a) Drive the whole mock
+   lifecycle with parent request counters/timestamps and no early polls under fake
+   timers: with the persistent program selection at `time`, confirm one `wakeup`
+   (`wakeReason: "time"`); then at `tool-calls` with a small value, resume on child
+   tool activity; then at `context-tokens`, resume on an upward occupancy crossing with
+   rearm only after occupancy drops back below the threshold; then at `off`, confirm
+   progress stays silent while attached completion still resumes. 3b) Steer the running
+   delegate once and confirm the attached report still delivers once to the same parent
+   turn; continue the settled chain as user takeover and confirm no parent prompt,
+   context, wake, or old-turn charge; resume explicitly via parent `Task(resume)` to
+   reattach. 4) `TaskList` a running delegate under the same program gate and confirm
+   fresh elapsed / last-tool fields plus cheap settled re-read. 5) `TaskStop` (cancel
+   obsolete work) and user Stop still abort; restart hydrates the retained chain with
+   no parent messages. 6) Run a delegate whose
   document declares `maxTurns: 2` and let it pass two tool-calling turns;
   confirm the key is ignored and the delegate keeps running. 7) Start a
   delegate on another model, exhaust the parent HTTP 429 budget, and click
@@ -12325,10 +12352,25 @@ This test plan spec is accepted when:
   combined reports to exceed the bounded `TaskWait` result, then let the parent
   idle.
 - **Expected**: Idle and duration watchdogs never fire. Parent idle does not
-  abort delegates. Completion reports are delivered into the same durable
-  turn. `TaskWait` expiry reports “Still running after Ns”, includes a
-  heartbeat, and states that this is not a failure. No turn count ends a
-  delegate, and no status reports one. Explorer's catalog includes
+  abort delegates. Attached completion reports are delivered into the same durable
+   turn; `user`-owned runs never wake, deliver, or bill the parent. A program
+   heartbeat reports “Still running after Ns”, includes a
+   heartbeat, and states that this is not a failure; a program wake, `any`
+   threshold, or progress checkpoint never detaches unfinished delegates. In step 3a the
+   program selection alone bounds the wait (no `timeoutSeconds`, no per-call wake
+   override; legacy timing args are ignored), the `time` selection returns `status:
+   "wakeup"` with `wakeReason: "time"`, the `tool-calls` selection returns
+   `wakeReason: "tool-calls"` with the crossing ids and consumes no report
+   delivery, and the `context-tokens` selection returns `wakeReason:
+   "context-tokens"` on an upward crossing with rearm only after occupancy
+   drops back below the threshold; attached completion still resumes the parent in every
+   selection, and `off` only silences progress resumption. Omitted bounded reports stay
+   pending and deliver once via the idle resume. A detached continuation
+   against an unrelated live parent fails with `AGENT_BUSY` with the draft
+   preserved, and its terminal silently closes only its own execution turn.
+   Delegation entries and result headers separate estimated context
+   occupancy from cumulative billed spend. No turn count ends a
+   delegate, and no status reports one. Explorer's catalog includes
   `Bash` while code-reviewer remains read-only. A terminal parent 429 aborts
   leftover delegates and Continue is not `AGENT_BUSY` (D352). In step 8 the
   capped delegate's request carries the declared output limit and the uncapped
@@ -12342,10 +12384,25 @@ This test plan spec is accepted when:
   ADR 0166, ADR 0189, decisions-log D328 / D352 / D383
 - **Acceptance**: C (conversation), E (tools & permissions), H (diagnostics), Quality
 - **Milestone**: M6+
-- **Status**: Covered by unit tests; full desktop journey pending. The output
-  cap's parse and clamp are covered in `packages/shared`
-  `subagent-definition.test.ts`, and its document round-trip in host-core
-  `user_subagents` tests; the request-level assertion in step 8 stays manual.
+- **Status**: Partially automated — the backend program-wait lifecycle is
+  automated, the renderer journey is not. `pnpm test:e2e:subagent-lifecycle`
+  drives the phases below over the real Rust host-core NDJSON RPC, the real
+  agent sidecar process, and the real Electron Main IPC handlers with a local
+  SSE provider (no renderer): phase 1 holds a child stream under a session
+  `time: 900` selection while a stale per-call
+  `TaskWait { timeoutSeconds: 1, subagentWakeup: { time: 1 } }` must not wake the
+  parent, proven by a 2.5s quiet window on the provider request count, with the
+  report still delivered exactly once; phase 2 attaches a user steer that only
+  the child adopts before its single report; phase 3 continues a settled chain as
+  `user` detached with zero parent provider requests and its own execution turn;
+  phase 4 reattaches via an explicit parent `Task(resume)`. The exact 900s cadence
+  and the stop / parent-error / restart paths are covered separately by
+  unit/fake-clock tests and `test:e2e:subagent-stop` / `test:e2e:subagent-parent-error`;
+  they are not part of this bounded-window suite. The output cap's parse and clamp
+  stay covered in `packages/shared` `subagent-definition.test.ts`, its document
+  round-trip in host-core `user_subagents` tests, and the request-level assertion
+  in step 8 stays manual. Do not report the pending renderer journey as passing:
+  mark actual automation coverage only.
 
 #### E2E-157: Global scrollbars stay quiet while remaining discoverable
 

@@ -28,6 +28,8 @@ export type EventPersistenceDependencies = {
    * returning early does not stop this function from running.
    */
   isStaleTerminalEvent: (envelope: AgentEventEnvelope) => boolean;
+  /** Child-only execution turns finalize silently (no parent conclusion). */
+  isChildExecutionTurn?: (sessionId: string, turnId: string | null | undefined) => boolean;
   finishApprovedExecution: (...args: any[]) => Promise<void>;
   emitAgentEvent: (envelope: AgentEventEnvelope) => void;
 };
@@ -49,6 +51,7 @@ export function createEventPersistence({
   logger,
   finishTurn,
   isStaleTerminalEvent,
+  isChildExecutionTurn = () => false,
   finishApprovedExecution,
   emitAgentEvent,
 }: EventPersistenceDependencies): {
@@ -210,6 +213,13 @@ function persistAgentEvent(envelope: AgentEventEnvelope): UiMessage | undefined 
           data: String(error),
         });
       }));
+    // A child-only execution turn closes its own durable row only: no
+    // regenerate branch archive, which belongs to the parent's conversation.
+    if (
+      isChildExecutionTurn(envelope.sessionId, envelope.turnId ?? turnId)
+    ) {
+      return;
+    }
     // Persist the completed branch as the active regenerate revision when the
     // latest user turn carries revision metadata (ChatGPT-style history).
     trackWrite((async () => {
@@ -251,6 +261,23 @@ function persistAgentEvent(envelope: AgentEventEnvelope): UiMessage | undefined 
         });
       }
     })());
+    return;
+  }
+  if (event.type === "message_end" && event.message.role === "user" && envelope.parentToolCallId) {
+    // Child steer/continuation echo: a user turn inside a delegate,
+    // attributed by `parentToolCallId`/`agentName`. Persisted for the delegate
+    // transcript and chain replay; the parent's model rebuild skips tagged
+    // rows, so it never enters the parent context.
+    void persistenceOutbox.enqueue({
+      key: `message:${envelope.sessionId}:${event.message.id}`,
+      sessionId: envelope.sessionId,
+      message: subagentTagged(event.message, envelope),
+      turnId: envelope.turnId ?? turnId,
+    }, () => runtimeState.host).catch((error) => {
+      logger.app("persistence", "warn", "child steering transcript enqueue failed", {
+        sessionId: envelope.sessionId, data: String(error),
+      });
+    });
     return;
   }
   if (event.type === "message_end" && event.message.role === "user" && !envelope.parentToolCallId) {
@@ -297,13 +324,15 @@ function persistAgentEvent(envelope: AgentEventEnvelope): UiMessage | undefined 
       !(event.message.thinking || "").trim();
     const reservedForSteering = steeringReplies.delete(event.message.id);
     if (failed && empty && !event.message.error && !reservedForSteering) return;
+    // An explicit envelope turn owns this row — a detached child's
+    // execution turn must never fold into whatever parent turn is active.
     void persistenceOutbox
       .enqueue(
         {
           key: `message:${envelope.sessionId}:${event.message.id}`,
           sessionId: envelope.sessionId,
           message: subagentTagged(event.message, envelope),
-          turnId,
+          turnId: envelope.turnId ?? turnId,
         },
         () => runtimeState.host,
       )

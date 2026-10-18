@@ -20,7 +20,8 @@ export type SubagentOutcome =
   | "aborted"
   | "failed"
   | "stopped"
-  | "denied";
+  | "denied"
+  | "interrupted";
 
 export type SubagentTiming = {
   startedAt?: number;
@@ -48,6 +49,7 @@ const DELEGATION_STATUSES = new Set<SubagentOutcome>([
   "failed",
   "stopped",
   "denied",
+  "interrupted",
 ]);
 
 function asDelegationStatus(value: unknown): SubagentOutcome | null {
@@ -184,9 +186,12 @@ export function delegationTimingBounds(
  * `details.stopped[]`. Those rows — which are deliberately not topology nodes —
  * are what tells a delegation card how its subagent actually finished.
  *
- * When `turnLive` is false the parent turn has ended, so any leftover
- * `running` node is reconstructed as `aborted` (the runtime aborts them at
- * run end). A `TaskStop` snapshot that still says `running` is `stopped`.
+  * When `turnLive` is false the parent turn has ended, so any leftover
+  * `running` node with no terminal snapshot is reconstructed as `aborted`
+  * (the runtime aborts them at run end). A persisted `interrupted` snapshot
+  * (app exit with retained history) is recoverable and never rewritten here;
+  * only a still-`running`/missing status becomes `aborted`. A `TaskStop`
+  * snapshot that still says `running` is `stopped`.
  */
 export function collectDelegationStatuses(
   items: readonly AssistantActivityItem[],
@@ -295,6 +300,88 @@ export function collectDelegationFailures(
   return failures;
 }
 
+/**
+ * Lifecycle outcome of one `TaskWait` result (backend-owned `details`).
+ *
+ * `TaskWait` returns `status` + optional `wakeReason`:
+ * - `completed` (+`completion`): at least one awaited delegate settled and its
+ *   report is in this result — inspectable history, never deleted.
+ * - `wakeup` (+`time`/`tool-calls`/`context-tokens`): an interim progress
+ *   checkpoint on still-running delegates — the live delegation is one stable
+ *   ongoing state, not a new standalone result row.
+ * - `timeout` (no `wakeReason`): the outer bound elapsed with runners left.
+ * - `interrupted`: new user input cut the wait; runners keep working.
+ * Anything else (including absent fields on legacy rows) is unknown: the row
+ * stays inspectable but earns no lifecycle badge.
+ *
+ * `TaskList` is also read here. When it has expected pending delegates it waits
+ * through the same program coordinator and returns the same `status` fields, so
+ * an active `TaskList` reads as a program wait (progress/result) exactly like a
+ * `TaskWait`. A cheap snapshot — no pending delegates — carries no `status` and
+ * stays a roster check with its own settled label.
+ */
+export type TaskWaitLifecycle =
+  | { kind: "completed" }
+  | { kind: "progress"; reason: "time" | "tool-calls" | "context-tokens" }
+  | { kind: "timeout" }
+  | { kind: "interrupted" }
+  | { kind: "unknown" };
+
+function asWaitRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * Read a `TaskWait` row's lifecycle from its backend-owned `details`
+ * (`details.status` + `details.wakeReason`). Returns null for non-wait rows.
+ * `TaskList` has no wait lifecycle: it is a point-in-time roster check and
+ * must never read as a wait event.
+ */
+export function taskWaitLifecycle(message: UiMessage): TaskWaitLifecycle | null {
+  const kind = lifecycleKindOf(message);
+  // A `TaskWait`, or a `TaskList` that blocked through the shared program
+  // coordinator and returned the same `status` fields. A `TaskList` that only
+  // read the current snapshot never waited, so it returns null below.
+  if (kind !== "wait" && kind !== "list") return null;
+  const payload = asWaitRecord(toolResultPayload(message));
+  if (!payload) return kind === "wait" ? { kind: "unknown" } : null;
+  const status = typeof payload.status === "string" ? payload.status : "";
+  const wakeReason = typeof payload.wakeReason === "string" ? payload.wakeReason : "";
+  if (status === "interrupted") return { kind: "interrupted" };
+  if (status === "timeout") return { kind: "timeout" };
+  if (status === "completed") return { kind: "completed" };
+  if (status === "wakeup") {
+    if (wakeReason === "time" || wakeReason === "tool-calls" || wakeReason === "context-tokens") {
+      return { kind: "progress", reason: wakeReason };
+    }
+    return { kind: "unknown" };
+  }
+  // A `TaskWait` without status/wakeReason predates the field (or is still
+  // settling): inspectable, never a lifecycle badge. A `TaskList` here is the
+  // cheap snapshot path, which has no wait lifecycle at all.
+  return kind === "wait" ? { kind: "unknown" } : null;
+}
+
+/**
+ * Whether a program-wait row (`TaskWait`, or an active `TaskList` that blocked
+ * on the coordinator) is a live progress checkpoint on still-running delegates
+ * (wakeup/time/threshold) rather than a delivered result.
+ * Completed/timeout/interrupted/unknown rows are history and stay visible.
+ */
+export function isLiveWaitCheckpoint(message: UiMessage): boolean {
+  return taskWaitLifecycle(message)?.kind === "progress";
+}
+
+/**
+ * Whether a program-wait row delivered at least one settled report
+ * (`status: completed`). Only these rows read as "results arrived".
+ */
+export function isWaitResultDelivery(message: UiMessage): boolean {
+  return taskWaitLifecycle(message)?.kind === "completed";
+}
+
 /** One subagent named on a lifecycle row's roster (ADR 0089). */
 export type DelegationRosterEntry = {
   delegationId: string;
@@ -378,6 +465,59 @@ export function delegationRosterOutcome(
   return warned ? warned.status : "completed";
 }
 
+/**
+ * Group wait checkpoints with the live delegation interval they belong to.
+ *
+ * Repeated `TaskWait`/active-`TaskList` progress checkpoints on the same live
+ * delegation read as one stable ongoing wait. The redundant earlier rows are
+ * not deleted: the caller renders them inside a small disclosure attached to
+ * the group's first row, so every checkpoint stays inspectable. Result
+ * deliveries (`completed`), timeouts, interruptions, and cheap `TaskList`
+ * snapshots are never folded — they are distinct history.
+ *
+ * `folded` is the message ids suppressed from the top level (every row of a
+ * group except the last). `groups` maps each group's first folded row id to the
+ * folded rows it owns, in transcript order.
+ */
+export function foldedWaitCheckpointGroups(
+  items: readonly AssistantActivityItem[],
+): { folded: ReadonlySet<string>; groups: ReadonlyMap<string, UiMessage[]> } {
+  const byKey = new Map<string, Array<{ id: string; message: UiMessage }>>();
+  for (const item of items) {
+    if (item.kind !== "tool") continue;
+    if (!isLiveWaitCheckpoint(item.message)) continue;
+    const roster = delegationRoster(item.message);
+    // Key on the sorted delegation ids this checkpoint covers: the same live
+    // delegation waited again folds; a different target set stays separate.
+    const ids = roster.map((entry) => entry.delegationId).sort();
+    const key = ids.length > 0 ? ids.join(",") : `row:${item.message.id}`;
+    const rows = byKey.get(key);
+    if (rows) rows.push({ id: item.message.id, message: item.message });
+    else byKey.set(key, [{ id: item.message.id, message: item.message }]);
+  }
+  const folded = new Set<string>();
+  const groups = new Map<string, UiMessage[]>();
+  for (const rows of byKey.values()) {
+    if (rows.length < 2) continue;
+    const earlier = rows.slice(0, -1);
+    for (const row of earlier) folded.add(row.id);
+    groups.set(earlier[0]!.id, earlier.map((row) => row.message));
+  }
+  return { folded, groups };
+}
+
+/**
+ * The message ids a folded (non-latest) progress checkpoint owns. The caller
+ * keeps history intact and only suppresses the redundant top-level rows; the
+ * latest checkpoint still renders so the active interval reads as one ongoing
+ * state rather than disappearing.
+ */
+export function collapsedWaitCheckpoints(
+  items: readonly AssistantActivityItem[],
+): ReadonlySet<string> {
+  return foldedWaitCheckpointGroups(items).folded;
+}
+
 export function lifecycleKindOf(
   message: UiMessage,
 ): DelegationLifecycleKind | null {
@@ -438,7 +578,8 @@ export function summarizeSubagentActivity(
       (outcome) =>
         outcome === "timed_out" ||
         outcome === "aborted" ||
-        outcome === "stopped",
+        outcome === "stopped" ||
+        outcome === "interrupted",
     ).length,
   };
 }

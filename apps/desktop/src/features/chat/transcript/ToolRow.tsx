@@ -48,9 +48,14 @@ import {
   delegationRosterSummary,
   lifecycleKindOf,
   subagentOutcome,
+  taskWaitLifecycle,
   type SubagentOutcome,
   type SubagentTiming,
 } from "../../../lib/subagent-topology";
+import {
+  formatSubagentMetricsLine,
+  parseSubagentMetrics,
+} from "../../../lib/subagent-metrics";
 import { useAppStore } from "../../../stores/app-store";
 import { Markdown } from "../../../components/Markdown";
 import { ReviewChangeCard } from "../../../components/ReviewChangeCard";
@@ -76,6 +81,8 @@ import {
   ToolCommandCopy,
   TOOL_ACTION_KEYS,
   TOOL_RUNNING_KEYS,
+  WAIT_PROGRESS_LABEL_KEYS,
+  WAIT_SETTLED_LABEL_KEYS,
   useAutomaticDisclosure,
   useMessageRevealRequest,
 } from "./shared";
@@ -232,11 +239,52 @@ function HostToolRow({
   const chips = toolResultChips(message);
   // A lifecycle row (ADR 0089) is about subagents, so it is presented as one:
   // the agent names it reports on replace the bare delegation ids it was
-  // called with, and its badge rolls up their statuses (D268).
+  // called with, and its badge rolls up their statuses (D268). A settled
+  // `TaskWait` names its own outcome from backend-owned wait fields
+  // (`details.status`/`wakeReason`): only a `completed` wait delivered
+  // results; a `wakeup` wait is an interim progress checkpoint on
+  // still-running delegates, never a result.
   const lifecycle = action === "delegate" ? lifecycleKindOf(message) : null;
   const roster = lifecycle ? delegationRoster(message) : [];
   const rosterSummary = lifecycle ? delegationRosterSummary(roster) : "";
   const rosterOutcome = lifecycle ? delegationRosterOutcome(roster) : null;
+  // A `TaskWait`, and a `TaskList` that blocked on the program coordinator,
+  // both carry backend-owned wait fields; a cheap `TaskList` snapshot does not
+  // and stays a roster check.
+  const waitLifecycle =
+    lifecycle === "wait" || lifecycle === "list"
+      ? taskWaitLifecycle(message)
+      : null;
+  const waitLabelKey =
+    waitLifecycle?.kind === "completed"
+      ? WAIT_SETTLED_LABEL_KEYS.completed
+      : waitLifecycle?.kind === "timeout"
+        ? WAIT_SETTLED_LABEL_KEYS.timeout
+        : waitLifecycle?.kind === "interrupted"
+          ? WAIT_SETTLED_LABEL_KEYS.interrupted
+          : waitLifecycle?.kind === "progress"
+            ? WAIT_PROGRESS_LABEL_KEYS[waitLifecycle.reason]
+            : null;
+  // History stays inspectable: a folded checkpoint's tooltip names the
+  // actual wait outcome, so repeated waits on the same live delegation read
+  // as one ongoing state without losing what each row did.
+  const waitTitle =
+    (lifecycle === "wait" || lifecycle === "list") &&
+    waitLifecycle &&
+    waitLifecycle.kind !== "unknown"
+      ? [
+          waitLifecycle.kind === "completed"
+            ? t(WAIT_SETTLED_LABEL_KEYS.completed)
+            : waitLifecycle.kind === "timeout"
+              ? t(WAIT_SETTLED_LABEL_KEYS.timeout)
+              : waitLifecycle.kind === "interrupted"
+                ? t(WAIT_SETTLED_LABEL_KEYS.interrupted)
+                : t(WAIT_PROGRESS_LABEL_KEYS[waitLifecycle.reason]),
+          rosterSummary,
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : undefined;
   const agentName =
     action === "delegate" && !lifecycle
       ? delegateAgentName(message, delegate)
@@ -454,6 +502,23 @@ function HostToolRow({
                 {t("chat.processingSteps", { count: delegate.items.length })}
               </span>
             ) : null}
+            {variant === "topology"
+              ? (() => {
+                  const metrics = parseSubagentMetrics(delegationPayload);
+                  if (!metrics) return null;
+                  const line = formatSubagentMetricsLine(metrics);
+                  if (!line) return null;
+                  return (
+                    <span
+                      className="subagent-topology-node-metrics"
+                      title={line}
+                      aria-label={t("chat.subagentMetricsLabel")}
+                    >
+                      {line}
+                    </span>
+                  );
+                })()
+              : null}
           </span>
           {outcome === "running" ? (
             <span className="tool-spinner" aria-label={t("chat.running")} />
@@ -479,14 +544,17 @@ function HostToolRow({
             </span>
             <span
               className={`tool-row-name ${status === "running" ? "running" : ""}`}
+              title={waitTitle}
             >
-              {lifecycle
-                ? t(
-                    (status === "running"
-                      ? LIFECYCLE_RUNNING_KEYS
-                      : LIFECYCLE_LABEL_KEYS)[lifecycle],
-                  )
-                : actionLabel}
+              {waitLabelKey
+                ? t(waitLabelKey)
+                : lifecycle
+                  ? t(
+                      (status === "running"
+                        ? LIFECYCLE_RUNNING_KEYS
+                        : LIFECYCLE_LABEL_KEYS)[lifecycle],
+                    )
+                  : actionLabel}
             </span>
             {lifecycle && roster.length > 0 ? (
               <span className="tool-row-agent is-count">
@@ -602,6 +670,78 @@ function HostToolRow({
     </div>
   );
 }
+
+/**
+ * Earlier wait checkpoints folded into one ongoing state, still reachable.
+ *
+ * Repeated Program wait checkpoints on the same live delegation are suppressed
+ * as separate top-level rows so the active interval reads as one state. They
+ * are not deleted: this small disclosure keeps every earlier checkpoint one
+ * click away, with each row's own outcome label and payload intact.
+ */
+export const FoldedWaitCheckpoints = memo(function FoldedWaitCheckpoints({
+  messages,
+  onUserInteraction,
+}: {
+  messages: readonly UiMessage[];
+  onUserInteraction?: () => void;
+}) {
+  const { t } = useTranslation();
+  const detailsId = useId();
+  const disclosure = useAutomaticDisclosure(
+    false,
+    undefined,
+    disclosureKey("folded-waits", messages[0]?.id ?? ""),
+  );
+  const { open, toggle: toggleDisclosure, collapse: collapseDisclosure } = disclosure;
+  if (messages.length === 0) return null;
+  const toggle = () => {
+    onUserInteraction?.();
+    toggleDisclosure();
+  };
+  return (
+    <div
+      className={`tool-row folded-waits ${open ? "open" : ""}`}
+      role="region"
+      aria-label={t("chat.showEarlierMessages")}
+    >
+      <div className="tool-row-head">
+        <button
+          ref={disclosure.titleRef}
+          className="tool-row-header"
+          aria-expanded={open}
+          aria-controls={detailsId}
+          title={t("chat.showEarlierMessages")}
+          onClick={toggle}
+        >
+          <span className="tool-row-icon" aria-hidden>
+            <IconBot size={15} />
+          </span>
+          <span className="tool-row-name">
+            {t("chat.processingSteps", { count: messages.length })}
+          </span>
+          <span className="tool-row-caret" aria-hidden>
+            <IconChevronRight size={12} />
+          </span>
+        </button>
+      </div>
+      {open ? (
+        <div className="tool-row-body" id={detailsId} ref={disclosure.bodyRef} {...disclosure.bodyEvents}>
+          <DisclosureCollapseRail
+            label={t("chat.collapseDetails")}
+            onCollapse={() => {
+              onUserInteraction?.();
+              collapseDisclosure();
+            }}
+          />
+          {messages.map((message) => (
+            <ToolRow key={message.id} message={message} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+});
 
 /**
  * What a delegate did, nested under the `Task` call that spawned it.
@@ -721,6 +861,21 @@ function SubagentRunFollow({
                   message={item.message}
                   streaming={item.message.status === "streaming"}
                 />
+              ) : item.kind === "steering-user" ? (
+                <div
+                  className="subagent-steering-user"
+                  data-message-id={item.message.id}
+                  key={`steering-${item.message.id}`}
+                >
+                  {item.message.content ? (
+                    <div className="prose-chat selectable">
+                      <Markdown source={item.message.content} />
+                    </div>
+                  ) : null}
+                  {item.message.error ? (
+                    <AssistantErrorMessage message={item.message} />
+                  ) : null}
+                </div>
               ) : (
                 <div
                   className="subagent-answer"

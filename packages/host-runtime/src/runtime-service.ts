@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 
+import type {
+  AgentContinueSubagentRequest,
+  AgentContinueSubagentResponse,
+} from "@pi-desktop/shared";
 import type { RuntimePort, TurnStartRequest, TurnSteerRequest } from "@pi-desktop/agent-host";
 import {
   ErrorCodes,
@@ -112,6 +116,13 @@ export class RuntimeService implements RuntimePort {
   private readonly turnFinalizations = new Map<string, Promise<void>>();
   private readonly pendingAbortReasons = new Map<string, TurnEndReason>();
   private readonly sessionOperations = new Map<string, Promise<void>>();
+  /**
+   * Child-only execution-accounting turns opened for detached user
+   * continuations (`continueSubagent` while idle). They finalize their own
+   * durable row but fan out no parent conclusion: terminal events for them
+   * are persisted, never emitted. Removed when the turn finalizes.
+   */
+  private readonly childExecutionTurns = new Set<string>();
   private readonly listeners = new Set<(envelope: AgentEventEnvelope) => void>();
   private readonly turnEndListeners = new Set<(info: TurnEndedInfo) => void>();
   private readonly events: TurnEventPipeline;
@@ -414,8 +425,157 @@ export class RuntimeService implements RuntimePort {
     }
   }
 
-  async stop(sessionId: string): Promise<{ requested: boolean }> {
+  /**
+   * Steer one live delegate with user text. Turn-scoped like `steer`: the
+   * expected parent turn must still own the session, and the sidecar runtime
+   * revalidates before touching the child loop. Returns `accepted: false`
+   * instead of throwing, so headless callers get the safe contract.
+   */
+  async steerSubagent(request: {
+    sessionId: string;
+    delegationId: string;
+    turnId: string;
+    content: string;
+    sessionMessageId?: string;
+  }): Promise<{ accepted: boolean }> {
+    const sessionId = request.sessionId.trim();
+    const delegationId = request.delegationId.trim();
+    const content = request.content;
+    if (!sessionId || !delegationId || typeof content !== "string" || !content.trim()) {
+      return { accepted: false };
+    }
+    if (!this.isTurnDispatchable(sessionId, request.turnId)) return { accepted: false };
+    try {
+      const sidecar = this.requireSidecar();
+      const messageId =
+        typeof request.sessionMessageId === "string" && request.sessionMessageId.trim()
+          ? request.sessionMessageId.trim()
+          : undefined;
+      const result = await sidecar.call<{ accepted?: boolean }>("agent.steerSubagent", {
+        sessionId,
+        delegationId,
+        expectedTurnId: request.turnId,
+        content,
+        ...(messageId ? { messageId } : {}),
+      });
+      return { accepted: result?.accepted !== false };
+    } catch (error) {
+      this.options.log("warn", "steer subagent failed", { sessionId, turnId: request.turnId, delegationId, error: String(error) });
+      return { accepted: false };
+    }
+  }
+
+  /**
+   * Continue one settled delegate as a new run of the same chain, authorized
+   * directly by the user. Attached while the parent still expects the chain
+   * (the live turn is named and the sidecar runtime confirms); otherwise
+   * detached under a fresh child-only execution turn opened here for
+   * accounting. The execution turn never prompts the parent model, never
+   * renders a main user row, and never bills an unrelated turn — it exists
+   * so the child's events and usage have an explicit owner. Serialized per
+   * session with prompts: a parent prompt racing a detached execution meets
+   * the existing one-turn busy guard instead of aborting it.
+   */
+  async continueSubagent(
+    request: AgentContinueSubagentRequest,
+  ): Promise<AgentContinueSubagentResponse> {
+    const sessionId = request.sessionId.trim();
+    const delegationId = request.delegationId.trim();
+    const content = request.content;
+    const messageId =
+      typeof request.messageId === "string" && request.messageId.trim()
+        ? request.messageId.trim()
+        : undefined;
+    const expectedTurnId =
+      typeof request.expectedTurnId === "string" && request.expectedTurnId.trim()
+        ? request.expectedTurnId.trim()
+        : undefined;
+    if (!sessionId || !delegationId) {
+      throw typedError("sessionId and delegationId required", ErrorCodes.INVALID_ARGUMENT);
+    }
+    if (typeof content !== "string" || !content.trim()) {
+      throw typedError("Continuation text required", ErrorCodes.INVALID_ARGUMENT);
+    }
+    if (delegationId.length > 128 || content.length > 20_000 || (expectedTurnId && expectedTurnId.length > 128)) {
+      throw typedError("continueSubagent payload out of bounds", ErrorCodes.INVALID_ARGUMENT);
+    }
+    return this.withSessionOperation(sessionId, () =>
+      this.continueSubagentTurn(sessionId, delegationId, content, messageId, expectedTurnId),
+    );
+  }
+
+  private async continueSubagentTurn(
+    sessionId: string,
+    delegationId: string,
+    content: string,
+    messageId: string | undefined,
+    expectedTurnId: string | undefined,
+  ): Promise<AgentContinueSubagentResponse> {
     const sidecar = this.requireSidecar();
+    const active = this.activeTurns.get(sessionId);
+    if (active) {
+      // A live turn owns the session: only its own id attaches, and the
+      // sidecar runtime still decides attached vs busy from the source
+      // record — a detached source never joins an unrelated live turn.
+      if (!expectedTurnId || expectedTurnId !== active) {
+        throw typedError(
+          expectedTurnId ? "The target turn has ended" : "Session already has an active turn",
+          expectedTurnId ? "TURN_NOT_FOUND" : ErrorCodes.AGENT_BUSY,
+        );
+      }
+      return sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
+        sessionId,
+        delegationId,
+        expectedTurnId: expectedTurnId,
+        content,
+        ...(messageId ? { messageId } : {}),
+      });
+    }
+    if (expectedTurnId) {
+      // Idle sessions own no turn: naming one is stale, not an adoption.
+      throw typedError("The target turn has ended", "TURN_NOT_FOUND");
+    }
+    // Idle path: open a child-only execution turn for accounting, then let
+    // the sidecar runtime adopt it. No parent prompt runs for this turn.
+    const host = this.requireHost();
+    const detail = await host.call<{ session?: Record<string, unknown> | null }>("session.get", {
+      id: sessionId,
+      messageLimit: 1,
+    });
+    if (!detail.session) throw typedError("Session not found", ErrorCodes.NOT_FOUND);
+    const settings = await host.call<Record<string, unknown>>("settings.get");
+    const launch = await this.options.launch.resolve(sessionId, detail.session, settings ?? {});
+    sidecar.setProjectInstructionRoot(sessionId, launch.projectPath);
+    const turnId = await this.beginTurn(sessionId, launch.providerId, launch.modelId);
+    this.childExecutionTurns.add(turnKey(sessionId, turnId));
+    try {
+      // The sidecar may have no live runtime after a restart: carry the
+      // normal launch preparation so it can hydrate an idle runtime from the
+      // persisted transcript/chain. No parent prompt runs for this turn.
+      return await sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
+        ...launch.sidecarParams,
+        sessionId,
+        delegationId,
+        expectedTurnId: turnId,
+        content,
+        ...(messageId ? { messageId } : {}),
+      });
+    } catch (error) {
+      // A rejected continuation owns no execution: close the accounting turn
+      // so the session does not leak busy, then surface the coded error.
+      this.childExecutionTurns.delete(turnKey(sessionId, turnId));
+      await this.finishTurn(sessionId, "error", errorCodeOf(error), { turnId });
+      throw error;
+    }
+  }
+
+  /** Whether the turn is a child-only execution owner (no parent conclusion). */
+  isChildExecutionTurn(sessionId: string, turnId: string | null | undefined): boolean {
+    if (typeof turnId !== "string" || !turnId.trim()) return false;
+    return this.childExecutionTurns.has(turnKey(sessionId.trim(), turnId.trim()));
+  }
+
+  async stop(sessionId: string): Promise<{ requested: boolean }> {    const sidecar = this.requireSidecar();
     this.options.log("info", "prompt graceful stop requested", { sessionId });
     // The runtime owns the boundary decision: agent_end arrives after the
     // current reply/tool batch completes and finishes it as a completed turn.
@@ -621,6 +781,7 @@ export class RuntimeService implements RuntimePort {
       if (this.turnFinalizations.get(key) !== record) return;
       this.turnFinalizations.delete(key);
       this.pendingAbortReasons.delete(key);
+      this.childExecutionTurns.delete(key);
       const info: TurnEndedInfo = { sessionId: id, turnId, reason, ...(errorCode ? { errorCode } : {}), settled };
       for (const listener of this.turnEndListeners) {
         try {
@@ -658,6 +819,16 @@ export class RuntimeService implements RuntimePort {
   // -------------------------------------------------------------------------
 
   private emit(envelope: AgentEventEnvelope): void {
+    // A child-only execution turn finalizes its durable row through
+    // persistence, but its terminal must not read as a parent conclusion to
+    // listeners. Child content rows still fan out for the delegate transcript.
+    if (
+      (envelope.event.type === "agent_end" || envelope.event.type === "error") &&
+      !envelope.parentToolCallId &&
+      this.isChildExecutionTurn(envelope.sessionId, envelope.turnId)
+    ) {
+      return;
+    }
     for (const listener of this.listeners) {
       try {
         listener(envelope);

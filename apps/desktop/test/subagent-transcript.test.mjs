@@ -12,6 +12,10 @@ const runtimeSource = await readFile(
   new URL("../../../packages/agent-runtime/src/runtime.ts", import.meta.url),
   "utf8",
 );
+const progressSource = await readFile(
+  new URL("../../../packages/agent-runtime/src/subagent-progress.ts", import.meta.url),
+  "utf8",
+);
 const toolPresentationSource = await readFile(
   new URL("../src/lib/tool-presentation.ts", import.meta.url),
   "utf8",
@@ -29,6 +33,10 @@ const messagesCss = await readFile(
 );
 const topologySource = await readFile(
   new URL("../src/lib/subagent-topology.ts", import.meta.url),
+  "utf8",
+);
+const activityItemsSource = await readFile(
+  new URL("../src/features/chat/transcript/ActivityItems.tsx", import.meta.url),
   "utf8",
 );
 const toolDisplaySource = await readFile(
@@ -99,12 +107,57 @@ test("a lifecycle row summarizes by agent name, never by delegation id", () => {
     transcriptSource,
     /rosterOutcome\s*\n?\s*\? t\(`chat\.subagentStatus\.\$\{rosterOutcome\}`\)/,
   );
-  // A lifecycle row is presented as a subagent row, not as "Delegated".
-  assert.match(transcriptSource, /LIFECYCLE_RUNNING_KEYS\s*\n?\s*: LIFECYCLE_LABEL_KEYS\)\[lifecycle\]/);
+  // A lifecycle row is presented as a subagent row, not as "Delegated". A
+  // settled TaskWait, or an active TaskList that blocked on the coordinator,
+  // names its backend-owned wait outcome (results arrived vs interim progress
+  // vs timeout/interrupted) instead of a generic waited label; a cheap
+  // TaskList snapshot and TaskStop keep their own settled labels.
+  assert.match(transcriptSource, /waitLabelKey/);
+  assert.match(transcriptSource, /WAIT_SETTLED_LABEL_KEYS/);
+  assert.match(transcriptSource, /WAIT_PROGRESS_LABEL_KEYS/);
+  assert.match(transcriptSource, /taskWaitLifecycle\(message\)/);
+  // The wait lifecycle is read for both program-wait tools, never only wait.
+  assert.match(transcriptSource, /lifecycle === "wait" \|\| lifecycle === "list"/);
+  // A folded checkpoint's tooltip still names what that row did, so repeated
+  // waits on one live delegation read as one ongoing state without losing
+  // inspectable history.
+  assert.match(transcriptSource, /waitTitle/);
+  assert.match(topologySource, /export function taskWaitLifecycle\(/);
+  assert.match(topologySource, /export function collapsedWaitCheckpoints\(/);
+  assert.match(topologySource, /export function foldedWaitCheckpointGroups\(/);
+  assert.match(topologySource, /export function isLiveWaitCheckpoint\(/);
+  // Folded checkpoints are not deleted: their earlier rows render in a small
+  // disclosure, so every wait stays reachable from the transcript.
+  assert.match(transcriptSource, /export const FoldedWaitCheckpoints/);
+  assert.match(transcriptSource, /messages\.map\(\(message\) => \(/);
   // It never falls back to its own arguments, so a pending wait shows no ids.
   assert.match(transcriptSource, /const summary = lifecycle \? rosterSummary : argSummary;/);
   // ...and it is still not a topology node.
   assert.match(topologySource, /if \(isDelegationActivityItem\(item\)\) continue;/);
+});
+
+test("a TaskWait row renders its wait outcome with a tooltip, never a bare waited label", () => {
+  // SSR contract: the row names its backend-owned wait outcome key and keeps
+  // the roster in the tooltip. Key resolution itself is covered by the tab
+  // SSR fixtures; here the source contract proves no generic waited label can
+  // reach the row.
+  assert.match(transcriptSource, /waitLabelKey\s*\n?\s*\? t\(waitLabelKey\)/);
+  assert.match(transcriptSource, /WAIT_SETTLED_LABEL_KEYS\.completed/);
+  assert.match(transcriptSource, /WAIT_PROGRESS_LABEL_KEYS\[waitLifecycle\.reason\]/);
+  assert.match(transcriptSource, /taskWaitLifecycle\(message\)/);
+  assert.match(transcriptSource, /title=\{waitTitle\}/);
+  assert.doesNotMatch(transcriptSource, /\{\s*lifecycle\s*\n?\s*\?\s*t\(\s*\(status === "running"/);
+});
+
+test("folded wait checkpoints suppress the top-level row without deleting history", () => {
+  // The projection keeps every folded row: the group anchor stays visible (it
+  // is the disclosure's slot), only the remaining redundant rows are hidden,
+  // and the earlier rows are handed to the disclosure rather than dropped.
+  assert.match(activityItemsSource, /foldedWaitCheckpointGroups\(items\)/);
+  assert.match(activityItemsSource, /projection\.groups\.has\(item\.message\.id\)/);
+  assert.match(activityItemsSource, /foldedCheckpoints\?\.get\(item\.message\.id\)/);
+  assert.match(activityItemsSource, /<FoldedWaitCheckpoints/);
+  assert.match(activityItemsSource, /messages=\{folded\}/);
 });
 
 test("a live delegate row keeps the attribution its stream carried", () => {
@@ -172,13 +225,26 @@ test("a Task node shows the effective model after the subagent name", () => {
 });
 
 test("a Task node and detail header show the effective thinking level", () => {
+  // The Task start snapshot still carries the resolved pair inline.
   assert.match(
     runtimeSource,
     /modelId: provider\.modelId,\s*\n\s*thinkingLevel,/,
   );
+  // Lifecycle snapshots moved out of runtime.ts into the extracted
+  // subagent-progress owner: both the TaskWait/TaskList roster summary and
+  // the wait-result snapshot carry the record's pair, so a settled delegate
+  // keeps its effective level after polling replaces the Task row.
   assert.match(
-    runtimeSource,
+    progressSource,
+    /export function delegationSummary\(record: DelegationRecord\)/,
+  );
+  assert.match(
+    progressSource,
     /modelId: record\.modelId,\s*\n\s*thinkingLevel: record\.thinkingLevel,/,
+  );
+  assert.match(
+    progressSource,
+    /export function snapshotWaitRecord\(record: DelegationRecord\)/,
   );
   assert.match(transcriptSource, /function delegateThinkingLevel\(message: UiMessage\)/);
   assert.match(transcriptSource, /value === "off"/);

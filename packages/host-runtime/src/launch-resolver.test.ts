@@ -116,6 +116,39 @@ describe("createHeadlessLaunchResolver", () => {
     expect(launch.sidecarParams.infiniteProviderRetry).toBe(true);
   });
 
+  it("normalizes configured subagent wake defaults into the sidecar params", async () => {
+    const { host } = hostWith([provider], { p1: "sk-test" });
+    const resolver = createHeadlessLaunchResolver({ getHost: () => host, dataDir: "/data", log: () => undefined });
+    const launch = await resolver.resolve(
+      "s1",
+      { providerId: "p1", modelId: "gpt-a" },
+      { defaultMode: "agent", subagentWakeup: { kind: "tool-calls", value: 5 } },
+    );
+    expect(launch.sidecarParams.subagentWakeup).toEqual({
+      kind: "tool-calls",
+      value: 5,
+    });
+    const fallback = await resolver.resolve(
+      "s1",
+      { providerId: "p1", modelId: "gpt-a" },
+      { defaultMode: "agent" },
+    );
+    expect(fallback.sidecarParams.subagentWakeup).toEqual({
+      kind: "time",
+      value: 600,
+    });
+    // Legacy persisted shapes still read compatibly into canonical.
+    const legacy = await resolver.resolve(
+      "s1",
+      { providerId: "p1", modelId: "gpt-a" },
+      { defaultMode: "agent", subagentWakeup: { toolCalls: 5 } as never },
+    );
+    expect(legacy.sidecarParams.subagentWakeup).toEqual({
+      kind: "tool-calls",
+      value: 5,
+    });
+  });
+
   it("falls back to the default provider and refuses a provider without a secret", async () => {
     const { host } = hostWith([provider, { ...provider, id: "p2", name: "Other", hasSecret: false }], { p1: "sk" });
     const resolver = createHeadlessLaunchResolver({ getHost: () => host, dataDir: "/data", log: () => undefined });

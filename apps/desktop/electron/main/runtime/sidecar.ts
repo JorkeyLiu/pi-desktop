@@ -48,6 +48,12 @@ export type SidecarRuntimeDependencies = {
    * in Agent Host or the renderer.
    */
   isStaleTerminalEvent: (envelope: AgentEventEnvelope) => boolean;
+  /**
+   * Child-only execution turns (detached user continuations): their terminal
+   * events finalize the durable row through persistence but must not read as
+   * a parent conclusion in Agent Host or the renderer.
+   */
+  isChildExecutionTurn?: (sessionId: string, turnId: string | null | undefined) => boolean;
   isQuitting: () => boolean;
   dataDir: string;
   agentExtensions: AgentExtensionBridge;
@@ -80,6 +86,7 @@ export function createSidecarRuntime({
   inflightCheckpointer,
   finishTurn,
   isStaleTerminalEvent,
+  isChildExecutionTurn = () => false,
   finishApprovedExecution,
   superviseRestart,
   isQuitting,
@@ -107,6 +114,17 @@ export function createSidecarRuntime({
     // the current turn's state in Agent Host or the renderer. Persistence is a
     // separate call, so dropping it here still archives it as history.
     if (isStaleTerminalEvent(envelope)) return;
+    // A child-only execution turn's terminal closes its own durable row
+    // (persistence still runs below) but must not conclude the parent in
+    // Agent Host or the renderer. Child content rows still fan out for the
+    // delegate transcript.
+    if (
+      (envelope.event.type === "agent_end" || envelope.event.type === "error") &&
+      !envelope.parentToolCallId &&
+      isChildExecutionTurn(envelope.sessionId, envelope.turnId)
+    ) {
+      return;
+    }
     runtimeState.agentHostBridge?.ingest(envelope);
     sendToRenderer(IPC.event.agentMessage, envelope);
   };

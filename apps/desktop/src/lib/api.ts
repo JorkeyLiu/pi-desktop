@@ -11,8 +11,12 @@ import type {
   AgentEventEnvelope,
   AgentCompactRequest,
   AgentCompactResponse,
+  AgentContinueSubagentRequest,
+  AgentContinueSubagentResponse,
   AgentPromptRequest,
   AgentSteerRequest,
+  AgentSteerSubagentRequest,
+  AgentSteerSubagentResponse,
   UiMessage,
   MessageRevisionSummary,
   AgentPromptResponse,
@@ -356,6 +360,12 @@ export type CreateSessionInput = Partial<SessionSummary> & {
   /** Run the session in its own git worktree (ADR 0329). */
   isolated?: boolean;
 };
+
+/**
+ * Renderer view of the backend continue contract. The shared package owns
+ * the protocol (`AgentContinueSubagentRequest/Response`); this import only
+ * re-uses it so the renderer never duplicates the file it does not own.
+ */
 
 function normalizeSession(session: SessionSummary): SessionSummary {
   return {
@@ -1013,6 +1023,19 @@ export const api = {
     invoke<{ messages: UiMessage[] }>(IPC.invoke.sessionActivateRevision, input),
   steer: (req: AgentSteerRequest) =>
     invoke<AgentPromptResponse>(IPC.invoke.agentSteer, req),
+  steerSubagent: (req: AgentSteerSubagentRequest) =>
+    invoke<AgentSteerSubagentResponse>(IPC.invoke.agentSteerSubagent, req),
+  /**
+   * Continue a settled delegate directly with its retained history.
+   *
+   * Backend contract (host-owned): `{ sessionId, delegationId, content,
+   * messageId?, expectedTurnId? }` -> `{ accepted: true, delegationId: new,
+   * turnId?, delivery }`. `expectedTurnId` is only a stale guard — the
+   * server decides `parent` vs `user` delivery from its source record. The
+   * channel resolves from the shared IPC table, which owns the literal.
+   */
+  continueSubagent: (req: AgentContinueSubagentRequest) =>
+    invoke<AgentContinueSubagentResponse>(IPC.invoke.agentContinueSubagent, req),
   prompt: (req: AgentPromptRequest) =>
     invoke<AgentPromptResponse>(IPC.invoke.agentPrompt, req),
   speechStatus: () => invoke<SpeechStatus>(IPC.invoke.speechGetStatus),

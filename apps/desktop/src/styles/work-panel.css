@@ -386,6 +386,75 @@
   flex-direction: column;
 }
 
+/* Compact status + single metrics region. The tab strip already names the
+   agent, so the header repeats only the outcome plus one localized metrics
+   group: current context occupancy vs cumulative spend vs turn/call counts.
+   Everything wraps instead of clipping at 320–400px panel widths. */
+.subagent-transcript-header {
+  display: flex;
+  flex: none;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  border-bottom: 1px solid var(--ds-border-subtle);
+  padding: 8px 14px;
+}
+
+.subagent-transcript-status {
+  flex: none;
+  color: var(--ds-text-primary);
+  font-size: var(--text-sm-plus);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--leading-normal);
+}
+
+/* Live report routing next to the outcome (`Running · User-owned`): muted
+   and wrappable so long locales never push the header into overflow. */
+.subagent-transcript-owner {
+  color: var(--ds-text-muted);
+  font-weight: var(--font-weight-normal);
+  overflow-wrap: anywhere;
+}
+
+.subagent-transcript-metrics {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 180px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  color: var(--ds-text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.subagent-transcript-metric {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.subagent-transcript-metric-label {
+  color: var(--ds-text-muted);
+}
+
+.subagent-transcript-metric-value {
+  color: var(--ds-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.subagent-transcript-metric-flag {
+  color: var(--ds-text-muted);
+  font-size: var(--text-xs);
+}
+
+.subagent-transcript-metrics .ui-help-icon {
+  flex: none;
+}
+
 .subagent-transcript-scroll {
   min-width: 0;
   min-height: 0;
@@ -445,11 +514,59 @@
   padding-top: 8px;
 }
 
-.subagent-transcript-model-picker {
+/* Static model/thinking label: display-only, never a fake menu. */
+.subagent-transcript-model-static {
+  display: inline-flex;
+  min-width: 0;
   flex: 1 1 auto;
-  max-width: calc(100% - 36px);
-  justify-content: flex-start;
-  cursor: not-allowed;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  color: var(--ds-text-muted);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.subagent-transcript-model-static .composer-model-thinking-model,
+.subagent-transcript-model-static .composer-model-thinking-level {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-transcript-error {
+  padding-top: 6px;
+  color: var(--ds-text-danger, #c0362c);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+.subagent-transcript-helper {
+  padding-top: 6px;
+  color: var(--ds-text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+/* Narrow sidebar panels: controls wrap so Send never overlaps the label. */
+@media (max-width: 480px) {
+  .subagent-transcript-header {
+    padding: 8px 10px;
+  }
+  .subagent-transcript-scroll {
+    padding: 0 10px 24px;
+  }
+  .subagent-transcript-composer {
+    padding: 8px 10px;
+  }
+  .subagent-transcript-composer-controls {
+    flex-wrap: wrap;
+  }
+  .subagent-transcript-model-static {
+    flex: 1 1 100%;
+  }
 }
 
 .subagent-transcript-composer-controls > .stop-btn {

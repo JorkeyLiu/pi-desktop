@@ -12,6 +12,11 @@
   lifecycle). Both are preserved — every existing boundary still holds; this
   adds one opt-in parameter and one piece of bookkeeping.
 - Tracking: #513
+- Amendment (2026-10, subagent controls): `interrupted` (app closed mid-run) is
+  now resumable from retained chain history; `stopped` / `aborted` stay
+  non-resumable. The §4 `interrupted` row and the §5 "Only `completed` and
+  `failed` are resumable" heading below are superseded to that extent — their
+  original wording is preserved and annotated in place.
 
 ## Context
 
@@ -94,7 +99,7 @@ model can act on:
 | unknown or evicted id | `Unknown delegation "<id>"` plus the current resumable list |
 | still running | `Delegation <id> is still running`, call TaskWait first — a resume is never queued |
 | `stopped` / `aborted` | not resumable; a future revive path (out of scope here) |
-| `interrupted` (the app closed mid-run) | not resumable; start a new delegation |
+| `interrupted` (the app closed mid-run) | ~~not resumable; start a new delegation~~ — superseded 2026-10: resumable from retained chain history, like `completed` / `failed` |
 | `Task.agent` differs from the chain's agent | name mismatch, lists available |
 | `Task.model` present on a resume | not allowed on a resumed run — start a new delegation to change models |
 | chain exceeds the read budget | `Delegation <id> has read too much to resume cheaply` |
@@ -116,7 +121,16 @@ previous model id in the delegation's lifecycle details as `modelChangedFrom`:
 refusing instead would strand the chain forever, and swapping silently would hand
 the same conversation to a different model with no trace.
 
-### 5. Only `completed` and `failed` are resumable
+### 5. Only `completed`, `failed`, `timed_out`, and `interrupted` are resumable
+
+> Amendment 2026-10: the original heading read "Only `completed` and `failed`
+> are resumable" with `interrupted` excluded. `interrupted` (the app closed
+> while the run still worked) is now resumable — its rows are retained history
+> and resuming continues them, but only when those rows still exist: a chain
+> with nothing left to replay is dropped with the §4 no-history error like
+> every other status. `stopped` and `aborted` still encode an explicit
+> Stop or runtime disposal and stay non-resumable. The paragraphs below are
+> preserved; read "`interrupted` … is not resumable" as superseded.
 
 A `failed` run's reads and findings still have value; its failed assistant row
 is dropped by the converter like any other error row. `stopped` and `aborted`
@@ -211,6 +225,29 @@ indistinguishable at that point.
 A resumed delegation's card shows the whole chain's rows as consecutive turns
 (task → reply → task → reply) with no special "resumed" badge. The new run's
 counters start at zero; `details.resumedFrom` keeps the link auditable.
+
+### 14. Direct user continuation carries explicit delivery ownership
+
+A user may continue a settled chain without the parent model emitting
+`Task(resume)`. The new run records `delivery: "parent" | "user"` (parent
+default): `parent` only while the parent still expects this chain
+(startedEpoch == turnEpoch, undelivered, not stopped/aborted, owning turn
+alive); otherwise `user`, which never auto-delivers, never enters parent
+context or parent accounting, and executes under a child-only
+execution-accounting turn opened with the existing durable-turn owner. Only an
+explicit parent `Task(resume)` reattaches the chain. No new session, schema,
+or event type; the user-origin marker is a `Task` row the parent rebuild
+skips.
+
+> Clarification 2026-10 (original wording above preserved): steering a running
+> delegate keeps it attached — a program wake, `any` threshold, or
+> progress checkpoint never detaches unfinished delegates (no model timeout exists).
+> A detached source against
+> an unrelated live parent fails with `AGENT_BUSY` with the draft preserved;
+> the session holds a single active turn, the detached run steers through its
+> execution owner, `expectedTurnId` stays a stale guard with `messageId`
+> idempotency, post-restart hydration rebuilds from history, and the detached
+> terminal silently closes only its own row.
 
 ## Consequences
 

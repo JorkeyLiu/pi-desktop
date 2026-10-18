@@ -1,5 +1,5 @@
 import { expandMcpInvocation } from "../composer-mcp";
-import { IPC, ErrorCodes, compactionRecordId, findSkillMentions, isGlobalPermissionMode, isRpcTimeoutError, type AgentEventEnvelope, type AgentPromptRequest, type AgentSteerRequest, type UiMessage, type AgentQueuePushRequest, type AgentStopRequest, type AgentStopSubagentsRequest, type AskToolResolution, type GlobalPermissionMode, type MessageUsage, type PendingInteractiveRequests, type PlanExecutionFinishStatus, type PlanResolutionResult, type PlanResolveRequest, type VoiceOrigin } from "@pi-desktop/shared";
+import { IPC, ErrorCodes, compactionRecordId, findSkillMentions, isGlobalPermissionMode, isRpcTimeoutError, type AgentContinueSubagentRequest, type AgentContinueSubagentResponse, type AgentEventEnvelope, type AgentPromptRequest, type AgentSteerRequest, type AgentSteerSubagentRequest, type AgentSteerSubagentResponse, type UiMessage, type AgentQueuePushRequest, type AgentStopRequest, type AgentStopSubagentsRequest, type AskToolResolution, type GlobalPermissionMode, type MessageUsage, type PendingInteractiveRequests, type PlanExecutionFinishStatus, type PlanResolutionResult, type PlanResolveRequest, type VoiceOrigin } from "@pi-desktop/shared";
 import type { FinishTurn } from "../runtime/plans";
 import { expandSlashInvocation, visionFromModelConfig, type ComposerTemplate } from "@pi-desktop/agent-runtime";
 import { appendPromptFallbackPaths, durableUserMessageId, preparePromptAttachments, type PreparedPromptAttachment } from "../prompt-attachments";
@@ -27,6 +27,8 @@ export type AgentIpcDependencies = {
   activeTurns: Map<string, string>;
   /** Whether the named turn can still start or steer host work. */
   isTurnDispatchable: (sessionId: string, turnId: string | null | undefined) => boolean;
+  /** Child-only execution turns for detached user continuations (no parent conclusion). */
+  childExecutionTurns: Set<string>;
   activeTurnUsages: Map<string, MessageUsage>;
   approvedExecutionIdsBySession: Map<string, string>;
   claimedExecutionSessions: Map<string, string>;
@@ -87,6 +89,7 @@ export function registerAgentIpc({
   dataDir,
   activeTurns,
   isTurnDispatchable,
+  childExecutionTurns,
   activeTurnUsages,
   approvedExecutionIdsBySession,
   claimedExecutionSessions,
@@ -176,6 +179,154 @@ export function registerAgentIpc({
         ...(attachment.message.inlinePath ? { inlinePath: attachment.message.inlinePath } : {}),
       })),
     });
+  });
+
+  handle(IPC.invoke.agentSteerSubagent, async (req: AgentSteerSubagentRequest) => {
+    if (!sidecar) throw new Error("sidecar unavailable");
+    rejectNativeAgentOperation(req.sessionId);
+    if (
+      !req?.sessionId || typeof req.delegationId !== "string" || !req.delegationId.trim() ||
+      !req.expectedTurnId || typeof req.content !== "string" || !req.content.trim()
+    ) {
+      throw Object.assign(new Error("delegationId, expectedTurnId and content required"), {
+        errorCode: ErrorCodes.INVALID_ARGUMENT,
+      });
+    }
+    if (req.delegationId.length > 128 || req.content.length > 20_000) {
+      throw Object.assign(new Error("steerSubagent payload out of bounds"), {
+        errorCode: ErrorCodes.INVALID_ARGUMENT,
+      });
+    }
+    // Steering belongs to the parent turn it names: refused once that turn
+    // was cancelled, started finalizing, or no longer owns the session. The
+    // sidecar runtime revalidates after dispatch, so a stale target fails
+    // there rather than steering the wrong child.
+    if (!isTurnDispatchable(req.sessionId, req.expectedTurnId)) {
+      throw Object.assign(new Error("The target turn has ended"), {
+        errorCode: ErrorCodes.TURN_NOT_FOUND,
+      });
+    }
+    // Text only: attachments ride the parent turn. The child echo is emitted
+    // by the runtime and persisted through the normal event pipeline with
+    // parentToolCallId/agentName attribution.
+    return sidecar.call<AgentSteerSubagentResponse>("agent.steerSubagent", {
+      sessionId: req.sessionId,
+      delegationId: req.delegationId.trim(),
+      expectedTurnId: req.expectedTurnId,
+      content: req.content,
+      ...(typeof req.messageId === "string" && req.messageId.trim() ? { messageId: req.messageId.trim() } : {}),
+    });
+  });
+
+  handle(IPC.invoke.agentContinueSubagent, async (req: AgentContinueSubagentRequest) => {
+    if (!sidecar) throw new Error("sidecar unavailable");
+    rejectNativeAgentOperation(req.sessionId);
+    const delegationId = typeof req.delegationId === "string" ? req.delegationId.trim() : "";
+    const content = typeof req.content === "string" ? req.content : "";
+    const expectedTurnId = typeof req.expectedTurnId === "string" && req.expectedTurnId.trim()
+      ? req.expectedTurnId.trim()
+      : undefined;
+    const messageId = typeof req.messageId === "string" && req.messageId.trim()
+      ? req.messageId.trim()
+      : undefined;
+    if (!req?.sessionId || !delegationId || !content.trim()) {
+      throw Object.assign(new Error("delegationId and content required"), {
+        errorCode: ErrorCodes.INVALID_ARGUMENT,
+      });
+    }
+    if (delegationId.length > 128 || content.length > 20_000 || (expectedTurnId && expectedTurnId.length > 128)) {
+      throw Object.assign(new Error("continueSubagent payload out of bounds"), {
+        errorCode: ErrorCodes.INVALID_ARGUMENT,
+      });
+    }
+    // Serial admission with prompts: a parent prompt racing a detached
+    // execution meets the one-turn busy guard instead of aborting it.
+    const releaseSessionOperation = await acquireSessionOperation(req.sessionId);
+    try {
+      const active = activeTurns.get(req.sessionId);
+      if (active) {
+        // A live turn owns the session: only its own id attaches, and the
+        // sidecar runtime still decides attached vs busy from the source
+        // record — a detached source never joins an unrelated live turn.
+        if (!expectedTurnId || expectedTurnId !== active) {
+          throw Object.assign(
+            new Error(expectedTurnId ? "The target turn has ended" : "Session already has an active turn"),
+            { errorCode: expectedTurnId ? ErrorCodes.TURN_NOT_FOUND : ErrorCodes.AGENT_BUSY },
+          );
+        }
+        return sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
+          sessionId: req.sessionId,
+          delegationId,
+          expectedTurnId,
+          content,
+          ...(messageId ? { messageId } : {}),
+        });
+      }
+      if (expectedTurnId) {
+        // Idle sessions own no turn: naming one is stale, not an adoption.
+        throw Object.assign(new Error("The target turn has ended"), {
+          errorCode: ErrorCodes.TURN_NOT_FOUND,
+        });
+      }
+      if (!host) throw new Error("host unavailable");
+      // Idle path: open a child-only execution turn for accounting. No parent
+      // prompt runs for this turn, no main user row is persisted, and the
+      // renderer stays idle: the turn only owns the child's events and usage.
+      const settings = await host.call<any>("settings.get");
+      const detail = await host.call<{ session?: any }>("session.get", {
+        id: req.sessionId,
+        messageLimit: 1,
+      });
+      if (!detail.session) {
+        throw Object.assign(new Error("Session not found"), {
+          errorCode: ErrorCodes.NOT_FOUND,
+        });
+      }
+      const launch = await resolveAgentRuntimeLaunch(
+        req.sessionId,
+        detail.session,
+        settings,
+      );
+      sidecar.setProjectInstructionRoot(req.sessionId, launch.workspaceRoot ?? launch.projectPath);
+      const turn = await host.call<{ turnId?: string }>("session.beginTurn", {
+        sessionId: req.sessionId,
+        providerId: launch.providerId,
+        modelId: launch.modelId,
+      });
+      const durableTurnId = String(turn?.turnId ?? "").trim();
+      if (!durableTurnId) {
+        throw new Error("session.beginTurn returned no turn");
+      }
+      activeTurns.set(req.sessionId, durableTurnId);
+      activeTurnUsages.delete(req.sessionId);
+      const turnKey = `${req.sessionId}:${durableTurnId}`;
+      childExecutionTurns.add(turnKey);
+      try {
+        // The sidecar may have no live runtime after a restart: carry the
+        // normal launch preparation so it can hydrate an idle runtime from
+        // the persisted transcript/chain. No parent prompt runs for this
+        // turn; the payload only binds the same model, permissions and
+        // workspace the next prompt would use.
+        return await sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
+          ...launch.sidecarParams,
+          sessionId: req.sessionId,
+          delegationId,
+          expectedTurnId: durableTurnId,
+          content,
+          ...(messageId ? { messageId } : {}),
+        });
+      } catch (error) {
+        // A rejected continuation owns no execution: close the accounting
+        // turn so the session does not leak busy, then surface the error.
+        childExecutionTurns.delete(turnKey);
+        await finishTurn(req.sessionId, "error", (error as { errorCode?: string })?.errorCode, {
+          turnId: durableTurnId,
+        });
+        throw error;
+      }
+    } finally {
+      releaseSessionOperation();
+    }
   });
 
   handle(IPC.invoke.agentPrompt, async (req: AgentPromptRequest) => {

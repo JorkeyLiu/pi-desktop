@@ -284,6 +284,18 @@ export class TurnEventPipeline {
     turnId: string | undefined,
   ): undefined {
     const sessionId = envelope.sessionId;
+    if (message.role === "user" && envelope.parentToolCallId) {
+      // Child steer echo: a user turn inside a delegate, attributed by
+      // `parentToolCallId`/`agentName`. Persisted for the transcript and
+      // chain replay; the parent's model rebuild skips tagged rows, so it
+      // never enters the parent context.
+      void this.persistence.append({
+        sessionId,
+        message: subagentTagged(message, envelope),
+        turnId: envelope.turnId ?? turnId,
+      });
+      return;
+    }
     if (message.role === "user" && !envelope.parentToolCallId) {
       // Steering input accepted during a stream: reserve the current reply
       // before persisting it, then the user row.
@@ -308,7 +320,13 @@ export class TurnEventPipeline {
       const empty = !(message.content || "").trim() && !(message.thinking || "").trim();
       const reservedForSteering = this.steeringReplies.delete(message.id);
       if (failed && empty && !message.error && !reservedForSteering) return;
-      void this.persistence.append({ sessionId, message: subagentTagged(message, envelope), turnId });
+      // An explicit envelope turn owns this row — a detached child's
+      // execution turn must never fold into whatever parent turn is active.
+      void this.persistence.append({
+        sessionId,
+        message: subagentTagged(message, envelope),
+        turnId: envelope.turnId ?? turnId,
+      });
       return;
     }
     if (message.role === "tool") {

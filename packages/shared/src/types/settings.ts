@@ -4,6 +4,7 @@ import type { KeybindingOverrides } from "../keyboard-shortcuts.js";
 import type { NetworkProxySettings } from "../network-proxy.js";
 import type { NetworkPolicySettings } from "../network-policy.js";
 import type { ContextCompactionSettings } from "./sessions.js";
+import type { SubagentWakeupSettings } from "../subagent-wakeup.js";
 import type { Mode } from "./common.js";
 import type { GlobalPermissionMode } from "./permissions.js";
 import type { PluginMarketSource } from "./plugins.js";
@@ -104,6 +105,17 @@ export type AppSettings = {
    * session disabled long ago is not stuck without a switch to re-enable it.
    */
   contextCompaction?: ContextCompactionSettings;
+  /**
+   * Persistent default for subagent progress checks (`TaskWait` and the idle
+   * resume share it). Single setting: `{kind, value?}` with kind
+   * `time` (default 600s), `tool-calls`, `context-tokens`, or `off`
+   * (no value, disables proactive checks). Result delivery is unconditional:
+   * settled reports always wake the parent. Absent means the product default.
+   * The renderer owns the settings UI; the runtime normalizes stored values
+   * through `normalizeSubagentWakeupSettings` at launch (legacy four-field
+   * sections migrate at read time).
+   */
+  subagentWakeup?: SubagentWakeupSettings;
   /** User overrides for the shared application shortcut map. */
   keybindings?: KeybindingOverrides;
   /** Unlocks the devtools console (settings button, F12, macOS View menu). */
