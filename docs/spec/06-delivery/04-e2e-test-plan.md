@@ -8073,9 +8073,13 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
     its `location`/`references` and its Markdown body, and a failed `Skill` call
     shows an `Error` note instead. A scheduled-automation row names its weekly
     days in the session language instead of printing their indices.
-  - A long path hint prints its middle omitted and keeps its last segments; the
-    whole path stays in the row's `title`, its file menu and its preview target,
-    and the path's tail is not clipped again.
+  - A path hint paints its file name inside the row at every column width, with
+    the directory's middle omitted around it and the name's own middle omitted
+    only when the name cannot fit, keeping its extension. The whole path stays
+    in the row's `title`, its file menu and its preview target, the printed text
+    is a prefix and a suffix of the raw spelling (absolute, relative or Windows),
+    and the path's tail is not clipped again. Two files under one prefix stay
+    distinguishable, and a wider row keeps more of the leading root.
   - A Read row's collapsed chip shows the returned window as
     `{lineCount},L{offset+1}-L{offset+lineCount}` (for example,
     `50,L16-L65`), never `fileBytes`; a Read result without valid window

@@ -15,6 +15,8 @@ import { SubagentTitleProvider } from "../../apps/desktop/src/lib/subagent-title
 
 declare global {
   var toolCardsProbe: () => Promise<unknown>;
+  /** Scroll the narrow path rows into the frame the probe screenshots. */
+  var toolCardsPathFocus: (() => void) | undefined;
 }
 
 /*
@@ -470,11 +472,16 @@ globalThis.toolCardsProbe = async () => {
 
     // ── 5. A path summary keeps its tail and its literal title ──
     const editHost = mount(wide, <ToolRow message={editWithReview("edit-1")} />);
+    // The hint is fitted from the row's measured width, so it is read after the
+    // layout pass that paints it rather than at the mount that enqueued it.
+    await settle();
     const summary = editHost.querySelector<HTMLElement>(".tool-row-summary")!;
     check(
+      // Either the value fits whole, which prints the tail as well, or the
+      // middle is the only thing omitted.
       "a long path prints its tail",
-      summary.textContent!.includes("…") &&
-        summary.textContent!.endsWith("ToolTerminal.tsx"),
+      summary.textContent!.endsWith("ToolTerminal.tsx") &&
+        (summary.textContent === LONG_PATH || summary.textContent!.includes("…")),
       summary.textContent,
     );
     check(
@@ -1144,6 +1151,195 @@ globalThis.toolCardsProbe = async () => {
       "a tool row keeps its own disclosure",
       bashHeader.getAttribute("aria-expanded") === "true" &&
         shown(fixHost.querySelector('[data-message-id="fix-bash-1"] .tool-terminal')),
+    );
+
+    // ── 6. A file row keeps the file's own name at every row width ──
+    // The collapsed hint names a file and the reader recognizes it by its last
+    // segment, so that tail has to be painted inside the row, not merely
+    // present in the DOM, however narrow the column happens to be (the child
+    // transcript mounts this same row). The directory gives up its width
+    // first; only a file name that cannot fit at all may omit its own middle,
+    // and then its extension stays. Nothing here re-spells the path: the raw
+    // value keeps its absolute/relative form, its separators and its case.
+    const EXTERNAL_ROOT = "/Users/jorkeyliu/workspace/repos/pi-desktop-mw/apps/desktop";
+    const EXTERNAL_NAME = "use-transcript-scroll.ts";
+    const EXTERNAL_PATH = `${EXTERNAL_ROOT}/src/features/chat/transcript/hooks/${EXTERNAL_NAME}`;
+    const SIBLING_PATH = `${EXTERNAL_ROOT}/src/features/chat/transcript/hooks/use-transcript-window.ts`;
+    const LONG_NAME_PATH = `${EXTERNAL_ROOT}/src/features/chat/transcript/hooks/a-considerably-longer-name-for-one-row-of-the-transcript.spec.mjs`;
+    const WINDOWS_PATH = `C:\\Users\\jorkeyliu\\workspace\\repos\\pi-desktop-mw\\apps\\desktop\\src\\features\\hooks\\${EXTERNAL_NAME}`;
+    const RELATIVE_PATH = `src/features/chat/transcript/hooks/${EXTERNAL_NAME}`;
+    const pathCases = [
+      { key: "absolute-external", path: EXTERNAL_PATH, tail: EXTERNAL_NAME },
+      { key: "same-prefix-sibling", path: SIBLING_PATH, tail: "use-transcript-window.ts" },
+      { key: "long-name", path: LONG_NAME_PATH, tail: ".spec.mjs" },
+      { key: "windows-separators", path: WINDOWS_PATH, tail: EXTERNAL_NAME },
+      { key: "relative", path: RELATIVE_PATH, tail: EXTERNAL_NAME },
+    ];
+    const readPathRow = (id: string, path: string) =>
+      message(id, "", {
+        toolName: "Read",
+        toolCallId: `call-${id}`,
+        toolStatus: "success",
+        // `file_path` is the alias the runtime sends; the row must read it the
+        // same way it reads `path`.
+        toolArgs: { file_path: path, limit: 40 },
+        toolResult: { details: { path } },
+      });
+
+    const pathStage = document.createElement("div");
+    pathStage.id = "path-stage";
+    pathStage.style.cssText =
+      "display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;padding:12px;width:1340px";
+    document.body.prepend(pathStage);
+    globalThis.toolCardsPathFocus = () => {
+      pathStage.scrollIntoView({ block: "start" });
+    };
+
+    /** The tail's own painted box, against the box that would clip it. */
+    const tailPaint = (summary: HTMLElement, tail: string) => {
+      const box = summary.getBoundingClientRect();
+      const walker = document.createTreeWalker(summary, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const data = (node as Text).data;
+        const at = data.lastIndexOf(tail);
+        if (at < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, at);
+        range.setEnd(node, at + tail.length);
+        const rect = range.getBoundingClientRect();
+        return {
+          painted: rect.width > 0 && rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5,
+          tailBox: [Math.round(rect.left), Math.round(rect.right)],
+          rowBox: [Math.round(box.left), Math.round(box.right)],
+          text: summary.textContent,
+          title: summary.title,
+        };
+      }
+      return { painted: false, missing: tail, text: summary.textContent, title: summary.title };
+    };
+    /**
+     * The printed hint is a prefix and a suffix of the raw value and nothing
+     * else. A head either spells the start of the whole value or — once the
+     * directory has given up its room entirely — the start of the file name.
+     */
+    const sameSpelling = (shown: string, raw: string) => {
+      const [head = "", ...rest] = shown.split("…");
+      const tail = rest.join("…");
+      const name = raw.split(/[/\\]/).pop() ?? raw;
+      return (
+        (raw.startsWith(head) || name.startsWith(head)) &&
+        raw.endsWith(tail) &&
+        shown.replace("…", "").length <= raw.length
+      );
+    };
+
+    const rootsSeen: Record<number, number> = {};
+    for (const width of [280, 340, 700]) {
+      const column = document.createElement("div");
+      column.style.cssText = `width:${width}px;min-width:0`;
+      pathStage.append(column);
+      const summaries: HTMLElement[] = [];
+      for (const item of pathCases) {
+        const host = mount(column, <ToolRow message={readPathRow(`${item.key}-${width}`, item.path)} />);
+        await settle(2);
+        const summary = host.querySelector<HTMLElement>(".tool-row-summary")!;
+        summaries.push(summary);
+        const paint = tailPaint(summary, item.tail);
+        check(
+          `${width}px: the file name is painted inside the row (${item.key})`,
+          paint.painted,
+          paint,
+        );
+        check(
+          `${width}px: the row keeps no clipped overhang (${item.key})`,
+          summary.scrollWidth <= summary.clientWidth + 1,
+          { scrollWidth: summary.scrollWidth, clientWidth: summary.clientWidth },
+        );
+        const rowHeader = host.querySelector<HTMLElement>(".tool-row-header");
+        const hoverText = [summary.title, rowHeader?.title ?? ""].filter(Boolean);
+        check(
+          `${width}px: the whole raw path stays available on hover (${item.key})`,
+          hoverText.includes(item.path),
+          hoverText,
+        );
+        check(
+          `${width}px: the row prints the original spelling (${item.key})`,
+          sameSpelling(summary.textContent ?? "", item.path),
+          { shown: summary.textContent, raw: item.path },
+        );
+      }
+      const [first, sibling] = summaries;
+      check(
+        `${width}px: two files under one prefix stay distinguishable`,
+        first.textContent !== sibling.textContent &&
+          Boolean(first.textContent?.endsWith(EXTERNAL_NAME)) &&
+          Boolean(sibling.textContent?.endsWith("use-transcript-window.ts")),
+        { first: first.textContent, sibling: sibling.textContent },
+      );
+      // The leading root is what the width buys: a wider row keeps more of it.
+      rootsSeen[width] = (first.textContent ?? "").split("…")[0].length;
+
+      // The chips and the diff counts keep their own space; the name yields
+      // before them, never the other way round.
+      const countsHost = mount(column, <ToolRow message={editWithReview(`counts-${width}`)} />);
+      await settle(2);
+      const counts = countsHost.querySelector<HTMLElement>(
+        ".tool-row-header > .review-change-card-counts",
+      );
+      const rowBox = countsHost.querySelector<HTMLElement>(".tool-row-header")!.getBoundingClientRect();
+      const countsBox = counts?.getBoundingClientRect();
+      const countsPaint = countsHost.querySelector<HTMLElement>(".tool-row-summary")!;
+      check(
+        `${width}px: the +a/−d pair keeps its place on the row`,
+        Boolean(countsBox) &&
+          countsBox!.width > 0 &&
+          countsBox!.right <= rowBox.right + 0.5 &&
+          counts!.textContent!.includes("+3") &&
+          counts!.textContent!.includes("−2"),
+        { countsBox: countsBox && [Math.round(countsBox.left), Math.round(countsBox.right)], rowBox: [Math.round(rowBox.left), Math.round(rowBox.right)], text: counts?.textContent },
+      );
+      check(
+        `${width}px: the mutation row still paints its file name`,
+        tailPaint(countsPaint, "ToolTerminal.tsx").painted,
+        tailPaint(countsPaint, "ToolTerminal.tsx"),
+      );
+    }
+    check(
+      "a wider row keeps more of the leading root",
+      rootsSeen[700] > rootsSeen[340] && rootsSeen[340] >= rootsSeen[280],
+      rootsSeen,
+    );
+
+    // A pane drag re-fits the hint: the row's width is observed, not read once.
+    const dragColumn = document.createElement("div");
+    dragColumn.style.cssText = "width:700px;min-width:0";
+    pathStage.append(dragColumn);
+    const dragHost = mount(
+      dragColumn,
+      <ToolRow message={readPathRow("resize", EXTERNAL_PATH)} />,
+    );
+    await settle(2);
+    const dragSummary = dragHost.querySelector<HTMLElement>(".tool-row-summary")!;
+    const dragWide = {
+      head: (dragSummary.textContent ?? "").split("…")[0].length,
+      painted: tailPaint(dragSummary, EXTERNAL_NAME).painted,
+      text: dragSummary.textContent,
+    };
+    dragColumn.style.width = "280px";
+    await settle(2);
+    const dragNarrow = {
+      head: (dragSummary.textContent ?? "").split("…")[0].length,
+      painted: tailPaint(dragSummary, EXTERNAL_NAME).painted,
+      text: dragSummary.textContent,
+      overhang: dragSummary.scrollWidth - dragSummary.clientWidth,
+    };
+    check(
+      "a pane drag re-fits the path to the width it now has",
+      dragWide.painted &&
+        dragNarrow.painted &&
+        dragNarrow.overhang <= 1 &&
+        dragNarrow.head < dragWide.head,
+      { wide: dragWide, narrow: dragNarrow },
     );
 
     cardsHost.scrollIntoView({ block: "start" });

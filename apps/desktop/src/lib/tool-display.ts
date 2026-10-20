@@ -394,26 +394,6 @@ export function getToolSummary(toolName: string | undefined, args: unknown) {
   return toolSummarySpec(toolName, args).text;
 }
 
-/**
- * Middle omission for display only: the start of a path and its last segments
- * are what a reader recognizes, and the middle is the least informative part.
- * The untruncated value stays available through the element's title, copy
- * affordance and preview target.
- */
-export function middleEllipsis(value: string, limit = 88): string {
-  const text = value.replace(/\s+/g, " ").trim();
-  if (text.length <= limit) return text;
-  const segments = text.split(/[/\\]/).filter((segment) => segment.length > 0);
-  const isAbsolute = /^[/\\]/.test(text);
-  const tailLength = Math.min(
-    Math.max(14, Math.floor(limit / 2)),
-    segments.slice(-2).join("/").length + (isAbsolute ? 1 : 0),
-  );
-  const tail = text.slice(-tailLength);
-  const headLength = Math.max(6, limit - tail.length - 1);
-  return `${text.slice(0, headLength).trimEnd()}…${tail}`;
-}
-
 export function formatToolDuration(totalSeconds: number) {
   const seconds = Math.max(0, Math.floor(totalSeconds));
   const hours = Math.floor(seconds / 3_600);
