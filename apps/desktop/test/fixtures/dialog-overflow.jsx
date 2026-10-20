@@ -78,12 +78,38 @@ function ModelPickerFixture() {
   );
 }
 
+// Regression surface: the rename dialog is mounted by parents (Sidebar,
+// ProjectsPage) that pass a fresh inline onClose closure on every rerender.
+// This fixture reproduces exactly that: each render creates new callback
+// identities while the dialog stays mounted.
+let bumpRename = () => {};
+function RenameRerenderFixture() {
+  const [tick, setTick] = useState(0);
+  bumpRename = () => flushSync(() => setTick((current) => current + 1));
+  window.dialogFixture.renameRenderTick = tick;
+  return (
+    <SessionRenameDialog
+      session={{ id: "s", title: long }}
+      onClose={() => {
+        window.dialogFixture.renameClosedByTick = tick;
+        close();
+      }}
+      onSave={async (value) => {
+        window.dialogFixture.saved = value;
+      }}
+      onError={error}
+    />
+  );
+}
+
 window.dialogFixture = {
-  responses: [], closed: false, saved: null,
+  responses: [], closed: false, saved: null, renameRenderTick: 0, renameClosedByTick: null,
   isBlockingOverlayActive,
+  rerender() { bumpRename(); },
   async show(kind, options = {}) {
     flushSync(() => root.render(null));
     this.responses = []; this.closed = false; this.saved = null;
+    this.renameRenderTick = 0; this.renameClosedByTick = null;
     document.documentElement.dataset.theme = options.theme ?? "light";
     await i18n.changeLanguage(options.locale ?? "en");
     const project = { name: long, path, groupId: "fixture-group", sessionCount: 2 };
@@ -91,6 +117,7 @@ window.dialogFixture = {
     let component;
     if (kind === "extension") component = <ExtensionPromptHost key={++revision} />;
     if (kind === "rename") component = <SessionRenameDialog session={{ id: "s", title: long }} onClose={close} onSave={async (value) => { this.saved = value; }} onError={error} />;
+    if (kind === "rename-rerender") { renameTrigger.focus(); component = <RenameRerenderFixture key={++revision} />; }
     if (kind === "instructions") component = <ProjectInstructionsDialog {...props} />;
     if (kind === "memory") component = <ProjectMemoryDialog {...props} />;
     if (kind === "delete") component = <ProjectDeleteDialog {...props} runningSessionIds={[]} onDeleted={() => {}} />;
@@ -117,3 +144,13 @@ window.dialogFixture = {
     await Promise.all(document.getAnimations().filter((animation) => animation.effect.getComputedTiming().iterations !== Infinity).map((animation) => animation.finished.catch(() => {})));
   },
 };
+// Stand-in for whatever had focus before the dialog opened, so focus
+// restoration is observable. Kept 1px and unpainted so it cannot overlap a
+// dialog under pointer hit-testing.
+const renameTrigger = document.createElement("button");
+renameTrigger.id = "rename-trigger";
+renameTrigger.type = "button";
+renameTrigger.textContent = "open rename";
+renameTrigger.style.cssText =
+  "position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;padding:0;border:0;overflow:hidden";
+document.body.appendChild(renameTrigger);

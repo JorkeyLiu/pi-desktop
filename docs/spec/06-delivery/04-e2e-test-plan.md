@@ -17278,16 +17278,26 @@ the latest destination. These assertions measure work counts, not device FPS.
   type, submit, reopen and dismiss. Repeat long title/message/option prompts in
   light/dark themes and Chinese at 520×480. Inspect long project/plugin names in
   rename, instructions, memory, delete, install, settings, permission-review and
-  OAuth dialogs; exercise dismissal controls.
+  OAuth dialogs; exercise dismissal controls. In the rename dialog, replace the
+  preselected title, move the caret, then re-render the mounting parent so it
+  hands over a fresh `onClose` closure; type again, save, and reopen.
 - **Expected:** Full source paths and other long text wrap without clipping; horizontal
   overflow is absent, and the 420px prompt width is unchanged. Tall prompts
   scroll inside the viewport. Close, Escape, typing and radio submission work.
+  Rename selects the whole title once on open, and parent re-renders with new
+  callback identities keep the caret, the typed text and input focus; saving
+  sends the full edited title, Escape uses the newest callback, and reopening
+  selects the initial title again.
 - **Specs:** `04-ux/08-component-spec.md`, Dialog long-text containment.
 - **Acceptance:** Bounded text and reachable modal controls.
 - **Milestone:** Post-MVP maintenance.
 - **Automation:** `pnpm test:e2e:dialog-overflow`; source/contract dialog suites
-  supplement, but do not replace, real Chromium geometry and pointer checks.
-- **Status:** Implemented. Native Windows evidence; macOS/Linux not qualified.
+  supplement, but do not replace, real Chromium geometry, pointer and
+  selection checks. The rename selection regression drives real typed input and
+  reads `selectionStart`/`selectionEnd` in the fixture rather than asserting on
+  effect wiring.
+- **Status:** Implemented. Native Windows and macOS (Apple Silicon) evidence for
+  geometry and rename selection; Linux not qualified.
 
 ### E2E-OUTPUT-CAP-716: Keep model requests inside the published context window
 

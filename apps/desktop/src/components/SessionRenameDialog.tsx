@@ -48,22 +48,41 @@ function RenameDialog({
   const [draft, setDraft] = useState(value);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const onCloseRef = useRef(onClose);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
+  // Mount-only lifecycle: lock background scroll, move focus into the dialog,
+  // select the current title once, and restore the previous focus on close.
+  // Parent surfaces (sidebar, project archive) inline their `onClose` closure,
+  // so this setup must not depend on callback identity.
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    requestAnimationFrame(() => {
+    const frame = requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
     });
+    return () => {
+      cancelAnimationFrame(frame);
+      document.body.style.overflow = previousOverflow;
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
+    };
+  }, []);
 
+  // Keep the newest callback reachable from the key handler below without
+  // re-subscribing it, so a re-render cannot re-run the focus/selection setup.
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
+  // Escape dismisses through the newest callback; Tab stays inside the dialog.
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        if (!savingRef.current) onClose();
+        if (!savingRef.current) onCloseRef.current();
         return;
       }
       if (event.key !== "Tab") return;
@@ -81,14 +100,9 @@ function RenameDialog({
         first.focus();
       }
     };
-
     window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previousOverflow;
-      if (previouslyFocused?.isConnected) previouslyFocused.focus();
-    };
-  }, [onClose]);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

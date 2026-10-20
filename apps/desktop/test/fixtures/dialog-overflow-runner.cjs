@@ -82,6 +82,68 @@ app.whenReady().then(async () => {
       check('rename releases native preview after close', await evaluate('!window.dialogFixture.isBlockingOverlayActive()'));
     }
   }
+  // Rename dialog lifecycle: parents pass a fresh inline onClose on every
+  // rerender. That must not re-run the mount-only focus/select setup, reset the
+  // caret, or steal focus from the input.
+  win.setContentSize(1100, 800);
+  const renameState = () => evaluate(`(() => {
+    const input = document.querySelector('#session-rename-input');
+    if (!input) return null;
+    return { value: input.value, start: input.selectionStart, end: input.selectionEnd,
+      focused: document.activeElement === input };
+  })()`);
+  const settle = () => evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+  const typeText = async (text) => {
+    for (const keyCode of text) win.webContents.sendInputEvent({ type: 'char', keyCode });
+    await settle();
+  };
+  const rerenderParent = async (times) => {
+    for (let i = 0; i < times; i += 1) { await evaluate('window.dialogFixture.rerender()'); await settle(); }
+  };
+  await evaluate('window.dialogFixture.show("rename-rerender")');
+  const renameInitial = await renameState();
+  check('rename opening selects the whole initial title once',
+    renameInitial?.focused && renameInitial.start === 0 && renameInitial.end === renameInitial.value.length && renameInitial.value.length > 1,
+    renameInitial);
+  await typeText('Alpha session');
+  const renameReplaced = await renameState();
+  check('rename typing replaces the selected title and leaves the caret at the end',
+    renameReplaced?.value === 'Alpha session' && renameReplaced.start === 13 && renameReplaced.end === 13, renameReplaced);
+  await evaluate(`document.querySelector('#session-rename-input').setSelectionRange(3, 3)`);
+  await rerenderParent(3);
+  const renameAfterRerenders = await renameState();
+  check('parent rerenders with fresh onClose keep focus, caret and text',
+    renameAfterRerenders?.focused && renameAfterRerenders.start === 3 && renameAfterRerenders.end === 3 && renameAfterRerenders.value === 'Alpha session',
+    renameAfterRerenders);
+  await typeText('XX');
+  const renameInserted = await renameState();
+  check('typing after rerenders inserts at the preserved caret',
+    renameInserted?.value === 'AlpXXha session' && renameInserted.start === 5 && renameInserted.end === 5, renameInserted);
+  await rerenderParent(2);
+  const renameStable = await renameState();
+  check('further rerenders leave the edited text and caret untouched',
+    renameStable?.focused && renameStable.value === 'AlpXXha session' && renameStable.start === 5 && renameStable.end === 5, renameStable);
+  await click('button[type="submit"]');
+  check('saving sends the full edited title', await evaluate('window.dialogFixture.saved === "AlpXXha session" && window.dialogFixture.closed'));
+  check('closing the dialog restores focus to the pre-dialog element',
+    await evaluate('document.activeElement?.id === "rename-trigger"'));
+  await evaluate('window.dialogFixture.show("rename-rerender")');
+  await rerenderParent(4);
+  const renameTicks = await evaluate('({ render: window.dialogFixture.renameRenderTick, closedBy: window.dialogFixture.renameClosedByTick })');
+  await evaluate('window.dispatchEvent(new KeyboardEvent("keydown", {key:"Escape",bubbles:true}))');
+  await settle();
+  const renameEscaped = await evaluate('({ closed: window.dialogFixture.closed, closedBy: window.dialogFixture.renameClosedByTick, gone: !document.querySelector("[role=dialog]") })');
+  check('Escape after parent rerenders uses the newest onClose callback',
+    renameEscaped.closed && renameEscaped.gone && renameEscaped.closedBy === renameTicks.render && renameTicks.render > 0,
+    { ...renameEscaped, latestRender: renameTicks.render });
+  await evaluate('window.dialogFixture.show("rename-rerender")');
+  const renameReopened = await renameState();
+  check('reopening the rename dialog selects the initial title again',
+    renameReopened?.focused && renameReopened.start === 0 && renameReopened.end === renameReopened.value.length && renameReopened.value.length === renameInitial?.value.length,
+    renameReopened);
+  await evaluate('window.dispatchEvent(new KeyboardEvent("keydown", {key:"Escape",bubbles:true}))');
+  await settle();
+  check('rename dialog closes from the reopened state', await evaluate('!document.querySelector("[role=dialog]")'));
   win.setContentSize(1254, 772);
   await evaluate('window.dialogFixture.show("models", { theme: "dark", locale: "zh-CN" })');
   const modelRows = await evaluate(`(() => {

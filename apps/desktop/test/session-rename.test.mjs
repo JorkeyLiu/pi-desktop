@@ -52,6 +52,20 @@ test("rename dialog is modal, localized, and caps input by Unicode code points",
   assert.match(dialogSource, /useBlockingOverlay\(\)/);
   assert.match(styles, /\.session-rename-dialog-overlay\s*\{[^}]*z-index:\s*65;/s);
 });
+test("rename dialog owns initial focus and selection independently of callback identity", () => {
+  // The sidebar and the project archive inline their onClose closure, so every
+  // parent rerender produces a new callback. Focus/selection setup must stay
+  // mount-only, or the effect's cleanup steals focus back to the trigger and its
+  // setup reselects the whole title, discarding the caret and later keystrokes.
+  assert.match(dialogSource, /const frame = requestAnimationFrame\(\(\) => \{/);
+  assert.match(dialogSource, /inputRef\.current\?\.focus\(\);\n\s*inputRef\.current\?\.select\(\);/);
+  assert.match(dialogSource, /select\(\);\n\s*\}\);\n\s*return \(\) => \{\n\s*cancelAnimationFrame\(frame\);/);
+  assert.match(dialogSource, /onCloseRef\.current = onClose;/);
+  assert.match(dialogSource, /if \(!savingRef\.current\) onCloseRef\.current\(\);/);
+  assert.doesNotMatch(dialogSource, /\}, \[onClose\]\);/);
+  // Every effect that owns focus, selection, or keyboard trapping is mount-only.
+  assert.equal(dialogSource.match(/\}, \[\]\);/g)?.length, 2);
+});
 
 test("rename uses the existing IPC bridge and updates only the local session title", () => {
   assert.match(apiSource, /invoke<\{ ok: boolean \}>\(IPC\.invoke\.sessionRename, id, title\)/);
