@@ -83,9 +83,17 @@ or second historical reader is needed. Ordinary history merges authoritative
 live output. An explicit search keeps its selected snapshot until returning to
 latest or starting a new turn. Neither mode writes to live/model caches.
 
-Upward paging and Load later messages extend the view contiguously. The pending
-view's identity owns each read; newer navigation, pane eviction, edits, or
-returning to latest invalidate stale completions. Starting a turn cancels both
+Upward and downward paging extend the view contiguously, both driven by the
+reader approaching a boundary rather than by a control: the near-top band
+fetches the previous page and the near-bottom band fetches the next one. A
+forward page that reaches the newest message ends the historical range so live
+output resumes in place; a failed forward page stops automatic paging and
+offers one explicit retry. A window with no reliable forward cursor (a remote
+older-only cursor, or partial metadata) re-reads the newest bounded page
+instead of synthesizing an offset, and an uncapped read publishes the full
+window it actually holds. The pending view's identity owns each read; newer
+navigation, pane eviction, edits, or returning to latest invalidate stale
+completions. Starting a turn cancels both
 focused views and in-flight target reads. Idle canonical changes invalidate a
 view when message IDs disappear or the same IDs change content or revision.
 Message actions prepare canonical input if history is incomplete or text was

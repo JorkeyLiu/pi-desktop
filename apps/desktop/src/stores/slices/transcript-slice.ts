@@ -14,9 +14,12 @@ import {
   mergeLiveSessionMessages,
 } from "../../lib/session-transcript";
 import { optimisticUserMessage } from "../../lib/session-transcript";
-import { withReviewChangeState } from "../../lib/workspace-review";
+import {
+  reviewChangeFromMessage,
+  withReviewChangeState,
+} from "../../lib/workspace-review";
 import { settleStoppedAssistantMetrics } from "../../lib/context-usage";
-import type { AppState } from "../app-state";
+import type { AppState, SessionHistoryWindow } from "../app-state";
 import type { SessionRuntime } from "../runtime/session-runtime";
 import { prepareTranscriptAction } from "../runtime/transcript-action";
 import type { StoreAccess } from "./types";
@@ -31,6 +34,16 @@ export type TranscriptSliceDependencies = StoreAccess & {
     sessionId: string,
   ) => string | null;
   flushPendingSessionConfiguration: (sessionId: string) => Promise<void>;
+};
+
+/**
+ * The window a renderer holds after an uncapped canonical read: the transcript
+ * starts at the first physical message and no page is missing. Every full-read
+ * replacement publishes this alongside its messages.
+ */
+const FULL_TRANSCRIPT_WINDOW: SessionHistoryWindow = {
+  messageStart: 0,
+  hasMoreBefore: false,
 };
 
 export function createTranscriptSlice({
@@ -51,6 +64,7 @@ export function createTranscriptSlice({
   | "activateMessageRevision"
   | "deleteMessage"
   | "rollbackWorkspaceChange"
+  | "rollbackReviewFile"
   | "abort"
 > {
   const canEdit = () => {
@@ -453,6 +467,55 @@ export function createTranscriptSlice({
       }
     },
 
+    rollbackReviewFile: async (sessionId, root, path) => {
+      if (!canEdit()) return null;
+      const state = get();
+      // The caller names the session its row came from; a row that is still on
+      // screen during a switch can never write into the session that replaced it.
+      if (!sessionId || state.activeSessionId !== sessionId || state.isRunning) {
+        return null;
+      }
+      try {
+        const result = await api.workspaceReviewRollbackFile({
+          sessionId,
+          ...(root ? { root } : {}),
+          path,
+        });
+        if (result.status === "rolledBack") {
+          const marks = new Set(result.rolledBack.map((mark) => mark.snapshotId));
+          set((current) =>
+            current.activeSessionId === sessionId
+              ? {
+                  messages: current.messages.map((message) => {
+                    const review = reviewChangeFromMessage(message);
+                    if (!review || !marks.has(review.snapshotId)) return message;
+                    return withReviewChangeState(message, "rolledBack");
+                  }),
+                }
+              : {},
+          );
+        } else if (result.status === "conflict") {
+          get().showToast(i18n.t("panel.review.rollbackConflict"), {
+            variant: "warning",
+          });
+        } else if (result.status === "unavailable") {
+          get().showToast(i18n.t("panel.review.rollbackUnavailable"), {
+            variant: "warning",
+          });
+        }
+        return result;
+      } catch (error) {
+        get().showToast(i18n.t("panel.review.rollbackError"), {
+          variant: "error",
+        });
+        set({
+          error: error instanceof Error ? error.message : String(error),
+          errorCode: (error as { code?: string })?.code ?? null,
+        });
+        return null;
+      }
+    },
+
     abort: async () => {
       const stateBeforeAbort = get();
       const sessionId = stateBeforeAbort.activeSessionId;
@@ -463,13 +526,27 @@ export function createTranscriptSlice({
         await api.abort(sessionId);
         runtime.submittedComposerDrafts.delete(sessionId);
         // Bypass in-flight pre-abort detail reads; request settled source state.
-        const detail = await api.getSession(sessionId);
-        const messages = detail.session?.messages;
-        if (messages) runtime.cacheSessionTranscript(sessionId, messages);
+        // The canonical read is uncapped, so it caches its own window: keeping
+        // the pre-abort cursors would advertise earlier/later pages that the
+        // replaced transcript no longer has.
+        const messages = await runtime.loadFullSessionMessages(sessionId);
         set((current) => ({
           runningSessions: { ...current.runningSessions, [sessionId]: false },
           ...(messages ? { retainedTranscripts: { ...current.retainedTranscripts, [sessionId]: messages } } : {}),
-          ...(current.activeSessionId === sessionId ? { isRunning: false, ...(messages ? { messages } : {}) } : {}),
+          ...(current.activeSessionId === sessionId
+            ? {
+                isRunning: false,
+                ...(messages
+                  ? {
+                      messages,
+                      sessionHistory: {
+                        ...current.sessionHistory,
+                        [sessionId]: FULL_TRANSCRIPT_WINDOW,
+                      },
+                    }
+                  : {}),
+              }
+            : {}),
         }));
         return;
       }

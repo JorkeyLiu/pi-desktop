@@ -39,8 +39,9 @@ export function useTraySessions({ setSearchOpen, reopenSidebar }: {
           archivedProjectPaths: Object.entries(store.projectMeta)
             .filter(([, meta]) => meta.archived)
             .map(([path]) => path),
-          // The sidebar presents its legacy manual setting using recent order.
-          sort: store.sessionView.sort === "manual" ? "recent" : store.sessionView.sort,
+          // Mirror the sidebar order exactly; a manual order must never fall
+          // back to activity-driven recency in the tray menu.
+          sort: store.sessionView.sort,
         }).catch((error) => console.error("Tray session synchronization failed", error));
       });
     };

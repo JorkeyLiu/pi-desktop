@@ -4133,7 +4133,7 @@ window; opening a normal panel afterward must still work.
   Hover each heading and keyboard-focus each action to confirm the controls
   reveal without moving the labels. 3) Inspect the `Sessions` toolbar and verify
   that Sort appears before New Chat. 4) Open Sort and inspect its placement,
-  then select Recently updated, Created date, Oldest first, and Name in turn.
+  then select Created date, Oldest first, and Name in turn.
   5) Pin one project and one conversation. 6) Archive another conversation
   and project. 7) Enable Show archived and restore both. 8) Restart the app.
   9) Delete a disposable conversation through the distinct Delete action.
@@ -4223,8 +4223,8 @@ window; opening a normal panel afterward must still work.
 #### E2E-048A: Project session lists fold after the ten most recent rows
 
 - **Preconditions**: One retained project contains more than ten durable
-  sessions with distinct updated timestamps; the sidebar uses the default
-  Recently updated sort; another retained project has ten or fewer sessions.
+  sessions with distinct creation timestamps; the sidebar uses the default
+  Created date sort; another retained project has ten or fewer sessions.
 - **Steps**: 1) Inspect the large project's session rows and count them. 2)
   Select the **Load N more…** control. 3) Switch the sort to Name and inspect
   the same group before expanding. 4) Restart the app and inspect the group
@@ -4541,40 +4541,73 @@ window; opening a normal panel afterward must still work.
 
 - **Preconditions**: A project-bound Agent session with a writable workspace;
   no Git repository is required.
-- **Steps**: 1) Ask the active agent to edit an existing file and create a new
-  file in session A. 2) Expand the activity group and inspect each review card
-  directly after its corresponding tool row; verify every card starts
-  collapsed with its added/modified status and +/− counts visible in the
-  header, then expand it to verify the exact hunks. 3) Commit the files
-  outside the app, close and reopen the Review panel, then reload session A.
-  4) Verify the same cards
-  and counts remain because they come from the transcript messages. 5) Use a
-  card's rollback action and verify the created file is removed or the previous
-  file bytes are restored. 6) Edit that file again outside the app and retry
-  rollback; inspect the conflict result and verify the later bytes remain. 7)
-  Switch to session B and a background project session, then return to A. 8)
-  Repeat with failed, denied, and scratch writes.
+- **Steps**: 1) Ask the active agent to edit an existing file twice with a
+  small change (one of them in a file longer than 4000 lines), restore one
+  edited file to its original bytes, and create a new file in session A. 2)
+  Expand the activity group and inspect each review card directly after its
+  corresponding tool row; verify every card starts collapsed with its
+  added/modified status and +/− counts visible in the header, then expand it to
+  verify the exact hunks, including the single-line change in the long file.
+  3) Open Review: verify it lists one row per changed file — the twice-edited
+  file once, the restored file not at all — under a summary bar stating the
+  changed-file count and net totals. 4) Continue the same session past a
+  hundred further messages so the first edit scrolls out of the loaded
+  transcript page, then close and reopen the Review panel and reload session A;
+  verify the same rows, baselines, and totals return, and that a file whose only
+  edit is now outside the loaded page is still listed with its full net change.
+  5) In a project group with two roots, edit the same relative path in each root
+  (one of them deleted) and verify Review shows two distinct rows whose labels
+  identify their folder, then roll each back and verify only its own root is
+  written. Commit the files outside the app and verify the rows are unchanged.
+  6) Use a file row's rollback action and verify the file returns to its first
+  recorded bytes (every later edit included) or the created file is removed. 7)
+  Edit that file again outside the app and retry the file rollback; inspect the
+  conflict result and verify the later bytes remain. 8) Switch to session B
+  while the panel is open and verify A's rows disappear immediately, without a
+  clickable rollback, until B's own rows arrive; then return to A. 9) Repeat
+  with failed, denied, and scratch writes.
 - **Expected**: Each successful workspace Write/Edit creates one message-owned
   review record and one adjacent keyboard-accessible card; the card is never a
   bottom/global entry. The completion opens nothing: the panel keeps whatever
   the user left it showing, and Review appears only after the user opens it.
-  Every review card, inline and in the Review tab, is
-  collapsed by default and expands on demand. The Review tab lists A's
-  chronological recorded changes, independent of Git status, repository
-  presence, commit state, focus refresh,
-  or workspace switching. Added, modified, and deleted statuses plus line
-  additions/deletions and hunks are shown when bounded evidence is available.
-  Successful rollback updates the card to Rolled back and survives restart.
-  A post-tool file change returns Conflict and does not overwrite it. Failed,
-  denied, and scratch writes do not create cards; session B cannot inherit A's
-  records. Binary or oversized snapshots show bounded metadata and disable
-  rollback when the previous bytes were not retained.
+  Every review card, inline and in the Review tab, is collapsed by default and
+  expands on demand. The Review tab is the session's net change: one row per
+  file the conversation changed, comparing the bytes recorded before the
+  conversation first modified the file with the working tree now, so repeated
+  edits collapse into one row and a file restored to its recorded bytes is not
+  listed. The host derives that set and those baselines from the session's own
+  records, so a long conversation never loses an early edit and a trimmed
+  transcript payload never drops a snapshot. Rows are identified by workspace
+  root and relative path: two project folders that share a relative name stay
+  separate and each rolls back inside its own folder. The summary states the
+  changed-file count and the summed net +/−. The rows do not depend on Git
+  status, repository presence, commit state, focus refresh, or workspace
+  switching. A one-line edit in a very long file shows its real hunk with exact
+  counts; a change the host cannot compare reports the specific reason (file too
+  large, change too large, earlier bytes not retained, folder unavailable,
+  request budget spent) and contributes no number, so partial totals read as a
+  lower bound rather than zero, and an unreadable record makes the totals a lower
+  bound and disables rollback. Successful file rollback removes the row and
+  updates the per-tool cards to Rolled back, and survives restart. A post-tool
+  file change returns Conflict and does not overwrite it. Switching sessions
+  clears the previous session's rows immediately, and its rows cannot be rolled
+  back from the new session. Failed, denied, and scratch writes do not create
+  cards; session B cannot inherit A's records. Binary or oversized snapshots
+  show bounded metadata and disable rollback when the previous bytes were not
+  retained.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md` §13a,
   `03-runtime/03-tools-and-permissions.md` §4c,
   `04-ux/08-component-spec.md` §5, ADR 0043
 - **Acceptance**: D (workspace), Quality
 - **Milestone**: M5
-- **Status**: Unit-covered (`chat-review-entry.test.mjs`); full UI scenario Draft
+- **Status**: Host-covered by the `review` unit tests and the real-host
+  `review.*` RPC tests in `crates/host-core` (bounded long-file diff, exact and
+  unknown counts, session-scanned per-file baseline, per-root rows and rollback,
+  record row cap and aggregate work budget, unreadable records, lock scope);
+  renderer-covered by `chat-review-entry.test.mjs`; the panel's rendered rows,
+  root labels, lower-bound totals, reason copy, session-switch clearing and file
+  rollback are driven by `node scripts/e2e-review-files.mjs` after
+  `pnpm build:js`. Full UI journey Draft.
 
 #### E2E-058: Built-in interactive terminal is absent
 
@@ -5873,7 +5906,9 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 - **Milestone**: M5
 - **Status**: Renderer regression automated by
   `node scripts/e2e-transcript-reading-position.mjs` (isolated React/Electron,
-  fixture IPC); live UI scenario Draft.
+  fixture IPC; it also covers a restored range reading forward to the newest
+  message with no manual control and returning to latest);
+  live UI scenario Draft.
 
 #### E2E-071h: Reopening a session while its response is streaming
 
@@ -9912,49 +9947,62 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   Agent/host fixture, two Desktop sessions, and no real provider or paid API.
 - **Steps**: Start a multi-step Agent turn that calls `TodoWrite` with ordered
   pending and `in_progress` items. Observe the checklist in its own `TodoWrite`
-  row inside the turn's process: it opens by default, lists the items, and
-  scrolls inside its own body instead of growing the row without bound.
-  Collapse the row and let the turn keep streaming: the collapse must survive
-  later `TodoWrite` updates to that row. Switch sessions and confirm each
-  session keeps its own checklist.
-  Complete and cancel items, confirm the all-cancelled label, then clear the
-  checklist and reload/restart the host.
+  row inside the turn's process: it opens by default, lists the committed
+  items, and scrolls inside its own body instead of growing the row without
+  bound. Collapse the row and let the turn keep streaming: the collapse must
+  survive later `TodoWrite` updates to that row.
+  Write again in the same turn and confirm the earlier row still shows its own
+  list, in its own order, with its own counts.
+  Complete one item and cancel another: the progress ratio counts only the
+  outstanding items and the cancelled count is named beside it. Cancel every
+  remaining item and confirm the all-cancelled label, with no `0/0` ratio and no
+  progress bar. Clear the checklist, confirm the row states it was cleared and
+  still has an expandable body, then reload/restart the host and confirm the
+  committed list survives.
+  Send an overlong item and a second `in_progress` item and confirm the row
+  shows what the host stored — truncated content and the demoted state — not the
+  argument as written. Refuse a write (a turn that already ended) and confirm the
+  row states the error, lists no rows, and never prints the raw `todos`
+  argument. Reach a row persisted before results carried the committed list and
+  confirm it stays readable from its own argument.
   Deliver an out-of-order older `todos.changed` event and confirm it cannot
-  replace the newer snapshot. Exercise invalid payload, Plan/Goal, delegated,
-  and remote-session paths, and confirm no Composer surface renders a checklist.
+  replace the newer snapshot. Confirm no Composer surface renders a checklist.
 - **Expected**: Host SQLite is authoritative; each successful full replacement
   advances revision, including clear, and emits one committed `todos.changed`
-  snapshot. Invalid or unauthorized writes do not mutate or emit. The checklist
-  renders as plain text rows in the tool row that wrote it, never as the
-  serialized `todos` argument, takes no focus, and orders its rows as the host
-  reports them. The Composer stack renders no checklist surface of its own: the
-  legacy bottom dock is not mounted. Stale events are
-  rejected, and local recovery is skipped for `remote:` sessions because
-  RACP v1 has no Todo snapshot operation.
+  snapshot. The tool result carries the committed list, and the row renders that
+  list — never the serialized `todos` argument — in the order the host reports
+  it, taking no focus. A cancelled item is neither completed nor outstanding, so
+  it leaves the ratio and is reported as its own count; a list with no
+  outstanding item states that instead of showing an empty ratio and an invalid
+  progress range. A cleared list and a refused write each still produce a body,
+  so a row's `aria-controls` always names an element it renders; a refused write
+  does not mutate or emit and shows only its error. The Composer stack renders
+  no checklist surface of its own, and no retired checklist component is mounted
+  anywhere. Stale events are rejected.
 - **Specs**: `03-runtime/03-tools-and-permissions.md`,
   `03-runtime/04-data-storage.md`, `03-runtime/06-host-rpc-protocol.md`,
   `04-ux/08-component-spec.md` §9.2/§9.3, ADR 0312.
 - **Acceptance**: C / E / F / Quality / Security.
 - **Milestone**: M6+.
-- **Automation**: `pnpm test:e2e:todos` exercises the isolated Electron
-  checklist journey through the production Agent's ToolSearch/TodoWrite path,
-  the production renderer, and a real host/SQLite profile. It mounts the
-  checklist component directly, so it no longer stands for a product route now
-  that the Composer dock is unmounted. Only the external
-  model stream and preload transport are fixtures; no live provider or user
-  profile is used. The scenario includes Unicode truncation with warning replay,
-  single-active-item normalization, and stale-event rejection. Runtime
-  internal scroll, a failed initial read followed by host recovery without
-  changing sessions, cached-snapshot reconciliation, and stale-event
-  rejection. Runtime
-  `runtime-todos.test.ts` exercises Agent tool validation, overlong content
-- **Status**: Run against the built change after building the
-  desktop and host. Host-core and targeted renderer tests are companion checks,
-  not substitutes for the Electron journey. The row's own default-open
-  disclosure and its collapse persistence are additionally rendered and driven
-  by `node scripts/e2e-tool-cards.mjs`, which passed before the current
-  detail-copy corrections; their revalidation is pending.
-  not substitutes for the Electron journey.
+- **Automation**: `pnpm test:e2e:todos` drives the product path: a real host
+  (SQLite + stdiorpc), the production Agent runtime's ToolSearch/TodoWrite
+  calls, and the transcript's own `ToolRow`, mounted in an isolated Electron
+  renderer with the application stylesheet. Only the external model stream and
+  the preload transport are fixtures; no live provider or user profile is used.
+  The scenario covers the default-open checklist, collapse surviving an update,
+  a second write leaving the first card intact, the mixed cancelled count, the
+  all-cancelled label, the cleared state and its disclosure target, truncation
+  and single-active-item normalization as rendered, a refused write, a legacy
+  row without a committed list, stale-event rejection through the production
+  store, and host-restart durability. Renderer contracts are also covered by
+  `apps/desktop/test/tool-presentation.test.mjs` and
+  `apps/desktop/test/todo-checklist-card.test.mjs`; `runtime-todos.test.ts`
+  covers tool validation and the committed list surviving the runtime's result
+  mapping, and host-core `rpc::todos` tests cover commit, refusal, normalization
+  and the reported list.
+- **Status**: Run against the built change after building the desktop and host.
+  Host-core and targeted renderer tests are companion checks, not substitutes
+  for the Electron journey.
 
 ## 8. Traceability Matrix
 
@@ -10660,14 +10708,46 @@ This test plan spec is accepted when:
 - Expect localized Pin/Unpin, Archive/Restore, and (for conversations) Delete
   actions with keyboard-reachable menu semantics.
 - Open the sort menu from the standalone `Sessions` heading, pin one
-  project/session, and choose each user-facing sort mode (Recently updated,
-  Created date, Oldest first, Name). Pinned projects remain first in Projects;
-  pinned conversations appear once in the global Pinned section above Sessions
-  and Projects, with the selected session sort and no date headers.
+  project/session, and choose each user-facing mode in both groups (Sessions:
+  Created date, Oldest first, Name; Projects: Recently opened, Created date,
+  Oldest first, Name). Pinned projects remain first in Projects; pinned
+  conversations appear once in the global Pinned section above Sessions and
+  Projects, with the selected session sort and no date headers.
 - Archive a row, verify it is absent by default, enable Show archived, and
   restore it. The transcript and project binding remain unchanged.
-- A legacy `manual` preference loads without presenting a drag-reorder
-  affordance.
+- A legacy `recent` preference loads as Created date, and a dragged order
+  loads as Manual order with the same rows in the same places.
+
+### E2E-SIDEBAR-session-order-stability
+
+- **Preconditions**: Two projects are open, project B opened last, and one of
+  them contains three conversations created in a known order, one of them
+  running and holding the newest activity timestamp; the stored sidebar
+  preference still says `recent`.
+- **Steps**: 1) Open the app and read the project-group order. 2) Send a turn
+  so the oldest conversation gains the newest activity, then read both orders
+  again. 3) Let several conversations in both projects gain activity and read
+  the project-group order. 4) Create a conversation. 5) Drag the running row
+  above the newest row. 6) Restart the app. 7) Create another conversation. 8)
+  Drag a conversation from Temporary onto a project row. 9) Pin a conversation.
+  10) Open the sort menu, choose a Projects mode, then a Sessions mode, then
+  Projects → Recently opened.
+- **Expected**: Conversations list newest-created first and no row moves when
+  activity changes. Project groups keep the order the user opened them, and
+  activity across several projects never reorders a group. A new conversation
+  appears on top. The dragged order is persisted as Manual order, survives the
+  restart with the same rows in the same places, and the sort menu shows Manual
+  order as the current state. A later conversation appears above the ranked
+  rows without disturbing their relative order. A drop from another list
+  changes nothing, and pinning still moves the row into the global Pinned
+  section. The sort menu shows a Sessions group and a Projects group with no
+  restore-defaults entry; choosing a Projects mode reorders projects only and
+  leaves the session order untouched, choosing a Sessions mode leaves the
+  project order untouched, and the existing Recently opened project mode
+  returns to the visit order. `pnpm test:e2e:sidebar-session-order` covers this
+  scenario with the real Sidebar component.
+- **Milestone**: M5
+- **Status**: Automated (`scripts/e2e-sidebar-session-order.mjs`)
 
 ### E2E-SIDEBAR-global-pinned-conversations
 
@@ -16340,7 +16420,13 @@ plugin-form fixtures in an isolated temporary directory at runtime.
   Check normal Markdown, message actions, and composer. Repeat with two assistant
   fragments in one turn, an old target outside the latest page, and a match after
   100,000 characters. Verify a visible highlight and that layout settling does
-  not pull the target away. Read upward and load later messages without gaps.
+  not pull the target away. Read upward and downward without gaps: approaching
+  either boundary pages the window with no control to press, and reaching the
+  newest message resumes live output in place. Break one forward page (block
+  the read, or restore a range whose metadata has no forward cursor) and
+  confirm the window stops instead of looping, offers one explicit retry, and
+  a range without a usable cursor lands on the newest page rather than the
+  oldest.
   Use the latest-message control to resume the live transcript. Scroll within
   the active conversation, reopen search, and select its own result; locate the
   target inside the same pane. Edit, retry, branch, and delete an old message. Reopen search and check the retained query.

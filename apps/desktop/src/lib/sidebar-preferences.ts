@@ -1,6 +1,12 @@
 import type { ProjectWorkspace, SessionSort } from "@pi-desktop/shared";
 export type { SessionSort } from "@pi-desktop/shared";
-export { sortSessions, sessionIsPinned, sessionIsArchived } from "@pi-desktop/shared";
+export {
+  compareSessions as compareSessionRows,
+  resolveSessionSort,
+  sortSessions,
+  sessionIsPinned,
+  sessionIsArchived,
+} from "@pi-desktop/shared";
 
 /** Local copy keeps this pure module runnable in Node's TS test loader. */
 export function normalizeProjectPath(projectPath?: string | null): string | null {
@@ -154,9 +160,13 @@ function cleanPaths(value: unknown): string[] {
   return output;
 }
 function sessionSort(value: unknown): SessionSort {
+  // `recent` was the old default and ordered rows by activity. It was never a
+  // choice distinct from the default, so it resolves to the stable created
+  // order instead of reintroducing moving rows after upgrade.
+  if (value === "recent") return "created";
   return value === "created" || value === "oldest" || value === "name" || value === "manual"
     ? value
-    : "recent";
+    : "created";
 }
 function projectSort(value: unknown): ProjectSort {
   return value === "created" || value === "oldest" || value === "name" || value === "manual"

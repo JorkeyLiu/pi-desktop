@@ -56,11 +56,24 @@ import {
 } from "../lib/sidebar-session-status";
 import { ErrorCodes, formatSessionLink } from "@pi-desktop/shared";
 import type { SessionSummary } from "@pi-desktop/shared";
+import {
+  compareSessionRows,
+  resolveSessionSort,
+} from "../lib/sidebar-preferences";
 import type {
   ProjectMeta,
   ProjectSort,
   SessionSort,
 } from "../lib/sidebar-preferences";
+import {
+  canReorderSidebarSessions,
+  moveSessionWithinOrder,
+  sessionOrderBucket,
+} from "../lib/sidebar-session-order";
+import {
+  projectVisitRanks,
+  sortProjectGroups,
+} from "../lib/sidebar-project-order";
 import {
   clampSidebarWidth,
   SIDEBAR_WIDTH_MAX,
@@ -162,16 +175,6 @@ function projectName(path: string, fallback?: string) {
   return parts[parts.length - 1] || path;
 }
 
-function timestamp(value?: string) {
-  const parsed = value ? Date.parse(value) : 0;
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function optionalTimestamp(value?: string): number | null {
-  const parsed = value ? Date.parse(value) : NaN;
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
 function projectMetaFor(
   path: string,
   projectMeta: Record<string, ProjectMeta>,
@@ -186,37 +189,6 @@ function projectDomId(path: string): string {
     hash = Math.imul(hash, 16777619);
   }
   return `sidebar-project-${(hash >>> 0).toString(36)}`;
-}
-
-function firstSessionDate(
-  sessions: SessionSummary[],
-  field: "createdAt" | "updatedAt",
-): number | null {
-  const values = sessions
-    .map((session) => timestamp(session[field]))
-    .filter((value) => value > 0);
-  return values.length ? Math.min(...values) : null;
-}
-
-function lastSessionDate(
-  sessions: SessionSummary[],
-  field: "createdAt" | "updatedAt",
-): number | null {
-  const values = sessions
-    .map((session) => timestamp(session[field]))
-    .filter((value) => value > 0);
-  return values.length ? Math.max(...values) : null;
-}
-
-function compareOptionalDate(
-  a: number | null,
-  b: number | null,
-  descending: boolean,
-): number {
-  if (a === null && b === null) return 0;
-  if (a === null) return 1;
-  if (b === null) return -1;
-  return descending ? b - a : a - b;
 }
 
 export function Sidebar({
@@ -284,6 +256,7 @@ export function Sidebar({
   const setProjectCollapsed = useAppStore((s) => s.setProjectCollapsed);
   const setProjectSort = useAppStore((s) => s.setProjectSort);
   const reorderProjects = useAppStore((s) => s.reorderProjects);
+  const reorderSessions = useAppStore((s) => s.reorderSessions);
   const showToast = useAppStore((s) => s.showToast);
   const version = useAppStore((s) => s.version);
   const setSettingsTab = useAppStore((s) => s.setSettingsTab);
@@ -491,8 +464,9 @@ export function Sidebar({
 
   const showArchived = sessionView.archived;
   const sessionSort = sessionView.sort;
-  const displaySessionSort: Exclude<SessionSort, "manual"> =
-    sessionSort === "manual" ? "recent" : sessionSort;
+  // A dragged order is a real order, not a legacy value that falls back to
+  // activity. Only the mode name is normalized.
+  const effectiveSessionSort = resolveSessionSort(sessionSort);
   const displayProjectSort: ProjectSort = projectSort;
   const activeProjectPath = normalizeProjectPath(activeProjectPathState ?? workspace?.path);
   const selectedSessionId = selectingSessionId ?? activeSessionId;
@@ -706,42 +680,15 @@ export function Sidebar({
     return candidates;
   }, [sessions, showArchived, sessionMeta]);
 
-  const compareSessions = useCallback((a: SessionSummary, b: SessionSummary) => {
-    const aMeta = sessionMeta[a.id] ?? {};
-    const bMeta = sessionMeta[b.id] ?? {};
-    const archiveOrder = Number(sessionArchived(a, aMeta)) - Number(sessionArchived(b, bMeta));
-    if (archiveOrder !== 0) return archiveOrder;
-    const pinOrder = Number(sessionPinned(b, bMeta)) - Number(sessionPinned(a, aMeta));
-    if (pinOrder !== 0) return pinOrder;
-    if (displaySessionSort === "name") {
-      const byName = taskTitle(a.title).localeCompare(taskTitle(b.title), undefined, {
-        sensitivity: "base",
-      });
-      if (byName !== 0) return byName;
-    } else if (displaySessionSort === "oldest") {
-      const byCreated = compareOptionalDate(
-        optionalTimestamp(a.createdAt),
-        optionalTimestamp(b.createdAt),
-        false,
-      );
-      if (byCreated !== 0) return byCreated;
-    } else if (displaySessionSort === "created") {
-      const byCreated = compareOptionalDate(
-        optionalTimestamp(a.createdAt),
-        optionalTimestamp(b.createdAt),
-        true,
-      );
-      if (byCreated !== 0) return byCreated;
-    } else {
-      const byRecent = compareOptionalDate(
-        optionalTimestamp(a.updatedAt),
-        optionalTimestamp(b.updatedAt),
-        true,
-      );
-      if (byRecent !== 0) return byRecent;
-    }
-    return a.id.localeCompare(b.id);
-  }, [displaySessionSort, sessionMeta, taskTitle]);
+  // One comparator for every sidebar container; the shared order keeps the
+  // tray menu and the sidebar from drifting apart.
+  const compareSessions = useCallback(
+    (a: SessionSummary, b: SessionSummary) =>
+      compareSessionRows(a, b, sessionMeta, effectiveSessionSort, {
+        titleOf: (row) => taskTitle(row.title),
+      }),
+    [effectiveSessionSort, sessionMeta, taskTitle],
+  );
 
   const pinnedSessions = useMemo(
     () => getGlobalPinnedSessions(filtered, sessionMeta, projectMeta, showArchived)
@@ -751,6 +698,13 @@ export function Sidebar({
   const pinnedSessionIds = useMemo(
     () => new Set(pinnedSessions.map((session) => session.id)),
     [pinnedSessions],
+  );
+
+  // Visit recency comes from the retained-tab order the user built by opening
+  // projects; it is the only input that may reorder groups in `recent`.
+  const projectVisitRankMap = useMemo(
+    () => projectVisitRanks(openProjectPaths),
+    [openProjectPaths],
   );
 
   const projectEntries = useMemo(() => {
@@ -798,42 +752,11 @@ export function Sidebar({
       (entry) => showArchived || !entry.meta.archived,
     );
     for (const entry of result) entry.sessions.sort(compareSessions);
-    result.sort((a, b) => {
-      const archiveOrder = Number(!!a.meta.archived) - Number(!!b.meta.archived);
-      if (archiveOrder !== 0) return archiveOrder;
-      const pinOrder = Number(!!b.meta.pinned) - Number(!!a.meta.pinned);
-      if (pinOrder !== 0) return pinOrder;
-      if (displayProjectSort === "manual") {
-        const byOrder =
-          (a.meta.order ?? Number.MAX_SAFE_INTEGER) -
-          (b.meta.order ?? Number.MAX_SAFE_INTEGER);
-        if (byOrder !== 0) return byOrder;
-      } else if (displayProjectSort === "name") {
-        const byName = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-        if (byName !== 0) return byName;
-      } else if (
-        displayProjectSort === "oldest" ||
-        displayProjectSort === "created"
-      ) {
-        const dateForProject =
-          displayProjectSort === "oldest" ? firstSessionDate : lastSessionDate;
-        const aCreated = dateForProject(a.sessions, "createdAt");
-        const bCreated = dateForProject(b.sessions, "createdAt");
-        const byCreated = compareOptionalDate(
-          aCreated,
-          bCreated,
-          displayProjectSort === "created",
-        );
-        if (byCreated !== 0) return byCreated;
-      } else {
-        const aRecent = lastSessionDate(a.sessions, "updatedAt");
-        const bRecent = lastSessionDate(b.sessions, "updatedAt");
-        const byRecent = compareOptionalDate(aRecent, bRecent, true);
-        if (byRecent !== 0) return byRecent;
-      }
-      return a.key.localeCompare(b.key);
-    });
-    return result;
+    // Project groups follow the same shared ordering rule as the rest of the
+    // sidebar: bucket boundaries first, then the selected mode. `recent` means
+    // the order the user opened projects, so conversation activity never moves
+    // a group.
+    return sortProjectGroups(result, displayProjectSort, projectVisitRankMap);
   }, [
     filtered,
     openProjectPaths,
@@ -843,6 +766,7 @@ export function Sidebar({
     projectMeta,
     showArchived,
     displayProjectSort,
+    projectVisitRankMap,
     sessionMeta,
     compareSessions,
   ]);
@@ -1053,7 +977,38 @@ export function Sidebar({
   const remoteProjectGroups = useMemo(() => groupRemoteProjectSessions(
     filtered.filter((session) => isRemoteSession(session) && !pinnedSessionIds.has(session.id)), compareSessions,
   ), [filtered, pinnedSessionIds, compareSessions]);
-  // Flat ordered list of every visible session id — used for Shift+click range selection.
+  // Every rendered container in its current order. A drop resolves the whole
+  // target container here, so a reorder always rewrites a complete rank list
+  // instead of guessing from the rows that happen to be on screen.
+  const sessionOrderContainers = useMemo(() => {
+    const containers = new Map<string, SessionSummary[]>();
+    for (const session of pinnedSessions) {
+      const key = sessionOrderBucket(session, sessionMeta[session.id]);
+      const rows = containers.get(key) ?? [];
+      rows.push(session);
+      containers.set(key, rows);
+    }
+    for (const entry of projectEntries) {
+      for (const session of entry.sessions) {
+        if (pinnedSessionIds.has(session.id)) continue;
+        const key = sessionOrderBucket(session, sessionMeta[session.id]);
+        const rows = containers.get(key) ?? [];
+        rows.push(session);
+        containers.set(key, rows);
+      }
+    }
+    for (const session of temporarySessionHistory) {
+      const key = sessionOrderBucket(session, sessionMeta[session.id]);
+      const rows = containers.get(key) ?? [];
+      rows.push(session);
+      containers.set(key, rows);
+    }
+    return containers;
+  }, [pinnedSessions, projectEntries, pinnedSessionIds, temporarySessionHistory, sessionMeta]);
+  const [sessionDropTarget, setSessionDropTarget] = useState<{
+    id: string;
+    insertAfter: boolean;
+  } | null>(null);
   const flatSessionOrder = useMemo(() => {
     const ids: string[] = [];
     // Pinned first (same order as rendered)
@@ -1263,8 +1218,14 @@ export function Sidebar({
     }
   };
 
-  const setSort = (next: SessionSort) => {
+  // Session and project order are separate choices: changing one must never
+  // overwrite the other.
+  const applySessionSort = (next: SessionSort) => {
     setSessionSort(next);
+    closeMenus();
+  };
+
+  const applyProjectSort = (next: ProjectSort) => {
     setProjectSort(next);
     closeMenus();
   };
@@ -1624,6 +1585,7 @@ export function Sidebar({
   const endSessionDrag = useCallback(() => {
     setDraggingSessionId(null);
     setDropProjectKey(null);
+    setSessionDropTarget(null);
   }, []);
 
   // A dragged row can unmount before its own `dragend` fires (sort refresh,
@@ -1634,6 +1596,7 @@ export function Sidebar({
     const clearDragState = () => {
       setDraggingSessionId(null);
       setDropProjectKey(null);
+      setSessionDropTarget(null);
     };
     window.addEventListener("dragend", clearDragState);
     window.addEventListener("drop", clearDragState, true);
@@ -1659,6 +1622,48 @@ export function Sidebar({
     return sessionIdFromDrag(dataTransfer) ?? localSessionId;
   };
 
+  // Dropping one row onto another reorders that row inside its own container.
+  // A running session may be reordered locally; moving it to another project
+  // keeps the existing stop-first rule in `moveSessionToProject`.
+  const onSessionRowDragOver = (
+    event: ReactDragEvent<HTMLDivElement>,
+    target: SessionSummary,
+  ) => {
+    const sourceId = sessionIdForDragOver(event.dataTransfer, draggingSessionId);
+    const source = sourceId ? sessions.find((item) => item.id === sourceId) : undefined;
+    if (!source || !canReorderSidebarSessions(source, target, sessionMeta)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    const rect = event.currentTarget.getBoundingClientRect();
+    const insertAfter = event.clientY > rect.top + rect.height / 2;
+    setSessionDropTarget((current) =>
+      current?.id === target.id && current.insertAfter === insertAfter
+        ? current
+        : { id: target.id, insertAfter },
+    );
+  };
+
+  const onSessionRowDragLeave = (target: SessionSummary) => {
+    setSessionDropTarget((current) => (current?.id === target.id ? null : current));
+  };
+
+  const onSessionRowDrop = (event: ReactDragEvent<HTMLDivElement>, target: SessionSummary) => {
+    const insertAfter = sessionDropTarget?.id === target.id ? sessionDropTarget.insertAfter : false;
+    const sourceId = sessionIdFromDrag(event.dataTransfer);
+    setDraggingSessionId(null);
+    setSessionDropTarget(null);
+    setDropProjectKey(null);
+    const source = sourceId ? sessions.find((item) => item.id === sourceId) : undefined;
+    if (!source || !canReorderSidebarSessions(source, target, sessionMeta)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const container = sessionOrderContainers.get(sessionOrderBucket(target, sessionMeta[target.id]));
+    const orderedIds = container?.map((session) => session.id) ?? [];
+    const next = moveSessionWithinOrder(orderedIds, source.id, target.id, insertAfter);
+    if (next.join("\u0000") === orderedIds.join("\u0000")) return;
+    reorderSessions(next);
+  };
   // A project group accepts a session row from another group. The current
   // group is not a drop target so a drag within one project is a no-op.
   const onProjectDropTargetOver = (
@@ -1759,21 +1764,22 @@ export function Sidebar({
     });
     return (
       <div
-        key={session.id}
-        className={`thread-item ${active ? "active" : ""} ${archived ? "archived" : ""} ${draggingSessionId === session.id ? "is-dragging" : ""} ${selectedIds.has(session.id) ? "selected" : ""}`}
+        className={`thread-item ${active ? "active" : ""} ${archived ? "archived" : ""} ${draggingSessionId === session.id ? "is-dragging" : ""} ${selectedIds.has(session.id) ? "selected" : ""} ${sessionDropTarget?.id === session.id ? (sessionDropTarget.insertAfter ? "is-drop-after" : "is-drop-before") : ""}`}
         data-sidebar-session-row={session.id}
-        draggable={!running && !isRemoteSession(session)}
+        draggable={!isRemoteSession(session)}
         onDragStart={(event) => {
-          if (running || isRemoteSession(session)) {
+          if (isRemoteSession(session)) {
             event.preventDefault();
             return;
           }
           beginSessionDrag(event, session.id);
         }}
         onDragEnd={endSessionDrag}
+        onDragOver={(event) => onSessionRowDragOver(event, session)}
+        onDragLeave={() => onSessionRowDragLeave(session)}
+        onDrop={(event) => onSessionRowDrop(event, session)}
         onClick={(event) => {
           const target = event.target as HTMLElement | null;
-          if (target?.closest("button, [data-action]")) return;
           if (handleMultiSelectClick(event, session.id)) return;
           cancelSessionPrefetch();
           hideSessionHoverCard();
@@ -1881,9 +1887,15 @@ export function Sidebar({
 
     const renderTimeGroupedSessions = (sessions: SessionSummary[]) => {
       const result: React.ReactNode[] = [];
-      for (const { group, sessions: groupSessions } of groupSidebarSessionsByTime(sessions)) {
+      // A manual order is one flat list; date headers would split an order the
+      // user set by hand.
+      for (const { group, sessions: groupSessions } of groupSidebarSessionsByTime(
+        sessions,
+        undefined,
+        { grouped: effectiveSessionSort !== "manual" },
+      )) {
         // For today, don't show header (as per requirement)
-        if (group !== "today") {
+        if (group && group !== "today") {
           const i18nKey =
             group === "yesterday" ? "nav.timeGroupYesterday" :
             group === "thisWeek" ? "nav.timeGroupThisWeek" :
@@ -2121,14 +2133,47 @@ export function Sidebar({
           }}
         >
           <div className="sidebar-popover-title">
-            {t("nav.sortSessions", { defaultValue: "Sort sessions" })}
+            {t("nav.sortSessions", { defaultValue: "Sort projects and chats" })}
           </div>
-          {(["recent", "oldest", "name", "created"] as const).map((value, index) => (
-            <button ref={index === 0 ? menuFirstItemRef : undefined} key={value} type="button" role="menuitemradio" aria-checked={displaySessionSort === value} className={displaySessionSort === value ? "selected" : ""} data-sort={value} onClick={() => setSort(value)}>
-              <span>{value === "recent" ? t("nav.sortRecent", { defaultValue: "Recently updated" }) : value === "oldest" ? t("nav.sortOldest", { defaultValue: "Oldest first" }) : value === "name" ? t("nav.sortName", { defaultValue: "Name" }) : t("nav.sortCreated", { defaultValue: "Created date" })}</span>
-              {displaySessionSort === value ? <span className="sidebar-sort-check">✓</span> : null}
-            </button>
-          ))}
+          <div
+            role="group"
+            aria-label={t("nav.sortSessionsGroup", { defaultValue: "Sessions" })}
+            data-sort-group="sessions"
+          >
+            <div className="sidebar-popover-title sidebar-popover-group">{t("nav.sortSessionsGroup", { defaultValue: "Sessions" })}</div>
+            {(["created", "oldest", "name"] as const).map((value, index) => (
+              <button ref={index === 0 ? menuFirstItemRef : undefined} key={`session-${value}`} type="button" role="menuitemradio" aria-checked={effectiveSessionSort === value} className={effectiveSessionSort === value ? "selected" : ""} data-sort={value} data-sort-scope="session" onClick={() => applySessionSort(value)}>
+                <span>{value === "oldest" ? t("nav.sortOldest", { defaultValue: "Oldest first" }) : value === "name" ? t("nav.sortName", { defaultValue: "Name" }) : t("nav.sortCreated", { defaultValue: "Created date" })}</span>
+                {effectiveSessionSort === value ? <span className="sidebar-sort-check">✓</span> : null}
+              </button>
+            ))}
+            {effectiveSessionSort === "manual" ? (
+              <button type="button" role="menuitemradio" aria-checked={true} className="selected" data-sort="manual" data-sort-scope="session" onClick={() => closeMenus()}>
+                <span>{t("nav.sortManual", { defaultValue: "Manual order" })}</span>
+                <span className="sidebar-sort-check">✓</span>
+              </button>
+            ) : null}
+          </div>
+          <div className="sidebar-popover-divider" />
+          <div
+            role="group"
+            aria-label={t("nav.sortProjectsGroup", { defaultValue: "Projects" })}
+            data-sort-group="projects"
+          >
+            <div className="sidebar-popover-title sidebar-popover-group">{t("nav.sortProjectsGroup", { defaultValue: "Projects" })}</div>
+            {(["recent", "created", "oldest", "name"] as const).map((value) => (
+              <button key={`project-${value}`} type="button" role="menuitemradio" aria-checked={displayProjectSort === value} className={displayProjectSort === value ? "selected" : ""} data-sort={value} data-sort-scope="project" onClick={() => applyProjectSort(value)}>
+                <span>{value === "recent" ? t("nav.sortProjectsRecent", { defaultValue: "Recently opened" }) : value === "oldest" ? t("nav.sortOldest", { defaultValue: "Oldest first" }) : value === "name" ? t("nav.sortName", { defaultValue: "Name" }) : t("nav.sortCreated", { defaultValue: "Created date" })}</span>
+                {displayProjectSort === value ? <span className="sidebar-sort-check">✓</span> : null}
+              </button>
+            ))}
+            {displayProjectSort === "manual" ? (
+              <button type="button" role="menuitemradio" aria-checked={true} className="selected" data-sort="manual" data-sort-scope="project" onClick={() => closeMenus()}>
+                <span>{t("nav.sortManual", { defaultValue: "Manual order" })}</span>
+                <span className="sidebar-sort-check">✓</span>
+              </button>
+            ) : null}
+          </div>
           <div className="sidebar-popover-divider" />
           <button type="button" role="menuitemcheckbox" aria-checked={showArchived} data-action="toggle-show-archived" onClick={toggleShowArchived}>
             <span>{showArchived ? t("nav.hideArchived", { defaultValue: "Hide archived" }) : t("nav.showArchived", { defaultValue: "Show archived" })}</span>

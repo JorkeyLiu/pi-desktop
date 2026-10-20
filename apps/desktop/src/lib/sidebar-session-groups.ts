@@ -104,11 +104,23 @@ function getTimeGroup(dateStr: string | undefined, now: Date): TimeGroup {
 }
 
 const TIME_GROUP_ORDER: TimeGroup[] = ["today", "yesterday", "thisWeek", "older14d", "archived"];
-/** Group only normal history; callers remove global pins before any row limit. */
-export function groupSidebarSessionsByTime(sessions: SessionSummary[], now = new Date()) {
+export type SidebarSessionTimeGroup = { group: TimeGroup | null; sessions: SessionSummary[] };
+/**
+ * Group normal history by when the session was created, so activity never moves
+ * a row into another bucket. Manual order is one flat list: re-bucketing it
+ * would reshuffle an order the user set by hand.
+ */
+export function groupSidebarSessionsByTime(
+  sessions: SessionSummary[],
+  now = new Date(),
+  options: { grouped?: boolean } = {},
+): SidebarSessionTimeGroup[] {
+  if (options.grouped === false) {
+    return sessions.length ? [{ group: null, sessions: [...sessions] }] : [];
+  }
   const grouped = new Map<TimeGroup, SessionSummary[]>();
   for (const session of sessions) {
-    const group = getTimeGroup(session.updatedAt, now);
+    const group = getTimeGroup(session.createdAt, now);
     if (!grouped.has(group)) grouped.set(group, []);
     grouped.get(group)!.push(session);
   }

@@ -3042,6 +3042,7 @@ pub fn builtin_tool_defs() -> Value {
             "description": "Replace the current session's task checklist in display order, so the user can follow multi-step work. \
                  Send `{ todos: [...] }`; every call replaces the whole list (at most 50 items) and an empty array clears it. \
                  At most one item may be `in_progress` — later ones become `pending`; content is trimmed, must be non-empty, and is truncated at 500 characters. \
+                 The reply reports completed/total/cancelled counts and returns the committed list; a cancelled item is neither completed nor outstanding, so total excludes it. \
                  The owner session and turn come from the transport, so any other argument is rejected.",
             "risk": "low",
             "parameters": {

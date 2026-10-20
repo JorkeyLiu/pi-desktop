@@ -694,6 +694,23 @@ export function registerWorkspaceIpc({
     },
   );
 
+  // The host owns which files this session changed and where each baseline
+  // starts, so the renderer sends only the session identity here.
+  handle(
+    IPC.invoke.workspaceReviewFiles,
+    async (input: { sessionId: string }) => {
+      if (!host) throw new Error("host unavailable");
+      return host.call("review.files", input);
+    },
+  );
+  handle(
+    IPC.invoke.workspaceReviewRollbackFile,
+    async (input: { sessionId: string; root?: string; path: string }) => {
+      if (!host) throw new Error("host unavailable");
+      return host.call("review.rollbackFile", input);
+    },
+  );
+
   handle(
     IPC.invoke.statsGetTokenUsageHistory,
     async (input?: { startDate?: number; endDate?: number; bucket?: string }) => {

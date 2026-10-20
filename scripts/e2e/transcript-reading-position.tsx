@@ -1,4 +1,5 @@
 import "./session-reading-position";
+import "./transcript-forward-paging";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import type { UiMessage } from "@pi-desktop/shared";
@@ -37,6 +38,7 @@ function Pane({ id, visible, running }: { id: string; visible: boolean; running:
     sessionId: id, messages, hasMoreBefore: false, isRunning: running,
     askPending: false, approvalPending: false, paneVisible: visible,
     searchTarget: null, readingWindow: false,
+    hasMoreAfter: false, loadingLater: false, laterFailed: false,
   });
   const rows = transcriptEntryMessages(scroll.tailEntry
     ? [...scroll.historyEntries, scroll.tailEntry] : scroll.historyEntries);

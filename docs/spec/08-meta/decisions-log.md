@@ -260,7 +260,7 @@ Gold source: local Codex electron captures; latest row wins where rows conflict.
 | D128 | Artifact-driven work panel tabs (shortcut clause superseded by D207) | **The work panel has no empty manual entry point, welcome chooser, titlebar/menu command, or Cmd/Ctrl+J shortcut. A file/URL/BrowserPreview/successful-command artifact creates and activates a closeable top tab; successful active-session workspace Write/Edit artifacts create and activate the singleton Review tab. File tabs are keyed by lexically normalized path, singleton tool tabs deduplicate, closing the active tab selects its right neighbor then left, closing the last tab hides the panel, and the sole panel-level control collapses it without deleting retained runtime tabs. Changing the visible session or workspace closes and clears tabs so relative resources never cross context boundaries. Startup is closed with no tabs; only panel width persists, while temporary OS-window expansion is excluded from launch bounds. Background-session, failed, and scratch writes do not steal focus. This supersedes D097's fixed tab entry points and `{open, tab}` persistence, refines D098's automatic refresh, and supersedes only D112's welcome-chooser clause.** | Match Codex's output-driven work surface, avoid an empty tool launcher, and make each visible tab correspond to work the session actually produced or explicitly previewed. D128 corrects the initially duplicated D119 identifier; D119 remains the transcript file-store decision. |
 | D140 | Session-owned dirty-workspace transcript review entry *(superseded by D179)* | **After a session produces a successful workspace Write/Edit, its transcript ends with one explicit Review changes command outside collapsed activity groups while that Git working tree remains dirty; other sessions in the same project do not inherit the command. It reports the capped file count and addition/deletion totals and creates, reopens, or activates D128's singleton Review tab. The entry and Review share one workspace-keyed diff refreshed on workspace activation, successful Write/Edit/Bash completion (500ms debounce), explicit Review refresh, and window focus; sequenced requests discard prior-workspace responses. Clean and non-Git results clear review ownership for that workspace; clean, non-Git, missing-workspace, and failed-refresh states hide the entry. Review ownership is renderer-memory state discarded on relaunch with D142's work-panel contexts. This is a contextual artifact/status entry, not the empty manual launcher forbidden by D128.** | Automatic panel opening alone leaves no discoverable return path after collapse or tab close, while session ownership prevents unrelated conversations from claiming project-wide edits. Sharing the real diff makes the conversation entry accurate and keeps Review deduplicated. |
 | D179 | Message-scoped inline review cards *(superseded by D180)* | **Historical decision: each successful workspace Write/Edit row rendered a card by matching the current workspace diff.** | Superseded because current Git state disappears after commit and cannot provide message-owned rollback |
-| D180 | Message-owned review snapshots and guarded rollback | **Successful workspace Write/Edit results carry bounded `details.review` evidence: snapshot id, message/tool id, path, operation, added/modified/deleted status, +/− counts, hunks, and rollback state. The host stores pre-tool bytes and before/after hashes outside the workspace under the session, and the renderer derives the adjacent card and chronological Review history from transcript messages only. `review.rollback` verifies the current post-tool hash before restoring prior bytes or removing a newly-created file; conflicts never overwrite later edits. Session deletion and startup cleanup remove snapshots; forked evidence is visible but non-reversible.** | A message-owned snapshot survives Git commits, separates same-path edits, and makes rollback explicit without trusting mutable repository state |
+| D180 | Message-owned review snapshots and guarded rollback *(panel list amended by D660)* | **Successful workspace Write/Edit results carry bounded `details.review` evidence: snapshot id, message/tool id, path, operation, added/modified/deleted status, +/− counts, hunks, and rollback state. The host stores pre-tool bytes and before/after hashes outside the workspace under the session, and the renderer derives the adjacent card and chronological Review history from transcript messages only. `review.rollback` verifies the current post-tool hash before restoring prior bytes or removing a newly-created file; conflicts never overwrite later edits. Session deletion and startup cleanup remove snapshots; forked evidence is visible but non-reversible.** | A message-owned snapshot survives Git commits, separates same-path edits, and makes rollback explicit without trusting mutable repository state |
 | D142 | Session-scoped work-panel runtime contexts (no-launcher clause amended by D207) | **Each conversation owns an in-memory work-panel context containing open state, ordered tabs, active tab, and Browser resource. Session selection atomically projects that context, switching away never deletes it, and switching back restores it. File/URL/BrowserPreview/command/Review artifacts are recorded against their originating `sessionId`; BrowserPreview renderer events therefore carry `sessionId`. Background artifacts may update their retained context but never open, activate, resize, navigate, or focus the visible panel. A workspace selection without an active conversation hides the panel, and relative resources remain bound to their session/workspace. Relaunch discards every context and Browser resource; only panel width persists. This supersedes only D128's requirement to close and clear tabs when the visible session or workspace changes; D128's artifact triggers, deduplication, and close/collapse behavior remain unchanged, while D207 adds an active-session shortcut that only reveals the retained context. No process ownership boundary changes.** | Permission-gated tools can finish while another conversation is loading or visible. A global destructive tab set either flashes open before being cleared or loses the originating conversation's tools; session-keyed renderer state preserves continuity without allowing background work to steal focus or making transient resources durable. |
 | D154 | Work-panel activity rail and resource switcher | **Once an artifact has opened the work panel, a 44px activity rail exposes Review, Terminal, and Browser as one-click 32px tool buttons; opening a missing tool still uses D128's `openWorkPanelTab` path. The 46px content header shows and closes the active resource and exposes a bounded keyboard-operable switcher for every open tool/file resource. The panel minimum becomes 364px so the rail preserves the previous 320px content floor *(width clamp superseded by D167)*. This replaces the horizontally scrolling top tabs and hidden empty-header context menu while preserving D128's artifact-driven panel entry, resource deduplication/order, close-neighbor behavior, and session-scoped runtime ownership.** | High-frequency tools should be visible and spatially stable, while long or numerous file names need a labeled overflow surface rather than compressing every action into one titlebar row. |
 | D157 | One visual assistant turn per user turn | **Provider-level assistant messages separated by thinking/tool activity remain distinct canonical transcript records, but ChatTranscript composes all records after one user message and before the next into one `role=article` assistant turn. Ordered markdown fragments and activity disclosures remain visible; only the composed turn owns the trailing aggregate model/usage row and Copy/Fork/Retry toolbar. Copy joins all contentful fragments with paragraph breaks; Fork and Retry use the last contentful assistant record as their durable boundary.** | Tool-capable providers close and reopen assistant messages around every tool call. Rendering those transport boundaries as separate responses duplicated action toolbars and made one agent run look like many AI replies. |
@@ -7684,3 +7684,64 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   E2E-PROVIDER-custom-endpoint-session-identity. See issue #1634,
   `03-runtime/02-agent-runtime.md` §6.3, and
   `03-runtime/11-provider-model-system.md`.
+
+## 2026-10-20 — Review lists one row per changed file with a guarded file-level rollback (D660)
+
+- D660 amends D180's Review-panel clause without changing its message-owned
+  evidence: the Review tab is the conversation's net change, not a change log.
+  It lists one row per file a conversation changed, comparing the bytes recorded
+  before the conversation first modified that file with the working tree now.
+  Repeated edits collapse into one row, and a file that ends up byte-identical
+  to its recorded baseline is not listed at all. Inline cards stay per tool call,
+  so a row's own status, counts, and hunks still describe exactly what that row
+  changed. This decision was first written under D659, which already belonged to
+  the archived-project reopen decision; it is renumbered here without changing
+  that entry.
+- The row set and each row's baseline are read from the host's durable
+  per-session records, not from the renderer's loaded message window. A long
+  conversation whose first edit has scrolled out of the page is still compared
+  from the first bytes it recorded, and a record whose display payload was
+  trimmed still contributes. A record the host cannot read makes the totals a
+  lower bound and disables rollback, because the missing record could be an
+  earlier edit of the same file.
+- A row's identity is its workspace root plus the relative path, so two project
+  folders that hold the same relative name stay separate rows and each rolls
+  back inside its own folder. A record written before roots were recorded
+  resolves only while the session spans a single root; with more than one root
+  the row reports that its workspace is unavailable rather than guessing, and a
+  root that has left the session is reported the same way. Rows are ordered by
+  the record's write time in microseconds, with the record file's own timestamp
+  standing in for entries written before that field existed.
+- Comparison bounds: the common leading and trailing lines are trimmed before
+  anything is solved, so a one-line edit in a very long file still produces a
+  real hunk with exact counts. The remaining region is solved exactly up to a
+  bounded budget, else bisected on a line that occurs once on both sides, else
+  reported as too large to compare. One answer shares a total comparison-work
+  budget and a total hunk-text budget across its rows, and a record body that
+  would exceed the per-record ceiling is dropped while its exact counts remain,
+  so a record always survives the transcript's display cap with its identity
+  fields intact. That display trimming keeps scalar fields before nested
+  containers for the same reason. Snapshot bytes above the per-side ceiling,
+  unretained earlier bytes, binary content, and paths that leave the workspace
+  each report their own reason, and an uncounted row never serializes as zero.
+- The comparison and the restore run outside the host's shared state lock: the
+  lock is held only to read the session's identity, roots, and data directory
+  and again to record the result, so one large comparison cannot stall every
+  other request.
+- `workspace/review/rollbackFile` replaces the panel's per-tool action: it
+  restores that file's first recorded bytes after verifying the current content
+  still matches the newest recorded record for the file, marks every active
+  record of the file rolled back, and returns those marks so the renderer
+  mirrors the state onto its messages. A conflicting edit is reported and never
+  overwritten. A rollback applies only to the session that requested it, and
+  switching sessions drops the previous session's rows before the next answer
+  arrives, so a stale row can never be acted on. Per-tool records keep their own
+  `review.rollback` in the transcript.
+- Renderer surface plus additive host RPCs and their shared types; no schema
+  change, and the recorded evidence, snapshot lifecycle, and session scoping are
+  unchanged. Covered by the host-core `review` unit tests and real-host
+  `review.*` RPC tests, `apps/desktop/test/chat-review-entry.test.mjs`, the
+  isolated renderer probe `scripts/e2e-review-files.mjs`, and catalog parity for
+  the new copy in all nine locales. See `03-runtime/01-ipc-protocol.md`,
+  `04-ux/08-component-spec.md` §5, `04-ux/09-interaction-patterns.md`, and
+  E2E-057.

@@ -576,3 +576,109 @@ test("selection revalidation cannot remove a restored range, but an explicit rew
   r.set({ messages: [message("tail", "edited")] });
   assert.equal(r.view(), undefined);
 });
+
+const restoredWindow = (overrides = {}) => ({
+  messages: [message("m1")], messageStart: 0, messageEnd: 1,
+  hasMoreBefore: false, hasMoreAfter: true, focus: null, restored: true, loading: null,
+  ...overrides,
+});
+
+test("a forward page without a physical end re-reads the bounded tail instead of guessing the head", async () => {
+  const calls = [];
+  const r = reader(async (_id, options) => {
+    calls.push(options);
+    return page([message("newest")], { messageStart: 3, messageEnd: 4, hasMoreAfter: false });
+  });
+  r.set({ transcriptViews: { s: restoredWindow({ messageEnd: undefined, messageStart: 900 }) } });
+  await r.loadTranscriptPage("s", "after");
+  // A remote or metadata-only window has no forward cursor; requesting one by
+  // arithmetic would read the transcript's head page instead of its newest one.
+  assert.deepEqual(calls, [{ messageLimit: 100, contentLimit: 65536 }]);
+  // The window is the newest bounded page again, and because it is no longer a
+  // historical snapshot it accepts live output.
+  assert.deepEqual(r.view().messages.map((row) => row.id), ["newest"]);
+  assert.deepEqual(r.visible().map((row) => row.id), ["newest", "tail"]);
+  assert.equal(r.view().hasMoreAfter, false);
+  assert.equal(r.view().restored, undefined);
+  assert.equal(r.view().messageStart, 3);
+});
+
+test("a forward page that cannot advance the window stops instead of repeating the cursor", async () => {
+  const calls = [];
+  const r = reader(async (_id, options) => {
+    calls.push(options);
+    return page([], { messageStart: 4, messageEnd: 4, hasMoreBefore: true, hasMoreAfter: true });
+  });
+  r.set({ transcriptViews: { s: restoredWindow({ messageStart: 4, messageEnd: 4 }) } });
+  await r.loadTranscriptPage("s", "after");
+  assert.equal(calls.length, 1);
+  assert.equal(r.view().hasMoreAfter, false, "an empty page must not leave automatic paging armed");
+  await r.loadTranscriptPage("s", "after");
+  assert.equal(calls.length, 1);
+});
+
+test("the forward page that reaches the tail resumes live output in the reading window", async () => {
+  const r = reader(async () => page([message("m2")], { messageStart: 1, messageEnd: 2, hasMoreAfter: false }));
+  r.set({ messages: [message("m2"), message("m3", "streamed")] });
+  r.set({ transcriptViews: { s: restoredWindow() } });
+  assert.deepEqual(r.visible().map((row) => row.id), ["m1"]);
+  await r.loadTranscriptPage("s", "after");
+  assert.equal(r.view().restored, undefined);
+  assert.deepEqual(r.visible().map((row) => row.id), ["m1", "m2", "m3"]);
+  assert.equal(r.get().transcriptViews.s.loading, null);
+});
+
+test("a failed forward page stops and stays explicitly retryable", async () => {
+  const calls = [];
+  const r = reader(async (_id, options) => {
+    calls.push(options);
+    if (calls.length === 1) throw new Error("host read failed");
+    return page([message("m2")], { messageStart: 1, messageEnd: 2, hasMoreAfter: false });
+  });
+  r.set({ transcriptViews: { s: restoredWindow() } });
+  await r.loadTranscriptPage("s", "after");
+  assert.equal(r.view().laterFailed, true);
+  assert.equal(r.view().loading, null);
+  assert.deepEqual(r.errors, ["host read failed"]);
+  await r.loadTranscriptPage("s", "after");
+  assert.equal(r.view().laterFailed, undefined);
+  assert.equal(r.view().hasMoreAfter, false);
+  assert.equal(calls.length, 2);
+});
+
+test("a superseded forward page cannot publish over the newer reading window", async () => {
+  const pending = deferred();
+  const r = reader(() => pending.promise);
+  r.set({ transcriptViews: { s: restoredWindow() } });
+  const loading = r.loadTranscriptPage("s", "after");
+  r.returnToLatestTranscript("s");
+  pending.resolve(page([message("m2")], { messageStart: 1, messageEnd: 2, hasMoreAfter: false }));
+  await loading;
+  assert.equal(r.view(), undefined);
+  assert.deepEqual(r.visible().map((row) => row.id), ["tail"]);
+});
+
+test("a range restored while the turn already runs resumes live output when it ends", async () => {
+  // A turn that was running before the restore never fires the "turn started"
+  // boundary, so the frozen snapshot would stay authoritative forever and the
+  // finished answer could never appear in it.
+  const r = reader(async () => page([message("old")], {
+    messageStart: 0, messageEnd: 1, hasMoreAfter: true,
+  }), { runningSessions: { s: true } });
+  assert.equal(await r.restoreTranscriptReading("s", bookmark, new AbortController().signal), true);
+  assert.equal(r.view().restored, true);
+  r.set({
+    runningSessions: { s: false },
+    messages: [message("old"), message("m2", "finished answer")],
+  });
+  assert.equal(r.view()?.restored, undefined, "the range must resume live output at turn end");
+  assert.deepEqual(r.visible().map((row) => row.id), ["old", "m2"]);
+});
+
+test("a search snapshot is never thawed by a turn ending", async () => {
+  const r = reader(async () => page([message("hit")]), { runningSessions: { s: true } });
+  await r.navigateTranscript(target("hit"));
+  r.set({ runningSessions: { s: false }, messages: [message("tail", "new")] });
+  assert.equal(r.view().focus.messageId, "hit");
+  assert.deepEqual(r.visible().map((row) => row.id), ["hit"]);
+});

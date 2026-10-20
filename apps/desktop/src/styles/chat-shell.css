@@ -390,6 +390,18 @@
   padding: 2px 0 12px;
 }
 
+/* The bottom boundary of the reading window. It carries no control: reaching
+ * it fetches the next page, so it only reserves the row the status occupies and
+ * gives the observer a stable element to watch. */
+.transcript-later-boundary {
+  min-height: 26px;
+  box-sizing: border-box;
+  color: var(--ds-text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+  padding: 12px 0 2px;
+}
+
 /* The tail runtime status (working / planning / run activity) mounts and clears
  * with the turn's phase, and each of those rows is its own box: without a
  * reserve, an indicator appearing between two tool rows grows `.thread-content`

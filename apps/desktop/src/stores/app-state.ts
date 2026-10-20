@@ -24,6 +24,7 @@ import type {
   PluginViewMeta,
   ProjectWorkspace,
   ProviderPublic,
+  ReviewFileRollbackResult,
   ReviewRollbackResult,
   SessionSummary,
   SessionThinkingLevel,
@@ -268,6 +269,12 @@ export type AppState = {
     messageId: string,
     snapshotId: string,
   ) => Promise<ReviewRollbackResult | null>;
+  /** Restore one file to the bytes this conversation first recorded. */
+  rollbackReviewFile: (
+    sessionId: string,
+    root: string | undefined,
+    path: string,
+  ) => Promise<ReviewFileRollbackResult | null>;
   abort: () => Promise<void>;
   openProject: (options?: { remoteHostKey?: string }) => Promise<void>;
   closeProjectDialog: () => void;
@@ -313,6 +320,8 @@ export type AppState = {
   renameSession: (id: string, title: string) => Promise<void>;
   /** Move an idle session into an already-known project, preserving history. */
   moveSessionProject: (id: string, projectPath: string) => Promise<boolean>;
+  /** Persist a manual session order for one sidebar container. */
+  reorderSessions: (orderedIds: string[]) => void;
   deleteSession: (id: string) => Promise<void>;
   setSessionSort: (sort: SessionSort) => void;
   setSessionArchiveVisibility: (show: boolean) => void;

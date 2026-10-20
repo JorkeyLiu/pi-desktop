@@ -1646,6 +1646,32 @@ fn capability_err(message: impl Into<String>) -> JsonRpcError {
     rpc_err(1018, message, "CAPABILITY_INVALID")
 }
 
+/// The workspace roots this session may write into: its primary root plus any
+/// other root of the same project group, exactly as tool calls resolved them.
+///
+/// Review records store the root their path is relative to, so every read and
+/// rollback re-checks that root against this list. A group folder that was
+/// removed, a forged record, or two folders that share a relative name can never
+/// redirect a write outside the session's roots.
+fn review_roots(
+    st: &AppState,
+    session_id: &str,
+) -> Result<Option<review::SessionRoots>, JsonRpcError> {
+    let Some(primary) = resolve_tool_workspace(st, session_id)? else {
+        return Ok(None);
+    };
+    let mut extra = Vec::new();
+    if let Ok(Some(group)) = st.db.project_group_for_path(&primary) {
+        for root in group.roots {
+            extra.push(std::path::PathBuf::from(root.path));
+        }
+    }
+    Ok(Some(review::SessionRoots::new(
+        std::path::PathBuf::from(primary),
+        extra,
+    )))
+}
+
 /// Validation failures from the user-owned MCP registry are the user's typo,
 /// not an internal fault, so they get a distinct code the UI can show inline.
 fn scope_err(err: impl ToString) -> JsonRpcError {
@@ -2212,43 +2238,157 @@ async fn handle_request(
             let session_id = params
                 .get("sessionId")
                 .and_then(|value| value.as_str())
-                .ok_or_else(|| rpc_err(1002, "sessionId required", "INVALID_PARAMS"))?;
+                .ok_or_else(|| rpc_err(1002, "sessionId required", "INVALID_PARAMS"))?
+                .to_string();
             let snapshot_id = params
                 .get("snapshotId")
                 .and_then(|value| value.as_str())
-                .ok_or_else(|| rpc_err(1002, "snapshotId required", "INVALID_PARAMS"))?;
-            let st = state.lock().await;
-            if remote_tools::session_remote_workspace(&st, session_id)?.is_some() {
-                return Err(rpc_err(
-                    1002,
-                    "remote workspace rollback is unavailable",
-                    "CAPABILITY_UNAVAILABLE",
-                ));
-            }
-            let workspace_root = resolve_tool_workspace(&st, session_id)?;
-            let outcome = review::rollback_change(
-                &st.data_dir,
-                session_id,
-                snapshot_id,
-                workspace_root.as_deref().map(std::path::Path::new),
-            )
+                .ok_or_else(|| rpc_err(1002, "snapshotId required", "INVALID_PARAMS"))?
+                .to_string();
+            // Session identity, roots, and the data directory are read under the
+            // lock; the file work happens without holding it.
+            let (data_dir, roots) = {
+                let st = state.lock().await;
+                if remote_tools::session_remote_workspace(&st, &session_id)?.is_some() {
+                    return Err(rpc_err(
+                        1002,
+                        "remote workspace rollback is unavailable",
+                        "CAPABILITY_UNAVAILABLE",
+                    ));
+                }
+                let Some(roots) = review_roots(&st, &session_id)? else {
+                    return Err(rpc_err(
+                        1002,
+                        "session has no workspace",
+                        "CAPABILITY_UNAVAILABLE",
+                    ));
+                };
+                (st.data_dir.clone(), roots)
+            };
+            let (data_dir, session, snapshot) = (data_dir, session_id.clone(), snapshot_id.clone());
+            let outcome = tokio::task::spawn_blocking(move || {
+                review::rollback_change(&data_dir, &session, &snapshot, &roots)
+            })
+            .await
+            .map_err(|error| rpc_err(1000, error.to_string(), "INTERNAL"))?
             .map_err(|error| rpc_err(1000, error.to_string(), "INTERNAL"))?;
             if matches!(outcome.status, "rolledBack" | "alreadyRolledBack") {
-                if let Some(root) = workspace_root.as_deref() {
+                let st = state.lock().await;
+                if let Some(root) = outcome.root.as_deref() {
                     let resolved = std::path::Path::new(root).join(&outcome.path);
                     st.hashline.invalidate_path(
-                        session_id,
+                        &session_id,
                         &crate::tools::hashline::canonical_key(&resolved),
                     );
                 }
                 sessions::update_tool_review_state(
                     &st.db,
-                    session_id,
+                    &session_id,
                     &outcome.message_id,
-                    snapshot_id,
+                    &snapshot_id,
                     "rolledBack",
                 )
                 .map_err(|error| rpc_err(1000, error.to_string(), "INTERNAL"))?;
+            }
+            Ok(serde_json::to_value(outcome)
+                .map_err(|error| rpc_err(1000, error.to_string(), "INTERNAL"))?)
+        }
+
+        // The session's own snapshot records are the authority for which files
+        // changed and where each baseline starts. A renderer window is not an
+        // input, so a long conversation cannot lose its earliest edit.
+        "review.files" => {
+            let session_id = params
+                .get("sessionId")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| rpc_err(1002, "sessionId required", "INVALID_PARAMS"))?
+                .to_string();
+            let (data_dir, roots) = {
+                let st = state.lock().await;
+                if remote_tools::session_remote_workspace(&st, &session_id)?.is_some() {
+                    return Err(rpc_err(
+                        1002,
+                        "remote workspace review is unavailable",
+                        "CAPABILITY_UNAVAILABLE",
+                    ));
+                }
+                let Some(roots) = review_roots(&st, &session_id)? else {
+                    return Ok(json!({
+                        "files": [],
+                        "unreadableRecords": 0,
+                    }));
+                };
+                (st.data_dir.clone(), roots)
+            };
+            let session = session_id.clone();
+            let outcome = tokio::task::spawn_blocking(move || {
+                review::file_changes(&data_dir, &session, &roots)
+            })
+            .await
+            .map_err(|error| rpc_err(1000, error.to_string(), "INTERNAL"))?;
+            Ok(serde_json::to_value(outcome)
+                .map_err(|error| rpc_err(1000, error.to_string(), "INTERNAL"))?)
+        }
+
+        "review.rollbackFile" => {
+            let session_id = params
+                .get("sessionId")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| rpc_err(1002, "sessionId required", "INVALID_PARAMS"))?
+                .to_string();
+            let path = params
+                .get("path")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| rpc_err(1002, "path required", "INVALID_PARAMS"))?
+                .to_string();
+            let root = params
+                .get("root")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            let (data_dir, roots) = {
+                let st = state.lock().await;
+                if remote_tools::session_remote_workspace(&st, &session_id)?.is_some() {
+                    return Err(rpc_err(
+                        1002,
+                        "remote workspace rollback is unavailable",
+                        "CAPABILITY_UNAVAILABLE",
+                    ));
+                }
+                let Some(roots) = review_roots(&st, &session_id)? else {
+                    return Err(rpc_err(
+                        1002,
+                        "session has no workspace",
+                        "CAPABILITY_UNAVAILABLE",
+                    ));
+                };
+                (st.data_dir.clone(), roots)
+            };
+            let session = session_id.clone();
+            let outcome = tokio::task::spawn_blocking(move || {
+                review::rollback_file(&data_dir, &session, &roots, root.as_deref(), &path)
+            })
+            .await
+            .map_err(|error| rpc_err(1000, error.to_string(), "INTERNAL"))?
+            .map_err(|error| rpc_err(1000, error.to_string(), "INTERNAL"))?;
+            if outcome.status == "rolledBack" {
+                let st = state.lock().await;
+                if let Some(root) = outcome.root.as_deref() {
+                    let resolved = std::path::Path::new(root).join(&outcome.path);
+                    st.hashline.invalidate_path(
+                        &session_id,
+                        &crate::tools::hashline::canonical_key(&resolved),
+                    );
+                }
+                for mark in &outcome.rolled_back {
+                    sessions::update_tool_review_state(
+                        &st.db,
+                        &session_id,
+                        &mark.message_id,
+                        &mark.snapshot_id,
+                        "rolledBack",
+                    )
+                    .map_err(|error| rpc_err(1000, error.to_string(), "INTERNAL"))?;
+                }
             }
             Ok(serde_json::to_value(outcome)
                 .map_err(|error| rpc_err(1000, error.to_string(), "INTERNAL"))?)
@@ -6000,6 +6140,328 @@ mod tests {
             .unwrap()
             .iter()
             .all(|session| session["id"] != json!(session_id)));
+    }
+
+    /// Snapshot helper: record one real edit of `path` under `root` for the
+    /// session, exactly as a tool call's review capture would.
+    fn record_review_edit(
+        data_dir: &std::path::Path,
+        session_id: &str,
+        message_id: &str,
+        root: &std::path::Path,
+        path: &str,
+        next: &str,
+    ) {
+        let pending = crate::review::prepare_change(
+            data_dir,
+            session_id,
+            message_id,
+            Some(root),
+            None,
+            "Edit",
+            &json!({ "path": path }),
+        )
+        .unwrap()
+        .expect("a workspace edit captures a review record");
+        fs::write(root.join(path), next).unwrap();
+        crate::review::finalize_change(&pending).unwrap();
+    }
+
+    fn review_session(app_state: &mut AppState, project_path: &std::path::Path) -> String {
+        sessions::create_session_with_options(
+            &app_state.db,
+            sessions::SessionCreateOptions {
+                project_path: Some(project_path.to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id
+    }
+
+    /// The host scans the session's own records, so a renderer's message window
+    /// cannot shorten a file's history: the baseline is the first edit even when
+    /// it happened before the newest hundred messages.
+    #[tokio::test]
+    async fn review_files_keeps_the_first_baseline_of_a_long_session() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let workspace = data_dir.path().join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(workspace.join("src.txt"), "one\ntwo\n").unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let session_id = review_session(&mut app_state, &workspace);
+        let data = app_state.data_dir.clone();
+        let state = Arc::new(Mutex::new(app_state));
+
+        record_review_edit(
+            &data,
+            &session_id,
+            "m1",
+            &workspace,
+            "src.txt",
+            "one\nTWO\n",
+        );
+        record_review_edit(
+            &data,
+            &session_id,
+            "m2",
+            &workspace,
+            "src.txt",
+            "one\nTWO\nthree\n",
+        );
+        record_review_edit(
+            &data,
+            &session_id,
+            "m3",
+            &workspace,
+            "src.txt",
+            "one\nTWO\nthree\nfour\n",
+        );
+
+        let files = handle_request(
+            state.clone(),
+            "review.files",
+            json!({ "sessionId": session_id }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        let rows = files["files"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{files}");
+        assert_eq!(rows[0]["path"], json!("src.txt"));
+        assert_eq!(rows[0]["additions"], json!(3), "{files}");
+        assert_eq!(rows[0]["deletions"], json!(1), "{files}");
+        assert_eq!(
+            rows[0]["snapshotIds"].as_array().unwrap().len(),
+            3,
+            "{files}"
+        );
+
+        let outcome = handle_request(
+            state,
+            "review.rollbackFile",
+            json!({ "sessionId": session_id, "path": "src.txt" }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome["status"], json!("rolledBack"));
+        assert_eq!(
+            fs::read_to_string(workspace.join("src.txt")).unwrap(),
+            "one\ntwo\n",
+            "the conversation's first bytes come back"
+        );
+    }
+
+    /// Two project roots can hold the same relative name. The review keeps them
+    /// apart and rolls each one back inside its own root.
+    #[tokio::test]
+    async fn review_files_and_rollback_stay_inside_each_records_root() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let primary = data_dir.path().join("primary");
+        let member = data_dir.path().join("member");
+        fs::create_dir_all(&primary).unwrap();
+        fs::create_dir_all(&member).unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        app_state
+            .db
+            .create_project_group(
+                "Two roots",
+                &[
+                    primary.to_string_lossy().to_string(),
+                    member.to_string_lossy().to_string(),
+                ],
+            )
+            .unwrap();
+        let session_id = review_session(&mut app_state, &primary);
+        let data = app_state.data_dir.clone();
+        let state = Arc::new(Mutex::new(app_state));
+
+        fs::write(primary.join("shared.ts"), "a0\n").unwrap();
+        record_review_edit(&data, &session_id, "m1", &primary, "shared.ts", "a1\n");
+        fs::write(member.join("shared.ts"), "b0\n").unwrap();
+        record_review_edit(&data, &session_id, "m2", &member, "shared.ts", "b1\n");
+        // A deletion in the member root must not be recreated in the primary.
+        fs::write(member.join("gone.ts"), "keep me\n").unwrap();
+        let pending = crate::review::prepare_change(
+            &data,
+            &session_id,
+            "m3",
+            Some(&member),
+            None,
+            "Edit",
+            &json!({ "path": "gone.ts" }),
+        )
+        .unwrap()
+        .unwrap();
+        fs::remove_file(member.join("gone.ts")).unwrap();
+        crate::review::finalize_change(&pending).unwrap();
+
+        let files = handle_request(
+            state.clone(),
+            "review.files",
+            json!({ "sessionId": session_id }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        let rows = files["files"].as_array().unwrap();
+        assert_eq!(rows.len(), 3, "one row per root and path: {files}");
+        let shared: Vec<&Value> = rows
+            .iter()
+            .filter(|row| row["path"] == json!("shared.ts"))
+            .collect();
+        assert_eq!(shared.len(), 2);
+        assert_ne!(shared[0]["root"], shared[1]["root"]);
+        let member_root = crate::workspace::simple_canonicalize(&member)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let member_gone = rows
+            .iter()
+            .find(|row| row["path"] == json!("gone.ts"))
+            .expect("the member root's deletion has its own row");
+        assert_eq!(member_gone["root"], json!(member_root));
+        assert_eq!(member_gone["status"], json!("deleted"));
+
+        let outcome = handle_request(
+            state,
+            "review.rollbackFile",
+            json!({
+                "sessionId": session_id,
+                "root": member_root,
+                "path": "gone.ts",
+            }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome["status"], json!("rolledBack"));
+        assert_eq!(
+            fs::read_to_string(member.join("gone.ts")).unwrap(),
+            "keep me\n"
+        );
+        assert!(
+            !primary.join("gone.ts").exists(),
+            "the primary root never gains a file the conversation did not touch"
+        );
+    }
+
+    /// A second session never reads the first session's records.
+    #[tokio::test]
+    async fn review_files_is_scoped_to_the_calling_session() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let workspace = data_dir.path().join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(workspace.join("src.txt"), "one\n").unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let owner = review_session(&mut app_state, &workspace);
+        let other = review_session(&mut app_state, &workspace);
+        let data = app_state.data_dir.clone();
+        let state = Arc::new(Mutex::new(app_state));
+        record_review_edit(&data, &owner, "m1", &workspace, "src.txt", "one\ntwo\n");
+
+        let files = handle_request(
+            state.clone(),
+            "review.files",
+            json!({ "sessionId": other }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(files["files"], json!([]));
+        let outcome = handle_request(
+            state,
+            "review.rollbackFile",
+            json!({ "sessionId": other, "path": "src.txt" }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome["status"], json!("unavailable"));
+        assert_eq!(
+            fs::read_to_string(workspace.join("src.txt")).unwrap(),
+            "one\ntwo\n"
+        );
+    }
+
+    /// Review work must not hold the host-wide state lock: another request is
+    /// served while a large session is still being compared.
+    #[tokio::test]
+    async fn review_files_does_not_hold_the_state_lock_while_comparing() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let workspace = data_dir.path().join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let session_id = review_session(&mut app_state, &workspace);
+        let data = app_state.data_dir.clone();
+        let state = Arc::new(Mutex::new(app_state));
+
+        // Files whose changed region is large and has no unique anchor: each one
+        // costs the full exact-solve budget.
+        for index in 0..24 {
+            let name = format!("wide-{index}.txt");
+            fs::write(workspace.join(&name), "shared\n".repeat(1_200)).unwrap();
+            let pending = crate::review::prepare_change(
+                &data,
+                &session_id,
+                &format!("m-{index}"),
+                Some(&workspace),
+                None,
+                "Edit",
+                &json!({ "path": name }),
+            )
+            .unwrap()
+            .unwrap();
+            fs::write(
+                workspace.join(&name),
+                format!("first\n{}last\n", "shared\n".repeat(1_200)),
+            )
+            .unwrap();
+            crate::review::finalize_change(&pending).unwrap();
+        }
+
+        // The order the two requests finish in is the evidence: a review that
+        // holds the lock would finish before the read-only request it blocks.
+        let finished = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let review_state = state.clone();
+        let review_finished = finished.clone();
+        let review = async move {
+            let result = handle_request(
+                review_state,
+                "review.files",
+                json!({ "sessionId": session_id }),
+                mpsc::unbounded_channel().0,
+            )
+            .await;
+            review_finished.lock().await.push("review");
+            result
+        };
+        let other_state = state;
+        let other_finished = finished.clone();
+        let other = async move {
+            let result = handle_request(
+                other_state,
+                "projects.list",
+                json!({}),
+                mpsc::unbounded_channel().0,
+            )
+            .await;
+            other_finished.lock().await.push("other");
+            result
+        };
+        let (review_result, other_result) = tokio::join!(review, other);
+        review_result.expect("review.files answers");
+        other_result.expect("projects.list answers");
+        assert_eq!(
+            *finished.lock().await,
+            vec!["other", "review"],
+            "a read-only request is served while the comparison runs"
+        );
     }
 
     #[tokio::test]

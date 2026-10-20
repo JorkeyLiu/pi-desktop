@@ -261,15 +261,30 @@ destination, chat as the home surface, tools and permissions inline.
   preview even without an open project. Back returns to the no-project browsing
   state. Branches preserve referenced pasted/imported inputs as child-owned
   copies; deleting the source task does not break these previews.
-- **Sort**: user-facing modes are Recently updated, Created date, Oldest
-  first, and Name. Pinned rows precede unpinned rows. Project groups switch
-  to `manual` by dragging a title or using ArrowUp/ArrowDown on that
-  title. Session `manual` remains a compatibility value.
+- **Sort**: the sort menu separates the two orders it controls. **Sessions**
+  offers Created date (default), Oldest first, and Name; a stored `recent` value
+  from an older build resolves to Created date, because activity-driven
+  ordering moved rows while they were being read. **Projects** offers Recently
+  opened (default), Created date, Oldest first, and Name. Each choice changes
+  only its own order, pinned rows precede unpinned rows, and there is no reset
+  entry; dragging a session row or a project title shows the corresponding
+  `manual` order as the current state.
+- **Conversation order**: sessions are ordered by creation time, so a reply, a
+  running turn, or any other activity never moves a row. Ties fall back to a
+  stable id order. Time headers group the default order by creation date;
+  `manual` renders one flat list so a hand-set order is never re-bucketed. A
+  session without a rank in a manual container appears above the ranked rows,
+  which is what a newly created session looks like.
 - **Conversation list**: each group shows the ten most-recent sessions in the
   active sort order by default; the remainder folds behind a **Load N more…**
   row that expands the full time-grouped list on click. Pinned rows precede
   unpinned rows and are never pushed behind the fold; the expansion state is
   not persisted.
+- **Project order**: the default project order is the order in which the user
+  opened the retained project tabs; pinned and archived projects keep their
+  buckets, and dragging a project title or ArrowUp/ArrowDown switches the order
+  to `manual`. Creating a conversation or replying in one never reorders the
+  project groups.
 - **Standalone sessions**: path-less sessions remain in the separate Sessions
   section and never inherit the last active project's workspace.
 - **Concurrency**: the shell selects one visible project at a time, while

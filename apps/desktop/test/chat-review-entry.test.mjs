@@ -10,7 +10,9 @@ import test from "node:test";
 import {
   reviewChangeFromMessage,
   reviewChangesFromMessages,
+  reviewFilesFromResult,
   summarizeReviewChanges,
+  summarizeReviewFiles,
 } from "../src/lib/workspace-review.ts";
 
 const transcriptSource = await readTranscriptSource();
@@ -172,11 +174,11 @@ test("chat renders one message-owned review inside the tool row that made it", (
   assert.doesNotMatch(transcriptSource, /<ReviewChangeCard\b/);
   // The standalone card is the review panel's row for a change no tool row
   // shows, and it stays the only place that repeats the file name.
-  assert.match(reviewSource, /<ReviewChangeCard/);
+  assert.match(reviewSource, /<ReviewFileChangeCard/);
   assert.doesNotMatch(transcriptSource, /workspaceDiff|findWorkspaceChange/);
   assert.match(cardSource, /aria-expanded=\{open\}/);
   assert.match(cardSource, /chat\.reviewChangeShow/);
-  assert.match(cardSource, /change\.hunks\.map/);
+  assert.match(cardSource, /hunks\.map/);
   assert.match(cardSource, /workspaceReviewRollback|rollbackWorkspaceChange/);
   assert.match(
     storeSource,
@@ -204,12 +206,40 @@ test("rollback outcomes reach the toast instead of a second card row", () => {
   assert.doesNotMatch(cardSource, /panel\.review\.rollbackConflict/);
 });
 
-test("Review is a session change history and no longer refreshes a Git diff", () => {
-  assert.match(reviewSource, /reviewChangesFromMessages\(messages\)/);
-  assert.match(reviewSource, /<ReviewChangeCard/);
+test("Review shows one row per file from its recorded baseline", () => {
+  // The panel asks the host for each file's net change, and the transcript's
+  // per-tool records are not the panel's list.
+  assert.doesNotMatch(reviewSource, /reviewFileRefs/);
+  assert.match(reviewSource, /api\.workspaceReviewFiles/);
+  assert.match(reviewSource, /<ReviewFileChangeCard/);
+  assert.match(reviewSource, /summarizeReviewFiles/);
+  assert.match(reviewSource, /panel\.review\.filesChanged/);
   assert.match(reviewSource, /panel\.review\.noChanges/);
+  assert.doesNotMatch(reviewSource, /reviewChangesFromMessages|summarizeReviewChanges/);
   assert.doesNotMatch(reviewSource, /workspaceDiff|refreshWorkspaceDiff|api\.workspaceDiff/);
   assert.doesNotMatch(appSource, /reviewRev|refreshWorkspaceDiff|workspaceDiff/);
+});
+
+test("a file rollback restores the first baseline and mirrors the marks", () => {
+  assert.match(
+    storeSource,
+    /rollbackReviewFile:[\s\S]*api\.workspaceReviewRollbackFile[\s\S]*withReviewChangeState/,
+  );
+  assert.match(
+    storeSource,
+    /rollbackReviewFile: async \(sessionId, root, path\)[\s\S]{0,400}activeSessionId !== sessionId/,
+  );
+  assert.match(cardSource, /rollbackReviewFile/);
+  assert.match(cardSource, /rollback\(sessionId, file\.root, file\.path\)/);
+  assert.match(cardSource, /panel\.review\.fileShow/);
+  assert.match(cardSource, /panel\.review\.limit\.workspaceUnavailable/);
+  assert.match(cardSource, /panel\.review\.limit\.requestBudgetExceeded/);
+});
+
+test("unknown counts are never rendered as zero", () => {
+  assert.match(cardSource, /panel\.review\.countsUnknown/);
+  assert.match(cardSource, /diff-count-unknown/);
+  assert.match(cardSource, /additions === undefined \|\| deletions === undefined/);
 });
 
 test("review surfaces keep visual state, focus, and motion feedback", () => {
@@ -247,4 +277,106 @@ test("a recorded change is a single flat row, not a card", () => {
   // The Git-diff era file rows are gone; only the +/− counts helper survives.
   assert.doesNotMatch(workPanelStylesSource, /\.diff-file/);
   assert.match(workPanelStylesSource, /\.diff-counts \{/);
+});
+
+test("the review panel asks the host for the session's files", () => {
+  // The panel no longer derives a file list from the transcript window, so a
+  // long conversation cannot lose an early edit, and a record whose display
+  // payload was trimmed cannot drop a snapshot from the list.
+  assert.match(reviewSource, /api\.workspaceReviewFiles\(\{ sessionId: target \}\)/);
+  assert.doesNotMatch(reviewSource, /reviewFileRefs|reviewChangesFromMessages/);
+  assert.doesNotMatch(reviewSource, /messages: /);
+  assert.match(reviewSource, /file\.root/);
+});
+
+test("switching sessions clears the rows before the next answer lands", () => {
+  // The effect resets the view on a session change and ignores a late answer
+  // for a session that is no longer active.
+  assert.match(
+    reviewSource,
+    /useEffect\(\(\) => \{[\s\S]{0,400}setView\(\s*sessionId\s*\?\s*\{ \.\.\.EMPTY, sessionId, loading: true/,
+  );
+  assert.match(reviewSource, /view\.sessionId === sessionId \? view : EMPTY_VIEW/);
+  assert.match(reviewSource, /sessionId=\{current\.sessionId\}/);
+});
+
+test("a reported file row never invents a count", () => {
+  const { files: reported } = reviewFilesFromResult({
+    truncated: true,
+    unreadableRecords: 2,
+    files: [
+      {
+        version: 1,
+        path: "docs/big.md",
+        status: "modified",
+        truncated: true,
+        reason: "diffTooComplex",
+        hunks: [],
+        reversible: true,
+        rolledBack: false,
+        snapshotIds: ["snapshot-1"],
+      },
+    ],
+  });
+  const [file] = reported;
+  assert.equal(file.additions, undefined);
+  assert.equal(file.deletions, undefined);
+  assert.equal(file.reason, "diffTooComplex");
+  // Unknown totals stay a lower bound instead of silently counting as zero.
+  assert.deepEqual(summarizeReviewFiles({ files: [file] }), {
+    fileCount: 1,
+    additions: 0,
+    deletions: 0,
+    partial: true,
+  });
+  // A bounded answer or an unreadable record makes the totals a lower bound
+  // even when every listed row counted its own change.
+  assert.deepEqual(
+    summarizeReviewFiles({
+      files: [{ ...file, path: "b.ts", additions: 2, deletions: 1, truncated: false }],
+      truncated: true,
+    }),
+    { fileCount: 1, additions: 2, deletions: 1, partial: true },
+  );
+  assert.deepEqual(
+    summarizeReviewFiles({
+      files: [{ ...file, path: "c.ts", additions: 2, deletions: 1, truncated: false }],
+      unreadableRecords: 1,
+    }),
+    { fileCount: 1, additions: 2, deletions: 1, partial: true },
+  );
+  assert.deepEqual(
+    summarizeReviewFiles({
+      files: [
+        { ...file, path: "a.ts", additions: 3, deletions: 1, truncated: false },
+        file,
+      ],
+    }),
+    { fileCount: 2, additions: 3, deletions: 1, partial: true },
+  );
+  // The root is part of a row's identity and is parsed with it.
+  const [rooted] = reviewFilesFromResult({
+    files: [{ ...file, root: "/projects/second", additions: 1, deletions: 0 }],
+  }).files;
+  assert.equal(rooted.root, "/projects/second");
+  // A record without exact counts is still parsed, so its row and its reason
+  // reach the panel.
+  const change = reviewChangeFromMessage(
+    message({
+      toolResult: {
+        details: {
+          root: "workspace",
+          review: {
+            ...baseReview,
+            additions: undefined,
+            deletions: undefined,
+            truncated: true,
+            reason: "fileTooLarge",
+          },
+        },
+      },
+    }),
+  );
+  assert.equal(change.additions, undefined);
+  assert.equal(change.reason, "fileTooLarge");
 });

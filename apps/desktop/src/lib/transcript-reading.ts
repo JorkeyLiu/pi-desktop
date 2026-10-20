@@ -25,6 +25,12 @@ export type TranscriptView = {
   focus: TranscriptSearchTarget | null;
   /** A bookmarked historical range, without search navigation/highlighting. */
   restored?: boolean;
+  /**
+   * A later page failed. The reader must retry explicitly: an automatic
+   * scroll trigger would otherwise repeat a failing read on every frame the
+   * window stays near the bottom.
+   */
+  laterFailed?: boolean;
   loading: "target" | "before" | "after" | null;
 };
 
@@ -148,13 +154,20 @@ export function extendTranscriptView(
   );
   const focused = view.messages.find((message) => message.id === view.focus?.messageId);
   const messages = focused ? upsertLiveSessionMessage(merged, focused) : merged;
+  // A forward page that reaches the newest physical message ends the reason the
+  // view was frozen: from here the window is the tail, so live output must be
+  // merged again instead of staying behind a historical snapshot. A search
+  // snapshot keeps its own contract and is never thawed this way.
+  const atTail = direction === "after" && session.hasMoreAfter !== true && !view.focus;
   return {
     ...view,
     messages,
     messageStart: Math.min(view.messageStart, session.messageStart ?? 0),
     messageEnd: Math.max(view.messageEnd ?? 0, session.messageEnd ?? 0),
     hasMoreBefore: direction === "before" ? session.hasMoreBefore === true : view.hasMoreBefore,
-    hasMoreAfter: direction === "after" ? session.hasMoreAfter === true : view.hasMoreAfter,
+    hasMoreAfter:
+      direction === "after" ? !atTail && session.hasMoreAfter === true : view.hasMoreAfter,
+    restored: atTail ? undefined : view.restored,
     loading: null,
   };
 }

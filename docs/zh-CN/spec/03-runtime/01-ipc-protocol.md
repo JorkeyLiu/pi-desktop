@@ -1486,9 +1486,37 @@ type AgentCapabilityQuery = {
   相反，来自转录工具结果的记录，因此提交无法删除
   记录的变化。
 - `workspace/review/rollback({sessionId, snapshotId})` →
-  `ReviewRollbackResult`。主机在之前验证当前的后工具哈希
-  恢复快照；它返回 `rolledBack`、`alreadyRolledBack`、
-  `conflict` 或 `unavailable` 并且永远不会覆盖冲突的后续编辑。
+  `ReviewRollbackResult`。主机在恢复快照前验证当前的工具后哈希；
+  它返回 `rolledBack`、`alreadyRolledBack`、`conflict` 或 `unavailable`，
+  且永远不会覆盖冲突的后续编辑。
+- `workspace/review/files({sessionId})` → `ReviewFileChangeResult { files:
+  ReviewFileChange[], truncated?, unreadableRecords? }`。改动文件集合由主机而非
+  渲染器确定：主机扫描本会话自己的 `review-changes/<sessionId>/` 记录，因此即使
+  某文件唯一的改动发生在渲染器可见消息窗口之前，它仍会列出；即使转录本读取时
+  裁剪了某条记录的显示内容，该记录仍参与聚合。每行用该文件最早记录快照的字节与
+  当前工作区内容比较；当前字节仍与记录基线相同的文件会被省略，因此该列表表示
+  净改动而非变更日志。每行由 `root` 与 `path` 共同标识：`root` 是该路径相对
+  的工作区根，因此同一项目分组中两个持有相同相对路径的文件夹是两行，且不会共用
+  基线。根字段写入之前产生的旧记录仅在会话只有一个根时解析；否则该行报告
+  `workspaceUnavailable`，不做猜测。主机无法计数时 `additions`/`deletions`
+  缺省；`truncated` 与 `reason`（`fileTooLarge`、`diffTooComplex`、
+  `diffTooLarge`、`baselineUnavailable`、`unreadable`、`workspaceUnavailable`、
+  `requestBudgetExceeded`）说明原因，未知计数绝不会序列化为 0。`truncated`
+  同时标记被主机限界的应答（行数上限、合计比较工作量、合计差异文本）；
+  `unreadableRecords` 统计本会话下完全无法读取的记录，非零时所有行都不可回滚，
+  因为缺失的记录可能正是该文件更早的一次修改。
+- `workspace/review/rollbackFile({sessionId, root?, path})` →
+  `ReviewFileRollbackResult { status, root?, path, rolledBack: [{snapshotId,
+  messageId}] }`。先确认当前内容仍与该文件最新活动记录的工具后哈希一致，再恢复
+  该文件最早记录的字节；`root` 指明该行属于哪个文件夹，会话有多个根时必须提供。
+  记录所属根已不在会话当前根内、文件名有歧义，或会话下存在任何不可读记录时，
+  主机返回 `unavailable` 而不写入。`conflict` 表示文件在记录的操作之外发生了
+  变化，此时不写入任何内容。该文件所有活动快照会被标记为已回滚并返回，供调用方
+  同步到消息上。
+- 两个审阅通道都按工具调用的同一规则解析会话根（主项目/工作树根，加上同一项目
+  分组内的其他根），只在读取会话身份、根与数据目录时持有主机状态锁，并有界比较
+  放在阻塞工作线程上执行，因此其他 RPC 不会等待它。每次读取与写入都重新校验
+  工作区包含关系；声称属于其他会话的记录，或路径越出自身根的记录，都不会被解析。
 
 ### browser (D100, D333)
 

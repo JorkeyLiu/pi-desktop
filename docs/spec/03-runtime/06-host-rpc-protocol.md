@@ -534,12 +534,21 @@ deletes per 60 seconds. P2/P3 methods are not present in protocol v11.
 - TodoWrite is allowed only for an Agent session's own running turn. Plan/Goal,
   delegated, plugin, and MCP calls receive a tool result error and do not mutate
   storage. A successful replacement advances the session revision even when
+  storage. A successful replacement advances the session revision even when
   `todos` is empty and emits `todos.changed` after the transaction commits.
   The event payload is the same complete snapshot returned by `todos.get`.
+- The successful TodoWrite result carries the committed list in `todos` beside
+  its existing `text`, `revision`, `summary`, and `warnings`: the row that wrote
+  the checklist renders what the session holds, not what the call asked for. A
+  refusal returns only `error` and `code` and carries no list. `summary.total`
+  counts the items that still matter — completed plus outstanding — so a
+  cancelled item is excluded from it and reported in `summary.cancelled`.
 - SQLite ownership is host-core only. The renderer receives snapshots through
   Electron Main IPC, keeps them by session id, and ignores revisions older than
-  or equal to the cached revision. Remote RACP sessions are local-only for this
-  vertical slice because RACP v1 has no Todo snapshot operation.
+  or equal to the cached revision. The checklist itself is displayed from the
+  tool result that committed it, so no renderer surface reads a snapshot back.
+  Remote RACP sessions are local-only for this vertical slice because RACP v1
+  has no Todo snapshot operation.
 
 ### Stats
 

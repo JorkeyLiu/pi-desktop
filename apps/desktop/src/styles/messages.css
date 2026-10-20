@@ -3262,8 +3262,10 @@
   color: var(--ds-ansi-bright-white);
 }
 
-/* A checklist: what the call wrote, with the same status glyph the Composer's
-   dock uses. */
+/* A checklist: the list the call committed, with the shared status glyph the
+   transcript's tool rows use. A list with no outstanding item drops the bar and
+   states its own condition in the same line, so this layout holds for a cleared
+   checklist as well. */
 .tool-todo {
   display: grid;
   min-width: 0;

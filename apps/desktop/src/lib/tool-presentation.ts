@@ -469,15 +469,24 @@ const TODO_STATUSES = new Set([
 const MAX_TODO_ITEMS = 50;
 
 /**
- * The checklist a `TodoWrite` call wrote. The host result records counts and
- * warnings only, so the rows come from the call's own `todos` argument and the
- * progress line from the result when it recorded one.
+ * The checklist a `TodoWrite` call committed.
+ *
+ * A successful host result carries the normalized list it stored as `todos`, so
+ * the rows show what the session holds — after trimming, truncation and the
+ * single-active-item demotion — and not a list the call asked for that the host
+ * then changed. An empty committed list is a real state (the session's checklist
+ * was cleared), so it still produces a body the row's disclosure can point at.
+ *
+ * A row persisted before the result carried that field falls back to its own
+ * `todos` argument; the session's current snapshot is never consulted, because a
+ * later write must not rewrite an earlier card.
  */
 function todosBlock(
   args: Record<string, unknown> | null,
   details: Record<string, unknown> | null,
 ): Extract<ToolBlock, { kind: "todos" }> | null {
-  const raw = Array.isArray(args?.todos) ? args.todos : null;
+  const committed = Array.isArray(details?.todos) ? details.todos : null;
+  const raw = committed ?? (Array.isArray(args?.todos) ? args.todos : null);
   if (!raw) return null;
   const items: ToolTodoItem[] = [];
   for (const entry of raw) {
@@ -490,7 +499,9 @@ function todosBlock(
       typeof record?.priority === "string" ? record.priority : undefined;
     items.push({ content, status, ...(priority ? { priority } : {}) });
   }
-  if (items.length === 0) return null;
+  // An argument the schema cannot describe is left to the generic fallback; a
+  // committed empty list is not that case, it is the checklist being cleared.
+  if (items.length === 0 && raw.length > 0) return null;
   const summary = asRecord(details?.summary);
   const countOf = (status: string) =>
     items.filter((item) => item.status === status).length;
@@ -928,9 +939,13 @@ function resultBlocks(
     }
     case "todo": {
       // A checklist is a list of items, not an argument dump: the host result
-      // carries counts and warnings only, so the rows come from the call's own
-      // `todos` argument (the schema's four states and its priority).
-      const checklist = todosBlock(args, details);
+      // carries the committed list, its counts and its warnings, so the body
+      // shows what the session holds rather than the argument that was sent.
+      // A refused write committed nothing, so its own list must not appear as
+      // if it had; the `error` note above is the whole body then.
+      const checklist = resultFailed(message)
+        ? null
+        : todosBlock(args, details);
       if (checklist) blocks.push(checklist);
       const warnings = stringArray(details?.warnings);
       if (warnings) {
@@ -1148,13 +1163,16 @@ export function buildToolPresentation(
   // the interesting part. A delegation places its own brief, so it opts out.
   // A run row's command was withheld above because the head shows it, so the
   // body must not print it back as an argument the moment a command prints
-  // nothing (D226).
+  // nothing (D226). A refused checklist is the same case in another shape: it
+  // committed nothing, so its argument must not appear as an input list the
+  // reader could mistake for the session's checklist.
   const headHasCommand =
     action === "run" &&
     options.hideSummaryArg === true &&
     getToolSummaryKey(message.toolName, args) !== null;
   const wantArgs =
     action !== "delegate" &&
+    !(action === "todo" && resultFailed(message)) &&
     !headHasCommand &&
     (blocks.length === 0 ||
       blocks.every(

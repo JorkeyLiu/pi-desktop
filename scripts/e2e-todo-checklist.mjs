@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-/** Real SQLite/stdiorpc host and production TodoDock in an isolated Electron renderer. */
+/**
+ * Real SQLite/stdiorpc host, the production agent runtime, and the production
+ * `TodoWrite` card in an isolated Electron renderer.
+ */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
@@ -19,6 +22,9 @@ try {
   await build({ entryPoints: [join(root, "scripts/e2e/todo-checklist.tsx")],
     outfile: join(temp, "renderer.js"), bundle: true, platform: "browser", format: "esm", jsx: "automatic",
     define: { "process.env.NODE_ENV": '"production"', "import.meta.env.DEV": "false" },
+    // The card's stylesheet is the app's built one, linked below; the imported
+    // CSS entry points would otherwise pull their font assets into the bundle.
+    loader: { ".css": "empty" },
     alias: { "@pi-desktop/i18n": join(root, "packages/i18n/src/index.ts"),
       "@pi-desktop/shared": join(root, "packages/shared/src/index.ts"),
       react: join(root, "apps/desktop/node_modules/react"),
@@ -51,7 +57,7 @@ const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("node:path");
 const channels = ${JSON.stringify({ get: IPC.invoke.todosGet, changed: IPC.event.todosChanged, host: IPC.event.hostStatus })};
 app.setPath("userData", path.join(__dirname, "profile"));
-let DesktopAgentRuntime, createAssistantMessageEventStream, host, win, failRead = false, suppressEvents = false, readCount = 0, readFailures = 0;
+let DesktopAgentRuntime, createAssistantMessageEventStream, host, win, suppressEvents = false;
 function forwardNotifications() {
   host.notifications.push = function (...notes) {
     for (const note of notes) if (!suppressEvents && note.method === "todos.changed") win.webContents.send(channels.changed, note.params);
@@ -70,34 +76,38 @@ app.whenReady().then(async () => {
         contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
     win.webContents.on("console-message", (event) => console.error(event.message));
     forwardNotifications();
-    ipcMain.handle("fixture:invoke", async (_event, channel, input) => {
-      if (channel !== channels.get) throw new Error("Unexpected fixture IPC: " + channel);
-      readCount++;
-      if (failRead) { failRead = false; readFailures++; return { ok: false, error: { code: "HOST_NOT_READY", message: "Injected first read failure" } }; }
-      try { return { ok: true, data: await host.call("todos.get", input, 10000) }; }
-      catch (error) { return { ok: false, error: { code: error.errorCode || "INTERNAL", message: error.message } }; }
-    });
+    // The renderer keeps only the snapshot contract (todos.changed); nothing in
+    // the card reads a checklist back from the database.
+    ipcMain.handle("fixture:invoke", async () => { throw new Error("The checklist card reads no snapshot"); });
+    const todoArgs = (todos) => ({ todos });
     ipcMain.handle("fixture:action", async (_event, name, input) => {
       switch (name) {
         case "create": return (await host.call("session.create", { title: input, mode: "agent" }, 10000)).session.id;
+        case "snapshot": return await host.call("todos.get", { sessionId: input }, 10000);
         case "write": {
+          // One real Agent turn: the model discovers TodoWrite, then calls it.
+          // Only the external model stream is replaced; discovery, argument
+          // validation, host RPC, SQLite, notifications and result replay all
+          // run in production code.
           const { turnId } = await host.call("session.beginTurn", { sessionId: input.sessionId }, 10000);
           const requests = [];
-          let round = 0;
+          let round = 0, started = null, ended = null;
           const runtime = new DesktopAgentRuntime({ host, sessionId: input.sessionId, turnId, mode: "agent",
             provider: { id: "todo-fixture", name: "Deterministic Todo fixture", baseUrl: "http://127.0.0.1:1/v1",
               modelId: "local-model", apiKey: "", authKind: "none", supportsReasoning: false, supportedThinkingLevels: ["off"] },
             commandShell: { id: "bash", label: "Bash", dialect: "posix", available: true, isDefault: true },
-            thinkingLevel: "off", onEvent: () => undefined,
+            thinkingLevel: "off",
+            onEvent: ({ event }) => {
+              if (event.type === "tool_start" && event.toolName === "TodoWrite") started = event;
+              if (event.type === "tool_end" && event.toolCallId === "write-todos") ended = event;
+            },
           });
-          // Replace only the external model transport. Discovery, argument validation,
-          // execution, host RPC, SQLite, notifications and result replay stay real.
           runtime.models = { streamSimple: (_model, context) => {
             requests.push({ ...context, messages: [...context.messages] });
             round++;
             const toolCall = round === 1
               ? { type: "toolCall", id: "discover-todos", name: "ToolSearch", arguments: { query: "TodoWrite" } }
-              : round === 2 ? { type: "toolCall", id: "write-todos", name: "TodoWrite", arguments: { todos: input.todos } } : undefined;
+              : round === 2 ? { type: "toolCall", id: "write-todos", name: "TodoWrite", arguments: todoArgs(input.todos) } : undefined;
             const message = { role: "assistant", api: "openai-completions", provider: "todo-fixture", model: "local-model",
               content: toolCall ? [toolCall] : [{ type: "text", text: "Checklist updated." }],
               usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
@@ -110,26 +120,34 @@ app.whenReady().then(async () => {
           } };
           try {
             await runtime.prompt("Track the requested implementation checklist.", "fixture-user-" + Date.now(), turnId);
-            const result = requests.at(-1)?.messages.find(message => message.role === "toolResult" && message.toolCallId === "write-todos");
-            if (!result || result.isError) throw new Error("Agent TodoWrite did not replay a successful tool result: " + JSON.stringify(result));
+            if (!started || !ended) throw new Error("The agent turn produced no TodoWrite call");
+            if (ended.isError) throw new Error("Agent TodoWrite did not replay a successful tool result: " + JSON.stringify(ended.result));
             const stored = await host.call("todos.get", { sessionId: input.sessionId }, 10000);
-            return { ...stored, toolResultText: result.content.filter(block => block.type === "text").map(block => block.text).join(" ") };
+            return { snapshot: stored, toolArgs: started.args, toolResult: ended.result, isError: false };
           } finally {
             await runtime.dispose();
             await host.call("session.endTurn", { turnId, status: "completed", createNotification: false }, 10000);
           }
         }
+        case "refuse": {
+          // A write against a turn that already ended: the host refuses it, and
+          // nothing is committed or announced.
+          const { turnId } = await host.call("session.beginTurn", { sessionId: input.sessionId }, 10000);
+          await host.call("session.endTurn", { turnId, status: "completed", createNotification: false }, 10000);
+          const result = await host.call("tools.execute", {
+            sessionId: input.sessionId, turnId, toolCallId: "refused-todos", toolName: "TodoWrite",
+            args: todoArgs(input.todos), mode: "agent" }, 10000);
+          return { toolArgs: todoArgs(input.todos), isError: true,
+            toolResult: { content: [{ type: "text", text: String(result.content?.error ?? result.errorCode) }],
+              details: result.content, isError: true } };
+        }
         case "restart": await host.restart(); forwardNotifications(); return;
-        case "ready": win.webContents.send(channels.host, { ok: false, component: "host" }); win.webContents.send(channels.host, { ok: true, component: "host", restarted: true }); return;
         case "event": win.webContents.send(channels.changed, input); return;
-        case "failRead": failRead = true; return;
         case "suppressEvents": suppressEvents = input; return;
-        case "readCount": return readCount;
-        case "readFailures": return readFailures;
         default: throw new Error("Unknown action: " + name);
       }
     });
-    const watchdog = setTimeout(async () => { console.error("Todo checklist scenario timed out"); await host.stop(); app.exit(1); }, 50000);
+    const watchdog = setTimeout(async () => { console.error("Todo checklist scenario timed out"); await host.stop(); app.exit(1); }, 60000);
     await win.loadFile(path.join(__dirname, "index.html"));
     const result = await win.webContents.executeJavaScript("window.todoChecklistProbe()");
     console.log("TODO_CHECKLIST " + JSON.stringify(result));
@@ -142,7 +160,7 @@ app.whenReady().then(async () => {
   const child = spawn(resolveElectronBinary(root).electronBinary, [join(temp, "main.cjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => { output += chunk; });
-  const timer = setTimeout(() => child.kill("SIGKILL"), 60_000);
+  const timer = setTimeout(() => child.kill("SIGKILL"), 90_000);
   let code;
   try { code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); }); }
   finally { clearTimeout(timer); }

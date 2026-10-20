@@ -57,9 +57,21 @@ export function createTranscriptReadingRuntime({ get, set }: StoreAccess, read: 
     });
   }
 
-  function reportError(sessionId: string, pending: TranscriptView, error: unknown) {
+  function reportError(
+    sessionId: string,
+    pending: TranscriptView,
+    direction: "before" | "after",
+    error: unknown,
+  ) {
     if (get().transcriptViews[sessionId] !== pending) return;
-    publish(sessionId, { ...pending, loading: null });
+    // A later page that failed while the reader sits at the bottom of the
+    // window must not retry itself: mark the view so only an explicit retry
+    // reads again.
+    publish(sessionId, {
+      ...pending,
+      loading: null,
+      ...(direction === "after" ? { laterFailed: true } : {}),
+    });
     if (get().activeSessionId === sessionId)
       get().showToast(error instanceof Error ? error.message : String(error), { variant: "error" });
   }
@@ -150,41 +162,68 @@ export function createTranscriptReadingRuntime({ get, set }: StoreAccess, read: 
     },
     loadTranscriptPage: async (sessionId, direction) => {
       const view = currentView(sessionId);
-      const remote = isRemoteSession({ id: sessionId });
-      // Remote history exposes older-item cursors only; never synthesize a
-      // forward cursor by applying local physical-offset arithmetic.
-      if (remote && direction === "after") return;
       if (view.loading || !(direction === "before" ? view.hasMoreBefore : view.hasMoreAfter))
         return;
+      const remote = isRemoteSession({ id: sessionId });
       const limit = view.focus ? TRANSCRIPT_SEARCH_PAGE_SIZE : TRANSCRIPT_PAGE_SIZE;
-      const pending: TranscriptView = { ...view, loading: direction };
+      // A forward page needs the exclusive physical end of the current window.
+      // Remote history exposes older-item cursors only, and a window restored
+      // from partial metadata may carry no end at all. Synthesizing one would
+      // request the transcript's *head* page, so a window without a reliable
+      // forward cursor re-reads the newest bounded page instead: one explicit,
+      // bounded degradation back to the live tail, never an arithmetic guess.
+      const resyncTail = direction === "after" && view.messageEnd === undefined;
+      const pending: TranscriptView = { ...view, loading: direction, laterFailed: undefined };
       publish(sessionId, pending);
       try {
-        const { session } = await read(sessionId, {
-          messageBefore:
-            direction === "before" ? view.messageStart : (view.messageEnd ?? 0) + limit,
-          messageLimit: limit,
-          contentLimit: TRANSCRIPT_CONTENT_LIMIT,
-        });
+        const { session } = await read(
+          sessionId,
+          resyncTail
+            ? { messageLimit: limit, contentLimit: TRANSCRIPT_CONTENT_LIMIT }
+            : {
+                messageBefore: direction === "before" ? view.messageStart : (view.messageEnd ?? 0) + limit,
+                messageLimit: limit,
+                contentLimit: TRANSCRIPT_CONTENT_LIMIT,
+              },
+        );
         if (get().transcriptViews[sessionId] !== pending) return;
         if (!session) throw new Error("Conversation no longer exists.");
+        if (resyncTail) {
+          publish(sessionId, transcriptViewFromSession(session, view.focus));
+          return;
+        }
         const extended = extendTranscriptView(pending, session, direction);
         // Remote numeric values represent opaque Host item cursors. Preserve
         // the returned cursor rather than depending on its ordering. Local
         // transcripts continue merging physical message offsets unchanged.
-        publish(sessionId, remote ? {
-          ...extended,
-          messageStart: session.messageStart ?? 0,
-          messageEnd: undefined,
-          hasMoreAfter: false,
-        } : extended);
+        if (remote) {
+          publish(sessionId, {
+            ...extended,
+            messageStart: session.messageStart ?? 0,
+            messageEnd: undefined,
+            hasMoreAfter: false,
+          });
+          return;
+        }
+        // A later page that added nothing cannot advance the window: keeping
+        // the flag would let automatic forward paging re-request the same
+        // cursor for as long as the reader stays near the bottom.
+        publish(
+          sessionId,
+          direction === "after" && extended.messages.length === pending.messages.length
+            ? { ...extended, hasMoreAfter: false }
+            : extended,
+        );
       } catch (error) {
-        reportError(sessionId, pending, error);
+        reportError(sessionId, pending, direction, error);
       }
     },
   };
 
-  /** One lifecycle boundary for pane eviction, new turns, and authoritative edits. */
+  /**
+   * One lifecycle boundary for pane eviction, new turns, authoritative edits,
+   * and a finished turn that overlapped a restored range.
+   */
   function reconcile(state: AppState, previous: AppState) {
     for (const [id, view] of Object.entries(state.transcriptViews)) {
       const evicted = !state.retainedSessionIds.includes(id);
@@ -200,7 +239,29 @@ export function createTranscriptReadingRuntime({ get, set }: StoreAccess, read: 
         !(view.restored && previous.selectingSessionId === id) &&
         state.messages !== previous.messages &&
         transcriptWasRewritten(previous.messages, state.messages);
-      if (evicted || started || rewritten) returnToLatestTranscript(id);
+      if (evicted || started || rewritten) {
+        returnToLatestTranscript(id);
+        continue;
+      }
+      /*
+        A range restored while a turn was already streaming never sees the
+        "turn started" boundary above: that turn began before the range
+        existed. Keeping the snapshot frozen past the end of that turn would
+        lock its result out of the transcript for good. The range keeps its
+        rows and its scroll position and simply becomes the loaded window
+        again, so new output lands below the reader instead of replacing what
+        they were reading. A search snapshot keeps its own contract.
+      */
+      const resumedDuringReading =
+        state.activeSessionId === id &&
+        previous.activeSessionId === id &&
+        view.restored === true &&
+        !view.focus &&
+        !state.runningSessions[id] &&
+        previous.runningSessions[id] === true;
+      if (!resumedDuringReading) continue;
+      const { restored: _released, ...thawed } = view;
+      publish(id, thawed);
     }
   }
 

@@ -145,17 +145,34 @@ test("global pins honor session and project archives including normalized paths"
   );
 });
 
-test("ordinary date groups retain their order after pins are removed", () => {
+test("ordinary date groups follow the created date, not activity", () => {
   const date = (day) => new Date(2026, 8, day, 1).toISOString();
   const rows = [
-    session({ id: "old", updatedAt: "2025-01-01T00:00:00Z" }),
-    session({ id: "week", updatedAt: date(10) }),
-    session({ id: "today", updatedAt: date(13) }),
-    session({ id: "yesterday", updatedAt: date(12) }),
-    session({ id: "fortnight", updatedAt: date(3) }),
+    session({ id: "old", createdAt: "2025-01-01T00:00:00Z" }),
+    session({ id: "week", createdAt: date(10) }),
+    session({ id: "today", createdAt: date(13) }),
+    session({ id: "yesterday", createdAt: date(12) }),
+    session({ id: "fortnight", createdAt: date(3) }),
+    // A busy row keeps its created bucket no matter how recently it was used.
+    session({ id: "busy-old", createdAt: "2025-01-02T00:00:00Z", updatedAt: date(13) }),
   ];
+  const grouped = groupSidebarSessionsByTime(rows, new Date(2026, 8, 13, 12));
   assert.deepEqual(
-    groupSidebarSessionsByTime(rows, new Date(2026, 8, 13, 12)).map((group) => group.group),
+    grouped.map((group) => group.group),
     ["today", "yesterday", "thisWeek", "older14d", "archived"],
   );
+  assert.deepEqual(
+    grouped.find((group) => group.group === "archived").sessions.map((row) => row.id),
+    ["old", "busy-old"],
+  );
+});
+
+test("a manual order is one flat list without date buckets", () => {
+  const rows = [
+    session({ id: "ranked-first", createdAt: "2025-01-01T00:00:00Z" }),
+    session({ id: "ranked-second", createdAt: new Date(2026, 8, 13, 1).toISOString() }),
+  ];
+  const flat = groupSidebarSessionsByTime(rows, new Date(2026, 8, 13, 12), { grouped: false });
+  assert.deepEqual(flat, [{ group: null, sessions: rows }]);
+  assert.deepEqual(groupSidebarSessionsByTime([], new Date(2026, 8, 13, 12), { grouped: false }), []);
 });

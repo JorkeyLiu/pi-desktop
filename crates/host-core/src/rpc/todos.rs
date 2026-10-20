@@ -19,8 +19,10 @@ use crate::tools::{ToolsExecuteParams, ToolsExecuteResult};
 /// sessions live outside SQLite, so they can never own a Desktop checklist.
 const NATIVE_PI_SESSION_PREFIX: &str = "native-pi:";
 
-/// Longest `current:` excerpt carried in the tool result text. The model gets
-/// the summary and the active item; it never gets the whole list echoed back.
+/// Longest `current:` excerpt carried in the tool result text. That text stays
+/// a bounded one-line summary — which item is active and how far the list got —
+/// so a model never has to re-read its own checklist to know the outcome. The
+/// committed list itself rides beside it as structured data for the card.
 const CURRENT_CONTENT_PREVIEW_CHARS: usize = 80;
 
 /// `todos.get`: the committed snapshot for one live session.
@@ -229,6 +231,13 @@ fn success(
                 "cancelled": summary.cancelled,
             },
             "warnings": warnings,
+            // The committed list, so the row that wrote it renders what the
+            // session now holds — after trimming, truncation and the
+            // single-active-item demotion — instead of re-deriving a card
+            // from the argument the model sent. `text` stays the bounded
+            // one-line summary named above; this field is the same snapshot
+            // `todos.changed` and `todos.get` report.
+            "todos": snapshot.todos,
         }),
         duration_ms: started.elapsed().as_millis() as u64,
         denied: None,
@@ -412,10 +421,23 @@ mod tests {
             json!({"completed": 1, "total": 2, "inProgress": 1, "cancelled": 1})
         );
         assert_eq!(result["content"]["warnings"], json!([]));
+        // The renderer's card reads the list the host committed, so the result
+        // carries it: a card built from the call's own argument would show a
+        // list the session never held.
+        assert_eq!(
+            result["content"]["todos"],
+            json!([
+                {"content": "done", "status": "completed", "priority": "medium"},
+                {"content": "now", "status": "in_progress", "priority": "high"},
+                {"content": "dropped", "status": "cancelled", "priority": "medium"}
+            ]),
+            "{result}"
+        );
         let text = result["content"]["text"].as_str().unwrap();
         assert!(text.contains("1/2 completed"), "{text}");
         assert!(text.contains("current: now"), "{text}");
-        // The result carries a summary, never the whole checklist.
+        // The text stays a bounded summary; the checklist travels only as the
+        // structured `todos` field below, never inside this sentence.
         assert!(!text.contains("dropped"), "{text}");
 
         let emitted = harness.events();
@@ -491,6 +513,58 @@ mod tests {
         // Stored content keeps its own line breaks after trimming; only the
         // tool result text is collapsed to one line.
         assert_eq!(stored[1]["content"], json!("multiline\nlater"));
+        // The result carries the same normalized list the event reports, not
+        // the argument the model sent: the card reads what the session holds.
+        assert_eq!(
+            result["content"]["todos"], emitted[0]["params"]["todos"],
+            "{result}"
+        );
+        assert_eq!(
+            result["content"]["todos"][0]["content"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            todos::MAX_TODO_CONTENT_CHARS
+        );
+        assert_eq!(result["content"]["todos"][1]["status"], json!("pending"));
+    }
+
+    /// A clear is a committed state, not an absent one: the result says the
+    /// checklist is empty while the revision still advances, so the row that
+    /// wrote it can show "cleared" instead of a stale list or a 0/0 ratio.
+    #[tokio::test]
+    async fn clearing_the_checklist_reports_an_empty_committed_list() {
+        let mut harness = Harness::new();
+        let session_id = harness.session("agent").await;
+        let turn_id = harness.begin_turn(&session_id).await;
+        harness
+            .call(
+                "tools.execute",
+                write_call(&session_id, &turn_id, items(&["kept", "dropped"])),
+            )
+            .await
+            .unwrap();
+        assert_eq!(harness.events().len(), 1);
+
+        let cleared = harness
+            .call(
+                "tools.execute",
+                write_call(&session_id, &turn_id, json!({"todos": []})),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cleared["ok"], json!(true), "{cleared}");
+        assert_eq!(cleared["content"]["todos"], json!([]), "{cleared}");
+        assert_eq!(
+            cleared["content"]["summary"],
+            json!({"completed": 0, "total": 0, "inProgress": 0, "cancelled": 0})
+        );
+        assert_eq!(cleared["content"]["revision"], json!(2));
+        let emitted = harness.events();
+        assert_eq!(emitted.len(), 1);
+        assert_eq!(emitted[0]["params"]["todos"], json!([]));
+        assert_eq!(emitted[0]["params"]["revision"], json!(2));
     }
 
     #[tokio::test]

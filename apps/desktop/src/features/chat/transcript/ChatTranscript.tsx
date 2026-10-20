@@ -4,7 +4,7 @@ import type { PlanningState, UiMessage } from "@pi-desktop/shared";
 import { proposalKindForMode } from "@pi-desktop/shared";
 import { ConversationMinimap } from "../../../components/ConversationMinimap";
 import { PermissionCard } from "../../../components/PermissionCard";
-import { TooltipButton } from "../../../components/ui";
+import { Button, TooltipButton } from "../../../components/ui";
 import { TurnOutcomeCard } from "../../../components/TurnOutcomeCard";
 import { IconArrowDown } from "../../../components/icons";
 import { useAppStore } from "../../../stores/app-store";
@@ -57,6 +57,10 @@ type ChatTranscriptProps = {
   onRestoreReading?: RestoreTranscriptReading;
   hasMoreAfter?: boolean;
   onLoadNewer?: () => Promise<void>;
+  /** A later page is in flight; the bottom boundary shows it. */
+  loadingLater?: boolean;
+  /** The last later page failed and waits for an explicit retry. */
+  laterFailed?: boolean;
   onReturnToLatest?: () => void;
   navigationLoading?: boolean;
 };
@@ -92,6 +96,8 @@ function TranscriptBody({
   onRestoreReading,
   hasMoreAfter = false,
   onLoadNewer,
+  loadingLater = false,
+  laterFailed = false,
   onReturnToLatest,
   navigationLoading = false,
 }: ChatTranscriptProps) {
@@ -128,6 +134,7 @@ function TranscriptBody({
     wrapRef,
     contentRef,
     historyBoundaryRef,
+    laterBoundaryRef,
     loadingOlder,
     showJump,
     historyEntries,
@@ -157,6 +164,10 @@ function TranscriptBody({
     searchTarget,
     readingWindow,
     onRestoreReading,
+    hasMoreAfter,
+    loadingLater,
+    laterFailed,
+    onLoadNewer,
   });
 
   const specializedActivity = agentActivity;
@@ -295,15 +306,25 @@ function TranscriptBody({
               runtimeActivity={specializedActivity}
             />
           ) : null}
-          {hasMoreAfter ? (
-            <button
-              type="button"
-              className="transcript-load-later"
-              disabled={navigationLoading}
-              onClick={() => void onLoadNewer?.()}
-            >
-              {t("chat.loadLaterMessages")}
-            </button>
+          <div
+            ref={laterBoundaryRef}
+            className="transcript-later-boundary"
+            role="status"
+            aria-live="polite"
+            aria-hidden={!loadingLater}
+          >
+            {loadingLater ? t("chat.loadingLaterMessages") : null}
+          </div>
+          {laterFailed ? (
+            <div className="transcript-load-later">
+              <Button
+                size="sm"
+                onClick={() => void onLoadNewer?.()}
+                disabled={loadingLater}
+              >
+                {t("chat.laterFailedRetry")}
+              </Button>
+            </div>
           ) : null}
           {!readingWindow ? (
             <TurnOutcomeCard

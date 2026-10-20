@@ -17,7 +17,11 @@ test("native abort bypasses smart-stop rewrite and refreshes source detail", () 
   const abort = transcript.slice(transcript.indexOf("abort: async"));
   const native = abort.slice(abort.indexOf('source === "pi-native"'), abort.indexOf("const submittedDraft"));
   assert.match(native, /api\.abort\(sessionId\)/);
-  assert.match(native, /api\.getSession/);
+  // The settled re-read is the runtime's uncapped canonical read, which calls
+  // `api.getSession` without the in-flight pre-abort detail dedupe and caches
+  // the matching full-transcript window itself.
+  assert.match(native, /runtime\.loadFullSessionMessages\(sessionId\)/);
+  assert.doesNotMatch(native, /api\.getSession\(/, "the branch must not double-read the source");
   assert.match(native, /return;/);
   assert.doesNotMatch(native, /replaceSessionMessages|resolveComposerSmartStop/);
 });
@@ -109,14 +113,18 @@ test("native smart-stop abort keeps one durable user row and never rewrites the 
   api.replaceSessionMessages = async () => assert.fail("native abort must not rewrite transcript");
   const runtime = {
     submittedComposerDrafts: new Map([[id, { messageCountBeforeSend: 0, draft: { text: "identical prompt", fileReferences: [] } }]]),
-    cacheSessionTranscript: (_id, rows) => { runtime.cached = rows; },
+    // The settled read is the uncapped canonical read, which owns caching the
+    // full-transcript window alongside the rows it returns.
+    loadFullSessionMessages: async () => { calls.push("detail"); return [user("durable-1")]; },
   };
   try {
     await createTranscriptSlice({ ...stateHarness(state), runtime }).abort();
     assert.equal(calls[0], "abort");
     assert.deepEqual(state.messages, [user("durable-1")]);
-    assert.deepEqual(runtime.cached, state.messages);
     assert.equal(state.isRunning, false);
+    // The replaced transcript starts at the first message and has no missing
+    // page, so the stale pre-abort cursors must not survive the replacement.
+    assert.deepEqual(state.sessionHistory[id], { messageStart: 0, hasMoreBefore: false });
     assert.equal(runtime.submittedComposerDrafts.size, 0);
   } finally { api.abort = originalAbort; api.replaceSessionMessages = originalReplace; api.getSession = originalGet; }
 });

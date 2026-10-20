@@ -389,6 +389,8 @@ export const IPC = {
     composerCommands: "pi-desktop/composer/commands",
     workspaceDiff: "pi-desktop/workspace/diff",
     workspaceReviewRollback: "pi-desktop/workspace/review/rollback",
+    workspaceReviewFiles: "pi-desktop/workspace/review/files",
+    workspaceReviewRollbackFile: "pi-desktop/workspace/review/rollbackFile",
     browserNavigate: "pi-desktop/browser/navigate",
     browserAction: "pi-desktop/browser/action",
     browserSetBounds: "pi-desktop/browser/setBounds",

@@ -608,10 +608,17 @@ visually distinct from list content.
   control. The sort menu and every other body-level sidebar menu remain
   content-sized and open 4px to the right of their trigger or pointer. Their
   left edge never flips to the trigger's left side; the surface has a viewport
-  width cap for narrow windows. The sort choices remain Recently updated,
-  Created date, Oldest first, and Name; the chosen session sort orders global
-  pins internally without date headers. Pinned projects still precede unpinned
-  projects within the project sort.
+  width cap for narrow windows. The menu carries a **Sessions** group (Created
+  date, Oldest first, Name, plus a checked Manual order row while a dragged
+  order is in effect) and a **Projects** group (Recently opened, Created date,
+  Oldest first, Name, plus its own checked Manual order row), followed by the
+  Show archived toggle. Each group changes only its own order and neither
+  offers a way to restore defaults; activity no longer reorders rows, and the
+  chosen session sort orders global pins internally without date headers.
+  Dragging a session row draws a 2px accent line on the row it will land
+  against, inside its own list only. Pinned projects still precede unpinned
+  projects within the project sort, and the default project order follows the
+  retained tabs the user opened rather than conversation activity.
   Project rows have no reorder grip. Pressing the project title and moving
   8px starts a pointer reorder and selects the persisted `manual` project order without changing the session sort.
 - When a session hover card is revealed for the active project, the renderer
@@ -920,6 +927,7 @@ pending action cards remain reachable outside a hidden process. See
 | Turn start (send / retry / regenerate) | Re-pins and positions the latest content before paint, even if the user had scrolled up; the later persisted user-message event does not flash the transcript at its top, and the composer collapse / indicator layout clamps during the send never release follow mode |
 | Idle (after stream) | Auto-scroll unlocked; user can scroll freely |
 | Message-scoped review snapshot | Each successful workspace Write/Edit tool row is followed by one compact InlineReviewCard carrying that message's added/modified/deleted status and explicit addition/deletion totals. It renders as a single flat list row on the tool-row rhythm — disclosure caret, Git-style status letter (`A`/`M`/`D`), path, addition/deletion counts — with no card border, status rail, icon plate, or status pill; hover fill is the only row chrome, and a rolled-back change is struck through. Its hunks sit behind an expandable disclosure: every review card (inline and in the Review tab) is collapsed by default, and the user expands it on demand. The card remains after a Git commit, never becomes a bottom/global entry, and offers hash-guarded rollback without leaking into another session's transcript. |
+| Review tab: one row per file | The panel's list is the session's net change, not one row per tool call: one row per file the conversation touched, comparing the bytes recorded just before the conversation first modified that file with the working tree as it is now. Repeated edits to a file collapse into that one row, and a file restored to its recorded bytes is not listed. The summary bar states the changed-file count plus the summed net `+`/`−`; a file the host could not count contributes no number, so the totals become a lower bound and the row itself names the reason. A row expands to its net hunks and one file-level rollback that restores the first recorded bytes under the same post-tool hash guard as a per-tool rollback. |
 
 ### 4.5 Accessibility
 
@@ -930,7 +938,10 @@ pending action cards remain reachable outside a hidden process. See
   `aria-controls`. Its localized accessible name includes the path, status,
   addition count, and deletion count — and the rolled-back state, which the row
   otherwise shows only as a strikethrough; the visible text and color are not
-  the only status signal (the row carries a Git-style status letter).
+  the only status signal (the row carries a Git-style status letter). A review
+  row whose change the host could not count names that state instead of reading
+  "0 additions, 0 deletions", and the Review tab's summary labels a lower-bound
+  total so partial evidence is never presented as an exact one.
 - Empty-home task entry starts in the always-visible bottom composer. There is
   no starter-card or contextual quick-action layer between the hero and
   composer.
@@ -973,7 +984,7 @@ terminal surface; agent Bash output remains in the transcript.
 |   x closes; middle click    | new page |
 +---------------------------------------+
 | Active resource body                  |
-|  Review: recorded changes + diff      |
+|  Review: one row per changed file    |
 |  Browser: plugin chrome + host guest  |
 |  File: viewer for a transcript file   |
 |  Plugin view: the plugin's own page   |
@@ -1195,16 +1206,46 @@ entirely inside the plugin's isolated page:
   within the originating session.
 - Review truth: host-core adds one bounded `details.review` record to each
   successful workspace Write/Edit result. The renderer reads that record from
-  the owning transcript message, so status, counts, and hunks describe exactly
-  what that row changed and remain available after a commit, restart, or
-  workspace switch. The Review tab is the same session's chronological change
-  history, not a current-worktree scan; it reuses the same message-owned cards
-  as flat one-line rows under a borderless summary bar (`recorded N changes`
-  plus the run's `+`/`−` totals), each collapsed by default until the user
-  expands it. Its rollback action
-  calls the host; the host compares the current content with the recorded
-  post-tool hash and
-  returns a conflict without overwriting later work.
+  the owning transcript message, so a tool row's own status, counts, and hunks
+  describe exactly what that row changed and remain available after a commit,
+  restart, or workspace switch. That per-tool record is display evidence, not the
+  panel's list and not the source of a baseline. The Review tab shows one row per
+  file a conversation changed, and the host derives both the set and the baseline
+  by scanning the session's own snapshot records — never from the renderer's
+  message window, so a file whose first edit scrolled out of the transcript is
+  still listed, and a record whose display payload was trimmed still contributes.
+  Each row compares the bytes recorded before the conversation first modified that
+  file with the working tree as it is now; repeated edits collapse into the row,
+  and a file that ends up byte identical to its recorded baseline is not a changed
+  file at all. A row is identified by its workspace root and relative path, so two
+  project folders that hold the same relative name are separate rows; a root is
+  shown only when the session spans more than one, and the full path stays in the
+  row's tooltip and accessible name. The summary bar states the changed-file count
+  and the summed net `+`/`−`. A file whose change could not be counted contributes
+  no number: the totals then read as a lower bound, and its row states the specific
+  reason (file too large, change too large to compare, earlier bytes not retained,
+  folder no longer available, or the request's comparison budget already spent)
+  instead of a zero. A record the host could not read at all also makes the totals a
+  lower bound and disables rollback, because the missing record could be an earlier
+  edit of the same file. Each row is collapsed by default and expands to the hunks
+  and one rollback action. Rollback restores that file's first recorded bytes: the
+  host compares the current content with the latest recorded post-tool hash for the
+  file and returns a conflict without overwriting later or external work. Per-tool
+  records keep their own rollback in the transcript. Opening the panel, switching
+  sessions, or returning to a session re-reads the host's answer; while an answer is
+  in flight the previous session's rows are not shown and cannot be rolled back.
+- Review comparison bounds: a comparison trims the common leading and trailing
+  lines before it solves anything, so a one-line edit in a very long file still
+  produces a real hunk with exact `+`/`−` counts. The changed region is solved
+  exactly up to a bounded budget and otherwise bisected on a line that occurs
+  once on both sides; when even that budget is exhausted the row reports that
+  the change is too large to compare and carries no counts. One answer shares a
+  total comparison-work budget and a total hunk-text budget across its rows, and
+  a body that would exceed the record ceiling is dropped while its exact counts
+  remain, so a review record always survives the transcript's display cap with
+  its identity fields intact. Snapshot bytes above the per-side byte ceiling,
+  unretained earlier bytes, binary content, and paths that leave the workspace
+  each report their own reason and never claim zero additions or deletions.
 - Header tabs: the strip is a `tablist` containing one `tab` for every open
   Review, file, or plugin view. Clicking a tab activates it; the active tab is
   scrolled into view. Its close button, middle-click, and the shared tab menu
@@ -1671,9 +1712,14 @@ storage but compose into one assistant turn until the next user message.
   their stable ID. The selected message keeps complete text beyond the usual
   display cap. Render the same transcript, Markdown, message actions, and
   composer; do not open a separate reader. Preserve the live cache separately.
-  Upward paging and Load later messages extend the reading window. The existing
-  latest-message control and a new turn return to live output. Actions on an
-  old message prepare canonical input before editing, retrying, or branching.
+  Reading continues in both directions by scrolling alone: approaching the top
+  fetches the previous page and approaching the bottom fetches the next one, so
+  the reader never presses a control to see what comes next. A forward page
+  that reaches the newest message ends the historical range and live output
+  resumes in place, below the rows being read. A failed forward page stops
+  automatic paging and offers one explicit retry. The existing latest-message
+  control and a new turn return to live output. Actions on an old message
+  prepare canonical input before editing, retrying, or branching.
 - Ordinary history and search use one retained-session reading view, shared
   with subagent details. A nested answer reveals its owning Task and opens the
   existing details dock at the answer, even when the parent is outside the page.
@@ -2362,7 +2408,7 @@ twice.
 | Bash | `Command` (shell, highlighted) beside `Output` and `Errors` (error hue) as terminal panes (D226 follow-up, §9.10); each pane is labelled and copies its own bytes, and an empty channel is omitted rather than shown as an empty pane |
 | Glob | `Files` — clickable workspace paths |
 | Grep | `Matches` — grouped by file with a `line` gutter and clickable path headings for `outputMode: content`; a clickable path list for `filesWithMatches`; `path` → hit count fields for `count` |
-| TodoWrite | the checklist the call wrote — a progress line from the host's own counts plus one row per item with its state and priority; never the serialized `todos` argument |
+| TodoWrite | the checklist the call committed — a progress line from the host's own counts plus one row per item with its state and priority; never the serialized `todos` argument. Rows and counts come from the committed list in the result rather than the call's argument, so truncation and single-active-item demotion are what the reader sees. A cancelled item is neither completed nor outstanding: it leaves the ratio and is reported as its own count beside it. A list with no outstanding item names its state instead of printing `0/0` — `All N items cancelled` when every item was dropped, and a cleared note when the write emptied the checklist — and neither renders a progress bar. A cleared row still has a body, because a row's `aria-controls` must name the element it renders. A refused write keeps its `Error` note and no rows: an uncommitted list is never shown as the session's checklist |
 | Skill | the loaded document as a card: the skill's name, the `location`/`references` it reported, and its body as Markdown. A failed call is an `Error` note instead |
 | ScheduledTaskList/Create/Update/Delete | one row per automation: title, cadence, its clock, the weekly days **named in the session language** (the schema numbers them from Monday = 0, so a bare index is never printed), and enabled/paused |
 | ToolSearch, EnterPlanMode/SubmitPlan, NewContext, BrowserPreview, GenerateImages | the names they activated or matched, each name set listed once and read in the session language (the legacy `addedToolNames` carrier is used only when the row reports no `activated` list), the mode the tool's own name states (`Plan`, `Goal`), or the prompts and written images the call carried |
@@ -3068,7 +3114,9 @@ reasoning-level control.
   holds, so it never promises a title that is not in the loaded window.
 - The host-owned session checklist has no Composer surface of its own: it is read
   in the `TodoWrite` row that wrote it (§9.2), and no persistent bottom checklist
-  is rendered.
+  is rendered. The renderer still keeps the committed snapshot by session id (a
+  stale `todos.changed` cannot replace a newer one), and no surface reads that
+  store back.
 
 ### 11.4 States
 

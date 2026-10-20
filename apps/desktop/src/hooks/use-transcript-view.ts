@@ -20,5 +20,11 @@ export function useTranscriptView(sessionId: string) {
     parentMessage: view?.parentMessage,
     historical: Boolean(view?.focus || view?.restored),
     loading: Boolean(view?.loading),
+    /** A later page is in flight; the transcript shows it as a tail status. */
+    loadingLater: view?.loading === "after",
+    /** The last later page failed and waits for an explicit retry. */
+    laterFailed: view?.laterFailed === true,
+    /** Only a target read covers the conversation; paging keeps its own status. */
+    loadingTarget: view?.loading === "target",
   };
 }

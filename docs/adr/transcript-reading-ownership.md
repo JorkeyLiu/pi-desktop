@@ -23,6 +23,22 @@ Ordinary history always uses the current canonical value for overlapping rows,
 including streaming-to-complete transitions. Explicit search retains its
 selected historical snapshot until the user leaves it or starts a turn.
 
+Reading forward is a boundary, not a control. Both the near-top and the
+near-bottom bands page the window, so a reader never has to press anything to
+see what comes next, and reaching the newest message ends the historical range
+so live output resumes in place. A forward page needs the exclusive physical
+end of the current window: a view without one — a remote older-only cursor, or
+a restored range whose metadata is incomplete — re-reads the newest bounded
+page instead of deriving an offset that would address the transcript's head. A
+forward page that adds nothing, or that fails, disarms automatic paging; a
+failure additionally waits for one explicit retry. A range restored while a
+turn is already streaming keeps its rows and resumes live output when that turn
+ends, because the turn began before the "new turn" boundary could apply to it.
+An uncapped read replaces the transcript with the whole conversation and
+therefore publishes the matching full window; the previous page cursors do not
+survive it. A reading window never pins the reader: the latest control stays
+available the whole time.
+
 Reading views never populate runtime/model caches. A message action hydrates
 canonical input when history is partial or display-limited, then rechecks the
 session, run, navigation, and message-snapshot ownership before publishing it.
@@ -55,11 +71,16 @@ rather than reproducing hidden Markdown as extra UI copy.
 ## Validation
 
 Renderer state tests cover competing reads, streaming during ordinary paging,
-new turns, pane eviction, same-ID rewrites, and canonical action preparation.
+new turns, pane eviction, same-ID rewrites, canonical action preparation,
+forward paging without a physical end or with a page that cannot advance,
+forward-page failure and retry, a range restored during a running turn, and
+the window an uncapped abort publishes.
 Server rendering tests exercise nested answers, collapsed Task disclosure,
 Markdown destinations and delimiters, file chips, long messages, and CRLF source
 offsets. Browser-effect unit tests cover geometry, gesture interruption, and
 StrictMode-style cleanup/replay. Host tests cover bounded physical pages and
 latest parent context outside the page. The interaction contract is
-`E2E-SESSION-content-search-and-message-navigation`; these unit/rendering checks
-do not claim a completed native-app E2E run.
+`E2E-SESSION-content-search-and-message-navigation`; the isolated
+React/Electron fixture `node scripts/e2e-transcript-reading-position.mjs` also
+drives the production pane through automatic forward paging to the newest
+message. These checks are not a native-app E2E run.

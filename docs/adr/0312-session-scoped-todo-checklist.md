@@ -27,7 +27,8 @@ serves the complete committed snapshot through `todos.get`. Electron Main
 forwards the notification through the existing IPC bridge, and the renderer
 keeps snapshots keyed by session id while rejecting stale revisions.
 
-The Composer TodoDock is a non-focusing, session-aware presentation surface.
+The original Composer TodoDock was a non-focusing, session-aware presentation
+surface (since retired; see Current status).
 It shows bounded progress and the complete ordered list: the expanded dock
 scrolls inside its own box instead of truncating, so a long checklist stays
 readable without growing the Composer stack. Remote RACP sessions remain
@@ -48,15 +49,22 @@ reading the local database.
 
 Host-core tests cover migration, validation, transaction rollback, restart,
 revision ordering, fork isolation, cascade deletion, and RPC authorization.
-Renderer type checks and TodoDock interaction tests cover revision filtering,
-remote-session degradation, session switching, expansion, and full-list display
-through the dock's own scrollport.
+Renderer contract and component tests cover the checklist card's states, the
+revision fence on pushed snapshots, and the committed list surviving the
+runtime's result mapping.
 
-## Current status (amendment, 2026-10-19)
+## Current status (amendment, 2026-10-20)
 
 The persistence contract above is unchanged. The Composer dock surface is no
 longer mounted in the product: the checklist is read in the `TodoWrite` row that
 wrote it, which opens with the turn and keeps the reader's collapse choice across
-later streaming updates, and no Composer surface renders a checklist. `TodoDock`
-remains in the renderer only as the surface the legacy `pnpm test:e2e:todos`
-fixture mounts directly; it no longer stands for a product route.
+later streaming updates, and no Composer surface renders a checklist.
+
+The retired surfaces are gone rather than kept for a fixture. `TodoDock` and its
+snapshot-recovery hook had no product consumer left, so both were removed
+together with their tests; the renderer still keeps committed snapshots by
+session id and ignores stale revisions, but no surface reads them back. The row
+renders the list the host committed, which the successful tool result now
+carries as `todos`, so a card never re-derives a checklist from the argument a
+model sent and a later write cannot rewrite an earlier card. `pnpm test:e2e:todos`
+drives that production row in an isolated Electron renderer against a real host.

@@ -164,3 +164,140 @@ test("project rows expose press-and-move title drag and keyboard reorder behavio
   assert.match(storeSource, /projectSort: "manual"/);
   assert.match(storeSource, /persistCurrentSidebar\(get\)/);
 });
+
+test("a session drag persists a manual order instead of a transient one", () => {
+  const reorderBlock =
+    projectSliceSource.match(/reorderSessions: \(orderedIds\) => \{[\s\S]*?persistCurrentSidebar\(get\);\s*\},/)?.[0] ??
+    "";
+  assert.ok(reorderBlock, "the store must own session reordering");
+  assert.match(reorderBlock, /sessionOrderRanks\(orderedIds\)/, "ranks come from one helper");
+  assert.match(reorderBlock, /order: ranks\[id\]/);
+  assert.match(reorderBlock, /sort: "manual"/, "a dragged order is the manual sort");
+  assert.match(
+    reorderBlock,
+    /persistCurrentSidebar\(get\)/,
+    "the order must survive a renderer restart",
+  );
+  assert.match(
+    projectSliceSource,
+    /sessionMeta: withoutSessionOrder\(current\.sessionMeta, id\)/,
+    "a session that changes project starts unranked in its new group",
+  );
+});
+
+test("session rows reorder inside their own list without leaving the sort menu", () => {
+  assert.match(
+    sidebarSource,
+    /onDragOver=\{\(event\) => onSessionRowDragOver\(event, session\)\}/,
+  );
+  assert.match(sidebarSource, /onDrop=\{\(event\) => onSessionRowDrop\(event, session\)\}/);
+  assert.match(sidebarSource, /canReorderSidebarSessions\(source, target, sessionMeta\)/);
+  assert.match(sidebarSource, /reorderSessions\(next\)/);
+  assert.match(
+    sidebarSource,
+    /draggable=\{!isRemoteSession\(session\)\}/,
+    "a running session may still be reordered locally",
+  );
+  assert.doesNotMatch(
+    sidebarSource,
+    /draggable=\{!running && !isRemoteSession\(session\)\}/,
+    "running must not disable local reordering",
+  );
+  assert.match(
+    projectSliceSource,
+    /if \(state\.runningSessions\[id\]\) return false;/,
+    "cross-project moves keep the stop-first rule",
+  );
+  const sortModes = sidebarSource.match(/\(\["created", "oldest", "name"\] as const\)/);
+  assert.ok(sortModes, "the session sort menu offers only stable orders");
+  assert.match(sidebarSource, /nav\.sortManual/, "a manual order is shown as the current state");
+  assert.doesNotMatch(sidebarSource, /nav\.sortRecent/, "session activity recency is gone");
+});
+
+test("session and project sort are separate menu groups with separate setters", () => {
+  const menuSource = sidebarSource.slice(sidebarSource.indexOf("if (sortOpen) {"));
+  const [sessionGroup = "", projectGroup = ""] = menuSource.split('data-sort-group="projects"');
+
+  assert.match(
+    sessionGroup,
+    /data-sort-group="sessions"/,
+    "the menu labels the session group",
+  );
+  assert.match(sessionGroup, /data-sort-scope="session"/);
+  assert.match(
+    sessionGroup,
+    /onClick=\{\(\) => applySessionSort\(value\)\}/,
+    "a session sort choice only changes the session sort",
+  );
+  assert.doesNotMatch(
+    sessionGroup,
+    /applyProjectSort/,
+    "a session sort choice must not change the project sort",
+  );
+
+  assert.match(projectGroup, /data-sort-scope="project"/);
+  for (const mode of ["recent", "created", "oldest", "name"]) {
+    assert.match(
+      projectGroup,
+      new RegExp(`\\["recent", "created", "oldest", "name"\\]`),
+      "every existing project sort mode stays selectable",
+    );
+  }
+  assert.match(projectGroup, /onClick=\{\(\) => applyProjectSort\(value\)\}/);
+  assert.match(
+    projectGroup,
+    /nav\.sortProjectsRecent/,
+    "the default project order is described as a visit order, not message recency",
+  );
+  assert.doesNotMatch(
+    projectGroup,
+    /applySessionSort/,
+    "a project sort choice must not change the session sort",
+  );
+
+  const sessionSetter = sidebarSource.match(
+    /const applySessionSort = \(next: SessionSort\) => \{([\s\S]*?)\n  \};/,
+  )?.[1] ?? "";
+  const projectSetter = sidebarSource.match(
+    /const applyProjectSort = \(next: ProjectSort\) => \{([\s\S]*?)\n  \};/,
+  )?.[1] ?? "";
+  assert.match(sessionSetter, /setSessionSort\(next\)/);
+  assert.doesNotMatch(
+    sessionSetter,
+    /setProjectSort/,
+    "changing the session sort never touches the project sort",
+  );
+  assert.match(projectSetter, /setProjectSort\(next\)/);
+  assert.doesNotMatch(
+    projectSetter,
+    /setSessionSort/,
+    "changing the project sort never touches the session sort",
+  );
+});
+
+test("sidebar project groups order by user visits instead of session activity", () => {
+  assert.match(
+    sidebarSource,
+    /sortProjectGroups\(result, displayProjectSort, projectVisitRankMap\)/,
+    "project groups use the shared project order",
+  );
+  assert.match(sidebarSource, /const projectVisitRankMap = useMemo\(/);
+  assert.doesNotMatch(
+    sidebarSource,
+    /lastSessionDate\(a\.sessions, "updatedAt"\)/,
+    "conversation activity must not drive project-group order",
+  );
+});
+
+test("the tray menu mirrors the sidebar order it is given", async () => {
+  const traySource = await readFile(
+    new URL("../src/features/app/useTraySessions.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(traySource, /sort: store\.sessionView\.sort/);
+  assert.doesNotMatch(
+    traySource,
+    /sessionView\.sort === "manual" \? "recent"/,
+    "the tray must not downgrade a manual order",
+  );
+});

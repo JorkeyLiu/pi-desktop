@@ -728,6 +728,15 @@
   font-weight: var(--font-weight-medium);
 }
 
+/* Sort menu groups: sessions and projects are independent choices, so each
+   set carries its own heading and never runs together. */
+.sidebar-popover-title.sidebar-popover-group {
+  padding-top: 6px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  font-size: var(--text-xs);
+}
+
 .sidebar-popover button {
   justify-content: space-between;
 }

@@ -30,6 +30,10 @@ import {
   type ProjectMeta,
 } from "../../lib/sidebar-preferences";
 import {
+  sessionOrderRanks,
+  withoutSessionOrder,
+} from "../../lib/sidebar-session-order";
+import {
   normalizeProjectPath,
   sessionMatchesProject,
 } from "../../lib/sidebar-session-groups";
@@ -248,6 +252,7 @@ export function createProjectSlice({
   | "moveSessionProject"
   | "deleteSession"
   | "setSessionSort"
+  | "reorderSessions"
   | "setSessionArchiveVisibility"
   | "setSessionView"
   | "setShowArchived"
@@ -580,8 +585,31 @@ export function createProjectSlice({
         sessions: current.sessions.map((item) =>
           item.id === id ? { ...item, ...result.session } : item,
         ),
+        // A moved session joined a new group, so its old rank no longer means
+        // anything there; without a rank it lands at the top of that group.
+        sessionMeta: withoutSessionOrder(current.sessionMeta, id),
       }));
+      persistCurrentSidebar(get);
       return true;
+    },
+
+    reorderSessions: (orderedIds) => {
+      const ranks = sessionOrderRanks(orderedIds);
+      const ids = Object.keys(ranks);
+      if (ids.length < 2) return;
+      set((state) => {
+        const sessionMeta = { ...state.sessionMeta };
+        for (const id of ids) {
+          sessionMeta[id] = { ...(sessionMeta[id] ?? {}), order: ranks[id] };
+        }
+        // Dragging is an explicit order choice, exactly like dragging a project
+        // title. It stays until the user picks another sort mode.
+        return {
+          sessionMeta,
+          sessionView: { ...state.sessionView, sort: "manual", sortBy: "manual" },
+        };
+      });
+      persistCurrentSidebar(get);
     },
 
     deleteSession: async (id) => {

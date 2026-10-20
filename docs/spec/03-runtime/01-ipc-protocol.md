@@ -1965,6 +1965,46 @@ entry or local-page navigation, which follow its existing local-file policy.
   `ReviewRollbackResult`. The host verifies the current post-tool hash before
   restoring the snapshot; it returns `rolledBack`, `alreadyRolledBack`,
   `conflict`, or `unavailable` and never overwrites a conflicting later edit.
+- `workspace/review/files({sessionId})` → `ReviewFileChangeResult { files:
+  ReviewFileChange[], truncated?, unreadableRecords? }`. The host, not the
+  renderer, owns the changed-file set: it scans the session's own
+  `review-changes/<sessionId>/` records, so a file whose only edit happened
+  before the renderer's visible message window is still listed, and a record
+  whose display payload was trimmed by the transcript reader still contributes.
+  Each row compares the bytes of that file's oldest recorded snapshot with the
+  working tree now; a file whose current bytes still match its recorded
+  baseline is omitted, so the list is the net change and not a change log.
+  A row is identified by `root` and `path` together: `root` is the workspace
+  root the path is relative to, so two project-group folders that hold the same
+  relative name stay separate rows and never share a baseline. Records written
+  before the root was stored resolve only when the session has exactly one
+  root; otherwise the row reports `workspaceUnavailable` instead of guessing.
+  `additions`/`deletions` are absent whenever the host could not count the
+  change; `truncated` plus `reason` (`fileTooLarge`, `diffTooComplex`,
+  `diffTooLarge`, `baselineUnavailable`, `unreadable`, `workspaceUnavailable`,
+  `requestBudgetExceeded`) say why, and an unknown count is never serialized as
+  zero. `truncated` also marks an answer the host bounded (row cap, aggregate
+  comparison work, aggregate hunk text), and `unreadableRecords` counts records
+  under the session that could not be read at all — a non-zero value makes every
+  row non-reversible because an earlier edit of that file may be the missing one.
+- `workspace/review/rollbackFile({sessionId, root?, path})` →
+  `ReviewFileRollbackResult { status, root?, path, rolledBack: [{snapshotId,
+  messageId}] }`. Restores that file's oldest recorded bytes after verifying the
+  current content still matches the latest recorded active post-tool hash for the
+  file; `root` names which folder the row belongs to and is required whenever the
+  session has more than one root. The host refuses (`unavailable`) when the
+  record's root is not one of the session's current roots, when the name is
+  ambiguous, or when any record under the session is unreadable. `conflict` means
+  the file changed outside the recorded operations and nothing is written. Every
+  active snapshot of the file is marked rolled back and returned so the caller
+  can mirror the state onto its messages.
+- Both review channels resolve the session's roots the same way a tool call does
+  (primary project/worktree root plus the other roots of the same project group),
+  hold the host state lock only while reading session identity, roots, and the
+  data directory, and run the bounded comparison on a blocking worker so no other
+  RPC waits for it. Workspace containment is re-checked on every read and write;
+  a record claiming another session, or naming a path that escapes its root, is
+  never resolved.
 
 ### browser (D100, D333)
 

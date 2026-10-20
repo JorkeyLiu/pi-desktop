@@ -19,6 +19,10 @@ import {
   listSwitcherProjects,
 } from "../src/lib/sidebar-preferences.ts";
 import { loadRecentProjects, renameRecentProject } from "../src/lib/recent-projects.ts";
+import {
+  sessionOrderRanks,
+  withoutSessionOrder,
+} from "../src/lib/sidebar-session-order.ts";
 
 function session(overrides = {}) {
   return {
@@ -211,7 +215,8 @@ test("all user-facing session sort modes produce stable secondary order", () => 
 
   assert.deepEqual(
     sortSessions(sessions, {}, "recent").map((row) => row.id),
-    ["beta", "alpha"],
+    ["alpha", "beta"],
+    "the legacy default follows the created order, not activity",
   );
   assert.deepEqual(
     sortSessions(sessions, {}, "created").map((row) => row.id),
@@ -565,4 +570,72 @@ test("home switcher collapses aliased paths and follows retained-tab recency", (
     ["alpha", "older"],
   );
   assert.equal(projects.length, 2);
+});
+
+test("a stored legacy recent sort resolves to the stable created order", () => {
+  const values = new Map([
+    [
+      "pi.desktop.sidebarPreferences",
+      JSON.stringify({
+        sessionMeta: {},
+        projectMeta: {},
+        projectSort: "recent",
+        sessionView: { sort: "recent", archived: false },
+        openProjectPaths: [],
+      }),
+    ],
+  ]);
+  const previousStorage = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem(key) {
+      return values.get(key) ?? null;
+    },
+    setItem(key, value) {
+      values.set(key, String(value));
+    },
+    removeItem(key) {
+      values.delete(key);
+    },
+    clear() {
+      values.clear();
+    },
+    key() {
+      return null;
+    },
+    get length() {
+      return values.size;
+    },
+  };
+
+  try {
+    assert.equal(loadSidebarPreferences().sessionView.sort, "created");
+    // Project groups are unchanged by the session default.
+    assert.equal(loadSidebarPreferences().projectSort, "recent");
+
+    saveSidebarPreferences({
+      sessionMeta: {},
+      projectMeta: {},
+      projectSort: "name",
+      sessionView: { sort: "oldest", archived: false },
+      openProjectPaths: [],
+    });
+    assert.equal(loadSidebarPreferences().sessionView.sort, "oldest");
+  } finally {
+    globalThis.localStorage = previousStorage;
+  }
+});
+
+test("a session reorder keeps ranks for its own container only", () => {
+  const ranks = sessionOrderRanks(["c", "a", "b"]);
+  assert.deepEqual(ranks, { c: 0, a: 1, b: 2 });
+
+  const meta = {
+    pinned: { pinned: true, order: 3 },
+    moved: { order: 1, manualTitle: true },
+  };
+  const next = withoutSessionOrder(meta, "moved");
+  assert.equal(next.moved.order, undefined);
+  assert.equal(next.moved.manualTitle, true);
+  assert.equal(next.pinned.order, 3);
+  assert.equal(withoutSessionOrder(meta, "missing"), meta);
 });

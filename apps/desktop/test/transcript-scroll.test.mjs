@@ -5,6 +5,8 @@ import {
   TRANSCRIPT_REPIN_THRESHOLD_PX,
   TRANSCRIPT_SCROLL_GESTURE_WINDOW_MS,
   isHistoryRevealPosition,
+  isLaterRevealPosition,
+  LATER_REVEAL_THRESHOLD_PX,
   isRecentScrollGesture,
   reduceTranscriptScroll,
   transcriptHasLayout,
@@ -207,4 +209,16 @@ test("a pinned overflowing transcript is suppressed anywhere in the band", () =>
     ),
     false,
   );
+});
+
+test("the near-bottom band is the only automatic later-page trigger", () => {
+  const at = (scrollTop, scrollHeight = 2_000, clientHeight = 500) => ({
+    scrollTop, scrollHeight, clientHeight,
+  });
+  assert.equal(isLaterRevealPosition(at(1_500 - LATER_REVEAL_THRESHOLD_PX)), true);
+  assert.equal(isLaterRevealPosition(at(1_500 - LATER_REVEAL_THRESHOLD_PX - 1)), false);
+  // An underfilled window is at its own bottom, so it continues forward.
+  assert.equal(isLaterRevealPosition(at(0, 400, 500)), true);
+  // A scroller without layout reports no position at all.
+  assert.equal(isLaterRevealPosition(at(0, 0, 0)), false);
 });

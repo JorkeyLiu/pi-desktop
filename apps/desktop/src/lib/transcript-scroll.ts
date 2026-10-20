@@ -19,6 +19,16 @@ export const TRANSCRIPT_SCROLL_ROUNDING_TOLERANCE_PX = 1;
  */
 export const HISTORY_REVEAL_THRESHOLD_PX = 120;
 
+/**
+ * Near-bottom band that fetches the next page of later messages (D269).
+ *
+ * Reading forward is not a control: once the reader approaches the bottom of
+ * the loaded window the next page is fetched, exactly like the near-top band
+ * fetches the previous one. The band matches the earlier-history band so the
+ * two boundaries cannot drift apart.
+ */
+export const LATER_REVEAL_THRESHOLD_PX = HISTORY_REVEAL_THRESHOLD_PX;
+
 export type TranscriptScrollerGeometry = {
   scrollTop: number;
   scrollHeight: number;
@@ -51,6 +61,22 @@ export function isHistoryRevealPosition(
   const overflows = geometry.scrollHeight > geometry.clientHeight + 1;
   if (pinned && overflows) return false;
   return geometry.scrollTop <= HISTORY_REVEAL_THRESHOLD_PX;
+}
+
+/**
+ * Whether the visible bottom should fetch the next page of later messages.
+ *
+ * A window that does not overflow is already at its own bottom, so it keeps
+ * continuing forward until the newest page is loaded. A scroller without a
+ * layout box (an unrendered pane, `content-visibility: hidden`) reports no
+ * position at all and must never start a read.
+ */
+export function isLaterRevealPosition(
+  geometry: TranscriptScrollerGeometry,
+): boolean {
+  if (!transcriptHasLayout(geometry)) return false;
+  const distance = geometry.scrollHeight - geometry.scrollTop - geometry.clientHeight;
+  return distance <= LATER_REVEAL_THRESHOLD_PX;
 }
 
 export type TranscriptScrollInput = {

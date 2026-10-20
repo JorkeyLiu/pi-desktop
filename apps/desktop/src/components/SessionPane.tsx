@@ -81,9 +81,11 @@ export const SessionPane = memo(function SessionPane({
           readingWindow={transcript.historical}
           onRestoreReading={restoreReading}
           hasMoreAfter={transcript.hasMoreAfter}
+          loadingLater={transcript.loadingLater}
+          laterFailed={transcript.laterFailed}
           onLoadNewer={() => loadTranscriptPage(sessionId, "after")}
           onReturnToLatest={() => returnToLatest(sessionId)}
-          navigationLoading={transcript.loading}
+          navigationLoading={transcript.loadingTarget}
           isRunning={isRunning}
           pendingPermission={transcript.historical ? undefined : pendingPermission}
           queuedPermissions={queuedPermissions}

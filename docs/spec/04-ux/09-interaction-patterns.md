@@ -287,13 +287,30 @@ may be retained while exactly one workspace supplies the visible shell context.
   to a non-archived sibling. With no sibling, a conversation receives a fresh
   draft in the same scope and a project clears the visible workspace; the app
   never leaves a hidden archived row as the active context.
-- **Sort** offers Recently updated (`recent`), Created date (`created`),
-  Oldest first (`oldest`), and Name (`name`). Missing/invalid values fall back
-  to `recent`. Pressing a project title and moving 8px, or ArrowUp/ArrowDown
-  on that focused title, switches project ordering to `manual` and persists a
-  contiguous order per normalized path. Archived and pinned priority remains
-  ahead of the manual order; projects without an assigned order fall back to
-  a stable path order until they are moved.
+- **Sort** groups two independent orders. The **Sessions** group offers Created
+  date (`created`, the default), Oldest first (`oldest`), and Name (`name`);
+  missing/invalid values, and the legacy `recent` value written by older
+  builds, resolve to `created`, because session rows must not move when a reply
+  or a running turn changes their activity time. Ties break on the session id,
+  so equal creation times keep one order. The **Projects** group offers
+  Recently opened (`recent`, the default), Created date, Oldest first, and
+  Name. Choosing a row in one group never rewrites the other order, and no menu
+  entry restores defaults.
+- Dragging a session row onto another row of the same list persists a
+  contiguous order for that container (`manual`) and shows **Manual order** as
+  the current state; there is no reset entry, and picking another mode
+  re-sorts the rows. A running session may still be reordered locally, while
+  moving it to another project keeps the stop-first rule. A session with no
+  rank, such as one created after a manual order was set, appears above the
+  ranked rows in its own list.
+- `recent` project order follows the retained-tab order the user built by
+  opening projects, falling back to the newest created session for a project
+  without an open tab. Conversation activity never reorders project groups.
+- Pressing a project title and moving 8px, or ArrowUp/ArrowDown on that focused
+  title, switches project ordering to `manual` and persists a contiguous order
+  per normalized path. Archived and pinned priority remains ahead of the manual
+  order; projects without an assigned order fall back to a stable path order
+  until they are moved.
 - Each project group shows the ten most-recent rows in the active sort order
   by default; the remaining sessions fold behind a **Load N more…** control
   (the same affordance used for time-grouped overflow). Selecting it expands
@@ -581,16 +598,30 @@ may be retained while exactly one workspace supplies the visible shell context.
   transcript bottom and never shared with another session. Its status badge
   covers added, modified, and deleted changes, while counts and expandable
   hunks come from that message's result, not a current Git diff.
-- The transcript cards and Review consume the active session's persisted
-  message history. A commit, workspace focus change, or external Git state
-  change cannot remove or rewrite an old card. Review is a chronological
-  snapshot history and each reversible card exposes host-guarded rollback;
-  conflicts are reported without replacing a later edit. Scratch, failed,
+- The transcript cards and the Review tab read only the active session's own
+  records. A commit, workspace focus change, or external Git state change cannot
+  remove or rewrite an old card. The Review tab is the session's
+  net change per file — one row per file, from the bytes recorded before the
+  conversation first modified it to the working tree now — while every
+  reversible tool card exposes host-guarded rollback; the file row's rollback
+  restores that file's first recorded bytes under the same guard. Conflicts are
+  reported without replacing a later edit. Scratch, failed,
   denied, and unstructured results do not render a card. A background
   session's card remains with its own transcript and becomes visible only
   after that session is selected; its event never renders in the currently
   visible session. A successful workspace artifact cannot create or activate
   the singleton Review tab; it appears only after the user opens it.
+- The Review tab's row set and each row's baseline come from the host's own
+  session records, not from the messages the renderer still holds, so a long
+  conversation that scrolled out of the loaded window is still compared from the
+  first bytes the session recorded. A row's identity is the workspace folder
+  plus the path relative to it: two folders that contain the same relative name
+  stay separate rows, and a record whose folder is no longer part of the session
+  says so instead of resolving a guess. A row whose counts cannot be trusted
+  states the reason and never shows zero, and an answer shortened by its size
+  limits marks itself incomplete. Switching sessions clears the previous
+  session's rows immediately, before the next answer arrives, and a row's
+  rollback applies only to the session that requested it.
 - Each session retains `{open, tabs, activeTabId, browserResource}` in renderer
   memory. Selecting another session swaps the visible context atomically and
   switching back restores it; selecting a workspace without an active

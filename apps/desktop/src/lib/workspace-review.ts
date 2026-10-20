@@ -3,6 +3,8 @@ import type {
   ReviewChange,
   ReviewChangeState,
   ReviewChangeStatus,
+  ReviewDiffReason,
+  ReviewFileChange,
   UiMessage,
 } from "@pi-desktop/shared";
 
@@ -17,6 +19,15 @@ const REVIEW_CHANGE_STATES = new Set<ReviewChangeState>([
   "active",
   "rolledBack",
 ]);
+const REVIEW_DIFF_REASONS = new Set<ReviewDiffReason>([
+  "fileTooLarge",
+  "diffTooComplex",
+  "diffTooLarge",
+  "baselineUnavailable",
+  "unreadable",
+  "workspaceUnavailable",
+  "requestBudgetExceeded",
+]);
 
 export type ReviewChangeEntry = {
   message: UiMessage;
@@ -29,6 +40,23 @@ export type ReviewChangesSummary = {
   rolledBackCount: number;
   additions: number;
   deletions: number;
+};
+
+export type ReviewFilesSummary = {
+  fileCount: number;
+  additions: number;
+  deletions: number;
+  /** At least one file could not be counted, so the totals are a lower bound. */
+  partial: boolean;
+};
+
+/** What one `review.files` answer carried, including how complete it is. */
+export type ReviewFilesState = {
+  files: ReviewFileChange[];
+  /** The host bounded the answer, so the list and totals are a lower bound. */
+  truncated: boolean;
+  /** Records the host could not read at all. */
+  unreadableRecords: number;
 };
 
 function recordValue(value: unknown): Record<string, unknown> | null {
@@ -75,9 +103,19 @@ function parseHunks(value: unknown): DiffHunk[] {
   });
 }
 
+function parseReason(value: unknown): ReviewDiffReason | undefined {
+  return typeof value === "string" &&
+    REVIEW_DIFF_REASONS.has(value as ReviewDiffReason)
+    ? (value as ReviewDiffReason)
+    : undefined;
+}
+
 /**
  * Read the durable change record embedded in one successful tool message.
  * The message owns this evidence; no current Git state is consulted.
+ *
+ * The counts are `null` when the host could not count the change, so callers
+ * never read an unknown count as zero.
  */
 export function reviewChangeFromMessage(message: UiMessage): ReviewChange | null {
   if (
@@ -110,13 +148,12 @@ export function reviewChangeFromMessage(message: UiMessage): ReviewChange | null
     typeof status !== "string" ||
     !REVIEW_CHANGE_STATUSES.has(status as ReviewChangeStatus) ||
     typeof state !== "string" ||
-    !REVIEW_CHANGE_STATES.has(state as ReviewChangeState) ||
-    additions === null ||
-    deletions === null
+    !REVIEW_CHANGE_STATES.has(state as ReviewChangeState)
   ) {
     return null;
   }
 
+  const reason = parseReason(review.reason);
   return {
     version: 1,
     snapshotId,
@@ -125,11 +162,12 @@ export function reviewChangeFromMessage(message: UiMessage): ReviewChange | null
     operation: operation as ReviewChange["operation"],
     status: status as ReviewChangeStatus,
     state: state as ReviewChangeState,
-    additions,
-    deletions,
+    ...(additions === null ? {} : { additions }),
+    ...(deletions === null ? {} : { deletions }),
     hunks: parseHunks(review.hunks),
     ...(review.binary === true ? { binary: true } : {}),
     ...(review.truncated === true ? { truncated: true } : {}),
+    ...(reason ? { reason } : {}),
     reversible: review.reversible === true,
   };
 }
@@ -143,6 +181,82 @@ export function reviewChangesFromMessages(
   });
 }
 
+/** One file's net change as the host reported it. */
+export function parseReviewFileChange(value: unknown): ReviewFileChange | null {
+  const record = recordValue(value);
+  if (!record || record.version !== 1) return null;
+  const path = nonEmptyString(record.path);
+  const status = record.status;
+  const snapshotIds = Array.isArray(record.snapshotIds)
+    ? record.snapshotIds.filter(
+        (id): id is string => typeof id === "string" && id.trim() !== "",
+      )
+    : [];
+  if (
+    !path ||
+    typeof status !== "string" ||
+    !REVIEW_CHANGE_STATUSES.has(status as ReviewChangeStatus)
+  ) {
+    return null;
+  }
+  const additions = nonNegativeInteger(record.additions);
+  const deletions = nonNegativeInteger(record.deletions);
+  const reason = parseReason(record.reason);
+  const root = nonEmptyString(record.root);
+  return {
+    version: 1,
+    ...(root ? { root } : {}),
+    path,
+    status: status as ReviewChangeStatus,
+    ...(additions === null ? {} : { additions }),
+    ...(deletions === null ? {} : { deletions }),
+    hunks: parseHunks(record.hunks),
+    ...(record.binary === true ? { binary: true } : {}),
+    ...(record.truncated === true ? { truncated: true } : {}),
+    ...(reason ? { reason } : {}),
+    reversible: record.reversible === true,
+    rolledBack: record.rolledBack === true,
+    snapshotIds,
+  };
+}
+
+export function reviewFilesFromResult(value: unknown): ReviewFilesState {
+  const record = recordValue(value);
+  if (!record || !Array.isArray(record.files)) {
+    return { files: [], truncated: false, unreadableRecords: 0 };
+  }
+  return {
+    files: record.files.flatMap((file) => {
+      const change = parseReviewFileChange(file);
+      return change ? [change] : [];
+    }),
+    truncated: record.truncated === true,
+    unreadableRecords: nonNegativeInteger(record.unreadableRecords) ?? 0,
+  };
+}
+
+/**
+ * Net totals for the changed-file rows. Files without exact counts contribute
+ * nothing and mark the totals as a lower bound instead of a zero.
+ */
+export function summarizeReviewFiles(
+  state: Pick<ReviewFilesState, "files" | "truncated" | "unreadableRecords">,
+): ReviewFilesSummary {
+  let additions = 0;
+  let deletions = 0;
+  let partial = state.truncated || state.unreadableRecords > 0;
+  for (const file of state.files) {
+    if (file.additions === undefined || file.deletions === undefined) {
+      partial = true;
+      continue;
+    }
+    additions += file.additions;
+    deletions += file.deletions;
+  }
+  return { fileCount: state.files.length, additions, deletions, partial };
+}
+
+/** Totals for the per-tool records, counted only where the counts are exact. */
 export function summarizeReviewChanges(
   changes: ReviewChangeEntry[] | ReviewChange[],
 ): ReviewChangesSummary {
@@ -150,8 +264,8 @@ export function summarizeReviewChanges(
     (summary, entry) => {
       const change = "change" in entry ? entry.change : entry;
       summary.changeCount += 1;
-      summary.additions += change.additions;
-      summary.deletions += change.deletions;
+      summary.additions += change.additions ?? 0;
+      summary.deletions += change.deletions ?? 0;
       if (change.state === "rolledBack") summary.rolledBackCount += 1;
       else summary.activeCount += 1;
       return summary;

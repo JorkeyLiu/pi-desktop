@@ -806,8 +806,16 @@ fn preview_value(value: Value, limit: usize) -> Value {
                 Value::Array(output)
             }
             Value::Object(object) => {
+                // Identity and status leaves are short and load-bearing; a bulk
+                // array or nested object (a diff body, a list of rows) must not
+                // consume the budget before them. Scalars are visited first and
+                // the map keeps its own key order inside each class.
+                let mut entries: Vec<(String, Value)> = object.into_iter().collect();
+                entries.sort_by_key(|(_, item)| {
+                    matches!(item, Value::Array(_) | Value::Object(_)) as u8
+                });
                 let mut output = serde_json::Map::new();
-                for (key, item) in object {
+                for (key, item) in entries {
                     if *budget == 0 || output.len() >= 256 {
                         output.insert("_truncated".into(), Value::Bool(true));
                         break;
@@ -8487,5 +8495,48 @@ mod tests {
                 .as_i64(),
             Some(0)
         );
+    }
+
+    /// A review record's identity must survive the display trim applied to a
+    /// re-read transcript, or its snapshot disappears from the review.
+    #[test]
+    fn a_large_review_record_keeps_its_identity_under_display_trimming() {
+        let hunks: Vec<Value> = (0..1_200)
+            .map(|index| {
+                json!({
+                    "header": format!("@@ -{index},1 +{index},1 @@"),
+                    "lines": [{ "type": "add", "text": "x".repeat(400) }],
+                })
+            })
+            .collect();
+        let result = json!({
+            "ok": true,
+            "details": {
+                "root": "workspace",
+                "review": {
+                    "version": 1,
+                    "snapshotId": "snapshot-1",
+                    "messageId": "tool-1",
+                    "path": "src/large.ts",
+                    "operation": "edit",
+                    "status": "modified",
+                    "state": "active",
+                    "additions": 1_200,
+                    "deletions": 0,
+                    "hunks": hunks,
+                    "reversible": true
+                }
+            }
+        });
+
+        let trimmed = preview_value(result, 64 * 1024);
+        assert_eq!(trimmed["details"]["root"], json!("workspace"));
+        assert_eq!(
+            trimmed["details"]["review"]["snapshotId"],
+            json!("snapshot-1")
+        );
+        assert_eq!(trimmed["details"]["review"]["path"], json!("src/large.ts"));
+        assert_eq!(trimmed["details"]["review"]["reversible"], json!(true));
+        assert_eq!(trimmed["details"]["review"]["additions"], json!(1_200));
     }
 }

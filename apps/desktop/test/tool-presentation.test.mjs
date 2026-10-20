@@ -1025,6 +1025,139 @@ test("a TodoWrite warning reaches the reader without a second checklist", () => 
   });
 });
 
+test("a TodoWrite card reads the list the host committed, not the raw argument", () => {
+  // The host trims, truncates and demotes before it stores anything, so the
+  // argument a model wrote is not always the checklist a session holds. The
+  // committed list the result now carries is what the card must show.
+  const blocks = buildToolPresentation({
+    toolName: "TodoWrite",
+    toolStatus: "success",
+    toolArgs: {
+      todos: [
+        { content: "x".repeat(600), status: "in_progress", priority: "high" },
+        { content: "Second active item", status: "in_progress" },
+      ],
+    },
+    toolResult: envelope({
+      text: "Checklist updated: 0/2 completed [1 item(s) were truncated to 500 characters]",
+      revision: 4,
+      summary: { completed: 0, total: 2, inProgress: 1, cancelled: 0 },
+      warnings: ["1 item(s) were truncated to 500 characters"],
+      todos: [
+        { content: "x".repeat(500), status: "in_progress", priority: "high" },
+        { content: "Second active item", status: "pending", priority: "medium" },
+      ],
+    }),
+  });
+  const checklist = byRole(blocks, "details");
+  assert.equal(checklist.kind, "todos");
+  assert.deepEqual(
+    checklist.items.map((item) => [item.content.length, item.status]),
+    [[500, "in_progress"], ["Second active item".length, "pending"]],
+  );
+  assert.deepEqual(
+    [checklist.completed, checklist.total, checklist.cancelled],
+    [0, 2, 0],
+  );
+});
+
+test("an older TodoWrite row without a committed list still reads its own argument", () => {
+  // Rows persisted before the result carried `todos` stay readable: their own
+  // argument is the only list they have, and the session's current snapshot is
+  // never consulted for a historical card.
+  const blocks = buildToolPresentation({
+    toolName: "TodoWrite",
+    toolStatus: "success",
+    toolArgs: {
+      todos: [
+        { content: "Inspect", status: "completed" },
+        { content: "Patch", status: "cancelled" },
+      ],
+    },
+    toolResult: envelope({
+      text: "Checklist updated: 1/1 completed",
+      revision: 2,
+      summary: { completed: 1, total: 1, inProgress: 0, cancelled: 1 },
+      warnings: [],
+    }),
+  });
+  const checklist = byRole(blocks, "details");
+  assert.equal(checklist.kind, "todos");
+  assert.deepEqual(
+    checklist.items.map((item) => [item.content, item.status]),
+    [["Inspect", "completed"], ["Patch", "cancelled"]],
+  );
+  assert.deepEqual([checklist.completed, checklist.total, checklist.cancelled], [1, 1, 1]);
+});
+
+test("clearing the checklist keeps a body the disclosure can point at", () => {
+  // An empty write is a real state — the host advances the revision and the
+  // session now holds nothing — so the row needs a body saying so. Without one
+  // the row is expandable with `aria-controls` naming an element that is never
+  // rendered.
+  const message = {
+    toolName: "TodoWrite",
+    toolStatus: "success",
+    toolArgs: { todos: [] },
+    toolResult: envelope({
+      text: "Checklist updated: 0/0 completed",
+      revision: 5,
+      summary: { completed: 0, total: 0, inProgress: 0, cancelled: 0 },
+      warnings: [],
+      todos: [],
+    }),
+  };
+  const blocks = buildToolPresentation(message);
+  assert.deepEqual(roles(blocks), ["details"]);
+  const checklist = blocks[0];
+  assert.equal(checklist.kind, "todos");
+  assert.deepEqual(checklist.items, []);
+  assert.deepEqual(
+    [checklist.completed, checklist.total, checklist.cancelled],
+    [0, 0, 0],
+  );
+  // The row is only expandable because that body exists.
+  assert.equal(hasToolDetails(message), true);
+});
+
+test("a refused TodoWrite never shows its argument as a committed checklist", () => {
+  // A refused write commits nothing, so the list in the call must not appear
+  // as if the session held it; the error stays the body.
+  const blocks = buildToolPresentation({
+    toolName: "TodoWrite",
+    toolStatus: "error",
+    isError: true,
+    toolArgs: { todos: [{ content: "Inspect", status: "in_progress" }] },
+    toolResult: {
+      content: [{ type: "text", text: "TodoWrite requires Agent mode" }],
+      details: { error: "TodoWrite requires Agent mode", code: "TOOL_DISABLED_IN_PLAN" },
+      isError: true,
+    },
+  });
+  assert.deepEqual(blocks, [
+    {
+      kind: "note",
+      role: "error",
+      text: "TodoWrite requires Agent mode",
+      code: "TOOL_DISABLED_IN_PLAN",
+    },
+  ]);
+  assert.ok(!JSON.stringify(blocks).includes('"todos"'));
+});
+test("a running TodoWrite with an undescribable argument still has a body", () => {
+  // Before any result arrives there is no committed list to show, and a list
+  // the schema cannot describe leaves nothing for the card. The argument is
+  // then the only evidence, and the row still needs a body for the disclosure
+  // its header points at — without ever claiming the checklist was written.
+  const blocks = buildToolPresentation({
+    toolName: "TodoWrite",
+    toolStatus: "running",
+    toolArgs: { todos: "not-a-list" },
+  });
+  assert.ok(blocks.length > 0);
+  assert.ok(blocks.every((block) => block.kind !== "todos"));
+});
+
 test("a run row summarizes the model's description and keeps its command whole", () => {
   const args = {
     command: "pnpm test \\\n  --filter desktop",

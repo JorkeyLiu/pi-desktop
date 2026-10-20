@@ -29,8 +29,10 @@ import {
 import {
   HISTORY_REVEAL_THRESHOLD_PX,
   isHistoryRevealPosition,
+  isLaterRevealPosition,
   isRecentScrollGesture,
   isScrollGestureInput,
+  LATER_REVEAL_THRESHOLD_PX,
   reduceTranscriptScroll,
   transcriptHasLayout,
   TRANSCRIPT_SCROLL_ROUNDING_TOLERANCE_PX,
@@ -58,6 +60,10 @@ type UseTranscriptScrollOptions = {
   searchTarget: TranscriptSearchTarget | null;
   readingWindow: boolean;
   onRestoreReading?: RestoreTranscriptReading;
+  hasMoreAfter: boolean;
+  loadingLater: boolean;
+  laterFailed: boolean;
+  onLoadNewer?: () => Promise<void>;
 };
 
 export function useTranscriptScroll({
@@ -75,11 +81,16 @@ export function useTranscriptScroll({
   searchTarget,
   readingWindow,
   onRestoreReading,
+  hasMoreAfter,
+  loadingLater,
+  laterFailed,
+  onLoadNewer,
 }: UseTranscriptScrollOptions) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const historyBoundaryRef = useRef<HTMLDivElement>(null);
+  const laterBoundaryRef = useRef<HTMLDivElement>(null);
   const [savedReadingPosition] = useState(() => getTranscriptReadingPosition(sessionId));
   const pinnedRef = useRef(savedReadingPosition?.pinned ?? true);
   const lastScrollTopRef = useRef(0);
@@ -312,6 +323,19 @@ export function useTranscriptScroll({
   }, [hasMoreBefore, loadingOlder, onLoadOlder]);
 
   /**
+   * Reading forward is not a control (D269): approaching the bottom of the
+   * loaded window fetches the next page, exactly like approaching the top
+   * fetches the previous one. The store owns the in-flight request, so this
+   * stays a pure trigger: a page already loading, or one that failed and waits
+   * for an explicit retry, is never requested again by a scroll event.
+   */
+  const loadLater = useCallback(() => {
+    if (!paneVisibleRef.current) return;
+    if (!hasMoreAfter || loadingLater || laterFailed || !onLoadNewer) return;
+    void onLoadNewer();
+  }, [hasMoreAfter, laterFailed, loadingLater, onLoadNewer]);
+
+  /**
    * Reaching the top escalates in two stages (D261): mount more of what is
    * already loaded, and only fetch an older page once the window covers all of
    * it. Both stages anchor the viewport the same way, because both change
@@ -378,8 +402,10 @@ export function useTranscriptScroll({
     ) {
       reachTop();
     }
+    // The bottom boundary continues the same way: the reader never has to press
+    // anything to see what comes next.
+    if (paneVisibleRef.current && isLaterRevealPosition(el)) loadLater();
     if (readingWindow) {
-      pinnedRef.current = false;
       lastScrollTopRef.current = el.scrollTop;
       setShowJump(true);
       rememberReadingPosition();
@@ -423,7 +449,7 @@ export function useTranscriptScroll({
       setShowJump(transition.showJump);
     }
     rememberReadingPosition();
-  }, [cancelFollowScroll, reachTop, readingPositionPendingRef, readingWindow, rememberReadingPosition, scheduleFollowScroll]);
+  }, [cancelFollowScroll, loadLater, reachTop, readingPositionPendingRef, readingWindow, rememberReadingPosition, scheduleFollowScroll]);
 
   // Send / retry / regenerate always re-pins follow mode so the new prompt and
   // its stream stay in view, even if the user had scrolled up through history.
@@ -767,11 +793,64 @@ export function useTranscriptScroll({
     sessionId,
     transcriptWindow.hiddenAbove,
   ]);
+
+  // The same boundary rule at the bottom (D269): a scroll event is not the only
+  // way to reach the end of a window. A page that lands short of a viewport, a
+  // pane revealed already at its bottom, and a view that stops overflowing all
+  // put the reader at the boundary without moving scrollTop. Re-observing after
+  // each page keeps reading forward until the newest page is loaded.
+  useEffect(() => {
+    const root = scrollRef.current;
+    const boundary = laterBoundaryRef.current;
+    if (!root || !boundary || !hasMoreAfter) return;
+    if (!paneVisible) return;
+    let frame = 0;
+    const advanceIfLaterBoundaryVisible = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (scrollRef.current !== root || readingPositionPendingRef.current) return;
+        if (!isLaterRevealPosition(root)) return;
+        loadLater();
+      });
+    };
+    advanceIfLaterBoundaryVisible();
+    if (typeof IntersectionObserver === "undefined") {
+      return () => cancelAnimationFrame(frame);
+    }
+    const observer = new IntersectionObserver(
+      (records) => {
+        if (records.some((record) => record.isIntersecting)) {
+          advanceIfLaterBoundaryVisible();
+        }
+      },
+      {
+        root,
+        rootMargin: `0px 0px ${LATER_REVEAL_THRESHOLD_PX}px 0px`,
+      },
+    );
+    observer.observe(boundary);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+    // `messages.length` and the in-flight/error flags re-run the effect after
+    // each page, so a still-visible boundary continues to the tail and stops
+    // there: `hasMoreAfter` is the only condition that keeps it armed.
+  }, [
+    hasMoreAfter,
+    laterFailed,
+    loadingLater,
+    loadLater,
+    messages.length,
+    paneVisible,
+    sessionId,
+  ]);
   return {
     scrollRef,
     wrapRef,
     contentRef,
     historyBoundaryRef,
+    laterBoundaryRef,
     loadingOlder,
     showJump,
     historyEntries,
