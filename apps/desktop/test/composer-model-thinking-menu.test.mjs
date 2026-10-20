@@ -21,14 +21,17 @@ test("Composer uses one searchable model menu with an inline disclosure", () => 
 });
 
 test("model selection does not itself record usage", () => {
-  assert.doesNotMatch(modelMenuSource, /rememberModel/);
+  // Selecting a model records no recent-model usage; the thinking preference
+  // for that model is saved only by an explicit level adjustment.
+  assert.doesNotMatch(modelMenuSource, /rememberModel\(/);
+  assert.match(modelMenuSource, /if \(persisted\) rememberModelThinkingLevel\(binding, level\);/);
   assert.match(modelMenuSource, /setOtherModelsExpanded\(false\)/);
 });
-test("switching models adopts the target default without resetting same-model overrides", () => {
+test("switching models adopts the target level without resetting same-model overrides", () => {
   assert.match(modelMenuSource, /const selectedSameModel =\s*activeSessionId &&\s*candidate\.id === provider\?\.id &&\s*sameComposerModelId\(modelId \?\? "", nextModelId\);/);
   assert.match(
     modelMenuSource,
-    /const nextThinkingLevel = selectedSameModel\s*\?\s*thinkingLevelForProvider\(nextModelProvider, thinkingLevel\)[\s\S]*?initialThinkingLevelForBinding\(\s*nextBinding,\s*nextModelProvider\?\.supportedThinkingLevels,\s*\)[\s\S]*?initialThinkingLevelForUnmatchedModel\(\s*nextBinding,\s*nextModelProvider\?\.supportedThinkingLevels,\s*\)/,
+    /const nextThinkingLevel = selectedSameModel\s*\?\s*thinkingLevelForProvider\(nextModelProvider, thinkingLevel\)\s*:\s*resolveModelThinkingLevel\(\{\s*providerId: candidate\.id,\s*modelId: nextModelId,\s*binding: nextBinding,\s*catalogMatched: nextModel\?\.catalogSource === "models\.dev",/,
   );
 });
 test("the menu root carries the reasoning slider itself", () => {

@@ -6,8 +6,6 @@ import type {
 } from "@pi-desktop/shared";
 import {
   imageGenerationBindings,
-  initialThinkingLevelForBinding,
-  initialThinkingLevelForUnmatchedModel,
   isImageGenerationModel,
 } from "@pi-desktop/shared";
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
@@ -22,6 +20,10 @@ import {
   providerSearchText,
 } from "../../../../lib/provider-display";
 import { providerThinkingLevels } from "../../../../lib/session-thinking";
+import {
+  rememberModelThinkingLevel,
+  resolveModelThinkingLevel,
+} from "../../../../lib/model-thinking-preferences";
 import { useAppStore } from "../../../../stores/app-store";
 import {
   sessionThinkingMenuLevels,
@@ -263,15 +265,13 @@ export function useComposerModelMenu({
         sameComposerModelId(modelId ?? "", nextModelId);
       const nextThinkingLevel = selectedSameModel
         ? thinkingLevelForProvider(nextModelProvider, thinkingLevel)
-        : (nextModel?.catalogSource === "models.dev"
-          ? initialThinkingLevelForBinding(
-              nextBinding,
-              nextModelProvider?.supportedThinkingLevels,
-            )
-          : initialThinkingLevelForUnmatchedModel(
-              nextBinding,
-              nextModelProvider?.supportedThinkingLevels,
-            ));
+        : resolveModelThinkingLevel({
+            providerId: candidate.id,
+            modelId: nextModelId,
+            binding: nextBinding,
+            catalogMatched: nextModel?.catalogSource === "models.dev",
+            fallbackLevels: nextModelProvider?.supportedThinkingLevels,
+          });
       await configureActiveSession({
         mode,
         providerId: candidate.id,
@@ -297,7 +297,16 @@ export function useComposerModelMenu({
   const commitThinkingLevel = (level: SessionThinkingLevel) => {
     const queue = thinkingQueueRef.current;
     if (!queue) return Promise.resolve(false);
-    return queue.commit(level);
+    const binding = {
+      providerId: thinkingConfigRef.current.providerId,
+      modelId: thinkingConfigRef.current.modelId,
+    };
+    return queue.commit(level).then((persisted) => {
+      // The adjustment is the user's choice for this model even before any
+      // message is sent, so remember it as soon as it was applied.
+      if (persisted) rememberModelThinkingLevel(binding, level);
+      return persisted;
+    });
   };
 
   const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {

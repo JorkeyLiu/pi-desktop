@@ -13,8 +13,6 @@ import type {
   PermissionMode,
 } from "@pi-desktop/shared";
 import {
-  initialThinkingLevelForBinding,
-  initialThinkingLevelForUnmatchedModel,
   imageGenerationBindings,
   isImageGenerationModel,
   normalizeLargePasteThreshold,
@@ -28,6 +26,7 @@ import { composerModelDisplayName, sameComposerModelId } from "../lib/composer-m
 import {
   resolveComposerThinkingProvider,
 } from "../lib/session-thinking";
+import { resolveModelThinkingLevel } from "../lib/model-thinking-preferences";
 import { ComposerAutocomplete } from "./ComposerAutocomplete";
 import { AskToolCard } from "./AskToolCard";
 import { PlanApprovalBar } from "./PlanApprovalBar";
@@ -366,17 +365,16 @@ export function Composer({
   const selectedModelInfo = selectedModelCatalog?.find((candidate) =>
     sameComposerModelId(candidate.modelId, modelId ?? ""),
   );
-  // A draft without a session starts at the selected model's stored default
-  // thinking level, clamped onto that binding's enabled ladder.
-  const draftThinkingLevel = selectedModelInfo?.catalogSource === "models.dev"
-    ? initialThinkingLevelForBinding(
-        selectedBinding,
-        thinkingProvider?.supportedThinkingLevels,
-      )
-    : initialThinkingLevelForUnmatchedModel(
-        selectedBinding,
-        thinkingProvider?.supportedThinkingLevels,
-      );
+  // A draft without a session starts at the level the user last chose for the
+  // selected model, else that model's binding default, clamped onto the ladder
+  // the binding exposes now.
+  const draftThinkingLevel = resolveModelThinkingLevel({
+    providerId: provider?.id,
+    modelId,
+    binding: selectedBinding,
+    catalogMatched: selectedModelInfo?.catalogSource === "models.dev",
+    fallbackLevels: thinkingProvider?.supportedThinkingLevels,
+  });
   const sessionThinkingLevel =
     activeSession?.thinkingLevel ??
     (!activeSession ? draftConfiguration?.thinkingLevel : undefined) ??

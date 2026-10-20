@@ -6,13 +6,12 @@ import type {
 } from "@pi-desktop/shared";
 import {
   contextCompactionMark,
-  initialThinkingLevelForBinding,
-  initialThinkingLevelForUnmatchedModel,
   normalizeMode,
 } from "@pi-desktop/shared";
 import { api } from "../../lib/api";
 import { sameComposerModelId } from "../../lib/composer-models";
 import { scheduleHomeDraftAdopt } from "../../lib/composer-draft-cache";
+import { resolveModelThinkingLevel } from "../../lib/model-thinking-preferences";
 import {
   commitForkedSessionState,
   forkedSessionMessages,
@@ -301,15 +300,15 @@ export function createSessionCoordination({
           sameComposerModelId(candidate.modelId, inherited.modelId ?? ""),
         )
       : undefined;
-    const defaultThinkingLevel = catalogModel?.catalogSource === "models.dev"
-      ? initialThinkingLevelForBinding(
-          inheritedBinding,
-          defaultProvider?.supportedThinkingLevels,
-        )
-      : initialThinkingLevelForUnmatchedModel(
-          inheritedBinding,
-          defaultProvider?.supportedThinkingLevels,
-        );
+    // A model the user already chose an effort for starts there; otherwise the
+    // model's own binding default decides, exactly as before.
+    const inheritedThinkingLevel = resolveModelThinkingLevel({
+      providerId: inherited.providerId,
+      modelId: inherited.modelId,
+      binding: inheritedBinding,
+      catalogMatched: catalogModel?.catalogSource === "models.dev",
+      fallbackLevels: defaultProvider?.supportedThinkingLevels,
+    });
     const previousSessionId = state.activeSessionId;
     revealEmptyCreatingSession(active);
     let created: Awaited<ReturnType<typeof api.createSession>>;
@@ -317,7 +316,7 @@ export function createSessionCoordination({
       created = await api.createSession({
         title: untitledTaskTitle(),
         mode: draftConfig?.mode ?? normalizeMode(settings?.defaultMode),
-        thinkingLevel: draftConfig?.thinkingLevel ?? defaultThinkingLevel,
+        thinkingLevel: draftConfig?.thinkingLevel ?? inheritedThinkingLevel,
         permissionMode: draftConfig?.permissionMode,
         providerId: inherited.providerId,
         modelId: inherited.modelId,

@@ -106,7 +106,19 @@ app.whenReady().then(async () => {
       { modelId: "model-b", thinkingLevel: "low" },
     ],
   );
-  console.log("PASS Composer applies a switched model default and preserves same-model manual thinking");
+  assert.deepEqual(result.preferences, {
+    initialA: "high",
+    afterCommitA: "low",
+    storedAfterCommitA: "low",
+    afterSwitchToB: "low",
+    afterCommitB: "high",
+    afterReturnToA: "low",
+    afterReturnToB: "high",
+    storedAfterReturn: "high,low",
+    afterRestartA: "low",
+    clampedAfterRestartB: "high",
+  });
+  console.log("PASS Composer applies a switched model default, preserves same-model manual thinking, and remembers each model's own thinking level across switches and restarts");
 } finally {
   await rm(temp, { recursive: true, force: true });
 }

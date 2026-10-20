@@ -48,6 +48,10 @@ const modelMenuSource = await readFile(
   ),
   "utf8",
 );
+const thinkingPreferencesSource = await readFile(
+  new URL("../src/lib/model-thinking-preferences.ts", import.meta.url),
+  "utf8",
+);
 // Agent/Plan mode and model selection are owned by the Composer; the
 // conversation top bar only hosts the task title and window actions.
 const topbarSource = await readFile(
@@ -198,19 +202,33 @@ test("draft Composer thinking follows the exact model selected in its menu", () 
   );
   assert.match(
     composerSource,
-    /const nextThinkingLevel = selectedSameModel\s*\?\s*thinkingLevelForProvider\(nextModelProvider, thinkingLevel\)[\s\S]*?initialThinkingLevelForBinding\([\s\S]*?initialThinkingLevelForUnmatchedModel\(/,
+    /const nextThinkingLevel = selectedSameModel\s*\?\s*thinkingLevelForProvider\(nextModelProvider, thinkingLevel\)\s*:\s*resolveModelThinkingLevel\(/,
   );
   assert.match(composerSource, /const selectedBinding = provider\?\.models\.find/);
   assert.match(
     composerSource,
-    /const draftThinkingLevel = selectedModelInfo\?\.catalogSource === "models\.dev"\s*\?\s*initialThinkingLevelForBinding\(/,
+    /const draftThinkingLevel = resolveModelThinkingLevel\(\{\s*providerId: provider\?\.id,\s*modelId,\s*binding: selectedBinding,\s*catalogMatched: selectedModelInfo\?\.catalogSource === "models\.dev",/,
   );
-  assert.match(composerSource, /initialThinkingLevelForUnmatchedModel\(/);
-  assert.match(modelMenuSource, /initialThinkingLevelForUnmatchedModel\(/);
-  assert.match(sessionCoordinationSource, /initialThinkingLevelForUnmatchedModel\(/);
-  assert.match(modelMenuSource, /nextModel\?\.catalogSource === "models\.dev"/);
-  assert.match(sessionCoordinationSource, /catalogModel\?\.catalogSource === "models\.dev"/);
+  assert.match(composerSource, /resolveModelThinkingLevel\(/);
+  assert.match(modelMenuSource, /resolveModelThinkingLevel\(/);
+  assert.match(sessionCoordinationSource, /resolveModelThinkingLevel\(/);
+  // A model's remembered level is resolved in one place, shared by the draft
+  // Composer, an explicit model switch, and new-session inheritance.
+  assert.match(thinkingPreferencesSource, /export function resolveModelThinkingLevel\(/);
+  assert.match(thinkingPreferencesSource, /initialThinkingLevelForBinding\(/);
+  assert.match(thinkingPreferencesSource, /initialThinkingLevelForUnmatchedModel\(/);
+  assert.match(modelMenuSource, /catalogMatched: nextModel\?\.catalogSource === "models\.dev"/);
+  assert.match(sessionCoordinationSource, /catalogMatched: catalogModel\?\.catalogSource === "models\.dev"/);
   assert.doesNotMatch(composerSource, /highestSupportedThinkingLevel/);
+});
+
+test("an open session keeps its own thinking level over the model memory", () => {
+  // The remembered level is a fallback for a draft, an explicit model switch,
+  // and new-session inheritance; it never overrides a session's stored level.
+  assert.match(
+    composerSource,
+    /const sessionThinkingLevel =\s*activeSession\?\.thinkingLevel \?\?\s*\(!activeSession \? draftConfiguration\?\.thinkingLevel : undefined\) \?\?\s*draftThinkingLevel/,
+  );
 });
 
 test("new sessions default to the selected model binding's thinking level", () => {
@@ -222,11 +240,12 @@ test("new sessions default to the selected model binding's thinking level", () =
     materializeSource.length > 0,
     "materializeDraftSession implementation not found",
   );
-  assert.match(materializeSource, /initialThinkingLevelForBinding\(/);
-  assert.match(materializeSource, /inheritedBinding/);
+  assert.match(materializeSource, /resolveModelThinkingLevel\(/);
+  assert.match(materializeSource, /binding: inheritedBinding/);
+  // The draft's own explicit choice still outranks the inherited level.
   assert.match(
     materializeSource,
-    /thinkingLevel:[\s\S]*?defaultThinkingLevel/,
+    /thinkingLevel: draftConfig\?\.thinkingLevel \?\? inheritedThinkingLevel/,
   );
   assert.doesNotMatch(materializeSource, /highestSupportedThinkingLevel\(/);
 });

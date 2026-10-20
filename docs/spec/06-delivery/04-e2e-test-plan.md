@@ -2605,8 +2605,9 @@ validation still needed.
 - **Steps**: 1) Click the Composer-right model × reasoning chip. 2) Confirm the
   menu opens upward from the bottom composer. 3) Enter Model, select a different
   provider/model, and return to the root. 4) Confirm its default thinking level,
-  choose another supported level, then reselect the same model. 5) Open Settings
-  from the command palette or application menu.
+  choose another supported level, then reselect the same model. 5) Give each of
+  two models a different level, switch between them twice, and reopen the app.
+  6) Open Settings from the command palette or application menu.
 - **Expected**: The trigger uses a Bot icon while retaining the current model
   and reasoning labels. The root shows only Model and Reasoning level entries.
   The Model submenu lists enabled runnable providers and only the model bindings
@@ -2615,8 +2616,14 @@ validation still needed.
   metadata for those bindings, but unconfigured discovery results are absent;
   configured IDs remain available when discovery is unavailable. The root slider
   lists the selected model's supported levels. Selecting a different model
-  updates the active session to that binding's default thinking level; selecting
-  the already-active model preserves a manually selected level. Settings opens
+  updates the active session to the level the user last chose for that exact
+  provider/model, else that binding's default thinking level; selecting
+  the already-active model preserves a manually selected level. The chosen level
+  is remembered per provider + model as soon as it is applied (no message
+  needed), so switching back restores it, another model keeps its own, and both
+  survive restart; a model without a remembered level keeps the binding default,
+  and a remembered level the model no longer supports is clamped onto its
+  current ladder. Settings opens
   from the command palette/menu. The Composer model trigger ellipsizes long IDs.
   Each option is one line showing a single display name — no capability icon and
   no context-window count — and its tooltip exposes the complete value without
@@ -2627,10 +2634,14 @@ validation still needed.
 - **Acceptance**: C
 - **Milestone**: M2
 - **Status**: Component-covered by `pnpm test:e2e:composer-model-selection`
-  (isolated React/Electron with the real Composer hook) and
+  (isolated React/Electron with the real Composer hook, including the
+  A→B→A level restoration, restart persistence, and unsupported-level clamp),
   `apps/desktop/test/composer-model-rows.test.mjs` (rendered rows, flattened
-  keyboard order, reasoning slider); full provider/session desktop journey
-  remains Draft.
+  keyboard order, reasoning slider), and
+  `apps/desktop/test/model-thinking-preference-flow.test.mjs` +
+  `apps/desktop/test/model-thinking-preferences.test.mjs` (new-task inheritance,
+  per-provider identity, existing-session preservation, storage validation);
+  full provider/session desktop journey remains Draft.
 
 #### E2E-COMPOSER-narrow-controls: Composer controls adapt to a narrow chat column
 

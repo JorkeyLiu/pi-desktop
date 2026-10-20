@@ -235,9 +235,10 @@ Each session stores:
 
 Changing model or thinking level mid-session affects subsequent turns only.
 The stored thinking preference survives restart. An explicit switch to a
-different provider/model in Composer resets `thinkingLevel` to the target
-binding's `defaultThinkingLevel`, clamped to its enabled levels; if unset, it
-uses the normal new-session fallback. Selecting the already-active
+different provider/model in Composer starts at that model's remembered thinking
+level (see "Per-model thinking memory" below); a model without one falls back to
+its binding's `defaultThinkingLevel`, clamped to its enabled levels, and if that
+is unset to the normal new-session fallback. Selecting the already-active
 provider/model preserves a manually selected level. The effective request
 level remains clamped against the selected model binding's enabled levels at
 execution time, except `omit`, which is preserved on a reasoning model and
@@ -246,13 +247,35 @@ sends no thinking override. An empty binding or a binding containing only
 
 For a newly created session or explicit model switch, the renderer resolves the
 selected (or app-default) model's `ModelBinding`. A catalog-matched reasoning
-model starts at that binding's `defaultThinkingLevel` (`omit` is preserved;
-other values are clamped onto the enabled levels); when the default is unset it
-falls back to the highest enabled level. An unmatched model starts at `off`
-unless its binding stores an explicit default, while its Composer ladder stays
-available for manual opt-in. Changing a default in Settings does not rewrite
-existing sessions; an existing session keeps its stored choice until a
-different model is explicitly selected.
+model starts at the level the user remembers for that model, else that binding's
+`defaultThinkingLevel` (`omit` is preserved; other values are clamped onto the
+enabled levels); when neither exists it falls back to the highest enabled level.
+An unmatched model starts at its remembered level, else at `off` unless its
+binding stores an explicit default, while its Composer ladder stays available
+for manual opt-in. Changing a default in Settings does not rewrite existing
+sessions; an existing session keeps its stored choice until a different model is
+explicitly selected.
+
+### Per-model thinking memory
+
+The renderer remembers the thinking level the user last chose for each exact
+provider + model identity (`providerId` and the complete wire `modelId`), held in
+renderer-local storage (`pi.desktop.modelThinkingLevels`) rather than in a
+session. The same id under a different provider is a different identity, and
+changing one model's level never rewrites another model's.
+
+- An explicit level adjustment in the Composer is saved as soon as it is applied,
+  without waiting for a message to be sent, and survives restart.
+- The remembered level is a starting point for a new task draft, a new session,
+  and an explicit model switch. It never overrides a level a session already
+  stored, so opening an existing session keeps that session's own choice.
+- A model without a remembered level keeps the existing default behavior
+  described above.
+- A remembered level is a request, not a capability: it is clamped onto the
+  model binding's currently enabled levels with the canonical nearest-supported
+  rule (`omit` only while the binding enables reasoning; an empty or `off`-only
+  ladder resolves to `off`). It never bypasses the capability clamp at execution
+  time.
 
 Unpinned sessions still advertise that inherited default model's reasoning
 capability on session list/get/create/fork/configure. Enrichment does not pin

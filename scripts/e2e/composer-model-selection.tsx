@@ -8,6 +8,12 @@ import { flushSync } from "react-dom";
 import type { ModelInfo, ProviderPublic, SessionThinkingLevel } from "@pi-desktop/shared";
 import { useComposerModelMenu } from "../../apps/desktop/src/features/chat/composer/hooks/useComposerModelMenu";
 import { useAppStore } from "./fixtures/composer-model-selection-store";
+import {
+  MODEL_THINKING_PREFERENCES_KEY,
+  loadModelThinkingPreferences,
+  rememberModelThinkingLevel,
+  resolveModelThinkingLevel,
+} from "../../apps/desktop/src/lib/model-thinking-preferences";
 
 type MenuController = ReturnType<typeof useComposerModelMenu>;
 
@@ -17,6 +23,7 @@ declare global {
     switchedLevel: string;
     level: string;
     writes: Array<{ providerId?: string; modelId?: string; thinkingLevel: SessionThinkingLevel }>;
+    preferences: Record<string, string>;
   }>;
   var composerModelSelectionController: MenuController | undefined;
 }
@@ -94,6 +101,65 @@ function Fixture() {
   );
 }
 
+
+/**
+ * Second stage: a draft Composer over two models whose binding defaults differ
+ * from the levels the user picks, so a restored level cannot be mistaken for a
+ * default. Mirrors the real Composer's draft resolution and write path.
+ */
+const preferenceProvider: ProviderPublic = {
+  ...provider,
+  id: "thinking-preference-provider",
+  name: "Thinking preference provider",
+  models: [
+    { id: "pref-a", contextWindow: 32_000, maxTokens: 4_000, thinkingLevels: ["low", "high"], defaultThinkingLevel: "high" },
+    { id: "pref-b", contextWindow: 32_000, maxTokens: 4_000, thinkingLevels: ["low", "high"], defaultThinkingLevel: "low" },
+  ],
+};
+
+let preferenceRoot: ReturnType<typeof createRoot> | null = null;
+
+function PreferenceDraft({ initialModelId }: { initialModelId: string }) {
+  const [modelId, setModelId] = useState(initialModelId);
+  const [draftLevel, setDraftLevel] = useState<SessionThinkingLevel | null>(null);
+  const binding = preferenceProvider.models.find((entry) => entry.id === modelId);
+  const resolvedLevel = resolveModelThinkingLevel({
+    providerId: preferenceProvider.id,
+    modelId,
+    binding,
+    catalogMatched: true,
+    fallbackLevels: preferenceProvider.supportedThinkingLevels,
+  });
+  const thinkingLevel = draftLevel ?? resolvedLevel;
+  const controller = useComposerModelMenu({
+    mode: "agent",
+    activeSessionId: null,
+    provider: preferenceProvider,
+    modelId,
+    thinkingProvider: undefined,
+    thinkingLevel,
+    controlsBlocked: false,
+    configureActiveSession: async (configuration) => {
+      if (configuration.modelId) setModelId(configuration.modelId);
+      setDraftLevel(configuration.thinkingLevel);
+    },
+  });
+  globalThis.composerModelSelectionController = controller;
+  return (
+    <div className="composer-stack" style={{ position: "absolute", left: 120, top: 300, width: 640 }}>
+      <span className="selected-model">{modelId}</span>
+      <span className="selected-thinking-level">{thinkingLevel}</span>
+    </div>
+  );
+}
+
+function mountPreferenceDraft(initialModelId: string) {
+  const host = document.createElement("div");
+  document.body.append(host);
+  preferenceRoot = createRoot(host);
+  flushSync(() => preferenceRoot!.render(<PreferenceDraft initialModelId={initialModelId} />));
+  return settle();
+}
 const settle = () => new Promise<void>((resolve) =>
   requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
 );
@@ -163,10 +229,54 @@ globalThis.composerModelSelectionProbe = async () => {
   }
   useAppStore.setState({ recentModels: restored });
   await settle();
-  return {
+  const result = {
     model: document.querySelector(".selected-model")?.textContent?.trim() ?? "",
     switchedLevel,
     level: document.querySelector(".selected-thinking-level")?.textContent?.trim() ?? "",
     writes: [...writes],
+    preferences: {} as Record<string, string>,
   };
+
+  // ---- per-model thinking preference, through the real hook ----
+  // Start from no memory so the first level can only be pref-a's default.
+  localStorage.removeItem(MODEL_THINKING_PREFERENCES_KEY);
+  flushSync(() => root.unmount());
+  const levelOf = () => document.querySelector(".selected-thinking-level")?.textContent?.trim() ?? "";
+  const preferences = result.preferences;
+
+  await mountPreferenceDraft("pref-a");
+  preferences.initialA = levelOf();
+  await globalThis.composerModelSelectionController!.commitThinkingLevel("low");
+  await settle();
+  preferences.afterCommitA = levelOf();
+  preferences.storedAfterCommitA = Object.values(loadModelThinkingPreferences()).sort().join(",");
+
+  await globalThis.composerModelSelectionController!.selectModel(preferenceProvider, "pref-b");
+  await settle();
+  preferences.afterSwitchToB = levelOf();
+  await globalThis.composerModelSelectionController!.commitThinkingLevel("high");
+  await settle();
+  preferences.afterCommitB = levelOf();
+
+  await globalThis.composerModelSelectionController!.selectModel(preferenceProvider, "pref-a");
+  await settle();
+  preferences.afterReturnToA = levelOf();
+  await globalThis.composerModelSelectionController!.selectModel(preferenceProvider, "pref-b");
+  await settle();
+  preferences.afterReturnToB = levelOf();
+  preferences.storedAfterReturn = Object.values(loadModelThinkingPreferences()).sort().join(",");
+
+  // Restart: a brand-new draft component reads the stored preferences.
+  flushSync(() => preferenceRoot!.unmount());
+  await mountPreferenceDraft("pref-a");
+  preferences.afterRestartA = levelOf();
+
+  // A saved level the model no longer supports is clamped, not applied raw.
+  flushSync(() => preferenceRoot!.unmount());
+  rememberModelThinkingLevel({ providerId: preferenceProvider.id, modelId: "pref-b" }, "max");
+  await mountPreferenceDraft("pref-b");
+  preferences.clampedAfterRestartB = levelOf();
+  flushSync(() => preferenceRoot!.unmount());
+
+  return result;
 };
