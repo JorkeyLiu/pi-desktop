@@ -20,11 +20,10 @@ const details = await readFile(
   "utf8",
 );
 
-test("only a run row outside the topology gets the three-control head", () => {
-  assert.match(
-    transcript,
-    /const runHead = action === "run" && variant !== "topology"/,
-  );
+test("only a run row outside the subagent task card gets the three-control head", () => {
+  // A Task card is not a tool row at all, so it never reaches the head below.
+  assert.match(transcript, /if \(variant === "task"\) return <SubagentTaskCard \{\.\.\.props\} \/>;/);
+  assert.match(transcript, /const runHead = action === "run";/);
   assert.match(transcript, /runHead \? " is-run" : ""/);
   assert.match(styles, /\.tool-row-head\.is-run \{[^}]*display: flex/);
 });

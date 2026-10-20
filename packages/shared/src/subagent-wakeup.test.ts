@@ -149,7 +149,7 @@ describe("formatSubagentProgressMetrics", () => {
         contextTokens: 12_345,
         usage: { inputTokens: 40_000, outputTokens: 5_678, totalTokens: 45_678 },
       }),
-    ).toBe("3 tool calls, ctx ~12.3k tokens, spent 45.7k tokens");
+    ).toBe("3 tool calls, ctx 12.3k tokens, spent 45.7k tokens");
     expect(formatSubagentProgressMetrics({ toolCalls: 1 })).toBe(
       "1 tool call",
     );

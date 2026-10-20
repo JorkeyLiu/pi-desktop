@@ -1255,6 +1255,16 @@ export function commandShellGuidance(
   ].join(" ");
 }
 
+/**
+ * The `description` argument is display metadata the user sees in place of the
+ * raw command. It is advertised as optional so providers, logs, and older
+ * callers that only send `command` keep working, and it never reaches the
+ * runner: execution, permissions, timeout, output, and safety checks are
+ * unaffected by whether a call carries it.
+ */
+const BASH_DESCRIPTION_PARAM_GUIDANCE =
+  'Optional short, active-voice title of the command\'s user-facing purpose, for example "Install dependencies". Display metadata only: the command still runs exactly as written and every permission and safety check applies unchanged.';
+
 function commandShellToolDescription(
   shell: CommandShellOption,
   scratchDir?: string,
@@ -1266,6 +1276,7 @@ function commandShellToolDescription(
     shellSyntaxGuidance(shell),
     `The session scratch directory variable is ${shellScratchVariable(shell)}.`,
     `An optional timeout from 1 to ${MAX_COMMAND_TIMEOUT_SECONDS} seconds may be supplied; without it, the command defaults to a 60-second timeout.`,
+    'Describe a command the user will care about with the optional `description`: a short, active-voice title of its user-facing purpose, for example "Install dependencies", so the interface shows intent instead of the raw command text. It labels the command for the user; it never replaces or alters the command that runs, its permissions, its timeout, or any safety check.',
     ...(formattedScratch ? [`The session scratch directory is ${formattedScratch}.`] : []),
   ].join(" ");
 }
@@ -3348,6 +3359,11 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             description:
               `Optional command timeout in seconds from 1 to ${MAX_COMMAND_TIMEOUT_SECONDS}; defaults to 60 seconds.`,
           }),
+        ),
+        // Optional display metadata (see BASH_DESCRIPTION_PARAM_GUIDANCE):
+        // absent on calls from older providers, callers, and replays.
+        description: Type.Optional(
+          Type.String({ description: BASH_DESCRIPTION_PARAM_GUIDANCE }),
         ),
       },
       PluginScaffold: {

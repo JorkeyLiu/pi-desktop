@@ -793,7 +793,7 @@ reading surface of the workstation.
   conversation band. Its activity header is a full-width row with an
   ellipsizing label and trailing caret, never a content-sized chip, so it
   follows the dragged width instead of its own text. Content inside a
-  delegation node and its dock process is width-aware and wraps long task,
+  delegation card and its dock process is width-aware and wraps long task,
   path, command, and answer text.
 - The transcript keeps one stable scrollbar gutter on the trailing edge. It
   never reserves a matching left gutter, so the minimap and first message do
@@ -857,10 +857,24 @@ changing the stored message. Assistant errors and stopped trailing partial answe
 also stay outside it. User/system messages and compaction boundaries are unchanged.
 
 Within the process, an ordinary activity group represents one contiguous
-tool/search/thinking segment between progress paragraphs. It renders a group header
-only when the current mode has two or more visible items. A singleton uses its item
-disclosure directly, compact-hidden thinking never creates an empty wrapper, and
-the existing Task topology remains the container for delegated work.
+tool/search/thinking segment between progress paragraphs, and that segment draws
+no fold of its own: the whole-process header is the one disclosure above the rows,
+so an open process shows its work with every row keeping its own detail
+disclosure. Compact-hidden thinking never creates an empty wrapper, and a `Task`
+delegation card is a row of that same group: the process group, and not a second
+container, holds delegated work.
+
+The process's own runtime footer never restates an aggregate wait for delegated
+work: the Composer subagent dock already owns each live child's status, so a
+`waiting-subagents` phase draws no footer row at all, while the parent's own
+starting, waiting-for-model, preparation, compaction, recovery, retry and error
+rows keep rendering in full.
+
+The reasoning a turn emits immediately before its closing prose is presented as
+its own row before that prose instead of staying inside the tool segment it was
+grouped with, and it folds like any other reasoning row. The move only changes
+where that leaf is read: the stored transcript order the model produced is
+unchanged.
 
 Detailed opens whole-process disclosures while a turn is active. When a turn
 settles, an untouched process defaults closed; an explicit user choice remains
@@ -872,22 +886,23 @@ through later successful recovery, and closes on completion if still untouched.
 Group headers summarize count, running state and issue count without treating a
 failed child as a failed turn.
 
-No item payload opens itself in either mode: a tool, hosted-search or plan call
-stays a header row until the user opens its disclosure. The activity group and
-the whole process keep their automatic open defaults, so a live turn still shows
-its work. Compact keeps all tool/search payloads closed and suppresses reasoning
+Tool, hosted-search and plan rows stay header rows until the user opens them;
+an open process never expands one by itself. The one payload that opens with the
+turn is the `TodoWrite` checklist, because its checklist is the work the reader is
+watching, and the reader's collapse choice for that row survives later streaming
+updates. Compact keeps all tool/search payloads closed and suppresses reasoning
 text and excerpts; only its active thinking indicator remains.
 
-Whole process, group and item are independent controls. Closing an ancestor keeps
-descendant choices and reopening restores them; opening a parent never expands all
-children. User interaction with a child claims its ancestors without toggling them,
+Whole process and item are independent controls. Closing the process keeps
+descendant choices and reopening restores them; opening it never expands all
+children. User interaction with a child claims the process without toggling it,
 so completion cannot close around opened, focused or selected content. Choices use
-stable turn/group/item identities and remain while the retained session pane lives,
+stable turn/item identities and remain while the retained session pane lives,
 including mode changes and row remounts; pane eviction, deletion or renderer restart
 reapplies defaults rather than persisting disclosure state to messages or settings.
 
-Search/navigation reveals the process and the activity group that own the named
-message, and applies each reveal request once. Item-level targeting is not part
+Search/navigation reveals the process that owns the named message, and applies
+each reveal request once. Item-level targeting is not part
 of this change. Compact reasoning stays hidden until
 the user selects Detailed. Permission, question, plan/goal approval and other
 pending action cards remain reachable outside a hidden process. See
@@ -899,7 +914,7 @@ pending action cards remain reachable outside a hidden process. See
 |---|---|
 | Empty | Restrained hero + optional onboarding checklist in a scrollable content region, with a bottom-reserved home composer and no starter-card or contextual quick-action layer (D111/D204/D206). An open project underlines the project name, including before its first session exists; the control opens a searchable switcher of the sidebar's open projects, with clone-git-project and open-project actions. |
 | Streaming | Auto-scroll follows while pinned; new tokens append |
-| Active progress | Immediately after send, before the first assistant or tool event, a compact localized `Working…` status with elapsed time appears inline. Its model and subagent elapsed labels use the carried-unit format in §9.1. When the runtime names a quiet interval, that same row identifies starting, waiting for the model, preparing the next request, compacting context, recovering an empty response, retrying, or waiting for delegated work (with each running subagent's latest coarse action). It remains visible through thinking, tool execution, completed-tool gaps, and partial answers until the turn ends. Runtime phases take precedence over the Planning/Goal or Working fallback. Pending permissions, questions, and plan/goal approvals suppress the row; history reading never shows live status; no large generic progress card is rendered. The row lives in the reserved tail lane, so it appears and clears mid-turn without changing the transcript's content height. A retrying row remains compact at rest; hovering or focusing it reveals an error-styled tooltip with the localized error summary, stable code/HTTP status, and bounded provider message. The tooltip mixes the error tint over `--ds-bg-elevated-opaque` so transcript text does not show through. |
+| Active progress | Immediately after send, before the first assistant or tool event, a compact localized `Working…` status with elapsed time appears inline. Its model elapsed labels use the carried-unit format in §9.1. When the runtime names a quiet interval, that same row identifies starting, waiting for the model, preparing the next request, compacting context, recovering an empty response, or retrying. A `waiting-subagents` phase draws no row here: the Composer's session-wide subagent dock (§9.9) already lists every live child's status and elapsed time, so the transcript never restates that aggregate wait. It remains visible through thinking, tool execution, completed-tool gaps, and partial answers until the turn ends. Runtime phases take precedence over the Planning/Goal or Working fallback. Pending permissions, questions, and plan/goal approvals suppress the row; history reading never shows live status; no large generic progress card is rendered. The row lives in the reserved tail lane, so it appears and clears mid-turn without changing the transcript's content height. A retrying row remains compact at rest; hovering or focusing it reveals an error-styled tooltip with the localized error summary, stable code/HTTP status, and bounded provider message. The tooltip mixes the error tint over `--ds-bg-elevated-opaque` so transcript text does not show through. |
 | Turn outcome | After a failed turn, a session-scoped recovery card summarizes the interruption and tool evidence. Completed turns use the existing transcript and message-scoped InlineReviewCard without an extra success card; failed turns can continue through one localized prompt without losing the transcript. |
 | Session switch | A first-opened session paints at its latest record; a revisited pane paints at its own retained position. Bounded first commit and full-history expansion show the same position: no post-paint height correction may shift the visible rows, in either direction |
 | Turn start (send / retry / regenerate) | Re-pins and positions the latest content before paint, even if the user had scrolled up; the later persisted user-message event does not flash the transcript at its top, and the composer collapse / indicator layout clamps during the send never release follow mode |
@@ -968,13 +983,25 @@ terminal surface; agent Bash output remains in the transcript.
 ^ 10px transparent resize hit area on the left edge
 ```
 
-The header is a horizontally scrollable `tablist`. Each open New launcher,
-Review, file, or plugin view is one tab with an icon, an ellipsized label, and a
-close button shown on hover, focus, or the active tab. Middle-click closes a
-tab. The `+` button sits outside the scroller and remains visible when tabs
-overflow. Clicking it creates and activates a unique New launcher tab. The
-launcher body contains host-owned Review followed by every in-scope
-`contributes.views` entry as buttons; Files and Browser are not hardcoded in
+The header is a single-row `tablist` that scrolls horizontally and never wraps.
+Each open New launcher, Review, file, or plugin view is one tab with an icon, a
+single-line ellipsized label, and a close button: the active tab always shows
+its `×`, and every other tab shows it on hover or focus. A tab keeps a stable
+72px–180px width so labels never collapse into each other, the complete title
+and path stay available through the tab's hover title, and the strip fades at an
+edge where it continues past the viewport. A touchpad's horizontal gesture
+scrolls the row natively, while a plain vertical wheel or `Shift`+wheel over the
+strip moves that same row instead of the page. The selected tab is revealed when
+it opens, when selection changes, and while the dock's width animation settles —
+but a wheel gesture hands the row to the user, and later layout changes then
+never take it back. Middle-click closes a tab; right-click or `Shift`+`F10`
+opens one shared tab menu with close, close others, close to the right, and
+close all — there is no separate all-tabs list. The `+` button sits outside the
+scroller in a fixed right action lane beside maximize and the viewport-fixed
+toggle, so no action ever overlaps a tab and the strip never scrolls under them.
+Clicking `+` creates and activates a unique New launcher tab. The launcher body
+contains host-owned Review followed by every in-scope `contributes.views` entry
+as buttons; Files and Browser are not hardcoded in the renderer (ADR 0104).
 the renderer (ADR 0104). The header reserves a tokenized 44px right-side safe
 lane for the viewport-fixed work-panel toggle: the 28px control, its 12px
 viewport inset, and the header's own 4px control gap
@@ -1007,16 +1034,19 @@ singleton without duplicating it:
 
 - Panel body uses quiet inset paper (`#fafafa`); the 46px header band and tool
   chrome (review toolbar, browser chrome, file viewer header) stay white
-- The 46px header is a clipped tab strip plus a tight `+` trigger. Tabs keep a
-  stable `92px–180px` width and a visible gap, so labels do not shrink into
-  each other; only the strip scrolls when there are more tabs than the panel
-  can show. The trigger is outside it and never scrolls away. A New launcher
+- The 46px header is a single-row clipped tab strip plus a tight `+` trigger.
+  Tabs keep a stable `72px–180px` width and a visible gap, so labels do not
+  shrink into each other; only the strip scrolls when there are more tabs than
+  the panel can show, and its edges fade where the row continues out of view.
+  The trigger is outside it and never scrolls away. A New launcher
   tab carries the concise **New** title and the same data-driven tool rows as
   the former entry point. Shortcut labels are rendered only for real bindings.
-- Tab close uses a hover/focus/active `×` affordance and middle-click. The
-  active tab uses the normal active fill, while overflow is handled by the
-  strip rather than by a second resource list. Launcher rows use the same
-  fast hover/focus feedback as other panel rows.
+- Tab close uses a hover/focus/active `×` affordance: the active tab always
+  shows it, every other tab shows it on hover or focus. Middle-click and the
+  shared right-click / `Shift`+`F10` tab menu close as well. The active tab uses
+  the normal active fill, while overflow is handled by the strip rather than by
+  a second resource list. Launcher rows use the same fast hover/focus feedback
+  as other panel rows.
 - Active tabs, file-tree rows, and diff headers ease hover fills with
   `--motion-duration-fast` / `--motion-ease-out`. The resize handle matches the
   sidebar: a 32px centered 2px grip that appears on direct hover/focus, with
@@ -1177,14 +1207,16 @@ entirely inside the plugin's isolated page:
   returns a conflict without overwriting later work.
 - Header tabs: the strip is a `tablist` containing one `tab` for every open
   Review, file, or plugin view. Clicking a tab activates it; the active tab is
-  scrolled into view. Its close button and middle-click close it, selecting the
+  scrolled into view. Its close button, middle-click, and the shared tab menu
+  (close, close others, close to the right, close all) close it, selecting the
   right neighbor and then the left. ArrowLeft/ArrowRight/Home/End move between
   tabs and Delete/Backspace closes the focused tab. Pressing and moving a tab
   by 8px starts reordering; dropping on either half of another tab inserts the
   source before or after it. Holding the pointer near either edge auto-scrolls
   the strip toward off-screen tabs. `Alt+ArrowLeft`/`Alt+ArrowRight` reorders
   the focused tab without changing its active state. The `+` trigger remains
-  fixed beside the strip and creates a new launcher tab.
+  fixed beside the strip in the header's right action lane, which also holds
+  maximize and the panel toggle, and creates a new launcher tab.
 - New launcher: each `+` click creates a unique, active New tab. Its body uses
   the Review-plus-plugin tool list as buttons. Selecting a row replaces the
   launcher tab with that destination or activates its existing singleton.
@@ -1198,10 +1230,11 @@ entirely inside the plugin's isolated page:
   Home, End, and Escape operate the tablist; creating a launcher page never
   changes a native plugin surface's bounds.
 - Tab close: closing an active tab selects its right neighbor, then its left;
-  closing the last tab leaves the panel open on the New launcher. The
-  panel-level collapse control is the viewport-fixed shell toggle (not in the
-  work-panel content header) and hides the panel without deleting the runtime
-  tab set; a later artifact reopens it.
+  closing the last tab leaves the panel open on the New launcher. Closing a
+  subagent tab closes a view only and never stops the child; a browser tab keeps
+  its existing page cleanup. The panel-level collapse control is the
+  viewport-fixed shell toggle (not in the work-panel content header) and hides
+  the panel without deleting the runtime tab set; a later artifact reopens it.
 - Context change: selecting another session atomically projects that session's
   retained `{open, tabs, activeTabId, browserResource}` state. The previous
   session's context remains in renderer memory and is restored when selected
@@ -1245,12 +1278,13 @@ entirely inside the plugin's isolated page:
 - `<aside>` landmark. The header exposes a `role="tablist"` with one
   `role="tab"` per open New launcher or resource, `aria-selected`,
   `aria-controls`, roving `tabIndex`, and localized close buttons.
-  ArrowLeft/ArrowRight/Home/End move through tabs; Delete/Backspace and
-  middle-click close the focused tab. The `+` button is a direct action with a
-  localized label and no popup state. A New tab's body is a labelled
-  `role="tabpanel"` containing a labelled `role="group"` of ordinary buttons;
-  the legacy no-tab reveal remains a plain labelled group. Each resource body
-  remains a `role="tabpanel"`.
+  ArrowLeft/ArrowRight/Home/End move through tabs and reveal each tab as it is
+  reached; Delete/Backspace and middle-click close the focused tab, and
+  `Shift`+`F10` or the context-menu key opens the same tab menu a right-click
+  opens. The `+` button is a direct action with a localized label and no popup
+  state. A New tab's body is a labelled `role="tabpanel"` containing a labelled
+  `role="group"` of ordinary buttons; the legacy no-tab reveal remains a plain
+  labelled group. Each resource body remains a `role="tabpanel"`.
 - Resize handle: focusable `role="separator"` with
   `aria-orientation="vertical"`, a localized label, dynamic
   `aria-valuemin` / `aria-valuemax` / `aria-valuenow`, visible focus, and
@@ -1266,9 +1300,9 @@ entirely inside the plugin's isolated page:
 
 ### 5.7 Subagent task conversation
 
-A topology node opens the selected delegate in the same right-side dock as the
-work panel. The dock is an inset grouped side sheet: a sticky identity header,
-the task description as a full-width card, and the delegate's live process.
+A delegation card opens the selected delegate in the same right-side dock as the
+work panel. The dock is an inset side sheet holding the child's own conversation:
+the task brief it was given, and the delegate's live process.
 It does not render separate Details or Output tabs.
 
 - The selection is renderer-local and session-scoped: it stores only the
@@ -1276,14 +1310,13 @@ It does not render separate Details or Output tabs.
   `parentToolCallId` rows from the live/retained transcript. The header and
   process therefore update as thinking, tool calls, and answer fragments stream
   in.
-- The task description is the Task call's `task` argument, rendered as one
-  selectable inset grouped card. The delegate's thinking, tool rows,
+- The task description is the Task call's `task` argument, rendered as the
+  conversation's first selectable user row. The delegate's thinking, tool rows,
   and answer fragments reuse the same components and styling as the main
-  conversation. Task/node titles, descriptions, and step summaries use the
+  conversation. Card titles, the task brief, and step summaries use the
   available width and wrap or clamp to multiple lines; long paths, commands,
   and tool summaries in the live process wrap inside the dock instead of
-  becoming one-line ellipses. Reports and counters remain omitted from this
-  compact surface.
+  becoming one-line ellipses.
 - The dock has one scroll owner, the panel body. The scroll owner is
   keyboard-focusable and exposed as a polite `role="log"` so streamed rows
   remain discoverable without forcing focus changes. The live process is
@@ -1296,21 +1329,16 @@ It does not render separate Details or Output tabs.
   While pinned to the latest output, the panel body follows new process rows;
   a real upward gesture pauses follow and exposes the standard jump-to-latest
   control.
-- The selected delegate uses a sticky identity header: a 36px avatar with a
-  status dot, the agent name as the title, and the effective model plus a
-  concrete non-`off` thinking level as a caption (for example, `GPT-5.6-Luna
-  Max`). `off`, `omit`, and models without reasoning support add no suffix. A
-  tinted status capsule and elapsed time sit on the same row, trailing the
-  identity, and never wrap onto a second line; the name ellipsizes first. The
-  same caption appears on every delegation topology node, and its accessible
-  name and hover title contain the complete model/level label.
-  The task is an inset grouped card
-  under a **Task** section label, left-aligned and full-width, not a transcript
-  bubble. The card shows at most four lines by default; longer tasks expose an
-  inline Show more / Show less control with a disclosure chevron. The live
-  process uses an **Activity** section label (it does not repeat the agent
-  name), a trailing step count, and one subtle vertical timeline with no nested
-  card, so unused panel space reads as one continuous work surface.
+- The tab is the child's own conversation. Its strip label names the work the
+  delegate was given — the delegation chain's original task description, the
+  role when an older log carries none, then the localized unnamed label — and the
+  tab body opens with that same brief as its first user row, followed by the
+  delegate's thinking, tool rows, and answer fragments, which reuse the same
+  components and styling as the main conversation. The tab header carries the
+  outcome, the delivery owner, and one localized metrics group (occupancy, spend,
+  turns/calls); the child's model and reasoning level are stated once, in the tab
+  composer's static model chip. Long paths, commands, and tool summaries in the
+  live process wrap inside the dock instead of becoming one-line ellipses.
 - A delegate that settles without completing explains why, because the process
   alone does not: a `Failed`, `Timed out`, or `Aborted` capsule with no reason
   is all a reader gets, and a delegate that dies before emitting a message row
@@ -1323,11 +1351,11 @@ It does not render separate Details or Output tabs.
   The disclosure control sits in the card's heading so it stays reachable while
   the details are collapsed, and the card follows a **non-success** terminal
   outcome, so a completed or still-running delegate never shows one.
-- The dock header identifies the view as **Subagent** and offers close and
-  collapse controls. Closing returns to the previously selected work-panel
-  resource, if any; `Cmd/Ctrl + J` hides the whole dock. Selecting another node
-  replaces the task and process in place without changing panel width or the
-  conversation scroll position.
+- The view is the work panel's `subagent` tab, one per delegation, in the same
+  tab strip that hosts Review, files, and plugin views. Closing it returns to
+  the previously active tab, if any; `Cmd/Ctrl + J` hides the whole panel.
+  Opening another child's card activates its own tab without changing panel
+  width or the conversation scroll position.
 - A session switch or leaving the chat route hides the selection. A stale or
   deleted delegation shows a localized unavailable state and never displays
   another session's rows.
@@ -2236,22 +2264,24 @@ Lightweight inline disclosure row showing a semantic tool action, its primary
 argument hint, status, and a readable rendering of the result. It follows D071
 and is intentionally not an elevated card.
 
-One contiguous tool/search/thinking segment between progress paragraphs becomes an
-ordinary processing group only when it has two or more visible items. A singleton
-uses its item disclosure directly, and Task topology keeps its existing container.
-While the turn is active, the ordinary group owning the execution segment opens in
-Detailed and remains closed in Compact; when it settles, an untouched Detailed
-group closes. No item payload opens itself in either mode: a tool, hosted-search
-or plan row stays a header row until the user opens it, whichever item of the
-group it is. Compact keeps every tool/search payload closed.
+One contiguous tool/search/thinking segment between progress paragraphs is the
+ordinary activity group, and it draws no fold of its own: the turn's process
+header is the only disclosure above the rows, so an open process shows the
+segment immediately with every row keeping its own detail disclosure. A `Task`
+delegation card is a row of that same group, so delegated work is presented in
+place rather than moved into a second container. No item payload opens itself: a
+tool, hosted-search or plan row stays a header row until the user opens it,
+whichever item of the group it is, with the `TodoWrite` checklist as the one row
+whose payload opens with the turn. Compact keeps every tool/search payload closed.
 
-The group header shows `Processing · 12s` while active or `Processed for 12s`
-after completion, plus bounded item and issue counts. Expanding it reveals the
-ordered activity rows and their independent result disclosures. A failed child
+The process header shows `Processing · 12s` while active or `Processed for 12s`
+after completion, plus one tool count and a bounded issue count when the turn had
+issues. Expanding it reveals the ordered activity rows and their independent
+result disclosures. A failed child
 remains an error on its own ToolCallRow but does not make the group or whole turn
 terminally failed; terminal agent errors remain owned by the assistant error or
-TurnOutcomeCard surface. A user action on a group, item, or collapse rail claims
-that level and its ancestors without toggling them, so streaming and completion
+TurnOutcomeCard surface. A user action on an item or the process collapse rail
+claims that level without toggling it, so streaming and completion
 never reverse the chosen state or close around focused/selected content.
 Elapsed labels use compact automatically carried units: seconds below one
 minute, minutes plus seconds below one hour, and hours plus minutes (and
@@ -2259,9 +2289,7 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
 `90m` is rendered as `1h 30m`.
 
 ### 9.2 Anatomy
-
-```text
-[sparkle] Processing · 12s  3 steps                 [›]
+[sparkle] Processed for 12s  3 tools                 [›]
           ├─ [file] Read /src/foo.ts        [›]
           ├─ [search] Searched TODO  24 matches   [›]
           └─ [terminal] Ran pnpm test  exit 1  • Failed  [copy] [›]
@@ -2271,8 +2299,15 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
 
 - The leading Lucide icon reflects the action type: file, folder, search,
   edit, terminal, web, or generic tool.
-- A multi-item group header owns elapsed time plus item and issue counts and stays
-  in the transcript after completion. In Detailed the active group starts open and
+- The process header owns elapsed time plus the turn's tool and issue counts and
+  stays in the transcript after completion. In Detailed it starts open while the
+  turn is active and closes on completion only if untouched; compact-hidden
+  thinking never creates an empty row, and the segment between two progress
+  paragraphs is not wrapped in a second header.
+- Tool/search payloads stay collapsed in both modes until the user opens them; no
+  row auto-opens, so a reasoning leaf never selects an earlier tool. The
+  `TodoWrite` checklist is the exception, and live
+  thinking follows its own disclosure policy and never opens sibling payloads.
   closes on completion only if untouched; completed groups otherwise start closed.
   Compact groups start closed. A singleton has no group header.
 - Tool/search payloads stay collapsed in both modes until the user opens them; no
@@ -2293,10 +2328,20 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
   `truncated` chip follows `details.truncated` and therefore appears only when
   this result was cut short, not when a Read window of a longer file was filled
   (D306).
+- A path hint prints the start of the path and its last segments, with the
+  middle omitted (`…`) because that is the part a reader recognizes; the whole
+  value stays in the row's `title`, its file menu and its preview target, and
+  a non-path hint is never middle-omitted. The tail is not clipped a second
+  time by the row.
 - Live activity remains in the processing group, its latest row, or the
   dedicated runtime indicator; no additional status capsule is rendered.
-  Long paths remain in the row summary and are ellipsized.
-- The disclosure chevron is quiet until hover/focus or expansion.
+- A workspace mutation's row ends with its own `+a/−d` pair, which is where the
+  change's diff and rollback live too (§9.11): the transcript never grows a
+  second collapsed row naming the same file.
+- The disclosure chevron is quiet until hover/focus or expansion. A `TodoWrite`
+  row is the one payload a turn opens by itself — its checklist is the live work
+  the reader is watching — and the reader's collapse choice survives later
+  streaming updates to that row.
 - A `run` row's head carries two more controls than the others, because its
   command lives only there (D226, §9.10): the outcome with a toned dot, and a
   copy control beside the chevron. That outcome comes from the exit code the
@@ -2314,12 +2359,17 @@ twice.
 | Read | `File content` — syntax highlighted from the file extension |
 | Write | `Written content` — highlighted from the target extension |
 | Edit | `Changes` — compact diff, only when no ReviewChangeCard owns one |
-| Bash | `Output`, `Errors` (error hue), unframed and unlabelled (D227, §9.10); empty channels omitted. The command stays in the head; a PermissionCard, which has no head, still shows it as `Command` (shell) |
+| Bash | `Command` (shell, highlighted) beside `Output` and `Errors` (error hue) as terminal panes (D226 follow-up, §9.10); each pane is labelled and copies its own bytes, and an empty channel is omitted rather than shown as an empty pane |
 | Glob | `Files` — clickable workspace paths |
 | Grep | `Matches` — grouped by file with a `line` gutter and clickable path headings for `outputMode: content`; a clickable path list for `filesWithMatches`; `path` → hit count fields for `count` |
-| any host `notice` | `Note` — neutral, after the blocks it qualifies (search scoping, clipped long lines, Read window) |
+| TodoWrite | the checklist the call wrote — a progress line from the host's own counts plus one row per item with its state and priority; never the serialized `todos` argument |
+| Skill | the loaded document as a card: the skill's name, the `location`/`references` it reported, and its body as Markdown. A failed call is an `Error` note instead |
+| ScheduledTaskList/Create/Update/Delete | one row per automation: title, cadence, its clock, the weekly days **named in the session language** (the schema numbers them from Monday = 0, so a bare index is never printed), and enabled/paused |
+| ToolSearch, EnterPlanMode/SubmitPlan, NewContext, BrowserPreview, GenerateImages | the names they activated or matched, each name set listed once and read in the session language (the legacy `addedToolNames` carrier is used only when the row reports no `activated` list), the mode the tool's own name states (`Plan`, `Goal`), or the prompts and written images the call carried |
+| any host `notice` | `Note` — an error, warning or truncation notice stays visible after the blocks it qualifies; a routine informational notice is not printed in a successful row's body |
 | any failure | `Error` — message plus code, listed first |
-| unmapped payload | scalar entries as label/value fields; long or multi-line strings as their own labeled block; nested objects as JSON |
+| unmapped payload | scalar entries as label/value fields; long or multi-line strings as their own labeled block; nested objects as JSON, all of it beside one explicit `Raw` disclosure of the untouched payload |
+| list of names | a labelled value list when the entries are not paths (activated tools, task ids); a file list when they are |
 
 - Arguments appear as an `Input` field block only when the result blocks did not
   already carry them, or for opaque tools (`use`, `fork`, `fetch`) whose
@@ -2328,6 +2378,12 @@ twice.
   a run that printed nothing opens on an empty body, not on its arguments.
 - Every block exposes a compact copy action that copies the full payload, not
   the visible slice.
+- A payload with no per-tool mapping never stringifies itself at the reader: an
+  unknown nested value degrades to readable text instead of throwing, and the
+  untouched payload stays one `Raw` disclosure away, bounded in size rather than
+  printed inline.
+- A checklist never prints the arguments it was called with, and a `run` row
+  never prints its command back as an argument.
 
 ### 9.4 Layout
 
@@ -2336,13 +2392,17 @@ twice.
 - Header gap: 4px; expanded tool-call details align with the row's own content
   start and do not add a second horizontal inset. The collapse rail remains
   available beside the expanded body. Thinking disclosures and subagent
-  topology nodes retain their dedicated hierarchy insets.
+  delegation cards keep their own hierarchy insets.
 - Chips: monospace `--text-2xs`, `--ds-tile-deep` fill (no border, D297), error hue for exit codes
 - Code, file list, match list and field blocks: `font-mono text-sm`,
   independently copyable, capped at 260px with internal scrolling
 - File-list paths are block-level, start-aligned rows (same box as Grep path
   headings). A full-width `<button>` must not justify the path's characters
   across the block.
+- A run row's terminal is one column at every width, decided by the row itself
+  rather than by the viewport: the command pane stands alone and its output
+  follows underneath, so a long command line never has to share the row with it,
+  in the transcript or in the narrow work panel.
 - Diff blocks reuse the review card's `.diff-line` rails
 - Only expanded content receives an inset surface and subtle border
 
@@ -2412,20 +2472,37 @@ twice.
 - No cross-row activity grouping until turn boundaries are available to the
   transcript component
 
-### 9.9 Delegation cards and fan-out topology (D201, D265, D268, D271, D302, D319, D323, ADR 0062)
+### 9.9 Delegation cards and the subagent dock (D201, D265, D268, D271, D302, D319, D323, ADR 0062)
 
-A `Task` call is presented as a node of a delegation card, not as a compact tool
-row — one delegation reads the same as a fan-out (D265). The node names the
-delegate it ran, taken from the rows it produced or, before any arrived, from
-the call's own `agent` argument, and carries the call's short `description`. The
-resolved model id is shown immediately after the delegate name, from the
-structured `Task` result details.
+Every `Task` call that starts a delegation is presented as the child's own card,
+not as a compact tool row — one card per call, so a lone delegation reads the
+same as a fan-out (D265). A child is named by the task it was given: the card's
+headline is the call's short `description`, with the child's own status and
+runtime at the right of that title. The role that ran the delegate — taken from
+the rows it produced or, before any arrived, from the call's own `agent`
+argument — reads on the line under the title, in the place the step count used
+to occupy. A card therefore states no model id, no reasoning level and no step
+count; the child's own runtime is stated once, in its transcript tab.
 
-The topology node is width-aware at every panel size. Its title may occupy up
-to two lines, its description is clamped to two readable lines, and its step
-summary can wrap rather than forcing the user to resize the divider. Complete
-descriptions remain available through the node's accessible name/hover title;
-the node and its live process never create horizontal overflow.
+The headline of a resumed delegation is the chain's original description: the
+earliest `Task` call of the resume chain that carries one, so a later
+`Task(resume …)` continuation never renames the work it continues even when it
+sends a description of its own. The description is never repeated as a second
+card line. A delegate whose log carries no description — an older session — is
+named by its role, then by the localized unnamed label; the `task` brief is
+never a title.
+
+The card is width-aware at every panel size. Its title may occupy up to two
+lines, and its progress line can wrap rather than forcing the user to resize the
+divider. The complete title remains available through the card's hover title;
+the card and its live activity never create horizontal overflow.
+
+The card is not a disclosure. It has no caret, no extended body and no
+`aria-expanded`: what it opens is the child's own transcript, and the brief, the
+report and the child's rows live there. The card is one button — the whole tile
+opens that transcript — with the child's Stop control as a sibling of that
+button rather than nested inside it, so stopping the child and reading it are
+two independent actions that neither swallow nor trigger each other.
 
 An accepted steering message creates a new visual reply without ending the
 parent runtime turn. Earlier delegation cards in that running turn keep their
@@ -2434,7 +2511,7 @@ A new ordinary user turn, parent settlement, or history reading ends that live
 projection; terminal Task snapshots still take precedence.
 
 The lifecycle rows (`TaskWait`/`TaskList`/`TaskStop`) stay compact tool rows —
-they are not topology nodes and must not inflate the subagent counts — but they
+they are not child cards and must not inflate the delegation count — but they
 are presented as subagent rows rather than as generic tool calls (D269). A
 lifecycle row is called with delegation ids, which read as bare UUIDs, so it
 never summarizes from its own arguments:
@@ -2453,7 +2530,7 @@ never summarizes from its own arguments:
   (`TaskStop`). A repeated agent is counted (`explorer ×2`) rather than listed
   twice, and a subagent count chip sits beside the label.
 - **Its status badge rolls up that roster** using the same
-  `chat.subagentStatus.*` vocabulary as a topology node: anything still running
+  `chat.subagentStatus.*` vocabulary as a child card: anything still running
   keeps the row running, a `failed`/`denied` member outranks a completed
   sibling, and otherwise a non-completed member (truncated, timed out, stopped)
   is surfaced ahead of `completed`.
@@ -2465,24 +2542,26 @@ never summarizes from its own arguments:
   `delegations[]` JSON. A lifecycle row has no brief of its own, so the ids it
   was called with do not reappear as an argument block.
 
-```text
-[flow] Subagent completed   1 subagent · 1/1 finished · 40s        [›]
-  ┌────────────────┐    ┌───────────────────────────────────────────┐
-  │ (◎) Main agent │────│ [bot] code-reviewer  claude-sonnet-4-5 · Completed · 32s │
-  │ Coordinating 1 │    │ check the store diff                      │
-  │ delegated task │    │ 3 steps                                   │
-  └────────────────┘    └───────────────────────────────────────────┘
-```
+[sparkle] Processing · 40s  2 tools                                 [›]
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ [bot] check the store diff     Completed · 32s               [stop] │
+  │ code-reviewer                                                       │
+  │ Turns 1 · Tool calls 2 · Context 16.2K · Spent 30.3K                 │
+  └─────────────────────────────────────────────────────────────────────┘
 
-Clicking a topology node opens a dedicated `subagent` tab in the work panel —
-the same tab strip that hosts Review, files, and plugin views — instead of
-expanding the transcript. Re-opening the same delegation activates its tab;
-parallel delegates coexist as independent tabs. The tab renders the delegation
-as a conversation:
+The group around the card stays the ordinary process group: there is no main
+agent node, no connector, no group-level subagent summary and no group-level
+Stop all — those described a fan-out canvas, and one card per call says the same
+thing without implying delegate-to-delegate edges the runtime does not have.
+
+Clicking a card opens a dedicated `subagent` tab in the work panel — the same
+tab strip that hosts Review, files, and plugin views — instead of expanding the
+transcript. Re-opening the same delegation activates its tab; parallel delegates
+coexist as independent tabs. The tab renders the delegation as a conversation:
 
 ```text
 ┌──────────────────────────────────────────────┐
-│ [bot] [code-reviewer] [✕]  [bot] [explorer#2] [✕]   [+] ⤢ │
+│ [bot] [check the store diff] [✕]  [bot] [review the tests#2] [✕]   [+] ⤢ │
 ├──────────────────────────────────────────────┤
 │                    ┌──────────────────────┐ │
 │                    │ Review the changes   │ │
@@ -2522,14 +2601,19 @@ as a conversation:
   no longer be resolved) or the session itself cannot prompt. There is no second
   parent-resume strategy and no independent durable child session; the model
   line is plain display.
-- Tab labels carry the agent name captured when the tab opened, with a
-  strip-order `#n` suffix when the same name occurs more than once; a
-  localization fallback covers a delegate with no name.
+- Tab labels carry the task title the card states — the chain's original
+  description — captured when the tab opened, with a strip-order `#n` suffix
+  when the same title occurs more than once. A delegate with no description is
+  labelled by its role, and a localization fallback covers one with neither.
 - Tabs are never opened automatically when a delegate starts. They persist
   after the delegate settles until the user closes them and are scoped to
   their session like every other tab.
 - The conversation is re-found from the session's live/retained messages, so
   streaming rows keep arriving in the open tab while the delegate runs.
+- The tab's scroll area is the pane's only scrollbar — the composer sits below
+  it and never scrolls — and it reserves that trailing gutter whether or not the
+  rows overflow, so opening a long command detail never narrows the transcript
+  or shifts its rows sideways.
 - A delegation whose Task calls are missing renders a localized unavailable
   state. Delegation rows remain excluded from the parent turn stream and
   minimap.
@@ -2537,114 +2621,86 @@ as a conversation:
 - Runs are rebuilt from the message list on every render, so group memoization
   compares them by row identity and length rather than by object identity —
   otherwise a streaming delegate would freeze at its first row.
-- Every `Task` call in an activity group becomes one full-width delegation card
-  rather than a compact tool row, a lone delegation included (D265). Its header
-  presents aggregate state, the number of subagents, the settled/total count and
-  elapsed time; it keeps the standard disclosure caret. The aggregate state is
-  count-aware, so a single delegation is not announced in the plural.
-- **The card contains only those `Task` calls** (D319). Consecutive `Task`
-  starts stay in one topology group so a fan-out still reads as one card.
-  Parent thinking, workspace tools (`Read`/`Grep`/`Bash`/…), and lifecycle rows
-  (`TaskWait`/`TaskList`/`TaskStop`) are a separate processing group — before
-  the card, after it, or both — so the parent's own work is not painted as
-  subagent work. The tile, the “Subagent working” header, and the topology
-  canvas belong only to that Task group. The parent turn itself stays
-  transparent while streaming — no whole-turn tile wrapping thinking, tools, or
-  answer fragments (D323). The card keeps 16px inset from its
-  tile edge so the graph and any leftover rows do not sit on the border.- Runs are rebuilt from the message list on every render, so group memoization
-  compares them by row identity and length rather than by object identity —
-  otherwise a streaming delegate would freeze at its first row.
-- Every `Task` call in an activity group becomes one full-width delegation card
-  rather than a compact tool row, a lone delegation included (D265). Its header
-  presents aggregate state, the number of subagents, the settled/total count and
-  elapsed time; it keeps the standard disclosure caret. The aggregate state is
-  count-aware, so a single delegation is not announced in the plural.
-- **The card contains only those `Task` calls** (D319). Consecutive `Task`
-  starts stay in one topology group so a fan-out still reads as one card.
-  Parent thinking, workspace tools (`Read`/`Grep`/`Bash`/…), and lifecycle rows
-  (`TaskWait`/`TaskList`/`TaskStop`) are a separate processing group — before
-  the card, after it, or both — so the parent's own work is not painted as
-  subagent work. The tile, the “Subagent working” header, and the topology
-  canvas belong only to that Task group. The parent turn itself stays
-  transparent while streaming — no whole-turn tile wrapping thinking, tools, or
-  answer fragments (D323). The card keeps 16px inset from its
-  tile edge so the graph and any leftover rows do not sit on the border.
-- A delegate's terminal Task snapshot updates its topology node, settled count,
-  elapsed time, and open detail dock immediately, even while siblings or the
-  parent remain active. A completed delegate is green and stops spinning.
-  Terminal Task state takes precedence over older lifecycle snapshots
-  that still say `running`; the same outcome survives transcript reload.
-- A topology group stays live — open once, ticking elapsed, labelled working —
-  while any of *its* delegates is still running, even when the parent has
-  already moved on to a later processing group in the same turn. Elapsed time
-  uses that card's own delegation `startedAt`/`completedAt`, not the immediate
-  `Task` tool-call duration and not a later fan-out in the same turn. The runtime
-  keeps the durable parent turn open while delegates run: leftover `running` nodes
-  stay running across parent idle, and end only via `TaskStop`, user Stop, disposal,
-  or a terminal parent error — never via turn-end abort. `TaskStop`'s
-  `details.stopped[]` is a lifecycle status source, same as `TaskWait`/`TaskList`
-  `delegations[]`; a snapshot that still says `running` is presented as `stopped`.
-  A finished session therefore never keeps a live “Subagent working” card. This is the
-  single UI projection of the current wait; historical `TaskWait`/`TaskList` rows stay
-  inspectable, and result delivery reads separately from progress heartbeats.
+- Every `Task` call that starts a delegation becomes one full-width card rather
+  than a compact tool row, a lone delegation included (D265). The card is that
+  call's own row inside the ordinary activity group it belongs to: there is no
+  separate subagent container, no main-agent root, no connector, no
+  delegate-to-delegate edge and no downstream summary node, because the runtime
+  exposes no delegation dependencies and forbids nested `Task`.
+- Consecutive `Task` starts read as consecutive cards, so a fan-out is one card
+  per call rather than one aggregate tile. Parent thinking, workspace tools
+  (`Read`/`Grep`/`Bash`/…), delegation cards and lifecycle rows share that same
+  ordered group, and the parent turn itself stays transparent while streaming —
+  no whole-turn tile wrapping thinking, tools, or answer fragments (D323). A
+  lifecycle row is never presented as a card.
+- A delegate's terminal Task snapshot updates its card, its elapsed time and its
+  open transcript immediately, even while siblings or the parent remain active. A
+  completed delegate is green and stops spinning. Terminal Task state takes
+  precedence over older lifecycle snapshots that still say `running`; the same
+  outcome survives transcript reload.
+- A card whose delegate is still running keeps the durable turn live, so the
+  process header stays open and keeps ticking even when the parent has already
+  moved on to a later segment of the same turn, and the card stays reachable. That
+  elapsed time comes from the delegation's own `startedAt`/`completedAt`, not from
+  the immediate `Task` tool-call duration. Leftover `running` delegates stay
+  running across parent idle and end only via `TaskStop`, user Stop, disposal, or
+  a terminal parent error — never via turn-end abort. `TaskStop`'s
+  `details.stopped[]` is a lifecycle status source the same way `TaskWait`/
+  `TaskList` `delegations[]` is, and a snapshot that still says `running` is
+  presented as `stopped`. A finished session therefore never keeps a live running
+  card. This is the single UI projection of the current wait; historical
+  `TaskWait`/`TaskList` rows stay inspectable, and result delivery reads
+  separately from progress heartbeats.
 - The brief spawn window before a delegate settles is presented as a creating
-  state rather than a generic running one. Because the parent `Task` returns
-  its structured handle (`delegationId`, `startedAt`) only at its own
-  `tool_end` (ADR 0089), a `Task` row that is `running` with no delegation
-  payload is identified as still being created: its node and dock badge read
-  `chat.subagentCreating` (“Starting subagent…”), the status icon pulses in
-  the subagent accent, and the elapsed clock ticks from the call's own
-  `createdAt` instead of waiting for the handle — so the creation phase never
-  reads as stalled. Once the result arrives the node transitions to the normal
-  `running` presentation and continues from its real `startedAt`.
-- The expanded card renders a low-noise dotted canvas with one main-agent root
-  connected to the `Task` nodes in parent-row order. The runtime exposes no
-  delegate dependencies and forbids nested `Task`, so the renderer must not
-  invent delegate-to-delegate edges or a downstream summary node.
-- Each node shows the definition name, effective model id, short description,
-  explicit outcome, runtime duration and step count. Live and settled delegation
-  views share one header metrics region reporting tool calls/turns plus two
-  separated localized figures: the current estimated context occupancy (how
-  full the child's window is) and the cumulative billed spend (ledger-deduped,
-  never double-charged). Occupancy and spend are never merged into one number.
-  Unknown occupancy renders as a dash with its helper, never as zero. Provenance
-  falls back per segment from the `Task` summary to the lifecycle roster to the
-  latest valid child assistant usage (estimated); the latest segment decides, so
-  a latest segment with no occupancy reports unknown rather than reusing an old
-  gauge. The duration uses the
-  delegation registry's
-  `startedAt`/`completedAt` timestamps (and ticks live while the node is
-  running), not the immediate `Task` tool-call duration, and uses the same
-  automatically carried `h`/`m`/`s` format as the processing-group header.
-  Outcome prefers the
-  structured `Task` result
-  (`completed`, `truncated`, `aborted`, `stopped`, `failed`) and falls back to transport
-  state (`running`, `error`, `denied`, `success`). Clicking the node expands the
-  existing brief/report/counters and nested rows; the report remains printed
-  exactly once.
-- Local Desktop running nodes with a delegation handle expose a separate
-  icon-only Stop control with a localized accessible name; the delegate detail
-  panel exposes the same action. The group header
-  offers Stop all subagents for the current session. These actions do not open
-  a model turn or stop the coordinator. Pending cancellation disables duplicate
-  submission and reads Stopping; terminal nodes have no Stop action. Existing
-  output remains readable, including partial output from stopped delegates.
-- A topology that first appears while the turn is active opens once so progress
-  is visible, then closes when its activity settles if the user has not
-  interacted with the card. Reloaded history remains collapsed by default. A
-  user click on the card header or its collapse rail owns the card disclosure;
-  later lifecycle updates never reverse that choice. The header and every node
-  are keyboard disclosures with `aria-expanded`/`aria-controls`; status is
-  written in text and reinforced visually rather than conveyed by color alone.
-  At narrow chat widths the graph becomes a vertical flow without horizontal
-  page overflow.
+  state rather than a generic running one. Because the parent `Task` returns its
+  structured handle (`delegationId`, `startedAt`) only at its own `tool_end`
+  (ADR 0089), a `Task` call that is `running` with no delegation payload is
+  identified as still being created: the card and its tab read
+  `chat.subagentCreating` (“Starting subagent…”), the status icon pulses in the
+  subagent accent, and the elapsed clock ticks from the call's own `createdAt`
+  instead of waiting for the handle — so the creation phase never reads as
+  stalled. Once the result arrives the card transitions to the normal `running`
+  presentation and continues from its real `startedAt`.
+- The card states the child's own figures under its title, in the same localized
+  label-and-value vocabulary the composer's dock rows use: turns, tool calls,
+  context occupancy, then cumulative spend, so one report cannot read two ways
+  (`Turns 1 · Tool calls 2 · Context 16.2K · Spent 30.3K`; 轮次 / 工具调用 /
+  上下文 / 累计消耗 in zh-CN). Every boundary is one centred `·`, every figure is
+  a label with its value formatted in the reader's locale, and the line carries
+  no `ctx` abbreviation and no `~` prefix. A figure the payload never carried is
+  omitted rather than printed as a zero, and unknown occupancy keeps the
+  panel's labelled dash with its helper instead of an invented number; an
+  estimate is marked as one. Provenance falls back per segment from the `Task`
+  summary to the lifecycle roster to the latest valid child assistant usage
+  (estimated); the latest segment decides, so a latest segment with no occupancy
+  reports unknown rather than reusing an old gauge.
+- Outcome prefers the structured `Task` result (`completed`, `truncated`,
+  `aborted`, `stopped`, `failed`) and falls back to transport state (`running`,
+  `error`, `denied`, `success`).
+- Local Desktop running cards with a delegation handle expose their own icon-only
+  Stop control with a localized accessible name. It is a sibling of the card, so
+  stopping one child is independent of reading it and never opens a model turn or
+  stops the coordinator. Neither the dock nor any group header offers a
+  session-wide stop (§11.3a): a child is stopped from its own card or its own
+  dock row.
+  Pending cancellation disables duplicate submission and reads Stopping; a
+  terminal or still-creating card has no Stop action. Existing output remains
+  readable, including partial output from stopped delegates.
+- A card that appears while the turn is active is visible because its group is
+  open; reloaded history keeps the same automatic defaults as any other group. The
+  card is not a disclosure, so it has no expansion to restore, and later lifecycle
+  updates never reverse a choice the user made about the group. The card is one
+  native button whose accessible name is its own title, role and status; status is
+  written in text and reinforced visually rather than conveyed by color alone. At
+  narrow chat widths the title, role and progress line wrap instead of introducing
+  horizontal overflow.
 
 ### 9.10 A run row's command lives in its head (D226)
 
 A `run` row is the one row whose primary argument is the whole point of the
-call. Its head already prints that command, so the body opens on the output
-rather than on a `Command` block repeating what the reader just read. The two
-things the body no longer offers move up into the head.
+call. Its head prints that command, so the head carries the copy control and the
+outcome; the body is the terminal the command ran in, with the command and its
+output as labelled panes.
 
 ```text
 └─ [terminal] Ran  pnpm test  exit 1   • Failed  [copy] [›]
@@ -2652,17 +2708,24 @@ things the body no longer offers move up into the head.
    1 failing: run head keeps its caret
 ```
 
-- **The command appears once.** The body of a `run` row holds `Output`, `Errors`
-  and any host `notice` — never the command. A PermissionCard has no head of its
-  own, so it keeps showing the command it is asking about.
+- **The head still owns the summary and the whole command.** The body repeats
+  the command only inside the terminal's own `Command` pane, which highlights it
+  and copies it byte for byte; the head's hint is the model's `description` when
+  it wrote one, and its copy control always yields the command. A PermissionCard
+  has no head of its own, so its terminal pane is the only place the command
+  appears.
 - **Copy sits beside the chevron** and yields the command as it was written,
   including newlines the one-line head hint had to squeeze out.
-- **The body is the output, unframed** (D227). A `run` row's blocks drop their
-  heading and their card — no border, no fill, no per-block copy button — so the
-  expanded row reads like the terminal the text came from. The 260px height cap
-  and its scroll stay: a long build must not bury the transcript. `Errors` keeps
-  its tint, and each channel's name is carried for assistive technology in place
-  of the heading that used to name it.
+- **The body is a terminal** (D226 follow-up, D227). `Command`, `Output` and
+  `Errors` are labelled panes with their own copy controls in one column at
+  every width — the command first, its output beneath it (§9.4) — so a long
+  command line never shares a row with what it printed. Each output pane keeps the
+  exact bytes the command wrote — whitespace included — and paints ANSI SGR
+  colour by parsing it into styled spans, never by handing the escape sequence to
+  the DOM; every other control sequence is dropped, so a progress spinner cannot
+  repaint the transcript. An empty channel is omitted instead of rendered as an
+  empty pane. The 260px height cap and its scroll stay: a long build must not
+  bury the transcript, and a running command's newest line stays in view.
 - **Streaming keeps one stdout channel.** While Bash is running, the renderer
   accepts the runtime's cumulative `details.output` partial result and presents
   it as stdout. The completed `details.stdout` value takes precedence when both
@@ -2893,16 +2956,21 @@ reasoning-level control.
   the draft and optional model key; the host strips and restores inline file
   reference tokens, including pasted image chips, around the transform.
 - MainPane and the chat surface keep a 450px hard minimum. The composer toolbar
-  remains a single, non-wrapping row as its container narrows: the mode and
-  permission labels stay on one line and ellipsize within their chips, while
-  the combined model × reasoning trigger progressively gives up detail. At
-  560px it hides the reasoning level label, at 480px it tightens the model label
-  cap, and at the 450px floor it becomes a 32px icon-only trigger. The trigger's
-  menu and accessible name retain the complete model/reasoning selection. The
-  context inspector hides its percentage at the floor and plugin action
-  loading states remain icon-only, preserving the action hit targets without
-  clipping or overlapping toolbar content. Home and thread-docked composers
-  use the same responsive rules.
+  shares one row while it fits; when the composer's own container is 560px wide
+  or narrower the toolbar takes a second row instead of squeezing or hiding a
+  control, and the action cluster then owns the row it lands on. The mode and
+  permission labels stay single-line inside their chips, only the model name
+  ellipsizes, and at the 450px floor the context inspector drops its percentage
+  while keeping its ring and hit target; plugin action loading states remain
+  icon-only. The trigger's menu and accessible name retain the complete
+  model/reasoning selection, and no control leaves the toolbar at any width.
+  Home and thread-docked composers use the same responsive rules.
+- The model half of that chip is display-only shortening. A binding with no
+  alias paints the model name without the wire id's routing namespace
+  (`opencode-go/deepseek-v4.1-flash` reads `deepseek-v4.1-flash`), an alias is
+  the user's own name and is painted exactly as written, and the complete ids
+  stay in the trigger's tooltip and accessible name. Nothing here changes the id
+  that reaches the runtime.
 - The combined chip opens one anchored menu above itself. The menu starts with
   only Model and Reasoning level entries, each showing its current value and a
   chevron. Selecting an entry replaces the menu contents in place with a back
@@ -2948,35 +3016,59 @@ reasoning-level control.
   file-reference names), expose independent Remove and Send now actions, and
   increase the dock height measured by `--composer-dock-height`.
 
-### 11.3a Session TodoDock
+### 11.3a Session SubagentDock
 
-- The Composer stack places TodoDock above Plan/Goal approval surfaces when the
-  active session has a non-empty host-owned checklist. An empty checklist does
-  not reserve layout space.
-- The collapsed header shows completed/active progress and the current
-  `in_progress` content. A checklist whose items are all cancelled has a clear
-  cancelled label instead of a misleading `0/0 completed` count.
-- The disclosure is keyboard accessible, does not take focus on updates, and
-  resets closed when the active session changes. The expanded dock lists every
-  ordered row and scrolls inside its own box (`max-height: min(280px, 30dvh)`,
-  `overflow-y: auto`, `overscroll-behavior: contain`), so a long checklist stays
-  readable without growing the Composer stack and reaching the list's end never
-  scrolls the transcript behind it; that scrollport is keyboard reachable only
-  while the disclosure is open. The list stays mounted while collapsed so
-  opening and closing can animate with a bounded height/opacity transition;
-  collapsed content is `aria-hidden` and reduced-motion users receive an
-  immediate state change. A collapsed dock reserves only its header row: the
-  list's inset is clipped, never laid out below the header.
-  Completed rows use a success-tinted tile with a check icon, in-progress rows
-  use the accent tint, and cancelled rows are muted. Each status symbol has a
-  localized accessible name, and each row renders plain text.
-- Renderer snapshots are keyed by session id. A `todos.changed` event with an
-  older or equal revision is ignored. Session activation and host recovery
-  re-read the authoritative snapshot, including already cached checklists; a
-  failed initial read cannot permanently hide the dock after host recovery.
-  Recovery is skipped for `remote:` and `native-pi:` sessions, which do not own
-  a local Desktop checklist. Remote Todo parity requires an additive RACP
-  contract.
+- The Composer stack places the session-wide subagent dock above the Plan/Goal
+  approval surfaces while the active session has at least one running child
+  agent. Its list is the transcript's own live set — the same projection and
+  liveness trace the transcript renders — so the dock appears and disappears on
+  the same evidence, covers every active child of the current session across
+  earlier turns and dispatches, shows a resumed chain once and as its latest run,
+  keeps the chain's original task title, and never shows settled, stale or
+  restart-leftover rows. With no running child the dock renders nothing and
+  reserves no layout space.
+- The collapsed header states the active count and the current title inside one
+  disclosure, so it is keyboard-operable and never takes focus on updates. The
+  disclosure owns the dock's whole header: nothing else may toggle it. Expansion
+  is per session and in renderer memory only — it survives live updates and a
+  switch back to that session, and it is never persisted to the host.
+- The disclosure owns the dock's whole header and the header carries no
+  session-wide stop: stopping belongs to the row of the child it stops, where
+  the user can see which child it is.
+- The header is its own surface. The expanded rows begin below a deliberate gap,
+  so the header's hover fill never touches the first row's tile and their hover
+  states always read as two blocks; the list keeps the same inset at its sides
+  and bottom, and the gap lives inside the collapse layer so the closed dock is
+  still exactly its header's height.
+- The expanded dock lists one row per running child in one scrollport inside its
+  own box, keyboard reachable only while the disclosure is open, so a fan-out
+  wider than the box never truncates. A row reads the task title, the role
+  running it, the child's own localized label-and-value metrics line — turns,
+  tool calls, context occupancy, then cumulative spend, the same figures in the
+  same order with the same centred `·` separators the transcript card uses
+  (§9.9) — its status with its live duration, and its own per-id Stop control.
+  The row states no figure the child never reported: a counter that never
+  arrived is omitted, occupancy the child never reported keeps the labelled dash
+  the transcript tab uses, never an invented zero, and an estimated value is
+  marked as an estimate.
+- The row body is itself the open action: the whole row is one native button, so a
+  click anywhere on it — or Enter or Space — opens that child's chain tab in the
+  work panel (§9.9). The per-child Stop control is a sibling of that button rather
+  than nested inside it, so stopping one child and reading it stay independent
+  actions. Hovering that open action — or reaching it with the keyboard — paints
+  the row's own surface across its whole box, the stop control's gap included,
+  while the button inside stays transparent and the stop control keeps its own
+  hover and focus indication, so a row never reads as a button nested inside a
+  button; pointing at or focusing Stop never lights the row. Before the Task
+  handle lands there is no delegation id, so neither action targets the row yet,
+  and opening needs the same local-tools capability the transcript's own card
+  requires.
+- A child whose description cannot be resolved falls back to its role and then to
+  the localized unnamed label. The dock reads the conversation the transcript
+  holds, so it never promises a title that is not in the loaded window.
+- The host-owned session checklist has no Composer surface of its own: it is read
+  in the `TodoWrite` row that wrote it (§9.2), and no persistent bottom checklist
+  is rendered.
 
 ### 11.4 States
 
@@ -3153,6 +3245,12 @@ reasoning-level control.
   bindings. Cached or freshly discovered rows may enrich those configured
   models, but unconfigured discovery results never appear in the conversation
   list; configured IDs remain visible when discovery is unavailable.
+- A model row is one line. It shows the alias when the binding carries one and
+  the complete wire ID otherwise, clipped with an ellipsis instead of wrapping;
+  the row's title keeps the full value for hover and assistive technology. Rows
+  carry no capability icons and no context-window count. The recent group has no
+  provider heading of its own, so its rows show the model label alone while the
+  title keeps the provider name.
 - Opening the combined menu starts model hydration before the Model submenu is
   entered. The first visible rows use cached metadata or configured bindings;
   live discovery updates them in the background without replacing a configured
@@ -3190,9 +3288,9 @@ reasoning-level control.
   these reasoning levels` and lists `omit` then the selected model binding's
   enabled levels as the classic radio rows. `omit` persists as the session
   thinking level and sends no provider thinking override (ADR 0295).
-  Model-row reasoning badges use published reasoning metadata; vision badges
-  use the effective image-input capability for the row's provider binding
-  (`supportsImages` when explicitly set, published image input otherwise).
+  Model rows carry no capability badge and no context-window count: the row
+  states one model label, and its title holds the complete value. The effective
+  image-input capability still gates image attachments in the Composer.
   Rows use `role="menuitemradio"`, `aria-checked`, active-row styling, and a
   trailing check. Selecting a concrete model, or a level from the radio list,
   persists the complete session config, clears model filtering, and returns

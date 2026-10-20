@@ -3102,14 +3102,26 @@ pub fn builtin_tool_defs() -> Value {
                 "Run a non-interactive shell command in the workspace. stdout keeps its first {}KB, stderr its \
                  last {}KB, and anything over budget is spilled to a file named in the truncation marker. \
                  Use Read/Glob/Grep for reading and searching instead of shell equivalents; when a shell search \
-                 is genuinely needed prefer `rg` and exclude build output.",
+                 is genuinely needed prefer `rg` and exclude build output. \
+                 Describe a command the user will care about with the optional `description`: a short, \
+                 active-voice title of its user-facing purpose, for example \"Install dependencies\", so the \
+                 interface shows intent instead of the raw command text. It labels the command for the user; it \
+                 never replaces or alters the command that runs, its permissions, its timeout, or any safety check.",
                 BUDGET_SHELL.max_bytes / 1024,
                 BUDGET_SHELL_ERR.max_bytes / 1024
             ),
             "risk": "high",
             "parameters": {
                 "type": "object",
-                "properties": { "command": { "type": "string" } },
+                "properties": {
+                    "command": { "type": "string" },
+                    // Display metadata only, and optional so a call that sends
+                    // just `command` stays valid. Never read by the runner.
+                    "description": {
+                        "type": "string",
+                        "description": "Optional short, active-voice title of the command's user-facing purpose, for example \"Install dependencies\". Display metadata only: the command still runs exactly as written and every permission and safety check applies unchanged."
+                    }
+                },
                 "required": ["command"]
             }
         }
@@ -4551,6 +4563,51 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("File or directory"));
+    }
+
+    #[test]
+    fn bash_def_advertises_description_as_optional_metadata() {
+        let defs = builtin_tool_defs();
+        let bash = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|def| def["name"] == "Bash")
+            .unwrap()
+            .clone();
+        let properties = &bash["parameters"]["properties"];
+        assert_eq!(properties["description"]["type"], "string");
+        assert!(properties["description"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Display metadata only"));
+        // Optional: a call that sends only `command` must stay valid.
+        assert_eq!(
+            bash["parameters"]["required"],
+            serde_json::json!(["command"])
+        );
+        assert!(bash["description"]
+            .as_str()
+            .unwrap()
+            .contains("optional `description`"));
+    }
+
+    #[tokio::test]
+    async fn bash_description_does_not_change_the_executed_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = execute_tool(
+            Some(dir.path()),
+            None,
+            "Bash",
+            &serde_json::json!({
+                "command": "printf labelled",
+                "description": "Print a label",
+            }),
+            15_000,
+        )
+        .await;
+        assert!(result.ok, "bash tool failed: {:?}", result.content);
+        assert_eq!(result.content["stdout"].as_str(), Some("labelled"));
     }
 
     #[tokio::test]

@@ -69,9 +69,20 @@ export type ContextMenuState = ContextMenuRequest & {
  * Keyboard-opened menus (Shift+F10, the context-menu key) report no pointer
  * coordinates, so they anchor near the focused node instead of the origin.
  */
-function pointForEvent(event: ReactMouseEvent<HTMLElement>): ContextMenuPoint {
-  if (event.clientX !== 0 || event.clientY !== 0) {
-    return { x: event.clientX, y: event.clientY };
+type ContextMenuTrigger = Pick<
+  ReactMouseEvent<HTMLElement>,
+  "preventDefault" | "stopPropagation" | "currentTarget"
+> & {
+  /** Keyboard triggers (Shift+F10, the context-menu key) have no pointer. */
+  clientX?: number;
+  clientY?: number;
+};
+
+function pointForEvent(event: ContextMenuTrigger): ContextMenuPoint {
+  const pointerX = event.clientX ?? 0;
+  const pointerY = event.clientY ?? 0;
+  if (pointerX !== 0 || pointerY !== 0) {
+    return { x: pointerX, y: pointerY };
   }
   const rect = event.currentTarget.getBoundingClientRect();
   return {
@@ -160,7 +171,7 @@ export function useContextMenu() {
     Both are applied here so no call site can forget one.
   */
   const openContextMenu = useCallback(
-    (event: ReactMouseEvent<HTMLElement>, request: ContextMenuRequest) => {
+    (event: ContextMenuTrigger, request: ContextMenuRequest) => {
       if (!request.items.length) return;
       event.preventDefault();
       event.stopPropagation();

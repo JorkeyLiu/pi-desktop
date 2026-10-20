@@ -12,11 +12,19 @@ const {
   buildToolPresentation,
   hasToolDetails,
   langForPath,
+  parseSkillDocument,
   runOutcome,
   toolResultChips,
   toolResultPayload,
 } = await import("../src/lib/tool-presentation.ts");
-const { getToolAction } = await import("../src/lib/tool-display.ts");
+const {
+  getToolAction,
+  getToolSummary,
+  getToolSummaryKey,
+  getToolSummaryValue,
+  isToolPathSummary,
+} = await import("../src/lib/tool-display.ts");
+const { reviewChangeFromMessage } = await import("../src/lib/workspace-review.ts");
 
 /** A host tool result as pi-ai delivers it: structured details plus text echo. */
 function envelope(details) {
@@ -151,20 +159,25 @@ test("Bash keeps its channels apart and leaves the command to the head", () => {
       truncated: true,
     }),
   };
-  // The row's head prints the command and copies it, so the body opens on the
-  // output instead of repeating it (D226).
+  // The row's head prints the command and copies it, and the body is the
+  // terminal: the command pane plus the two output channels (D226).
   const blocks = buildToolPresentation(message, { hideSummaryArg: true });
-  assert.deepEqual(roles(blocks), ["stdout", "stderr"]);
-  assert.equal(byRole(blocks, "stderr").tone, "error");
-  assert.equal(byRole(blocks, "stdout").tone, undefined);
+  assert.deepEqual(roles(blocks), ["command"]);
+  const terminal = blocks[0];
+  assert.equal(terminal.kind, "terminal");
+  assert.equal(terminal.command, "pnpm test");
+  assert.equal(terminal.stdout, "3 passing\n");
+  assert.equal(terminal.stderr, "1 failing\n");
   assert.deepEqual(toolResultChips(message), [
     { role: "exit", count: 1 },
     { role: "truncated" },
   ]);
-  // A permission card has no head of its own, so it still shows the command.
+  // A permission card has no head of its own, so the pane is the only place the
+  // command appears; it is the same terminal either way.
   const asked = buildToolPresentation(message);
-  assert.deepEqual(roles(asked), ["command", "stdout", "stderr"]);
-  assert.equal(byRole(asked, "command").lang, "bash");
+  assert.deepEqual(roles(asked), ["command"]);
+  assert.equal(asked[0].kind, "terminal");
+  assert.equal(asked[0].command, "pnpm test");
 });
 
 test("Bash progress output renders in the stdout channel before completion", () => {
@@ -177,8 +190,14 @@ test("Bash progress output renders in the stdout channel before completion", () 
     },
     { hideSummaryArg: true },
   );
-  assert.deepEqual(roles(progress), ["stdout"]);
-  assert.equal(byRole(progress, "stdout").text, "1\n2\n");
+  // The body is the terminal (D226 follow-up): a progress snapshot lands in its
+  // stdout pane while the command still runs, and the command it ran stays
+  // visible beside the output.
+  assert.deepEqual(roles(progress), ["command"]);
+  assert.equal(progress[0].kind, "terminal");
+  assert.equal(progress[0].command, "for i in 1 2 3; do echo $i; done");
+  assert.equal(progress[0].stdout, "1\n2\n");
+  assert.equal(progress[0].stderr, null);
 
   // The completed shape remains authoritative when both fields are present;
   // this prevents a stale progress snapshot from winning after tool_end.
@@ -191,8 +210,10 @@ test("Bash progress output renders in the stdout channel before completion", () 
     },
     { hideSummaryArg: true },
   );
-  assert.equal(byRole(completed, "stdout").text, "done\n");
+  assert.equal(completed[0].stdout, "done\n");
 
+  // An explicit empty stdout is a value, not a fallback: the stale snapshot
+  // must not come back, and the channel reads as empty rather than missing.
   const completedEmpty = buildToolPresentation(
     {
       toolName: "Bash",
@@ -202,7 +223,9 @@ test("Bash progress output renders in the stdout channel before completion", () 
     },
     { hideSummaryArg: true },
   );
-  assert.deepEqual(roles(completedEmpty), []);
+  assert.deepEqual(roles(completedEmpty), ["command"]);
+  assert.equal(completedEmpty[0].stdout, null);
+  assert.equal(completedEmpty[0].stderr, null);
 });
 
 test("the run outcome comes from the exit code, not from the call's status", () => {
@@ -233,10 +256,21 @@ test("a command that prints nothing does not fall back to its arguments", () => 
     toolArgs: { command: "true", description: "check the exit code" },
     toolResult: envelope({ exitCode: 0, stdout: "", stderr: "" }),
   };
-  // Withholding the command must not hand the body an `input` block that
-  // prints the same command back as an argument.
-  assert.deepEqual(roles(buildToolPresentation(message, { hideSummaryArg: true })), []);
-  assert.deepEqual(roles(buildToolPresentation(message)), ["command"]);
+  // The terminal stays — a command that printed nothing still shows what ran —
+  // but the command must not come back a second time as an `input` argument
+  // row, whether or not the head already shows it.
+  const withheld = buildToolPresentation(message, { hideSummaryArg: true });
+  assert.deepEqual(roles(withheld), ["command"]);
+  assert.equal(withheld[0].kind, "terminal");
+  assert.equal(withheld[0].command, "true");
+  assert.equal(withheld[0].stdout, null);
+  // An empty channel is omitted, not rendered as an empty pane.
+  assert.equal(withheld[0].stderr, null);
+  // A permission card has no head of its own, so it gets the same terminal and
+  // still no argument dump.
+  const asked = buildToolPresentation(message);
+  assert.deepEqual(roles(asked), ["command"]);
+  assert.equal(asked[0].command, "true");
 });
 
 test("a clean run omits empty channels and the exit chip", () => {
@@ -453,16 +487,95 @@ test("unknown plugin payloads degrade to fields and labeled blocks, not a blob",
   ]);
 });
 
-test("a string result becomes a single output block", () => {
+test("a string result from an unmapped tool becomes a single output block", () => {
   const blocks = buildToolPresentation({
-    toolName: "Skill",
-    toolArgs: { skill: "review" },
+    toolName: "plugin_echo",
+    toolArgs: { message: "loaded review skill" },
     toolResult: "loaded review skill",
   });
   const output = byRole(blocks, "output");
   assert.equal(output.kind, "code");
   assert.equal(output.text, "loaded review skill");
   assert.equal(output.highlight, false);
+});
+
+test("a Skill answer becomes the document it loaded, not a raw blob", () => {
+  const text = [
+    "# Skill: Release notes (release-notes)",
+    "Location: /plugins/skills/release-notes/SKILL.md",
+    "References are relative to /plugins/skills/release-notes.",
+    "",
+    "# Release notes",
+    "Write the entry from the diff.",
+  ].join("\n");
+  assert.deepEqual(parseSkillDocument(text), {
+    name: "Release notes",
+    id: "release-notes",
+    location: "/plugins/skills/release-notes/SKILL.md",
+    references: "/plugins/skills/release-notes",
+    body: "# Release notes\nWrite the entry from the diff.",
+  });
+
+  const blocks = buildToolPresentation(
+    {
+      toolName: "functions.Skill",
+      toolArgs: { id: "release-notes" },
+      toolResult: text,
+    },
+    { hideSummaryArg: true },
+  );
+  assert.deepEqual(roles(blocks), ["output"]);
+  const document = blocks[0];
+  assert.equal(document.kind, "document");
+  assert.equal(document.title, "Release notes");
+  assert.equal(document.id, "release-notes");
+  assert.deepEqual(document.fields, [
+    { label: "location", value: "/plugins/skills/release-notes/SKILL.md" },
+    { label: "references", value: "/plugins/skills/release-notes" },
+  ]);
+  assert.equal(document.body, "# Release notes\nWrite the entry from the diff.");
+
+  // Text that is not a skill document still reaches the reader as the body,
+  // named after its own first line instead of being thrown away.
+  const plain = buildToolPresentation({
+    toolName: "Skill",
+    toolArgs: { id: "notes" },
+    toolResult: "Just an answer\nsecond line",
+  });
+  assert.equal(plain[0].kind, "document");
+  assert.equal(plain[0].title, "Just an answer");
+  assert.equal(plain[0].id, "notes");
+  assert.equal(plain[0].body, "Just an answer\nsecond line");
+});
+
+test("a failed Skill call reads as an error, never as a document", () => {
+  const failed = buildToolPresentation({
+    toolName: "Skill",
+    toolStatus: "error",
+    toolArgs: { id: "missing" },
+    toolResult: 'Skill "missing" was not found',
+  });
+  // The error note leads; the arguments it was called with stay visible, and
+  // no document card is built from the failure text.
+  assert.deepEqual(roles(failed), ["error", "input"]);
+  assert.equal(failed[0].kind, "note");
+  assert.equal(failed[0].role, "error");
+  assert.match(failed[0].text, /not found/);
+  assert.deepEqual(failed[1].rows, [{ label: "id", value: "missing" }]);
+
+  // An envelope that flags itself as an error is one too, even when an imported
+  // transcript never updated the call's own status.
+  const imported = buildToolPresentation({
+    toolName: "Skill",
+    toolArgs: { id: "missing" },
+    toolResult: {
+      isError: true,
+      content: [{ type: "text", text: 'Skill "missing" was not found' }],
+    },
+  });
+  assert.deepEqual(roles(imported), ["error", "input"]);
+  assert.equal(imported[0].role, "error");
+  assert.match(imported[0].text, /not found/);
 });
 
 test("no known-tool block ever contains pretty-printed JSON of its payload", () => {
@@ -735,18 +848,382 @@ test("a malformed roster degrades instead of rendering blank rows", () => {
   );
 });
 
-test("TodoWrite has a checklist action and keeps its arguments visible", () => {
+test("TodoWrite renders the checklist it wrote, not a serialized argument", () => {
   assert.equal(getToolAction("TodoWrite"), "todo");
   const message = {
     toolName: "TodoWrite",
-    toolArgs: { todos: [{ content: "Inspect", status: "pending", priority: "high" }] },
+    toolArgs: {
+      todos: [
+        { content: "Inspect", status: "pending", priority: "high" },
+        { content: "Patch", status: "in_progress" },
+        { content: "Obsolete", status: "cancelled" },
+        { content: "", status: "pending" },
+        { content: "Invented status", status: "sideways" },
+      ],
+    },
     toolResult: envelope({
-      text: "Checklist updated: 0/1 completed",
+      text: "Checklist updated: 0/3 completed",
       revision: 1,
-      summary: { completed: 0, total: 1, inProgress: 0, cancelled: 0 },
+      summary: { completed: 0, total: 3, inProgress: 1, cancelled: 1 },
       warnings: [],
     }),
   };
-  assert.deepEqual(roles(buildToolPresentation(message)), ["input", "notice"]);
-  assert.match(byRole(buildToolPresentation(message), "input").text, /Inspect/);
+  const blocks = buildToolPresentation(message);
+  assert.deepEqual(roles(blocks), ["details"]);
+  const checklist = blocks[0];
+  assert.equal(checklist.kind, "todos");
+  // Rows come from the call's own list, with the schema's four states; an
+  // entry the schema cannot describe is left out rather than rendered blank.
+  assert.deepEqual(
+    checklist.items.map((item) => [item.content, item.status, item.priority ?? null]),
+    [
+      ["Inspect", "pending", "high"],
+      ["Patch", "in_progress", null],
+      ["Obsolete", "cancelled", null],
+    ],
+  );
+  assert.deepEqual(
+    [checklist.completed, checklist.total, checklist.cancelled, checklist.hidden],
+    [0, 3, 1, 0],
+  );
+  // Nothing in the card is a JSON dump of the argument, and the host's own
+  // success line ("Checklist updated: …") is not repeated as a second
+  // section: it only restates the progress the checklist already shows.
+  assert.ok(!JSON.stringify(blocks).includes('"todos":'));
+  assert.ok(!JSON.stringify(blocks).includes("Checklist updated"));
+});
+
+test("a routine TodoWrite writes no generic success section", () => {
+  const text = "Checklist updated: 0/1 completed; current: Inspect";
+  const blocks = buildToolPresentation({
+    toolName: "TodoWrite",
+    toolStatus: "success",
+    toolArgs: { todos: [{ content: "Inspect", status: "in_progress" }] },
+    toolResult: {
+      content: [{ type: "text", text }],
+      details: {
+        text,
+        revision: 1,
+        summary: { completed: 0, total: 1, inProgress: 1, cancelled: 0 },
+        warnings: [],
+      },
+    },
+  });
+  // The checklist is the whole body: its own progress line already carries the
+  // counts and the in-progress item the host sentence spells out.
+  assert.deepEqual(roles(blocks), ["details"]);
+  assert.equal(blocks[0].kind, "todos");
+  assert.ok(!JSON.stringify(blocks).includes("Checklist updated"));
+
+  // A refused write is not routine: the host reports it through `error`, and
+  // that note is the body a reader gets.
+  const refused = buildToolPresentation({
+    toolName: "TodoWrite",
+    toolStatus: "error",
+    toolArgs: { todos: [{ content: "Inspect", status: "pending" }] },
+    toolResult: {
+      content: [{ type: "text", text: "TodoWrite is unavailable here" }],
+      details: {
+        error: "TodoWrite is unavailable in Plan mode",
+        code: "MODE_REFUSED",
+      },
+      isError: true,
+    },
+  });
+  assert.deepEqual(byRole(refused, "error"), {
+    kind: "note",
+    role: "error",
+    text: "TodoWrite is unavailable in Plan mode",
+    code: "MODE_REFUSED",
+  });
+});
+
+test("a ToolSearch lists each group once and drops the wrapper sentence", () => {
+  const names = ["Browser", "BrowserPreview"];
+  const activatedText = `Activated on-demand tools: ${names.join(", ")}. They are available on the next model turn.`;
+  const current = buildToolPresentation({
+    toolName: "ToolSearch",
+    toolStatus: "success",
+    toolArgs: { query: "browser" },
+    toolResult: {
+      content: [{ type: "text", text: activatedText }],
+      details: {
+        query: "browser",
+        matches: [...names],
+        activated: [...names],
+        addedToolNames: [...names],
+      },
+    },
+  });
+  // One section per group of names, and no "notice" restating them: the
+  // sentence pi hands the model is a wrapper around these lists.
+  assert.deepEqual(roles(current), ["details", "details"]);
+  assert.deepEqual(
+    current.map((block) => block.label),
+    ["activated", "matches"],
+  );
+  assert.deepEqual(current[0].items, names);
+  assert.ok(!JSON.stringify(current).includes("available on the next model turn"));
+
+  // A legacy row that only carries the alias still names what it added.
+  const legacy = buildToolPresentation({
+    toolName: "ToolSearch",
+    toolStatus: "success",
+    toolArgs: { query: "glob" },
+    toolResult: {
+      content: [{ type: "text", text: "Activated on-demand tools: Glob." }],
+      details: { query: "glob", addedToolNames: ["Glob"] },
+    },
+  });
+  assert.deepEqual(
+    legacy.map((block) => [block.role, block.label, block.items]),
+    [["details", "added", ["Glob"]]],
+  );
+
+  // A search that lists nothing keeps the answer, because nothing else holds
+  // it, and a failed search speaks as the error it is.
+  const noMatchText = "No matching on-demand tool. Available names: Glob, Grep.";
+  const noMatch = buildToolPresentation({
+    toolName: "ToolSearch",
+    toolStatus: "success",
+    toolArgs: { query: "zebra" },
+    toolResult: {
+      content: [{ type: "text", text: noMatchText }],
+      details: { query: "zebra", matches: [], activated: [] },
+    },
+  });
+  assert.equal(byRole(noMatch, "notice").text, noMatchText);
+  assert.equal(byRole(noMatch, "error"), undefined);
+  const failed = buildToolPresentation({
+    toolName: "ToolSearch",
+    toolStatus: "error",
+    toolArgs: { query: "zebra" },
+    toolResult: {
+      content: [{ type: "text", text: "ToolSearch is unavailable in Goal mode" }],
+      details: { query: "zebra" },
+      isError: true,
+    },
+  });
+  assert.equal(byRole(failed, "error").text, "ToolSearch is unavailable in Goal mode");
+});
+
+test("a TodoWrite warning reaches the reader without a second checklist", () => {
+  const blocks = buildToolPresentation({
+    toolName: "TodoWrite",
+    toolArgs: { todos: [{ content: "Inspect", status: "pending" }] },
+    toolResult: envelope({
+      summary: { completed: 0, total: 1, cancelled: 0 },
+      warnings: ["Only one item is in progress at a time"],
+    }),
+  });
+  assert.deepEqual(roles(blocks), ["details", "notice"]);
+  assert.equal(blocks[0].kind, "todos");
+  assert.deepEqual(blocks[1], {
+    kind: "note",
+    role: "notice",
+    text: "Only one item is in progress at a time",
+  });
+});
+
+test("a run row summarizes the model's description and keeps its command whole", () => {
+  const args = {
+    command: "pnpm test \\\n  --filter desktop",
+    description: "Run the desktop tests",
+  };
+  assert.equal(getToolSummary("Bash", args), "Run the desktop tests");
+  assert.equal(getToolSummaryKey("Bash", args), "description");
+  assert.equal(isToolPathSummary("Bash", args), false);
+  // The head's copy control hands back the command, never the label.
+  assert.equal(getToolSummaryValue("Bash", args), args.command);
+  // A permission card has no head, so the terminal pane still names it.
+  const blocks = buildToolPresentation(
+    {
+      toolName: "Bash",
+      toolStatus: "success",
+      toolArgs: args,
+      toolResult: envelope({ exitCode: 0, stdout: "ok\n" }),
+    },
+    { hideSummaryArg: true },
+  );
+  assert.deepEqual(roles(blocks), ["command"]);
+  assert.equal(blocks[0].command, args.command);
+  assert.equal(byRole(blocks, "input"), undefined);
+});
+
+test("a legacy run argument is still the command it ran", () => {
+  const message = {
+    toolName: "Bash",
+    toolArgs: { cmd: "make -j4" },
+    toolResult: envelope({ exitCode: 2, stderr: "boom\n" }),
+  };
+  const blocks = buildToolPresentation(message, { hideSummaryArg: true });
+  assert.deepEqual(roles(blocks), ["command"]);
+  assert.equal(blocks[0].command, "make -j4");
+  assert.equal(blocks[0].stdout, null);
+  assert.equal(blocks[0].stderr, "boom\n");
+  assert.equal(runOutcome(message), "failed");
+  assert.deepEqual(toolResultChips(message), [{ role: "exit", count: 2 }]);
+});
+
+test("a failed run keeps its error note beside the terminal", () => {
+  const blocks = buildToolPresentation(
+    {
+      toolName: "Bash",
+      toolStatus: "error",
+      toolArgs: { command: "definitely-not-a-command" },
+      toolResult: envelope({
+        error: "command not found",
+        code: "ENOENT",
+        exitCode: 127,
+        stderr: "definitely-not-a-command: not found\n",
+      }),
+    },
+    { hideSummaryArg: true },
+  );
+  assert.deepEqual(roles(blocks), ["error", "command"]);
+  assert.deepEqual(blocks[0], {
+    kind: "note",
+    role: "error",
+    text: "command not found",
+    code: "ENOENT",
+  });
+  assert.equal(blocks[1].command, "definitely-not-a-command");
+  assert.match(blocks[1].stderr, /not found/);
+});
+
+test("a scheduled automation names its weekly days instead of numbering them", () => {
+  const message = {
+    toolName: "ScheduledTaskList",
+    toolArgs: {},
+    toolResult: {
+      content: [{ type: "text", text: "2 scheduled automations" }],
+      details: {
+        tasks: [
+          {
+            id: "t1",
+            title: "Nightly",
+            cadence: "weekly",
+            enabled: true,
+            schedule: { hour: 9, minute: 5, weekday: 0, weekdays: [0, 2] },
+          },
+          {
+            id: "t2",
+            title: "Hourly",
+            cadence: "hourly",
+            enabled: false,
+            schedule: { hour: 0, minute: 0, weekday: 0 },
+          },
+        ],
+      },
+    },
+  };
+  // `weekday`/`weekdays` count from Monday = 0 in the host schema, so the row
+  // gets names in the session language from the React layer.
+  const names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const blocks = buildToolPresentation(message, {
+    weekdayName: (weekday) => names[weekday] ?? "",
+  });
+  assert.deepEqual(roles(blocks), ["details", "notice"]);
+  assert.equal(blocks[0].kind, "fields");
+  assert.deepEqual(
+    blocks[0].rows.map((row) => [row.label, row.value]),
+    [
+      ["Nightly", "weekly · 09:05 · Mon, Wed · enabled"],
+      ["Hourly", "hourly · 00:00 · paused"],
+    ],
+  );
+  // Without a formatter the day is dropped: a bare index would tell a reader
+  // nothing about when the automation runs.
+  const unnamed = buildToolPresentation(message);
+  assert.deepEqual(
+    unnamed[0].rows.map((row) => row.value),
+    ["weekly · 09:05 · enabled", "hourly · 00:00 · paused"],
+  );
+});
+
+test("a workspace edit leaves its diff to the row's own review body", () => {
+  const hunks = [
+    { header: "@@ -1,1 +1,1 @@", lines: [{ type: "del", text: "a" }, { type: "add", text: "b" }] },
+  ];
+  const message = {
+    id: "msg-1",
+    role: "tool",
+    toolName: "Edit",
+    toolStatus: "success",
+    toolArgs: { path: "src/main.ts", tag: "A1B2" },
+    toolResult: envelope({
+      path: "src/main.ts",
+      root: "workspace",
+      tag: "C3D4",
+      review: {
+        version: 1,
+        snapshotId: "snap-1",
+        messageId: "msg-1",
+        path: "src/main.ts",
+        status: "modified",
+        operation: "edit",
+        state: "active",
+        additions: 1,
+        deletions: 1,
+        hunks,
+        reversible: true,
+      },
+    }),
+  };
+  // The row hosts the change itself: no second diff block, and no ops block.
+  const blocks = buildToolPresentation(message, { hideSummaryArg: true });
+  assert.equal(byRole(blocks, "diff"), undefined);
+  assert.equal(byRole(blocks, "written"), undefined);
+  // The durable record the row's counts and rollback action read is intact.
+  const change = reviewChangeFromMessage(message);
+  assert.equal(change.path, "src/main.ts");
+  assert.equal(change.state, "active");
+  assert.equal(change.reversible, true);
+  assert.deepEqual([change.additions, change.deletions], [1, 1]);
+  assert.deepEqual(change.hunks, hunks);
+  // A rolled-back change keeps its record and reports the state.
+  const rolledBack = reviewChangeFromMessage({
+    ...message,
+    toolResult: envelope({
+      root: "workspace",
+      review: { ...message.toolResult.details.review, state: "rolledBack" },
+    }),
+  });
+  assert.equal(rolledBack.state, "rolledBack");
+});
+
+test("an unknown payload degrades to readable fields plus its own disclosure", () => {
+  const cyclic = { id: 7, label: "deploy", detail: {} };
+  cyclic.detail.self = cyclic;
+  const blocks = buildToolPresentation({
+    toolName: "plugin_deployer",
+    toolArgs: { mode: "fast" },
+    // The text half of a real envelope carries the payload for the model; here
+    // it is a placeholder, because a cyclic payload has no JSON text.
+    toolResult: {
+      content: [{ type: "text", text: "[cyclic payload]" }],
+      details: cyclic,
+    },
+  });
+  const fields = byRole(blocks, "details");
+  assert.equal(fields.kind, "fields");
+  assert.deepEqual(fields.rows.slice(0, 2), [
+    { label: "id", value: "7" },
+    { label: "label", value: "deploy" },
+  ]);
+  assert.ok(blocks.some((block) => block.label === "detail"));
+  const raw = blocks.find((block) => block.kind === "raw");
+  assert.ok(raw, "the untouched payload is one disclosure away");
+  assert.equal(typeof raw.text, "string");
+  assert.ok(raw.text.length > 0);
+
+  // A payload too large to offer keeps its readable fields and simply omits the
+  // disclosure, rather than printing twenty thousand characters again.
+  const huge = buildToolPresentation({
+    toolName: "plugin_deployer",
+    toolArgs: {},
+    toolResult: envelope({ id: "x", note: "y".repeat(20_001) }),
+  });
+  assert.equal(huge.find((block) => block.kind === "raw"), undefined);
+  assert.ok(huge.some((block) => block.label === "note"));
 });

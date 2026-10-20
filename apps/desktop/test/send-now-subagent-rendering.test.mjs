@@ -42,11 +42,17 @@ test("a steering response keeps the earlier delegation card live until parent se
       createElement(SlotSessionProvider, { sessionId: "fixture" },
         createElement(TranscriptHistory, { entries: history, isRunning: true, liveDelegations }))));
     const live = render(collectLiveDelegationEntries(history, entries.at(-1), true));
-    assert.match(live, /Subagent working/);
+    // The steering message does not settle the earlier delegation: its card
+    // still reads as the running child, and only it offers the stop handle.
+    assert.match(live, /data-outcome="running"/);
+    assert.match(live, /class="subagent-task-status"[^>]*>Running</);
     assert.match(live, /Stop explorer/);
     assert.doesNotMatch(live, /Subagent finished with warnings/);
     const settled = render(collectLiveDelegationEntries(history, entries.at(-1), false));
-    assert.doesNotMatch(settled, /Subagent working/);
+    // Once the parent turn settles, the same card states the child's stopped
+    // outcome and the stop handle is gone.
+    assert.match(settled, /data-outcome="aborted"/);
+    assert.doesNotMatch(settled, /class="subagent-task-status"[^>]*>Running</);
     assert.doesNotMatch(settled, /Stop explorer/);
     const beforeReply = entries.slice(0, -1);
     assert.equal(collectLiveDelegationEntries(beforeReply.slice(0, -1), beforeReply.at(-1), true).has("task"), true);
@@ -62,7 +68,8 @@ test("a steering response keeps the earlier delegation card live until parent se
       createElement(SlotSessionProvider, { sessionId: "fixture" },
         createElement(TranscriptHistory, { entries: completeHistory, isRunning: true,
           liveDelegations: collectLiveDelegationEntries(completeHistory, completeEntries.at(-1), true) }))));
-    assert.match(completedHtml, /Subagent completed/);
+    assert.match(completedHtml, /data-outcome="completed"/);
+    assert.match(completedHtml, /class="subagent-task-status"[^>]*>Completed</);
     assert.doesNotMatch(completedHtml, /Stop explorer/);
   } finally { await vite.close(); }
 });

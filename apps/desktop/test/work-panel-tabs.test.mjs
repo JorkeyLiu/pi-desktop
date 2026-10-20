@@ -7,6 +7,7 @@ const {
   browserPluginTab,
   browserPluginTabForReveal,
   closeWorkPanelTabState,
+  closeWorkPanelTabsState,
   createWorkPanelFileRequest,
   emptyWorkPanelContext,
   fileWorkPanelTab,
@@ -25,6 +26,7 @@ const {
   subagentWorkPanelTab,
   switchWorkPanelContextState,
   toolWorkPanelTab,
+  workPanelTabCloseTargets,
 } = await import("../src/lib/work-panel-tabs.ts");
 
 test("work panel tabs open on demand and deduplicate by resource", () => {
@@ -367,4 +369,40 @@ test("repeated subagent labels gain a strip-order suffix, singletons stay bare",
     ["explorer#1", "reviewer", "explorer#2", "explorer#3"],
   );
   assert.deepEqual(subagentTabDisplayLabels(["explorer"]), ["explorer"]);
+});
+
+test("strip close scopes keep the anchor and the surviving order", () => {
+  const tabs = ["a", "b", "c", "d"].map((id) => ({ id, kind: "review" }));
+  assert.deepEqual(workPanelTabCloseTargets(tabs, "b", "others"), ["a", "c", "d"]);
+  assert.deepEqual(workPanelTabCloseTargets(tabs, "b", "right"), ["c", "d"]);
+  assert.deepEqual(workPanelTabCloseTargets(tabs, "b", "all"), ["a", "b", "c", "d"]);
+  assert.deepEqual(workPanelTabCloseTargets(tabs, "missing", "others"), []);
+  assert.deepEqual(workPanelTabCloseTargets(tabs, "d", "right"), []);
+});
+
+test("batch close keeps order and hands selection to the nearest survivor", () => {
+  const tabs = ["a", "b", "c", "d", "e"].map((id) => ({ id, kind: "review" }));
+  const state = { tabs, activeTabId: "c" };
+
+  // Closing tabs that do not own selection leaves selection alone.
+  assert.deepEqual(closeWorkPanelTabsState(state, ["a", "e"]), {
+    tabs: tabs.slice(1, 4),
+    activeTabId: "c",
+  });
+
+  // The active tab goes away: the nearest tab to its right survives first.
+  assert.equal(closeWorkPanelTabsState(state, ["c", "d"]).activeTabId, "e");
+  // Nothing survives on the right: the last tab before it wins.
+  assert.equal(closeWorkPanelTabsState(state, ["c", "d", "e"]).activeTabId, "b");
+
+  const all = closeWorkPanelTabsState(state, ["a", "b", "c", "d", "e"]);
+  assert.deepEqual(all, { tabs: [], activeTabId: null });
+
+  // Nothing to do returns the same object, so store selectors stay stable.
+  assert.equal(closeWorkPanelTabsState(state, ["missing"]), state);
+  assert.equal(closeWorkPanelTabsState(state, []), state);
+  assert.deepEqual(closeWorkPanelTabsState({ tabs, activeTabId: null }, ["a"]), {
+    tabs: tabs.slice(1),
+    activeTabId: null,
+  });
 });

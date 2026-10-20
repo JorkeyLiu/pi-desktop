@@ -53,7 +53,7 @@ AI 服务和 OAuth 厂商账户编辑器共用已选模型面板。每个已选�
 - 模型显示名称
 - 模型 ID
 - 提供商名称
-- 能力徽章
+- 能力徽章（设置行；Composer 模型行只有一行模型标签，不显示能力图标或上下文窗口数）
 - 可选的上下文窗口
 - 服务模型列表为某字段报告正安全整数上下文/输入或输出上限时，该值优先于目录；未报告的字段独立回退到目录值。缺失或非正数不作猜测。
 - 未锚定的中转站（OpenAI 兼容）服务已知模型家族时，可读取权重所有者的已发布记录，该记录优先于转售商共识且不改写配置的线上 ID；所有者的地区/套餐兄弟键仅在其公开键未表态时作为补充证据，不会否决公开键的结论。仅当普通查找无结果、且至少两个不同发布者一致声明同一所有者前缀目标时，才按 models.dev 的 canonical 声明做名称换算，容量始终取自所有者自己的记录。所有者别名在能力或上限上互相矛盾时不借用任何所有者记录。
@@ -248,9 +248,13 @@ type ModelCatalogItem = {
 有资格出现在 Composer 中。
 
 组合 Composer 菜单打开时，渲染器会在进入“模型”子菜单前开始加载提供商模型。
-因此首个可见行优先来自缓存目录或已配置绑定，实时发现仍在后台更新。模型行显示
-配置的线上模型 ID；非空的已配置别名仍会根据准确的绑定解析，并作为选中芯片的
-紧凑名称，而不会替换模型身份。
+因此首个可见行优先来自缓存目录或已配置绑定，实时发现仍在后台更新。
+组合菜单先列出最近使用的三个可用绑定，再按提供商分组展开其他模型。每个模型行只有一行：
+绑定带别名时显示别名，否则显示完整 wire ID，用省略号裁切而不换行，行的 title 保留
+完整值供悬停和辅助技术读取；行内不显示能力图标，也不显示上下文窗口数。最近使用分组
+没有自己的提供商标题，因此其行只显示模型名称，提供商名称保留在行 title 中。
+搜索、提供商分组顺序、“其他模型”折叠、`menuitemradio` 语义、选中勾选和推理滑杆保持不变。
+非空的已配置别名仍会根据准确的绑定解析，并作为选中芯片的紧凑名称。
 
 ## 10. 默认模型策略
 
@@ -305,10 +309,10 @@ Composer 模型列表中的上下文窗口标签通过 `effectiveContextWindow` 
    baseline. An absent or `null` value follows the published capability;
    `true` enables image input for a configured endpoint even when its published
    record is text-only, and `false` disables a published image capability.
-3. The Composer model-row vision badge and the main attachment transport gate
-   use this same effective result. An unknown or custom model without an
-   explicit binding override remains on the conservative path-fallback route;
-   discovery or cache metadata alone cannot promote it to image transport.
+3. The main attachment transport gate uses this same effective result. An
+   unknown or custom model without an explicit binding override remains on the
+   conservative path-fallback route; discovery or cache metadata alone cannot
+   promote it to image transport.
 4. The main process prepares pasted images as content-addressed refs. A
    vision-capable model receives images within the 10 MB app-side inline
    bound as transient image blocks; other cases receive a safe `@path`.
@@ -357,7 +361,8 @@ Electron 使用本地 `Pi catalog` 记录装饰缓存和新发现的模型行。
 - [ ] 刷新合并到缓存和选择器中（绝不破坏性替换）
 - [ ] 重新启动会在实时刷新和离线之前水合先前的目录
       刷新使缓存的选择器保持填充状态
-- [ ] 能力徽章可见
+- [ ] 每个模型行只有一行：一个省略号裁切的模型标签，不显示能力图标，也不显示
+      上下文窗口数；最近使用行不显示提供商名称（保留在行 title 中）
 - [ ] 会话模型更改仅适用于下一回合
 - [ ] 目录命中的推理模型新会话默认为该绑定存储的思考等级
       （钳位到已启用档；未设置时才用最高已启用档）；未匹配模型没有显式绑定默认值

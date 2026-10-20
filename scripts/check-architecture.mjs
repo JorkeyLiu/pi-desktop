@@ -61,7 +61,10 @@ function trackedSourceFiles() {
   return git(["ls-files", "-co", "--exclude-standard"])
     .split("\n")
     .filter(Boolean)
-    .filter(isSourcePath);
+    .filter(isSourcePath)
+    // A tracked file deleted in the worktree is still listed by git but has no
+    // content left to measure; it holds no line budget until it exists again.
+    .filter((filePath) => existsSync(resolve(root, filePath)));
 }
 
 function locFor(filePath) {

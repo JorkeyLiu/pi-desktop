@@ -1,11 +1,9 @@
-import { Fragment, memo, useMemo } from "react";
+import { memo, useMemo } from "react";
 import type { UiMessage } from "@pi-desktop/shared";
 import type { AssistantActivityItem } from "../../../lib/assistant-turns";
-import { foldedWaitCheckpointGroups, isDelegationActivityItem, type DelegationActivityItem, type SubagentOutcome, type SubagentTiming } from "../../../lib/subagent-topology";
-import { ReviewChangeCard } from "../../../components/ReviewChangeCard";
+import { foldedWaitCheckpointGroups, isDelegationActivityItem, type SubagentOutcome, type SubagentTiming } from "../../../lib/subagent-topology";
 import { ThinkingRow } from "./shared";
 import { HostedSearchRow } from "./HostedSearchRow";
-import { SubagentTopology } from "./SubagentDetail";
 import { FoldedWaitCheckpoints, ToolRow } from "./ToolRow";
 import { useRenderBlocks, type RenderBlock } from "./render-blocks";
 
@@ -19,17 +17,14 @@ type ActivityItemsProps = {
   items: readonly AssistantActivityItem[];
   isActive: boolean;
   live: boolean;
-  delegateItems: DelegationActivityItem[];
   delegationStatuses: ReadonlyMap<string, SubagentOutcome>;
   delegationTimings: ReadonlyMap<string, SubagentTiming>;
   onUserInteraction: () => void;
 };
 
-type ActivityItemBlockProps = Omit<ActivityItemsProps, "items" | "delegateItems" | "delegationStatuses" | "delegationTimings"> & {
+type ActivityItemBlockProps = Omit<ActivityItemsProps, "items" | "delegationStatuses" | "delegationTimings"> & {
   block: RenderBlock<AssistantActivityItem>;
   lastItem?: AssistantActivityItem;
-  topologyItem?: AssistantActivityItem;
-  delegateItems?: DelegationActivityItem[];
   delegationStatuses?: ReadonlyMap<string, SubagentOutcome>;
   delegationTimings?: ReadonlyMap<string, SubagentTiming>;
   /** Folded wait checkpoints owned by this block's anchor row, if any. */
@@ -37,22 +32,29 @@ type ActivityItemBlockProps = Omit<ActivityItemsProps, "items" | "delegateItems"
 };
 
 const ActivityItemBlock = memo(function ActivityItemBlock({
-  block, isActive, live, lastItem, topologyItem,
-  delegateItems, delegationStatuses, delegationTimings, foldedCheckpoints, onUserInteraction,
+  block, isActive, live, lastItem,
+  delegationStatuses, delegationTimings, foldedCheckpoints, onUserInteraction,
 }: ActivityItemBlockProps) {
   return <>{block.items.map((item) => {
-    // The topology predicate narrows to all tools, but a false result can still
-    // be an ordinary tool. Do not exclude tools from the remaining branches.
+    // A `Task` call that starts a delegation is the child's own row: its own
+    // one-line history entry, expandable in place, with its brief, report and
+    // nested rows inside it. Siblings are never grouped into one presentation —
+    // each call is the row for the work it started.
+    // `Boolean` keeps the guard from narrowing the branches below away: a false
+    // result can still be an ordinary tool call.
     const delegation = Boolean(isDelegationActivityItem(item));
-    if (delegation) {
-      if (item !== topologyItem || !delegateItems) return null;
-      return <SubagentTopology
-        key="subagent-topology"
-        items={delegateItems}
-        delegationStatuses={delegationStatuses}
-        delegationTimings={delegationTimings}
-        onUserInteraction={onUserInteraction}
-      />;
+    if (delegation && item.kind === "tool") {
+      return (
+        <ToolRow
+          key={item.message.id}
+          variant="task"
+          message={item.message}
+          onUserInteraction={onUserInteraction}
+          {...(item.delegate ? { delegate: item.delegate } : {})}
+          {...(delegationStatuses ? { delegationStatuses } : {})}
+          {...(delegationTimings ? { delegationTimings } : {})}
+        />
+      );
     }
     // A tool or hosted-search row always starts collapsed: only the user opens
     // a payload, never the row's position in the turn.
@@ -67,12 +69,16 @@ const ActivityItemBlock = memo(function ActivityItemBlock({
           onUserInteraction={onUserInteraction}
         />;
       }
+      // A workspace mutation's diff lives in the tool row that made it, so no
+      // second collapsed row names the same file (D192).
       return (
-        <Fragment key={item.message.id}>
-          <ToolRow imagesInTurn message={item.message}
-            onUserInteraction={onUserInteraction} {...(item.delegate ? { delegate: item.delegate } : {})} />
-          <ReviewChangeCard message={item.message} />
-        </Fragment>
+        <ToolRow
+          key={item.message.id}
+          imagesInTurn
+          message={item.message}
+          onUserInteraction={onUserInteraction}
+          {...(item.delegate ? { delegate: item.delegate } : {})}
+        />
       );
     }
     if (item.kind === "hostedSearch") return <HostedSearchRow
@@ -112,10 +118,8 @@ export const ActivityItems = memo(function ActivityItems({ items, ...context }: 
   );
   const blocks = useRenderBlocks(visibleItems, itemKey);
   const lastItem = visibleItems.at(-1);
-  const topologyItem = context.delegateItems[0];
   return <>{blocks.map((block) => {
     const ownsLast = lastItem !== undefined && block.items.includes(lastItem);
-    const ownsTopology = topologyItem !== undefined && block.items.includes(topologyItem);
     const ownsFolded = projection.groups.size > 0 &&
       block.items.some((item) => item.kind === "tool" && projection.groups.has(item.message.id));
     return <ActivityItemBlock
@@ -124,10 +128,8 @@ export const ActivityItems = memo(function ActivityItems({ items, ...context }: 
       isActive={context.isActive}
       live={context.live}
       lastItem={ownsLast ? lastItem : undefined}
-      topologyItem={ownsTopology ? topologyItem : undefined}
-      delegateItems={ownsTopology ? context.delegateItems : undefined}
-      delegationStatuses={ownsTopology ? context.delegationStatuses : undefined}
-      delegationTimings={ownsTopology ? context.delegationTimings : undefined}
+      delegationStatuses={context.delegationStatuses}
+      delegationTimings={context.delegationTimings}
       foldedCheckpoints={ownsFolded ? projection.groups : undefined}
       onUserInteraction={context.onUserInteraction}
     />;

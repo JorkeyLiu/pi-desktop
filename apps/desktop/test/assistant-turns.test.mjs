@@ -530,3 +530,203 @@ test("reuses unchanged activity parts when only the tail thinking token changes"
   assert.notEqual(sharedThink, firstThink);
   assert.equal(sharedThink.items[0].message, nextThinking);
 });
+
+/* A thought that follows the last tool result is the reasoning the answer was
+ * written from. It belongs beside the prose, not inside the operation group it
+ * followed, so the group keeps reading as the work and the thought reads as the
+ * reply's own preamble. It is one row either way — never a second copy. */
+test("a thought after the last tool result leaves the operation segment", () => {
+  const { entries } = buildTranscriptEntries([
+    message("user", "user", "Why is the render slow?"),
+    message("think-a", "assistant", "", { thinking: "The transcript is heavy." }),
+    message("read", "tool", "ok", { toolName: "Read", toolCallId: "read" }),
+    message("think-b", "assistant", "", { thinking: "Two rules reconfigure it." }),
+    message("final", "assistant", "Two rules re-measure the row."),
+  ]);
+  const turn = entries[1];
+  assert.equal(turn.kind, "assistant-turn");
+  assert.deepEqual(turn.parts.map((part) => part.kind), [
+    "activity",
+    "activity",
+    "message",
+  ]);
+  const [work, thought, answer] = turn.parts;
+  assert.deepEqual(
+    work.items.map((item) => item.kind),
+    ["thinking", "tool"],
+  );
+  assert.equal(work.items[0].message.id, "think-a");
+  assert.deepEqual(thought.items.map((item) => item.message.id), ["think-b"]);
+  assert.equal(answer.message.id, "final");
+  // One row for the thought, in transcript order, not a copy in the segment above.
+  const ids = turn.parts.flatMap((part) =>
+    part.kind === "activity" ? part.items.map((item) => item.message.id) : [],
+  );
+  assert.deepEqual(ids, ["think-a", "read", "think-b"]);
+  assert.equal(ids.filter((id) => id === "think-b").length, 1);
+});
+
+test("a thought before the next tool stays in that tool's segment", () => {
+  const { entries } = buildTranscriptEntries([
+    message("user", "user", "Inspect"),
+    message("think-a", "assistant", "", { thinking: "Start with the row." }),
+    message("read", "tool", "ok", { toolName: "Read", toolCallId: "read" }),
+    message("think-b", "assistant", "", { thinking: "Now the stylesheet." }),
+    message("grep", "tool", "ok", { toolName: "Grep", toolCallId: "grep" }),
+    message("think-c", "assistant", "", { thinking: "Both agree." }),
+    message("final", "assistant", "Both agree: the row re-measures."),
+  ]);
+  const turn = entries[1];
+  assert.deepEqual(turn.parts.map((part) => part.kind), [
+    "activity",
+    "activity",
+    "message",
+  ]);
+  assert.deepEqual(
+    turn.parts[0].items.map((item) => item.message.id),
+    ["think-a", "read", "think-b", "grep"],
+  );
+  assert.deepEqual(
+    turn.parts[1].items.map((item) => item.message.id),
+    ["think-c"],
+  );
+});
+
+test("a thought-only turn keeps one segment and no empty sibling", () => {
+  const { entries } = buildTranscriptEntries([
+    message("user", "user", "Think it over"),
+    message("think-a", "assistant", "", { thinking: "One" }),
+    message("think-b", "assistant", "", { thinking: "Two" }),
+    message("user-2", "user", "Thanks"),
+  ]);
+  const turn = entries[1];
+  assert.equal(turn.kind, "assistant-turn");
+  assert.deepEqual(turn.parts.map((part) => part.kind), ["activity"]);
+  assert.deepEqual(
+    turn.parts[0].items.map((item) => item.message.id),
+    ["think-a", "think-b"],
+  );
+});
+
+test("a turn that ends on a tool keeps its thought where chronology put it", () => {
+  const { entries } = buildTranscriptEntries([
+    message("user", "user", "Run it"),
+    message("read", "tool", "ok", { toolName: "Read", toolCallId: "read" }),
+    message("think-a", "assistant", "", { thinking: "Run the suite." }),
+    message("bash", "tool", "ok", { toolName: "Bash", toolCallId: "bash" }),
+  ]);
+  const turn = entries[1];
+  assert.equal(turn.kind, "assistant-turn");
+  assert.deepEqual(turn.parts.map((part) => part.kind), ["activity"]);
+  assert.deepEqual(
+    turn.parts[0].items.map((item) => item.message.id),
+    ["read", "think-a", "bash"],
+  );
+});
+
+test("every tool-result round keeps its own thought ahead of its prose", () => {
+  const { entries } = buildTranscriptEntries([
+    message("user", "user", "Fix it"),
+    message("think-1", "assistant", "", { thinking: "Read the row." }),
+    message("read-1", "tool", "ok", { toolName: "Read", toolCallId: "read-1" }),
+    message("think-2", "assistant", "", { thinking: "Edit the rule." }),
+    message("edit-1", "tool", "ok", { toolName: "Edit", toolCallId: "edit-1" }),
+    message("progress", "assistant", "The rule was doubling the work."),
+    message("think-3", "assistant", "", { thinking: "Verify the fix." }),
+    message("bash-1", "tool", "ok", { toolName: "Bash", toolCallId: "bash-1" }),
+    message("think-4", "assistant", "", { thinking: "The suite is green." }),
+    message("final", "assistant", "The suite is green."),
+  ]);
+  const turn = entries[1];
+  assert.deepEqual(turn.parts.map((part) => part.kind), [
+    "activity",
+    "message",
+    "activity",
+    "activity",
+    "message",
+  ]);
+  assert.deepEqual(
+    turn.parts[0].items.map((item) => item.message.id),
+    ["think-1", "read-1", "think-2", "edit-1"],
+  );
+  assert.equal(turn.parts[1].message.id, "progress");
+  assert.deepEqual(
+    turn.parts[2].items.map((item) => item.message.id),
+    ["think-3", "bash-1"],
+  );
+  assert.deepEqual(
+    turn.parts[3].items.map((item) => item.message.id),
+    ["think-4"],
+  );
+  assert.equal(turn.parts[4].message.id, "final");
+  // The turn's own text and tools are unchanged by the regrouping.
+  assert.equal(
+    assistantTurnContent(turn),
+    "The rule was doubling the work.\n\nThe suite is green.",
+  );
+});
+
+test("a failed turn keeps its thought beside the error it produced", () => {
+  const { entries } = buildTranscriptEntries([
+    message("user", "user", "Try it"),
+    message("read", "tool", "ok", { toolName: "Read", toolCallId: "read" }),
+    message("think-a", "assistant", "", {
+      thinking: "The provider will reject this.",
+      error: { code: "PROVIDER_ERROR", message: "upstream failed" },
+    }),
+  ]);
+  const turn = entries[1];
+  assert.deepEqual(turn.parts.map((part) => part.kind), ["activity", "message"]);
+  assert.deepEqual(
+    turn.parts[0].items.map((item) => item.message.id),
+    ["read", "think-a"],
+  );
+  assert.equal(turn.parts[1].message.id, "think-a");
+});
+
+test("the split survives the streaming hand-off without duplicating a row", () => {
+  const history = [
+    message("user", "user", "Why?"),
+    message("read", "tool", "ok", { toolName: "Read", toolCallId: "read" }),
+    message("think-live", "assistant", "", {
+      thinking: "Because the row re-measures.",
+      status: "streaming",
+    }),
+  ];
+  const streaming = buildTranscriptEntries(history).entries[1];
+  assert.deepEqual(streaming.parts.map((part) => part.kind), ["activity"]);
+  const answered = buildTranscriptEntries([
+    ...history,
+    message("answer", "assistant", "Because the row re-measures.", {
+      status: "streaming",
+    }),
+  ]).entries[1];
+  assert.deepEqual(answered.parts.map((part) => part.kind), [
+    "activity",
+    "activity",
+    "message",
+  ]);
+  assert.deepEqual(
+    answered.parts[1].items.map((item) => item.message.id),
+    ["think-live"],
+  );
+  assert.equal(answered.parts[2].message.id, "answer");
+  const shared = reuseTranscriptEntries(
+    buildTranscriptEntries(history).entries,
+    buildTranscriptEntries([
+      ...history.slice(0, 2),
+      { ...history[2], thinking: "Because the row still re-measures." },
+      message("answer", "assistant", "Because the row re-measures.", {
+        status: "streaming",
+      }),
+    ]).entries,
+  );
+  const turn = shared[1];
+  assert.equal(turn.kind, "assistant-turn");
+  const thoughtRows = turn.parts.flatMap((part) =>
+    part.kind === "activity"
+      ? part.items.filter((item) => item.message.id === "think-live")
+      : [],
+  );
+  assert.equal(thoughtRows.length, 1);
+});

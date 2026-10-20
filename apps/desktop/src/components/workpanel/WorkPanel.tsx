@@ -23,7 +23,10 @@ import {
   pluginWorkPanelTab,
   subagentTabDisplayLabels,
   toolWorkPanelTab,
+  workPanelTabCloseTargets,
+  type WorkPanelTabCloseScope,
 } from "../../lib/work-panel-tabs";
+import { ContextMenu, useContextMenu } from "../ContextMenu";
 import type { PluginViewMeta } from "@pi-desktop/shared";
 import { pluginViewIcon, pluginViewInitial } from "../../lib/plugin-view-icons";
 import { useAppStore } from "../../stores/app-store";
@@ -218,6 +221,8 @@ function LocalWorkPanel({
   const openNewWorkPanelTab = useAppStore((s) => s.openNewWorkPanelTab);
   const replaceWorkPanelTab = useAppStore((s) => s.replaceWorkPanelTab);
   const setWidth = useAppStore((s) => s.setWorkPanelWidth);
+  const closeTabs = useAppStore((s) => s.closeWorkPanelTabs);
+  const { contextMenu, openContextMenu, closeContextMenu } = useContextMenu();
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
   const tools = workPanelTools(t, pluginViews);
   const tabSignature = JSON.stringify(
@@ -243,6 +248,16 @@ function LocalWorkPanel({
   const suppressedTabClickPointerIdsRef = useRef<Set<number>>(new Set());
   const tabButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const newTabButtonRef = useRef<HTMLButtonElement | null>(null);
+  /** The tab whose reveal has already been spent; later renders leave scroll alone. */
+  const revealedTabIdRef = useRef<string | null>(null);
+  /** A wheel gesture means the user owns the row; layout changes stop revealing. */
+  const userScrolledTabStripRef = useRef(false);
+  /** Bounded reveal frames while the dock's width animation settles. */
+  const revealFrameRef = useRef<number | null>(null);
+  const [tabOverflow, setTabOverflow] = useState({
+    left: false,
+    right: false,
+  });
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
   const [dropIndicator, setDropIndicator] = useState<{
     tabId: string;
@@ -301,13 +316,130 @@ function LocalWorkPanel({
     setNativeSurfaceReadyForExit(true);
   }, [exiting]);
 
+  const syncTabOverflow = useCallback(() => {
+    const strip = tabStripRef.current;
+    if (!strip) return;
+    const maxScrollLeft = strip.scrollWidth - strip.clientWidth;
+    const overflowing = maxScrollLeft > 1;
+    const left = overflowing && strip.scrollLeft > 1;
+    const right = overflowing && strip.scrollLeft < maxScrollLeft - 1;
+    setTabOverflow((previous) =>
+      previous.left === left && previous.right === right
+        ? previous
+        : { left, right },
+    );
+  }, []);
+
+  const revealTabInStrip = useCallback((tabId: string) => {
+    const button = tabButtonRefs.current[tabId];
+    const strip = tabStripRef.current;
+    if (!button || !strip) return;
+    const tab = button.closest<HTMLElement>("[data-work-panel-tab-id]") ?? button;
+    const tabRect = tab.getBoundingClientRect();
+    const stripRect = strip.getBoundingClientRect();
+    // Already whole: never move a row the user can see.
+    if (tabRect.left >= stripRect.left - 0.5 && tabRect.right <= stripRect.right + 0.5) {
+      return;
+    }
+    // Reveal the whole tab, including its close affordance — not just the
+    // label button, which is narrower and can leave the close clipped.
+    // Explicit scroll math instead of `scrollIntoView`, so a viewport that is
+    // still growing is corrected by exactly the clipped remainder.
+    if (tabRect.left < stripRect.left) {
+      strip.scrollLeft += tabRect.left - stripRect.left;
+    } else {
+      strip.scrollLeft += tabRect.right - stripRect.right;
+    }
+  }, []);
+
+  /**
+   * The dock plays a width animation on open and on a resize, so the strip
+   * viewport keeps growing for a few frames after the first reveal. Re-apply
+   * the reveal inside a bounded frame budget while the selected tab is still
+   * clipped, and stop the moment the user takes the row over.
+   */
+  const revealTabFrames = useCallback(
+    (tabId: string) => {
+      if (revealFrameRef.current !== null) {
+        cancelAnimationFrame(revealFrameRef.current);
+        revealFrameRef.current = null;
+      }
+      let frames = 0;
+      const tick = () => {
+        revealFrameRef.current = null;
+        if (userScrolledTabStripRef.current) return;
+        if (revealedTabIdRef.current !== tabId) return;
+        revealTabInStrip(tabId);
+        frames += 1;
+        if (frames < 24) revealFrameRef.current = requestAnimationFrame(tick);
+      };
+      revealFrameRef.current = requestAnimationFrame(tick);
+    },
+    [revealTabInStrip],
+  );
+
+  // A reveal is spent once per selected tab: opening or switching a tab
+  // brings it fully into view, while a manual scroll, a later tab that does
+  // not change selection, and streaming ticks keep the user's position.
   useLayoutEffect(() => {
-    if (!activeTabId) return;
-    tabButtonRefs.current[activeTabId]?.scrollIntoView({
-      block: "nearest",
-      inline: "nearest",
+    if (!activeTabId) {
+      revealedTabIdRef.current = null;
+      return;
+    }
+    if (revealedTabIdRef.current === activeTabId) return;
+    revealedTabIdRef.current = activeTabId;
+    userScrolledTabStripRef.current = false;
+    revealTabInStrip(activeTabId);
+    revealTabFrames(activeTabId);
+    syncTabOverflow();
+  }, [activeTabId, revealTabFrames, syncTabOverflow]);
+
+  useEffect(
+    () => () => {
+      if (revealFrameRef.current !== null) {
+        cancelAnimationFrame(revealFrameRef.current);
+        revealFrameRef.current = null;
+      }
+    },
+    [],
+  );
+
+  // Edge fades track real overflow after a resize, an open or close, and a
+  // scroll. A viewport that grows open (the dock's mount animation, a resize)
+  // can also strand the selected tab, so the reveal is re-applied when layout
+  // changes — never after the user scrolled the row themselves.
+  useLayoutEffect(() => {
+    const reconcile = () => {
+      syncTabOverflow();
+      if (!activeTabId || userScrolledTabStripRef.current) return;
+      if (revealedTabIdRef.current !== activeTabId) return;
+      revealTabInStrip(activeTabId);
+    };
+    reconcile();
+    const strip = tabStripRef.current;
+    if (!strip) return;
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => reconcile());
+    observer?.observe(strip);
+    if (strip.parentElement) observer?.observe(strip.parentElement);
+    // Tab widths, not the strip's own box, decide overflow: a late font or a
+    // retitled tab changes `scrollWidth` without resizing the viewport.
+    for (const tab of strip.querySelectorAll("[data-work-panel-tab-id]")) {
+      observer?.observe(tab);
+    }
+    window.addEventListener("resize", reconcile);
+    let cancelled = false;
+    void document.fonts?.ready.then(() => {
+      if (!cancelled) reconcile();
     });
-  }, [activeTabId, tabs.length]);
+    return () => {
+      cancelled = true;
+      observer?.disconnect();
+      window.removeEventListener("resize", reconcile);
+    };
+  }, [activeTabId, revealTabInStrip, syncTabOverflow, tabSignature]);
 
   const finishTabReorder = useCallback(() => {
     const state = tabReorderState.current;
@@ -624,11 +756,75 @@ function LocalWorkPanel({
     [activateTab, closeTabAndFocus, reorderTab, tabs],
   );
 
+  const closeTabRangeAndFocus = useCallback(
+    (anchorTabId: string, scope: WorkPanelTabCloseScope) => {
+      const closing = workPanelTabCloseTargets(tabs, anchorTabId, scope);
+      if (!closing.length) return;
+      closeTabs(closing);
+      requestAnimationFrame(() => {
+        const nextActiveId = useAppStore.getState().activeWorkPanelTabId;
+        if (nextActiveId) tabButtonRefs.current[nextActiveId]?.focus();
+        else newTabButtonRef.current?.focus();
+      });
+    },
+    [closeTabs, tabs],
+  );
+
+  // One menu per tab, built where the close actions already live. Labels name
+  // the target through the tab that was right-clicked, so the surface itself
+  // only needs its own accessible name.
+  const tabMenuRequest = useCallback(
+    (tab: WorkPanelTab) => {
+      const index = tabs.findIndex((item) => item.id === tab.id);
+      return {
+        label: t("panel.tabMenuLabel"),
+        items: [
+          {
+            id: "close",
+            label: t("common.close"),
+            onSelect: () => closeTabAndFocus(tab.id),
+          },
+          {
+            id: "close-others",
+            label: t("panel.closeOtherTabs"),
+            disabled: tabs.length <= 1,
+            separatorBefore: true,
+            onSelect: () => closeTabRangeAndFocus(tab.id, "others"),
+          },
+          {
+            id: "close-right",
+            label: t("panel.closeTabsToRight"),
+            disabled: index < 0 || index === tabs.length - 1,
+            onSelect: () => closeTabRangeAndFocus(tab.id, "right"),
+          },
+          {
+            id: "close-all",
+            label: t("panel.closeAllTabs"),
+            danger: true,
+            separatorBefore: true,
+            onSelect: () => closeTabRangeAndFocus(tab.id, "all"),
+          },
+        ],
+      };
+    },
+    [closeTabAndFocus, closeTabRangeAndFocus, t, tabs],
+  );
+
+  /**
+   * A touchpad's horizontal gesture stays native: the strip already scrolls
+   * `overflow-x`. Shift+wheel and a plain vertical wheel over the strip are
+   * translated here, so desktop mice and touchpads move the same single row.
+   */
   const onTabStripWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     const strip = event.currentTarget;
-    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
     if (strip.scrollWidth <= strip.clientWidth) return;
-    strip.scrollLeft += event.deltaY;
+    // The user owns the row from here: layout changes must not re-reveal.
+    userScrolledTabStripRef.current = true;
+    const horizontal = Math.abs(event.deltaX) > Math.abs(event.deltaY);
+    if (horizontal && !event.shiftKey) return;
+    const delta = horizontal ? event.deltaX : event.deltaY;
+    if (!delta) return;
+    strip.scrollLeft += delta;
     event.preventDefault();
   };
 
@@ -815,13 +1011,18 @@ function LocalWorkPanel({
       />
       <div className="work-panel-main">
         <header className="work-panel-header">
-          <div className="work-panel-tab-strip-wrap">
+          <div
+            className="work-panel-tab-strip-wrap"
+            data-overflow-left={tabOverflow.left ? "true" : undefined}
+            data-overflow-right={tabOverflow.right ? "true" : undefined}
+          >
               <div
                 ref={tabStripRef}
                 className="work-panel-tab-strip no-drag"
                 role="tablist"
                 aria-label={t("panel.tabsLabel")}
                 onWheel={onTabStripWheel}
+                onScroll={syncTabOverflow}
               >
                 {tabs.map((tab) => {
                   const label =
@@ -846,6 +1047,9 @@ function LocalWorkPanel({
                       )}
                       data-work-panel-tab-id={tab.id}
                       key={tab.id}
+                      onContextMenu={(event) =>
+                        openContextMenu(event, tabMenuRequest(tab))
+                      }
                     >
                       <button
                         ref={(node) => {
@@ -860,7 +1064,9 @@ function LocalWorkPanel({
                         aria-grabbed={draggingTabId === tab.id}
                         aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight"
                         className="work-panel-tab-button"
-                        title={tab.kind === "subagent" ? label : tab.resource ?? label}
+                        title={
+                          tab.kind === "file" ? (tab.resource ?? label) : label
+                        }
                         onPointerDown={(event) => beginTabReorder(event, tab.id)}
                         onDragStart={(event) => event.preventDefault()}
                         onClick={() => activateTab(tab.id)}
@@ -869,7 +1075,19 @@ function LocalWorkPanel({
                           event.preventDefault();
                           closeTabAndFocus(tab.id);
                         }}
-                        onKeyDown={(event) => onTabKeyDown(event, tab.id)}
+                        onKeyDown={(event) => {
+                          // Shift+F10 and the context-menu key open the same
+                          // menu the pointer does, anchored on the tab.
+                          if (
+                            (event.shiftKey && event.key === "F10") ||
+                            event.key === "ContextMenu"
+                          ) {
+                            event.preventDefault();
+                            openContextMenu(event, tabMenuRequest(tab));
+                            return;
+                          }
+                          onTabKeyDown(event, tab.id);
+                        }}
                       >
                         <Icon size={14} />
                         <span className="work-panel-tab-label">{label}</span>
@@ -1018,6 +1236,7 @@ function LocalWorkPanel({
           )}
         </div>
       </div>
+      <ContextMenu state={contextMenu} onClose={closeContextMenu} />
     </aside>
   );
 }

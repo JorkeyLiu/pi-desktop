@@ -20,35 +20,37 @@ const [toolbarSource, modelPickerSource, primaryActionSource] = await Promise.al
 ]);
 const composerSource = `${toolbarSource}\n${modelPickerSource}`;
 
-test("narrow composer containers progressively simplify the model controls", () => {
+test("narrow composer containers move the model chip to a second row", () => {
   assert.match(
     styles,
     /\.composer-stack\s*\{[\s\S]*?container-type:\s*inline-size;[\s\S]*?container-name:\s*composer-stack;/,
   );
   assert.match(styles, /\.composer-left,\s*\.composer-right\s*\{[\s\S]*?min-width:\s*0;/);
   assert.match(styles, /\.composer-model-thinking\s*\{[\s\S]*?min-width:\s*0;/);
-  assert.match(
+  const narrow =
+    styles.match(/@container composer-stack \(max-width: 560px\) \{([\s\S]*?)\n\}/)?.[1] ??
+    "";
+  assert.match(narrow, /\.composer-toolbar\s*\{[\s\S]*?flex-wrap:\s*wrap;/);
+  assert.match(narrow, /\.composer-right\s*\{[\s\S]*?flex:\s*1 1 auto;/);
+  // The painted selection survives every width: no rule hides or folds the
+  // reasoning level, the separator, the model name, or the trigger's chevron.
+  assert.doesNotMatch(styles, /\.composer-model-thinking-level[^{]*\{[^}]*display:\s*none/);
+  assert.doesNotMatch(styles, /\.composer-model-thinking-dot[^{]*\{[^}]*display:\s*none/);
+  assert.doesNotMatch(
     styles,
-    /@container composer-stack \(max-width: 560px\)[\s\S]*?\.composer-model-thinking-dot,[\s\S]*?\.composer-model-thinking-level[\s\S]*?display:\s*none;/,
+    /\.composer-model-thinking-model[^{]*\{[^}]*display:\s*none/,
   );
-  assert.match(
+  // The essential controls keep their hit target instead of collapsing.
+  assert.doesNotMatch(
     styles,
-    /@container composer-stack \(max-width: 480px\)[\s\S]*?\.composer-model-thinking-model\s*\{[\s\S]*?max-width:\s*96px;/,
-  );
-  assert.match(
-    styles,
-    /@container composer-stack \(max-width: 450px\)[\s\S]*?\.composer-right \.composer-model-thinking-chip[\s\S]*?width:\s*32px;/,
-  );
-  assert.match(
-    styles,
-    /\.composer-model-thinking-model,\s*\.composer-model-thinking-chevron\s*\{[\s\S]*?display:\s*none;/,
+    /\.composer-right \.composer-model-thinking-chip[^{]*\{[^}]*width:\s*32px/,
   );
 });
 
 
 test("responsive rules preserve the semantic model trigger and action controls", () => {
   assert.match(composerSource, /className=\{`icon-btn composer-model-thinking-chip/);
-  assert.match(composerSource, /ariaLabel=\{`\$\{t\("chat\.model"\)\}: \$\{modelLabel\}\./);
+  assert.match(composerSource, /ariaLabel=\{`\$\{t\("chat\.model"\)\}: \$\{selectionName\}\./);
   assert.match(composerSource, /className=\"composer-model-thinking-chevron\"/);
   assert.match(composerSource, /ContextUsageInspector/);
   assert.match(composerSource, /composer-plugin-transform-btn/);

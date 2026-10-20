@@ -96,10 +96,16 @@ test("expanded live tool output stays local to the changed row", () => {
   // Bash burst does not rerender every sibling.
   assert.match(transcript, /const ToolRow = memo\(function ToolRow/);
   assert.match(transcript, /function toolRowPropsEqual\(/);
-  assert.match(transcript, /if \(previous.variant !== "topology"\) return true;/);
+  // A Task card is not a disclosure: it renders the child's card and never
+  // walks a payload for a body it does not have, so the only rows that format
+  // output are the ones the reader opened.
+  assert.match(transcript, /if \(variant === "task"\) return <SubagentTaskCard \{\.\.\.props\} \/>;/);
+  // A Task row additionally re-renders on its own delegation's status and
+  // timing; every other row stops at the message identity check.
+  assert.match(transcript, /if \(previous.variant !== "task"\) return true;/);
   assert.doesNotMatch(transcript, /autoOpenLatest/);
-  assert.match(transcript, /if \(variant !== "topology" && open && hasDetails && disclosure\.parentVisible/);
-  assert.match(transcript, /const blocks = variant !== "topology" && open && hasDetails \? presentation\.current\?\.blocks : null/);
+  assert.match(transcript, /if \(open && hasDetails && disclosure\.parentVisible/);
+  assert.match(transcript, /const blocks = open && hasDetails \? presentation\.current\?\.blocks : null/);
 });
 
 test("stream event bursts are coalesced until a paint or terminal event", () => {
@@ -114,9 +120,14 @@ test("tool errors stay local to their rows instead of failing the activity group
   assert.doesNotMatch(toolRow, /const hasFailure = items.some/);
   assert.doesNotMatch(toolRow, /processingFailedAfter/);
   assert.doesNotMatch(toolRow, /tool-activity-group[\s\S]*?failed/);
-  // Failures remain visible in the row header; no row opens its payload on its
-  // own, failed or not.
-  assert.match(toolRow, /const disclosure = useAutomaticDisclosure\(\s*false,\s*revealRequest,\s*disclosureKey\("tool", message\.id\),\s*\);/);
+  // Failures remain visible in the row header; a failed row still does not open
+  // its payload on its own. Only the checklist takes an opening default, and
+  // status never feeds it.
+  assert.match(
+    toolRow,
+    /const disclosure = useAutomaticDisclosure\(\s*action === "todo",\s*revealRequest,\s*disclosureKey\("tool", message\.id\),\s*\);/,
+  );
+  assert.doesNotMatch(toolRow, /useAutomaticDisclosure\(\s*(failed|status)\b/);
   assert.match(transcript, /bodyEvents: \{ onPointerDownCapture: claim, onFocusCapture: claim \}/);
   assert.match(toolRow, /status === "error"\s*\? t\("chat.toolFailed"\)/);
 });

@@ -256,6 +256,31 @@ export function buildTranscriptEntries(
     current.parts.push({ kind: "activity", items: [item] });
   };
 
+  /**
+   * A thought that follows the last tool result belongs to the prose beneath it,
+   * not to the operation above it: it is the reasoning that answer was written
+   * from. It leaves the operation group as its own sibling part, directly before
+   * that prose, so the group above reads as the work and the thought reads as the
+   * reply's own preamble. It stays one row with one disclosure of its own — this
+   * is a change of place, never a copy.
+   *
+   * A thought followed by another tool stays where chronology put it: it is part
+   * of preparing that call. A segment holding nothing but thoughts is already a
+   * sibling and is left alone.
+   */
+  const releaseTrailingThinking = (current: AssistantTurnEntry) => {
+    const last = current.parts[current.parts.length - 1];
+    if (last?.kind !== "activity") return;
+    let split = last.items.length;
+    while (split > 0 && last.items[split - 1].kind === "thinking") split -= 1;
+    if (split === 0 || split === last.items.length) return;
+    current.parts[current.parts.length - 1] = {
+      kind: "activity",
+      items: last.items.slice(0, split),
+    };
+    current.parts.push({ kind: "activity", items: last.items.slice(split) });
+  };
+
   const appendMessage = (message: UiMessage) => {
     if (message.role === "user" || message.role === "system") {
       turn = undefined;
@@ -274,7 +299,6 @@ export function buildTranscriptEntries(
       });
       return;
     }
-
     const current = ensureTurn(message);
     const thinking = messageThinking(message);
     if (thinking) pushActivity({ kind: "thinking", message });
@@ -283,6 +307,9 @@ export function buildTranscriptEntries(
     }
     const hasContent = messageContentFacts(message).hasContent;
     if (hasContent || !thinking || message.error) {
+      // The thought that produced this prose reads as its preamble, not as one
+      // more step of the work above it.
+      if (hasContent) releaseTrailingThinking(current);
       current.parts.push({ kind: "message", message });
       if (!current.anchorId && hasContent) {
         current.anchorId = message.id;

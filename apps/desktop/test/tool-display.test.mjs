@@ -9,6 +9,9 @@ import {
   getToolSummaryKey,
   getToolSummaryValue,
   isDelegationStartTool,
+  isToolPathSummary,
+  middleEllipsis,
+  toolSummarySpec,
 } from "../src/lib/tool-display.ts";
 
 test("maps built-in tools to concise Codex-style actions", () => {
@@ -101,4 +104,75 @@ test("formats processing time in the compact transcript style", () => {
   assert.equal(formatToolDuration(3_600), "1h");
   assert.equal(formatToolDuration(3_665), "1h 1m 5s");
   assert.equal(formatToolDuration(5_400), "1h 30m");
+});
+
+test("provider-namespaced aliases reach the same action and summary", () => {
+  assert.equal(getToolAction("functions.exec_command"), "run");
+  assert.equal(getToolSummary("functions.exec_command", { cmd: "ls -la" }), "ls -la");
+  assert.equal(getToolAction("functions.Skill"), "skill");
+  assert.equal(getToolAction("functions.Glob"), "list");
+  // The on-demand built-ins carry their own card only on their exact names: a
+  // plugin tool that merely sounds similar keeps the generic presentation.
+  assert.equal(getToolAction("EnterPlanMode"), "mode");
+  assert.equal(getToolAction("plugin_EnterPlanMode"), "use");
+});
+
+test("a path summary stays literal while the row may omit its middle", () => {
+  const path =
+    "/Users/me/workspace/repos/pi-desktop/apps/desktop/src/components/transcript/nested/tool/ToolTerminal.tsx";
+  const spec = toolSummarySpec("Read", { path, limit: 20 });
+  // The literal value is what `title`, the copy menu and the preview target
+  // need, so it is never shortened, however long it is.
+  assert.equal(spec.text, path);
+  assert.equal(spec.path, true);
+  assert.equal(spec.key, "path");
+  assert.equal(isToolPathSummary("Read", { path }), true);
+  assert.equal(getToolSummaryValue("Read", { path }), path);
+
+  const printed = middleEllipsis(path);
+  assert.ok(printed.length < path.length);
+  assert.ok(printed.includes("…"));
+  // The tail a reader recognizes — the file's own name — stays visible.
+  assert.ok(printed.endsWith("ToolTerminal.tsx"));
+
+  // A free-text summary is not a path: it is neither middle-omitted nor given a
+  // file title, and a long one is bounded like every other hint.
+  const query = toolSummarySpec("Grep", { pattern: "a/b/c" });
+  assert.equal(query.path, false);
+  assert.equal(isToolPathSummary("Grep", { pattern: "a/b/c" }), false);
+  assert.equal(getToolSummary("Grep", { pattern: "x".repeat(400) }).length, 220);
+  assert.equal(middleEllipsis("src/App.tsx"), "src/App.tsx");
+});
+
+test("an unrecognized tool summarizes with the one scalar it was called with", () => {
+  // A label beats a serialized argument object, which is what an unknown tool
+  // used to put in the collapsed row.
+  assert.equal(getToolSummary("plugin_issue_tracker_create", { title: "Bug 41" }), "Bug 41");
+  assert.equal(getToolSummaryKey("plugin_issue_tracker_create", { title: "Bug 41" }), "title");
+  // A bare number is reported with its own key, because "3" alone explains
+  // nothing.
+  assert.equal(getToolSummary("plugin_retry", { attempts: 3 }), "attempts: 3");
+  // Nothing scalar to say: the row falls back to the tool's own name rather
+  // than printing an object.
+  assert.equal(getToolSummary("plugin_weird", { nested: { a: 1 } }), "Weird");
+  // Even with nothing to summarize, the row names the tool rather than showing
+  // an empty hint.
+  assert.equal(getToolSummary("plugin_weird", null), "Weird");
+});
+
+test("summaries that name no argument fall back to the action label", () => {
+  // A checklist's state is its body, and a mode change is named by its tool.
+  assert.deepEqual(toolSummarySpec("TodoWrite", { todos: [{ content: "x" }] }), {
+    key: null,
+    text: "",
+    path: false,
+  });
+  assert.equal(getToolSummary("EnterPlanMode", {}), "Plan");
+  assert.equal(getToolSummary("SubmitGoal", {}), "Goal");
+  assert.equal(
+    getToolSummary("GenerateImages", {
+      items: [{ prompt: "a cat" }, { prompt: "a dog" }],
+    }),
+    "a cat (+1)",
+  );
 });

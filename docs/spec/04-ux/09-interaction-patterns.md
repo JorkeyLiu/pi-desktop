@@ -913,23 +913,28 @@ may be retained while exactly one workspace supplies the visible shell context.
 - Both modes give each loaded assistant turn one whole-process disclosure. It
   contains thinking, tools, hosted searches and intermediate progress text; the
   trailing answer, assistant errors and stopped trailing text remain outside it.
-- A contiguous activity segment receives a group disclosure only when it has at
-  least two mode-visible items. Progress text ends the segment, a singleton uses
-  its item disclosure directly, and compact-hidden thinking does not create a
-  redundant group. Existing Task topology remains separate.
-- Detailed starts active and completed whole processes open. Its active ordinary
-  group starts open and closes when it completes only if untouched; completed
-  groups otherwise start closed. Compact starts the process and groups closed,
-  except an untouched active process with any recorded failed/denied tool remains
-  open through recovery and closes on completion.
+- A contiguous activity segment draws no fold of its own: the turn's whole-process
+  disclosure is the one outer fold above the rows, each row keeps its own item
+  disclosure, and progress text ends the segment. Compact-hidden thinking does not
+  create a redundant wrapper. A `Task` delegation card is a row of that same
+  process group rather than a second container, and the reasoning emitted
+  immediately before the closing prose is presented as its own sibling row before
+  that prose.
+- Detailed starts active and completed whole processes open, and an untouched
+  active process closes on completion. Compact starts the process closed, except
+  an untouched active process with any recorded failed/denied tool remains open
+  through recovery and closes on completion.
 - No item payload opens itself in either mode: a tool, hosted-search or plan call
   stays a header row until the user opens it, including the literal final item of
-  the last activity group. Group and whole-process defaults are unchanged, so a
-  final thinking item never causes a backward scan. Compact keeps every item
-  payload closed and hides reasoning text/excerpts while retaining its active
-  thinking indicator.
-- Activating a process, group or item header toggles only that level. Closing a
-  parent preserves child state, reopening restores it, and sibling groups remain
+  the last group. The one exception is the `TodoWrite` row, which opens with the
+  turn because its checklist is the work the reader is watching, and the reader's
+  collapse choice for that row survives later streaming updates; no Composer
+  surface renders a checklist. Whole-process defaults are unchanged, so a final
+  thinking item never causes a backward scan. Compact keeps every item payload
+  closed and hides reasoning text/excerpts while retaining its active thinking
+  indicator.
+- Activating the process or an item header toggles only that level. Closing a
+  parent preserves item state, reopening restores it, and sibling rows remain
   independent. Opening a parent is never an expand-all action.
 - A manual item action claims its group and process as user-owned without toggling
   them. Streaming and completion cannot reopen a manual close or close around

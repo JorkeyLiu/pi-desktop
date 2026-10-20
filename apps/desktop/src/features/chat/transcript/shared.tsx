@@ -37,12 +37,15 @@ import { Markdown, useCopy } from "../../../components/Markdown";
 import {
   IconArchive,
   IconAudio,
+  IconBookOpen,
   IconBot,
   IconBranch,
+  IconBrowser,
   IconChat,
   IconCheck,
   IconChevronRight,
   IconCircleAlert,
+  IconClock,
   IconCode,
   IconCopy,
   IconFileText,
@@ -51,9 +54,11 @@ import {
   IconImage,
   IconListChecks,
   IconPencil,
+  IconRefresh,
   IconSearch,
   IconSheet,
   IconSparkles,
+  IconTarget,
   IconTerminal,
   IconVideo,
   IconWrench,
@@ -335,6 +340,13 @@ export const TOOL_ACTION_KEYS: Record<ToolAction, string> = {
   delegate: "chat.toolDelegated",
   todo: "chat.todo.updated",
   use: "chat.toolUsed",
+  skill: "chat.toolLoadedSkill",
+  toolSearch: "chat.toolSearchedTools",
+  mode: "chat.toolEnteredMode",
+  context: "chat.toolNewContext",
+  browser: "chat.toolOpenedPreview",
+  image: "chat.toolGeneratedImages",
+  schedule: "chat.toolScheduledTask",
 };
 
 /**
@@ -392,6 +404,13 @@ export const TOOL_RUNNING_KEYS: Record<ToolAction, string> = {
   delegate: "chat.toolDelegating",
   todo: "chat.todo.updating",
   use: "chat.toolUsing",
+  skill: "chat.toolLoadingSkill",
+  toolSearch: "chat.toolSearchingTools",
+  mode: "chat.toolEnteringMode",
+  context: "chat.toolStartingNewContext",
+  browser: "chat.toolOpeningPreview",
+  image: "chat.toolGeneratingImages",
+  schedule: "chat.toolSchedulingTask",
 };
 
 export function ToolActionIcon({ action }: { action: ToolAction }) {
@@ -416,6 +435,20 @@ export function ToolActionIcon({ action }: { action: ToolAction }) {
       return <IconBranch {...props} />;
     case "delegate":
       return <IconBot {...props} />;
+    case "skill":
+      return <IconBookOpen {...props} />;
+    case "toolSearch":
+      return <IconSearch {...props} />;
+    case "mode":
+      return <IconTarget {...props} />;
+    case "context":
+      return <IconRefresh {...props} />;
+    case "browser":
+      return <IconBrowser {...props} />;
+    case "image":
+      return <IconImage {...props} />;
+    case "schedule":
+      return <IconClock {...props} />;
     default:
       return <IconWrench {...props} />;
   }

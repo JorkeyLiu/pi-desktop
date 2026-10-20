@@ -2,6 +2,7 @@
 
 - Status: Accepted for implementation
 - Date: 2026-09-29
+- Amended: 2026-10-19
 - Deciders: PI-Desktop maintainers
 - Related: Issue #1177
 
@@ -50,3 +51,12 @@ revision ordering, fork isolation, cascade deletion, and RPC authorization.
 Renderer type checks and TodoDock interaction tests cover revision filtering,
 remote-session degradation, session switching, expansion, and full-list display
 through the dock's own scrollport.
+
+## Current status (amendment, 2026-10-19)
+
+The persistence contract above is unchanged. The Composer dock surface is no
+longer mounted in the product: the checklist is read in the `TodoWrite` row that
+wrote it, which opens with the turn and keeps the reader's collapse choice across
+later streaming updates, and no Composer surface renders a checklist. `TodoDock`
+remains in the renderer only as the surface the legacy `pnpm test:e2e:todos`
+fixture mounts directly; it no longer stands for a product route.

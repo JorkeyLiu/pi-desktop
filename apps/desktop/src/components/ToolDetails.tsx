@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
-import { HighlightedCode, useCopy } from "./Markdown";
+import { HighlightedCode } from "./Markdown";
 import { LargeTextPreview } from "./LargeTextPreview";
-import { IconCheck, IconCircleAlert, IconCopy, IconInfo } from "./icons";
+import { IconCircleAlert, IconInfo } from "./icons";
 import { TooltipButton, cx } from "./ui";
 import { toWorkspaceRel } from "../lib/chat-links";
 import { useOpenPreviewTarget } from "../hooks/use-preview-target";
@@ -10,12 +10,20 @@ import { ContextMenu } from "./ContextMenu";
 import { useAppStore } from "../stores/app-store";
 import type { ToolBlock, ToolChip } from "../lib/tool-presentation";
 import { AskToolRichText } from "./AskToolRichText";
+import { BlockHead, MoreNote } from "./tool/BlockHead";
+import { ToolChecklist } from "./tool/ToolChecklist";
+import { ToolDocumentCard } from "./tool/ToolDocumentCard";
+import { ToolRawPayload, ToolValueList } from "./tool/ToolValueList";
+import { ToolTerminal } from "./tool/ToolTerminal";
 
 /*
- * Renderer for the structured tool presentation (D192). Blocks arrive with a
- * semantic role; this layer owns the translated headings, the copy affordance
- * and the click-to-preview wiring. Shared by the transcript tool row and the
- * inline permission card so both read the same way.
+ * Renderer for the structured tool presentation (D192).
+ *
+ * Blocks arrive with a semantic role; this layer owns the translated headings,
+ * the copy affordance and the click-to-preview wiring, while the tool-specific
+ * cards (terminal, checklist, document, value list, raw payload) live in
+ * `components/tool/`. Shared by the transcript tool row and the inline
+ * permission card so both read the same way.
  */
 
 const BLOCK_LABEL_KEYS: Record<ToolBlock["role"], string> = {
@@ -54,37 +62,23 @@ function blockCopyText(block: ToolBlock): string {
         .join("\n");
     case "fields":
       return block.rows.map((row) => `${row.label}: ${row.value}`).join("\n");
+    case "values":
+      return block.items.join("\n");
+    case "terminal":
+      return [block.command, block.stdout, block.stderr]
+        .filter((part): part is string => part !== null)
+        .join("\n");
+    case "todos":
+      return block.items
+        .map((item) => `[${item.status}] ${item.content}`)
+        .join("\n");
+    case "document":
+      return block.body;
+    case "raw":
+      return block.text;
     case "note":
       return block.code ? `${block.code}: ${block.text}` : block.text;
   }
-}
-
-function BlockHead({ label, copy }: { label: string; copy: string }) {
-  const { copied, copy: run } = useCopy();
-  const { t } = useTranslation();
-  return (
-    <div className="tool-row-section-head">
-      <span>{label}</span>
-      <TooltipButton
-        className={cx("tool-row-copy", copied && "copied")}
-        tooltip={copied ? t("chat.copied") : t("chat.copy")}
-        ariaLabel={`${t("chat.copy")} ${label}`}
-        onClick={() => run(copy)}
-      >
-        {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
-      </TooltipButton>
-    </div>
-  );
-}
-
-function MoreNote({ hidden }: { hidden: number }) {
-  const { t } = useTranslation();
-  if (hidden <= 0) return null;
-  return (
-    <div className="tool-block-more">
-      {t("chat.toolBlockMore", { count: hidden })}
-    </div>
-  );
 }
 
 function AskToolResult({
@@ -206,7 +200,16 @@ function MatchList({ block }: { block: Extract<ToolBlock, { kind: "matches" }> }
   );
 }
 
-function BlockBody({ block, streaming }: { block: ToolBlock; streaming: boolean }) {
+function BlockBody({
+  block,
+  streaming,
+  plain,
+}: {
+  block: ToolBlock;
+  streaming: boolean;
+  /** No section frame around the body, so a card must label itself. */
+  plain: boolean;
+}) {
   switch (block.kind) {
     case "asktool":
       return <AskToolResult block={block} />;
@@ -262,6 +265,16 @@ function BlockBody({ block, streaming }: { block: ToolBlock; streaming: boolean 
           ))}
         </dl>
       );
+    case "values":
+      return <ToolValueList block={block} showLabel={plain} />;
+    case "terminal":
+      return <ToolTerminal block={block} streaming={streaming} />;
+    case "todos":
+      return <ToolChecklist block={block} />;
+    case "document":
+      return <ToolDocumentCard block={block} />;
+    case "raw":
+      return <ToolRawPayload block={block} />;
     case "note":
       return (
         <div className={cx("tool-note", block.role === "error" && "is-error")}>
@@ -291,6 +304,15 @@ export function ToolDetailBlocks({
   return (
     <>
       {blocks.map((block, index) => {
+        // The terminal brings its own labeled panes and copy controls, so it
+        // bypasses the generic section frame instead of nesting a second one.
+        if (block.kind === "terminal") {
+          return (
+            <div className="tool-block is-terminal" key={`terminal-${index}`}>
+              <ToolTerminal block={block} streaming={streaming} />
+            </div>
+          );
+        }
         const label =
           block.label ??
           (block.kind === "asktool"
@@ -302,14 +324,15 @@ export function ToolDetailBlocks({
             key={`${block.role}-${block.label ?? index}`}
           >
             {plain ? (
-              // A run row's body is the output and nothing else (D227), so the
-              // heading and its frame are gone. The channel still needs a name
-              // for anyone who cannot see that stderr is the tinted one.
+              // A run row's terminal owns the labeled panes, so any other
+              // block in that body — an error note, a host notice — keeps its
+              // channel name for screen readers instead of a heading the
+              // terminal would have had to repeat next to its own.
               <span className="sr-only">{label}</span>
             ) : (
               <BlockHead label={label} copy={blockCopyText(block)} />
             )}
-            <BlockBody block={block} streaming={streaming} />
+            <BlockBody block={block} streaming={streaming} plain={plain} />
           </section>
         );
       })}

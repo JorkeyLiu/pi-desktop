@@ -142,6 +142,24 @@
   --ds-success: #40c977;
   --ds-warning: #ff8549;
   --ds-error: #ff6764;
+  /* Terminal ANSI palette: command output may carry SGR colour, which the
+     terminal pane paints from these tokens rather than from raw literals. */
+  --ds-ansi-black: #6b7280;
+  --ds-ansi-red: #ff7b72;
+  --ds-ansi-green: #7ee787;
+  --ds-ansi-yellow: #e3b341;
+  --ds-ansi-blue: #79c0ff;
+  --ds-ansi-magenta: #d2a8ff;
+  --ds-ansi-cyan: #56d4dd;
+  --ds-ansi-white: #e6edf3;
+  --ds-ansi-gray: #8b949e;
+  --ds-ansi-bright-red: #ffa198;
+  --ds-ansi-bright-green: #aff5b4;
+  --ds-ansi-bright-yellow: #f2cc60;
+  --ds-ansi-bright-blue: #a5d6ff;
+  --ds-ansi-bright-magenta: #e2c5ff;
+  --ds-ansi-bright-cyan: #9ae6ec;
+  --ds-ansi-bright-white: #f0f6fc;
   --ds-info: var(--gray-300);
   --ds-purple: #c27aff;
   --ds-shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.55);
@@ -283,6 +301,23 @@
   --ds-success: #00a240;
   --ds-warning: #e25507;
   --ds-error: #e02e2a;
+  /* Terminal ANSI palette on the light tool-row surface. */
+  --ds-ansi-black: #24292f;
+  --ds-ansi-red: #cf222e;
+  --ds-ansi-green: #1a7f37;
+  --ds-ansi-yellow: #9a6700;
+  --ds-ansi-blue: #0969da;
+  --ds-ansi-magenta: #8250df;
+  --ds-ansi-cyan: #1b7c83;
+  --ds-ansi-white: #57606a;
+  --ds-ansi-gray: #6e7781;
+  --ds-ansi-bright-red: #a40e26;
+  --ds-ansi-bright-green: #116329;
+  --ds-ansi-bright-yellow: #7d4e00;
+  --ds-ansi-bright-blue: #0550ae;
+  --ds-ansi-bright-magenta: #6639ba;
+  --ds-ansi-bright-cyan: #14657a;
+  --ds-ansi-bright-white: #424a53;
   --ds-info: #5d5d5d;
   --ds-purple: #7c3aed;
   --ds-shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.12);

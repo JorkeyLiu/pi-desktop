@@ -955,7 +955,9 @@ E2E 从工作检出运行，并使用其中已经准备好的宿主开发环境�
   `03-runtime/13-model-catalog-and-selection.md`
 - **接受**：C
 - **里程碑**：M2
-- **状态**：草案
+- **状态**：组件覆盖（`pnpm test:e2e:composer-model-selection` 与
+  `apps/desktop/test/composer-model-rows.test.mjs`：渲染行、扁平化键盘顺序、推理滑杆）；
+  完整提供商/会话桌面流程仍为草案。
 
 #### E2E-090：转录底部保留跟踪停靠的输入框高度
 
@@ -4667,10 +4669,12 @@ eleven-tool-round desktop paths are verified by
   （队列顺序、ID 匹配删除、工具调用删除、中止拒绝队列、
   卡副本），`subagent-wiring.test.mjs`（主进程发现和模型引脚）
   和 `subagent-transcript.test.mjs` + `assistant-turns.test.mjs`（嵌套、
-  单一报告打印、记忆、接纳单个委派的卡片判定，以及两种语言
-  下按数量措辞的聚合文案），加上 `subagent-topology.test.mjs`
-  （委托检测、结构化结果和汇总计数）。满
-  多提供商扇出和渲染拓扑交互仍然是手动的。
+  单一报告打印、记忆、每次 `Task` 调用只接纳一张卡片、链原始标题），加上
+  `subagent-topology.test.mjs` 和 `subagent-task-title.test.mjs`（委托检测、
+  结构化结果）。`node scripts/e2e-tool-cards.mjs` 在真实渲染器中渲染并驱动卡片
+  及其同级停止控件，`node scripts/e2e-subagent-dock.mjs` 覆盖 Composer 停靠栏的
+  指标与其会话级操作；两者都在当前的详情文案修正前通过，重新验证仍然待办。满
+  多提供商扇出和渲染的跨轮旅程仍然是手动的。
 
 #### E2E-SUBAGENT-legacy-turn-limit-frontmatter-is-ignored
 
@@ -4897,16 +4901,27 @@ eleven-tool-round desktop paths are verified by
   5. 读取截断的文件并复制每个块。
 - **预期**：
   - 没有扩展行显示转义的 JSON，并且没有有效负载出现两次。
-  - Read/Write 显示突出显示的内容； Bash 显示命令、输出和
-    错误色调的 stderr 作为单独的块，省略了空通道；全球演出
-    路径列表； Grep 显示按文件分组的匹配结果以及 `content` 中的行号
-    模式、`filesWithMatches` 中的路径列表以及 `count` 中的每个文件总计；的
+  - Read/Write 显示高亮内容；Bash 显示终端：`Command` 面板与 `Output`、
+    错误色调的 `Errors` 并列，各有标题且可复制；宽行并排、窄行堆叠，
+    空通道被省略，ANSI 颜色被绘制而不是打印成转义序列；Glob 显示
+    路径列表；Grep 在 `content` 模式下按文件分组显示行号，
+    `filesWithMatches` 显示路径列表，`count` 显示每个文件的合计；
     失败的命令携带 `exit 1` 芯片。
-  - 工作区编辑不显示内联差异（其 ReviewChangeCard 拥有它）；的
-    暂存编辑显示了紧凑的差异和 `scratch` 芯片。
-  - 插件结果呈现 label/value 字段和标记块，而不是斑点。
+  - `TodoWrite` 行默认展开其清单（进度行加每个条目一行，含状态与优先级，
+    绝不显示序列化的 `todos` 参数），读者收起后保持收起，本轮后续
+    流式更新不会再次展开。`Skill` 行显示已加载文档的名称、
+    它报告的 `location`／`references` 以及 Markdown 正文；调用失败时改为
+    `Error` 说明。定时自动化行以会话语言命名星期，而不是打印索引。
+  - 长路径提示省略中段并保留末尾路径段；完整路径仍保留在行的 `title`、
+    文件菜单与预览目标中，末尾不会被再次裁切。
+  - 工作区编辑不显示内联差异，也不出现第二行同名文件：它自己的行以
+    `+a/−d` 结尾，展开后显示差异与回滚操作。
   - 单击路径在工作面板中将其打开；工作空间根目录之外的路径
     不可点击。
+  - 委派卡片由它被交付的任务命名：主标题是 `Task` 调用的简短 `description`
+    （续跑委派沿用链上原始描述），运行角色位于标题右侧，卡片不再显示模型 ID、
+    推理强度，也不重复打印描述行；长标题最多显示两行并在悬停标题中保留完整文本，
+    没有描述的老日志回退到角色名，单击卡片打开的标签页沿用同一标题。
   - 权限卡的参数预览使用相同的块。
   - 主机截断标记保持可见，出现 `truncated` 芯片，主机
     `notice` 在其限定的块下呈现为中性音符，上限
@@ -4915,8 +4930,10 @@ eleven-tool-round desktop paths are verified by
   `08-meta/decisions-log.md` (D192)
 - **验收**：C（聊天和直播）、E（工具和权限）、质量
 - **里程碑**：M5
-- **状态**：单位覆盖（`tool-presentation.test.mjs`，
-  `transcript-style.test.mjs`);完整的 UI 旅程草稿
+- **状态**：单元覆盖（`tool-presentation.test.mjs`、`tool-display.test.mjs`、
+  `ansi-text.test.mjs`、`transcript-style.test.mjs`、`subagent-task-title.test.mjs`）；
+  Chromium 真实渲染覆盖（`scripts/e2e-tool-cards.mjs`，需先运行 `pnpm build:js`）；
+  完整 UI 旅程草稿
 
 #### E2E-146：不产生可见文本的回合重新运行一次
 
@@ -5673,16 +5690,16 @@ eleven-tool-round desktop paths are verified by
   确认来源仍为 Responses 和原别名，副本保存了 Anthropic Messages 与新
   别名。未测试携带凭据的网络发现、外部模型请求及 OpenCode Go UI 分支。
 
-**E2E-CHAT-session-todo-checklist：TodoWrite 到按会话显示的 TodoDock**
+**E2E-CHAT-session-todo-checklist：TodoWrite 清单就是本会话的工作清单**
 
 - **前提：** 隔离的本地 Electron 配置、确定性的 Agent/Host fixture、两个 Desktop 会话，不使用真实 Provider 或付费 API。
-- **步骤：** 启动调用 `TodoWrite` 的多步骤 Agent 回合，观察 Composer 上方的 TodoDock，展开后切换会话并确认清单隔离。展开一个超过 dock 高度上限的清单，确认渲染全部条目、列表在 dock 内滚动而不撑高 Composer 栈；完成和取消条目，确认全部取消状态；清空清单后重载/重启 Host。发送乱序旧 `todos.changed` 事件，确认它不能覆盖新快照；再覆盖非法参数、Plan/Goal、委托和远程会话路径。
-- **预期：** 切换会话时收起、收起状态只占标题行高度、列表渲染全部条目并以自身为滚动容器、拒绝旧事件。
-- **链接规格：** `03-runtime/03-tools-and-permissions.md`、`03-runtime/04-data-storage.md`、`03-runtime/06-host-rpc-protocol.md`、`04-ux/08-component-spec.md`、ADR 0312。
+- **步骤：** 启动调用 `TodoWrite` 并带有序 pending 与 `in_progress` 条目的多步骤 Agent 回合。在本轮过程内的 `TodoWrite` 行里观察清单：它默认展开、列出全部条目，并在自身正文内滚动而不是无界撑高该行。收起该行后让回合继续流式输出：该收起必须在该行后续 `TodoWrite` 更新后仍然生效。切换会话并确认每个会话保留自己的清单。完成和取消条目，确认全部取消标签，然后清空清单并重载/重启 Host。发送乱序旧 `todos.changed` 事件，确认它不能覆盖新快照；再覆盖非法参数、Plan/Goal、委托和远程会话路径，并确认没有任何 Composer 表面渲染清单。
+- **预期：** Host SQLite 是权威；每一次成功的全量替换（包括清空）都推进 revision 并发出一条已提交的 `todos.changed` 快照。非法或未授权写入既不改变状态也不发出事件。清单渲染为写入它的工具行中的纯文本行，从不渲染序列化的 `todos` 参数，不获取焦点，并按宿主上报的顺序排列条目。Composer 栈不渲染自己的清单表面：旧版底部停靠栏没有被挂载。旧事件被拒绝，`remote:` 会话跳过本地恢复，因为 RACP v1 没有 Todo 快照操作。
+- **链接规格：** `03-runtime/03-tools-and-permissions.md`、`03-runtime/04-data-storage.md`、`03-runtime/06-host-rpc-protocol.md`、`04-ux/08-component-spec.md` §9.2/§9.3、ADR 0312。
 - **验收：** C / E / F / Quality / Security。
 - **里程碑：** M6+。
-- **自动化：** `pnpm test:e2e:todos` 从生产 Agent 的 ToolSearch/TodoWrite 路径进入，使用生产渲染器、真实 Host/SQLite 和隔离 Electron 配置验证清单旅程；仅替换外部模型流和 preload 传输，不使用真实 Provider 或用户配置。覆盖 Unicode 截断及警告重放、单一活动项归一化、全量清单渲染与 dock 内滚动、首次读取失败后不切换会话的主机恢复、已缓存快照重新同步及旧事件拒绝。运行时 `runtime-todos.test.ts` 使用确定性 Provider 验证 Agent 工具校验、超长内容归一化和续跑。
-- **状态：** 构建 Desktop 和 Host 后，针对已构建的改动执行。Host-core 和渲染器定向测试是辅助检查，不能替代 Electron 用户旅程。
+- **自动化：** `pnpm test:e2e:todos` 通过生产 Agent 的 ToolSearch/TodoWrite 路径、生产渲染器和真实 Host/SQLite 隔离配置验证清单旅程；它直接挂载清单组件，因此在 Composer 停靠栏不再挂载后不再代表一条产品路径。仅外部模型流和 preload 传输是 fixture，不使用真实 Provider 或用户配置。场景还覆盖 Unicode 截断及警告重放、单一活动项归一化、行内滚动、首次读取失败后不切换会话的主机恢复、已缓存快照重新同步及旧事件拒绝。运行时 `runtime-todos.test.ts` 使用确定性 Provider 验证 Agent 工具校验、超长内容归一化和续跑。
+- **状态：** 构建 Desktop 和 Host 后，针对已构建的改动执行。Host-core 和渲染器定向测试是辅助检查，不能替代 Electron 用户旅程。该行自身的默认展开与收起保留状态还由 `node scripts/e2e-tool-cards.mjs` 渲染并驱动，它在当前的详情文案修正前通过，重新验证仍然待办。
 
 ## 8. 可追溯性矩阵
 | 验收 | 应用场景 |
@@ -7013,7 +7030,7 @@ eleven-tool-round desktop paths are verified by
      查一个方向，另一个 `explorer` 查另一个方向 —— 然后不结束本轮，继续自己
      的工具调用，最后用 `TaskWait` 收敛。
   2. 确认父级的可见文本在 `Task` 与 `TaskWait` 之间持续流出（没有死掉的一
-     轮）、两条 `Task` 行组成一张一次展开的委托卡片，并且 `TaskWait` 那行
+     轮）、每次 `Task` 调用各自渲染一张完整宽度的委托卡片，并且 `TaskWait` 那行
      展示了两份报告。
   3. 先将会话设为 `ask`，用一份多文件规格委托给 `fixer`；确认它的
      `Write`/`Edit`、`Bash` 和外部路径调用都会渲染标明 `fixer` 的权限卡片。切换
@@ -7022,26 +7039,43 @@ eleven-tool-round desktop paths are verified by
      授权卡即可完成。
   4. 提示一轮，启动三个委托后以 `mode: "any"`、`minCompleted: 1` 调用
      `TaskWait`；确认它在第一个结算时立即返回，且仍在运行的委托继续运行。
-  5. 提示一轮，启动一个委托后不调用 `TaskWait`/`TaskStop` 就结束本轮；确认
-     该委托在运行结束时被停止、其节点读作 `aborted`，并且下一轮的模型上下文
-     中没有任何委托行。
+  5. 提示一轮，启动一个委托后不调用 `TaskWait`/`TaskStop` 就结束父级的工具循环；
+     确认持久轮次保持打开、该委托继续运行（卡片读作 `running` 而不是 `aborted`）、
+     空闲恢复把它的报告投递进同一轮，并且下一轮的模型上下文中没有任何委托行
+     （报告只通过 `TaskWait`／空闲恢复到达）。
   6. 在一轮里提示十次 `Task` 再加一次；确认第十一次以指明 10 个委托上限的
      工具错误失败，并且 `TaskStop` 会释放一个名额，使第十一个委托得以启动。
-  7. 重新加载会话；确认委托卡片、它的节点和 `TaskWait` 行都持久化并折叠重
-     绘，并且 `TaskWait` 能按 id 重读已结算委托的报告而不重新运行它。
-  8. 把 `~/.agents/subagents/readonly.md` 改成声明 `permission: auto` 并重新加载目录；
+  7. 重新加载会话；确认委托卡片和 `TaskWait` 行都持久化，并按该组的默认折叠状态
+     重绘，并且 `TaskWait` 能按 id 重读已结算委托的报告而不重新运行它。
+  8. 提示一轮：代理先发起两次 `Task` 调用，再输出可见文本之后才调用 `TaskWait`
+     （使 `Task` 与 `TaskWait` 落在不同的活动分段）；确认 `TaskWait` 返回后每张卡片
+     都读作 `completed` 而不是停在 `running`，且每张卡片的运行时长非零，取自委托的
+     生命周期时间戳而非 `Task` 起始调用本身。
+  9. 把 `~/.agents/subagents/readonly.md` 改成声明 `permission: auto` 并重新加载目录；
      确认该定义仍然加载但带着一条警告，且它的委托仍在会话的有效模式下裁决
      （工作区内的 `Write` 依旧弹出权限卡片）。
-  9. 提示一轮，启动一个委托，让 `TaskWait` 超时使节点仍显示 running，再调用
-     `TaskStop`；确认拓扑节点和 `TaskStop` 行都读作 `stopped` 而不是
+  10. 提示一轮，启动一个委托，让 `TaskWait` 超时使卡片仍显示 running，再调用
+     `TaskStop`；确认卡片和 `TaskStop` 行都读作 `stopped` 而不是
      `running`。结束本轮并重新加载会话；确认卡片不再标为工作中，也不再持续计时。
+  10a. 继续第 10 步停掉的委托 —— 一次由父级在后续轮次里显式 `Task.resume`，一次由
+     用户直接继续且没有任何父级提示。确认两者都在同一链上开启新的运行：父级 resume
+     的报告投递回父级，而用户直接继续是分离运行（父级零 provider 请求），并且无法
+     复活已停止运行的等待或投递。
+  11. 注入同步的 `SubagentRun` 初始化失败；确认 `Task` 结果是错误，且 `TaskList`
+     中没有任何永久 running 的行。
+  12. 在运行时 fixture 中让已结算行的发布抛错，确认父级的空闲自动恢复仍然返回报告。
+     在子代理忽略 abort 的情况下停止卡在自动恢复中的父级；确认父级结束并报告空闲，
+     而不会进入超时循环。
 - **预期**：`Task` 立即带着 `delegationId` 返回，父级继续工作；`TaskWait`
   带着每个委托的报告与状态收敛；`TaskList`/`TaskStop` 驱动生命周期；`TaskStop`
   的结果和已结束的一轮都不会留下实时的“子智能体工作中”卡片；内置 `fixer`
   继承所选的会话权限模式，因此 `auto` 也会让明确的外部路径无需重复授权卡，
   而 `ask` 和 `accept-edits` 保留各自的审批边界；项目定义声明的作用域被丢弃；
-  每会话 10 个运行委托的上限被强制执行；没有委托活过它所属的一轮；重新加载的
-  会话记录保留其委托拓扑。
+  每会话 10 个运行委托的上限被强制执行；在打开的持久轮次下，委托可以活过父级的工具
+  循环，只由 `TaskStop`、用户 Stop、dispose 或父级终止错误结束；已停止／已中止的
+  委托链仍可继续（父级 `Task(resume)` 投递其报告，用户直接继续则分离运行、不唤醒父级）；
+  重新加载的
+  会话记录保留其委托卡片和结果。
 - **链接规格**：`03-runtime/02-agent-runtime.md` §5f/§5f.1/§7.1、
   `03-runtime/03-tools-and-permissions.md` §10.2、`08-meta/decisions-log.md`
   （D242 修订 D231）、ADR 0089 和 ADR 0100
@@ -7732,15 +7766,15 @@ eleven-tool-round desktop paths are verified by
 - **里程碑**：M6+
 - **状态**：单元/源合约已覆盖；完整 UI 旅程为草稿
 
-#### E2E-204：显式退出在关机前确认（D363）
+#### E2E-204：仅在会话运行时显式退出才确认（D363）
 
 - **前提条件**：普通交互会话正在运行（不是 boot / supervision / capture 探针）。主窗口可见或已藏到托盘。
-- **步骤**：1) 从托盘菜单选择退出，或按 Cmd+Q / 应用菜单退出。2) 取消原生警告，确认窗口、托盘、host-core 和 sidecar 仍在。3) 再操作一次并确认退出，确认走有序关机。4) Windows/Linux 在关闭行为未设置时关窗，并在 D230 对话框选择退出；确认没有第二次警告。5) 以 `PI_DESKTOP_BOOT_PROBE=1`（及 supervision/capture 等价项）启动，确认 `app.quit()` 不弹对话框。6) 在打包的 Windows NSIS 或 Linux AppImage 安装上，下载更新并选择“重启以更新”；确认退出警告不再出现，安装器完成升级并重新拉起应用。
-- **预期**：误触显式退出可以取消。已经在关闭行为对话框选择退出的用户不会再被问一次。自动化探针不会被警告挡住。应用内更新重启同样不会被警告推迟：平台安装器先于 `app.quit()` 启动，应用一旦超出其等待窗口安装器就会中止，因此更新触发的退出必须立即走有序关机 —— 用户选择该操作时已经确认了重启。见 ADR 0022。
+- **步骤**：1) 在没有会话运行时，从托盘菜单选择退出，或按 Cmd+Q / 应用菜单退出；确认应用无警告直接退出并走有序关机。2) 在一个会话中发起提问后切换到另一个标签页（前一会话仍在后台运行），再退出；取消原生警告，确认窗口、托盘、host-core 和 sidecar 仍在。3) 再操作一次并确认退出，确认走有序关机。4) Windows/Linux 在关闭行为未设置时关窗，并在 D230 对话框选择退出；确认没有第二次警告。5) 以 `PI_DESKTOP_BOOT_PROBE=1`（及 supervision/capture 等价项）启动，确认 `app.quit()` 不弹对话框。6) 在打包的 Windows NSIS 或 Linux AppImage 安装上，下载更新并选择“重启以更新”；确认退出警告不再出现，安装器完成升级并重新拉起应用。
+- **预期**：空闲退出不提示；任一会话（含后台标签页）仍有进行中回合时退出提示一次，误触可以取消。已经在关闭行为对话框选择退出的用户不会再被问一次。自动化探针不会被警告挡住。应用内更新重启同样不会被警告推迟：平台安装器先于 `app.quit()` 启动，应用一旦超出其等待窗口安装器就会中止，因此更新触发的退出必须立即走有序关机 —— 用户选择该操作时已经确认了重启。见 ADR 0022。
 - **链接规格**：`04-ux/08-component-spec.md`、`04-ux/09-interaction-patterns.md`、`08-meta/decisions-log.md`（D216、D230、D363）、ADR 0022
 - **验收**：A、质量
 - **里程碑**：M5
-- **状态**：单元已覆盖（`close-behavior-tray.test.mjs` 断言探针与更新重启两项豁免，`auto-update.test.mjs` 断言安装闩锁先于 `quitAndInstall` 设置）；原生对话框旅程为草稿
+- **状态**：单元已覆盖（`quit-confirmation-gate.test.mjs` 断言空闲/运行中/取消/确认/重入/探针/更新矩阵，`close-behavior-tray.test.mjs` 断言门控合约，`auto-update.test.mjs` 断言安装闩锁先于 `quitAndInstall` 设置）；原生对话框旅程为草稿
 
 #### E2E-209：从本地智能体存储导入模型配置
 
@@ -8413,6 +8447,24 @@ runner 会在运行时的隔离临时目录中生成六个插件形态 fixture�
 - **链接规格**：`04-ux/07-ui-design-system.md` §10
 - **验收**：品质
 - **状态**：Windows 原生回归由 `scripts/e2e-work-panel-drag.mjs`（`pnpm test:e2e:work-panel-drag`）覆盖；macOS/Linux 原生拖动尚未验证。
+
+### E2E-WORK-PANEL-tab-strip-controls
+
+- **前提条件**：打开桌面会话，工作面板中至少打开十二个标签 —— Review、带长路径的 `pi.file-manager` 文件，以及一个 `subagent` 转录 —— 面板窄到标签条会溢出。
+- **步骤**：打开一个初始在视口外的标签，并在相距较远的标签之间切换；用触摸板手势、普通竖向滚轮和 `Shift`+滚轮滚动这一行；加宽再收窄面板；右键单击标签，再用 `Shift`+`F10` 打开同一菜单；分别用行内关闭按钮、中键、关闭其他、关闭右侧、关闭全部关闭标签；在子智能体仍在运行时关闭它的 `subagent` 标签。
+- **预期**：标签条始终保持单行，标签宽度为 72px–180px，选中标签在打开、切换选择以及宽度动画期间被滚入可见范围，滚轮手势之后不再自动抢回滚动。悬停标签可读到完整标题或路径。右侧固定动作车道里的动作不会压在标签上。只有一个共享菜单提供关闭、关闭其他、关闭右侧、关闭全部，没有把所有标签列成清单的菜单。关闭子智能体标签绝不会停止该子智能体。
+- **链接规格**：`04-ux/08-component-spec.md` §5.2、§5.4、§5.5
+- **验收**：品质
+- **状态**：自动化（`scripts/e2e-work-panel-tabs.mjs`，通过 `pnpm test:e2e:work-panel-tabs` 运行，13 项检查；在最终的标签条与卡片界面调整之前通过，须对交付构建重跑）。
+
+### E2E-COMPOSER-model-chip-namespace
+
+- **前提条件**：一个与会话绑定的无别名模型，其线路 ID 带路由前缀；另有一个配置了别名的绑定。
+- **步骤**：在 760px、340px、280px 三种 Composer 容器宽度下读取模型 × 推理芯片；悬停并聚焦它；打开菜单并检查触发器的无障碍名称；切换到带别名的绑定。
+- **预期**：无别名的芯片只画模型名、不带路由前缀；带别名的芯片原样显示别名；完整 ID 保留在悬停提示与无障碍名称中；推理等级在每个宽度下都保有可读槽位。560px 及以下时工具栏换到第二行，而不是隐藏控件。
+- **链接规格**：`04-ux/08-component-spec.md` §11.3、§12.2
+- **验收**：品质
+- **状态**：自动化（`node scripts/e2e-composer-model-chip.mjs`，宽度 760/340/280；直接运行，没有对应的包脚本别名）。
 
 #### E2E-LAYOUT-sidebar-project-group-fold
 

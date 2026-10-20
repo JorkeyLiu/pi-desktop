@@ -1589,6 +1589,76 @@ describe("DesktopAgentRuntime configuration matching", () => {
     await runtime.dispose();
   });
 
+  it("advertises Bash description as optional display metadata", async () => {
+    const host = {
+      call: vi.fn().mockResolvedValue({ ok: true, content: "done" }),
+    };
+    const runtime = createRuntime({ host });
+    const bash = (runtime as any).agent.state.tools.find(
+      (tool: any) => tool.name === "Bash",
+    );
+
+    // The model has to see the parameter before it reaches for it, and it has
+    // to see that it is display metadata, not part of the command.
+    const description = (bash.parameters as any).properties.description;
+    expect(description.type).toBe("string");
+    expect(description.description).toContain("user-facing purpose");
+    expect(description.description).toContain("still runs exactly as written");
+    expect((bash.parameters as any).required).toEqual(["command"]);
+    expect(bash.description).toContain("optional `description`");
+    expect(bash.description).toContain("never replaces or alters the command");
+
+    // The provider sees what a JSON round trip keeps: the field survives as an
+    // optional string, and `command` is still the only required argument, so a
+    // call that omits the label stays valid.
+    const declaration = toToolDeclaration(bash as any) as any;
+    expect(declaration.parameters.properties.description.type).toBe("string");
+    expect(declaration.parameters.required).toEqual(["command"]);
+    expect(declaration.parameters.required).not.toContain("description");
+
+    await runtime.dispose();
+  });
+
+  it("forwards a Bash description without letting it replace the command", async () => {
+    const host = {
+      call: vi.fn().mockImplementation(async (method: string) =>
+        method === "project.instructions.resolve"
+          ? { entries: [] }
+          : { ok: true, content: "done" },
+      ),
+    };
+    const runtime = createRuntime({ host });
+    const bash = (runtime as any).agent.state.tools.find(
+      (tool: any) => tool.name === "Bash",
+    );
+
+    // The labelled call: `command` is still the executed string, the label
+    // rides along as extra metadata, and the timeout semantics are unchanged.
+    await bash.execute("bash-described", {
+      command: "pnpm install",
+      description: "Install dependencies",
+      timeout: 30,
+    });
+    expect(host.call).toHaveBeenLastCalledWith(
+      "tools.execute",
+      expect.objectContaining({
+        toolName: "Bash",
+        args: { command: "pnpm install", description: "Install dependencies", timeout: 30 },
+        timeoutMs: 30_000,
+        expectedCommandShellId: "bash",
+      }),
+    );
+
+    // A description alone never becomes the command, and a call without one
+    // still runs with the command it was given.
+    await bash.execute("bash-plain", { command: "printf plain" });
+    const plainCall = host.call.mock.calls.at(-1)!;
+    expect(plainCall[1].args).toEqual({ command: "printf plain" });
+    expect(plainCall[1].timeoutMs).toBe(60_000);
+
+    await runtime.dispose();
+  });
+
   it("accepts aliased tool argument names and folds them onto the canonical ones", async () => {
     const host = {
       call: vi.fn().mockImplementation(async (method: string) =>

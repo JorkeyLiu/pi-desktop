@@ -17,7 +17,7 @@ import { parseProbe, probed, propsProbe, slotMounts, slotSsr } from "./helpers/s
 // Live Voice's idle entry is conditional on the feature setting and therefore
 // is not a permanent host slot in this disabled-by-default fixture.
 const HOST_LEFT = ["chat.addFiles", "settings.mode", "chat.permissionMode"];
-const HOST_RIGHT = ["context", "chat.model: Model. chat.reasoningLevel: Off", "chat.send"];
+const HOST_RIGHT = ["context", "chat.model: Model (model-1). chat.reasoningLevel: Off", "chat.send"];
 
 async function composer(t, toolbarProps = {}) {
   const ssr = await slotSsr(t);
@@ -68,7 +68,7 @@ test("an installed plugin's Composer action appears after the model picker", asy
   };
   const ssr = await composer(t, { composerTransforms: [action], value: "draft" });
   const html = ssr.toolbar();
-  const model = html.indexOf("chat.model: Model. chat.reasoningLevel: Off");
+  const model = html.indexOf("chat.model: Model (model-1). chat.reasoningLevel: Off");
 
   assert.ok(model >= 0);
   assert.ok(html.indexOf('aria-label="Enhance prompt"') > model);

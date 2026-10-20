@@ -5,6 +5,7 @@ import {
   browserPluginTab,
   browserTabLabel,
   closeWorkPanelTabState,
+  closeWorkPanelTabsState,
   createWorkPanelFileRequest,
   emptyWorkPanelContext,
   fileWorkPanelTab,
@@ -111,6 +112,7 @@ export function createWorkPanelSlice({
   | "activateWorkPanelTab"
   | "reorderWorkPanelTabs"
   | "closeWorkPanelTab"
+  | "closeWorkPanelTabs"
   | "collapseWorkPanel"
   | "resetWorkPanelContext"
   | "setWorkPanelWidth"
@@ -125,10 +127,10 @@ export function createWorkPanelSlice({
   };
 
   return {
-  openSubagentTab: (delegationId, agentName) => {
+  openSubagentTab: (delegationId, title) => {
     const id = delegationId.trim();
     if (!id) return;
-    get().openWorkPanelTab(subagentWorkPanelTab(id, agentName || undefined));
+    get().openWorkPanelTab(subagentWorkPanelTab(id, title || undefined));
   },
 
   openWorkPanel: () => {
@@ -326,6 +328,54 @@ export function createWorkPanelSlice({
         workPanelTabs: next.tabs,
         activeWorkPanelTabId: next.activeTabId,
         workPanelOpen: state.workPanelOpen,
+        workPanelFileRequest: fileRequest,
+        workPanelContexts: {
+          ...state.workPanelContexts,
+          [sessionId]: nextContext,
+        },
+      };
+    });
+  },
+
+  closeWorkPanelTabs: (tabIds) => {
+    const closingTabIds = [...new Set(tabIds)];
+    if (!closingTabIds.length) return;
+    const current = get();
+    const sessionId = current.activeSessionId;
+    if (!sessionId) return;
+    const closingTabs = current.workPanelTabs.filter((tab) =>
+      closingTabIds.includes(tab.id),
+    );
+    if (!closingTabs.length) return;
+    // Native views are released per tab exactly like a single close. A tab
+    // close only removes the view: no runtime, turn, or delegation is stopped.
+    for (const tab of closingTabs) {
+      if (tab.resource !== "pi.browser/browser") continue;
+      void api
+        .pluginViewClose("pi.browser", "browser", { sessionId, tabId: tab.id })
+        .catch((error) => get().showToast(String(error), { variant: "error" }));
+    }
+    set((state) => {
+      const next = closeWorkPanelTabsState(
+        {
+          tabs: state.workPanelTabs,
+          activeTabId: state.activeWorkPanelTabId,
+        },
+        closingTabIds,
+      );
+      if (next.tabs === state.workPanelTabs) return {};
+      const activeTab = next.tabs.find((tab) => tab.id === next.activeTabId);
+      const fileRequest =
+        nextFileRequest(activeTab) ?? state.workPanelFileRequest;
+      const nextContext: WorkPanelContext = {
+        open: state.workPanelOpen,
+        tabs: next.tabs,
+        activeTabId: next.activeTabId,
+        fileRequest,
+      };
+      return {
+        workPanelTabs: next.tabs,
+        activeWorkPanelTabId: next.activeTabId,
         workPanelFileRequest: fileRequest,
         workPanelContexts: {
           ...state.workPanelContexts,

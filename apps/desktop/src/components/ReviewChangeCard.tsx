@@ -2,6 +2,7 @@ import { useChatSessionCapability } from "../hooks/use-chat-session-capability";
 import { memo, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
+  ReviewChange,
   ReviewChangeStatus,
   UiMessage,
 } from "@pi-desktop/shared";
@@ -18,7 +19,46 @@ const STATUS_MARKS: Record<ReviewChangeStatus, string> = {
   deleted: "D",
 };
 
-function DiffBody({ message, compact }: { message: UiMessage; compact: boolean }) {
+/**
+ * The `+a/−d` pair a change reports, shared by the standalone card's header and
+ * the tool row that produced the change (which shows them at its end instead of
+ * repeating the file name in a second collapsed row).
+ */
+export function ReviewChangeCounts({
+  change,
+  className,
+}: {
+  change: Pick<ReviewChange, "additions" | "deletions">;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <span
+      className={cx("review-change-card-counts", "diff-counts", className)}
+      aria-label={t("chat.reviewChangeCounts", change)}
+    >
+      {change.additions > 0 && (
+        <span className="diff-count-add">+{change.additions}</span>
+      )}
+      {change.deletions > 0 && (
+        <span className="diff-count-del">−{change.deletions}</span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * The change itself: its diff (or the reason there is none), and the rollback
+ * action. Owned by whichever disclosure is showing the change — the standalone
+ * card in the review panel, or the tool row in the transcript.
+ */
+export function ReviewChangeBody({
+  message,
+  compact = false,
+}: {
+  message: UiMessage;
+  compact?: boolean;
+}) {
   const { t } = useTranslation();
   const change = reviewChangeFromMessage(message);
   const localToolsAllowed = useChatSessionCapability("canUseLocalTools");
@@ -92,6 +132,11 @@ function DiffBody({ message, compact }: { message: UiMessage; compact: boolean }
   );
 }
 
+/**
+ * One workspace change in the review panel, with its own collapsed row: the
+ * panel lists changes that belong to no visible tool row. In the transcript the
+ * change lives in the tool row that made it, so no second file-name row appears.
+ */
 export const ReviewChangeCard = memo(function ReviewChangeCard({
   message,
   compact = false,
@@ -147,21 +192,11 @@ export const ReviewChangeCard = memo(function ReviewChangeCard({
         <span className="review-change-card-path" title={change.path}>
           {change.path}
         </span>
-        <span
-          className="review-change-card-counts diff-counts"
-          aria-label={t("chat.reviewChangeCounts", change)}
-        >
-          {change.additions > 0 && (
-            <span className="diff-count-add">+{change.additions}</span>
-          )}
-          {change.deletions > 0 && (
-            <span className="diff-count-del">−{change.deletions}</span>
-          )}
-        </span>
+        <ReviewChangeCounts change={change} />
       </button>
       {open ? (
         <div className="review-change-card-body" id={detailsId}>
-          <DiffBody message={message} compact={compact} />
+          <ReviewChangeBody message={message} compact={compact} />
         </div>
       ) : null}
     </section>

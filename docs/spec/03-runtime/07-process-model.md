@@ -216,7 +216,9 @@ renderer-facing status):
 
 ## 5. Shutdown order
 
-After a confirmed quit, Electron Main synchronously records `app shutdown`
+An explicit quit (Cmd+Q, application-menu Quit, tray Quit) passes the D363 running-session gate before the sequence below: the native confirmation (Cancel / Quit) appears only while at least one session still has a live turn; an idle quit runs the same ordered shutdown with no dialog. Boot, supervision, and capture probes and in-app update restarts likewise skip the confirmation.
+
+After a quit that passed that gate, Electron Main synchronously records `app shutdown`
 before the first awaited teardown step. A force-terminated process therefore
 retains the lifecycle boundary whenever the local log write succeeds.
 

@@ -392,8 +392,11 @@ export type AppState = {
     line?: number;
     column?: number;
   } | null;
-  /** Open (or activate) the transcript tab of one delegated subagent. */
-  openSubagentTab: (delegationId: string, agentName?: string) => void;
+  /**
+   * Open (or activate) the transcript tab of one delegated subagent, labelling
+   * the tab with the task title the card states (role when it has none).
+   */
+  openSubagentTab: (delegationId: string, title?: string) => void;
   /** Abort one session's running turn, visible or not. */
   abortSession: (sessionId: string) => Promise<void>;
   openWorkPanel: () => void;
@@ -411,6 +414,12 @@ export type AppState = {
     insertAfter: boolean,
   ) => void;
   closeWorkPanelTab: (tabId: string) => void;
+  /**
+   * Close several tabs through the same contract as one close: strip order is
+   * preserved, a removed active tab hands selection to its nearest survivor,
+   * and native/browser view cleanup runs per tab. Nothing stops a runtime.
+   */
+  closeWorkPanelTabs: (tabIds: readonly string[]) => void;
   collapseWorkPanel: () => void;
   /** Hide the visible panel while retaining its session-owned context. */
   resetWorkPanelContext: () => void;

@@ -39,6 +39,8 @@ export type ToolPresentationMessage = {
   toolArgs?: unknown;
   toolResult?: unknown;
   toolStatus?: string;
+  /** pi-ai's own error flag on the result envelope. */
+  isError?: boolean;
 };
 
 export type ToolChip =
@@ -75,6 +77,24 @@ type BlockBase = {
   label?: string;
 };
 
+export type ToolTodoItem = {
+  content: string;
+  status: string;
+  priority?: string;
+};
+
+/**
+ * The fields of a loaded skill document. Read from the tool's own text — the
+ * `Skill` tool answers with the document, not with a result object.
+ */
+export type ToolSkillDocument = {
+  name: string;
+  id: string;
+  location: string | null;
+  references: string | null;
+  body: string;
+};
+
 export type ToolBlock =
   | (BlockBase & {
       kind: "asktool";
@@ -96,6 +116,34 @@ export type ToolBlock =
   | (BlockBase & { kind: "files"; paths: string[]; hidden: number })
   | (BlockBase & { kind: "matches"; groups: ToolMatchGroup[]; hidden: number })
   | (BlockBase & { kind: "fields"; rows: ToolFieldRow[] })
+  | (BlockBase & {
+      kind: "values";
+      label: string;
+      items: string[];
+      hidden: number;
+    })
+  | (BlockBase & {
+      kind: "terminal";
+      command: string | null;
+      stdout: string | null;
+      stderr: string | null;
+    })
+  | (BlockBase & {
+      kind: "todos";
+      items: ToolTodoItem[];
+      completed: number;
+      total: number;
+      cancelled: number;
+      hidden: number;
+    })
+  | (BlockBase & {
+      kind: "document";
+      title: string;
+      id: string;
+      fields: ToolFieldRow[];
+      body: string;
+    })
+  | (BlockBase & { kind: "raw"; text: string })
   | (BlockBase & { kind: "note"; text: string; code?: string });
 
 export type ToolPresentationOptions = {
@@ -107,6 +155,13 @@ export type ToolPresentationOptions = {
    * report, so showing both would print it twice (ADR 0062).
    */
   hideDelegateReport?: boolean;
+  /**
+   * A locale-aware name for a weekday index (`Monday = 0`, matching the host's
+   * schedule schema). A bare number is not a schedule a reader can picture, so
+   * the React layer supplies the name in the session language; without it the
+   * schedule keeps the clock alone rather than printing a number.
+   */
+  weekdayName?: (weekday: number) => string;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -385,6 +440,208 @@ function countsBlock(value: unknown): ToolBlock | null {
   return rows.length > 0 ? { kind: "fields", role: "matches", rows } : null;
 }
 
+/** A labeled list of scalar names (activated tools, scheduled task ids). */
+function valuesBlock(
+  label: string,
+  items: unknown,
+  role: ToolBlockRole = "details",
+): ToolBlock | null {
+  const names = stringArray(items);
+  if (!names) return null;
+  const visible = names.filter((item) => item.trim() !== "");
+  if (visible.length === 0) return null;
+  return {
+    kind: "values",
+    role,
+    label,
+    items: visible.slice(0, MAX_LIST_ITEMS),
+    hidden: Math.max(0, visible.length - MAX_LIST_ITEMS),
+  };
+}
+
+const TODO_STATUSES = new Set([
+  "pending",
+  "in_progress",
+  "completed",
+  "cancelled",
+]);
+/** The TodoWrite schema caps the list at 50 items. */
+const MAX_TODO_ITEMS = 50;
+
+/**
+ * The checklist a `TodoWrite` call wrote. The host result records counts and
+ * warnings only, so the rows come from the call's own `todos` argument and the
+ * progress line from the result when it recorded one.
+ */
+function todosBlock(
+  args: Record<string, unknown> | null,
+  details: Record<string, unknown> | null,
+): Extract<ToolBlock, { kind: "todos" }> | null {
+  const raw = Array.isArray(args?.todos) ? args.todos : null;
+  if (!raw) return null;
+  const items: ToolTodoItem[] = [];
+  for (const entry of raw) {
+    const record = asRecord(entry);
+    const content =
+      typeof record?.content === "string" ? record.content.trim() : "";
+    const status = typeof record?.status === "string" ? record.status : "";
+    if (!content || !TODO_STATUSES.has(status)) continue;
+    const priority =
+      typeof record?.priority === "string" ? record.priority : undefined;
+    items.push({ content, status, ...(priority ? { priority } : {}) });
+  }
+  if (items.length === 0) return null;
+  const summary = asRecord(details?.summary);
+  const countOf = (status: string) =>
+    items.filter((item) => item.status === status).length;
+  const cancelled = numberAt(summary, "cancelled") ?? countOf("cancelled");
+  return {
+    kind: "todos",
+    role: "details",
+    items: items.slice(0, MAX_TODO_ITEMS),
+    completed: numberAt(summary, "completed") ?? countOf("completed"),
+    // A cancelled item is neither completed nor outstanding, which is how the
+    // host counts the total too.
+    total: numberAt(summary, "total") ?? items.length - cancelled,
+    cancelled,
+    hidden: Math.max(0, items.length - MAX_TODO_ITEMS),
+  };
+}
+
+const SKILL_TITLE_LINE = /^#\s*Skill:\s*(.*?)\s*\(([^()]+)\)\s*$/;
+const SKILL_LOCATION_LINE = /^Location:\s*(.+?)\s*$/;
+const SKILL_REFERENCES_LINE = /^References are relative to\s+(.+?)\.?\s*$/;
+
+/**
+ * The document a `Skill` call loaded. The tool answers with the skill's own
+ * Markdown — a heading naming it, where it was loaded from, and the body — so
+ * the card reads those fields instead of printing the text as one raw blob.
+ */
+export function parseSkillDocument(text: string): ToolSkillDocument | null {
+  const lines = text.split("\n");
+  const title = lines[0]?.match(SKILL_TITLE_LINE);
+  if (!title) return null;
+  let location: string | null = null;
+  let references: string | null = null;
+  let bodyStart = 1;
+  for (let index = 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    const foundLocation = line.match(SKILL_LOCATION_LINE);
+    if (foundLocation) {
+      location = foundLocation[1];
+      bodyStart = index + 1;
+      continue;
+    }
+    const foundReferences = line.match(SKILL_REFERENCES_LINE);
+    if (foundReferences) {
+      references = foundReferences[1];
+      bodyStart = index + 1;
+      continue;
+    }
+    bodyStart = line.trim() === "" ? index + 1 : index;
+    break;
+  }
+  return {
+    name: title[1],
+    id: title[2],
+    location,
+    references,
+    body: lines.slice(bodyStart).join("\n").trim(),
+  };
+}
+
+/** The schedule's own numeric day list; the host schema stores integers. */
+function numberArray(value: unknown): number[] | null {
+  return Array.isArray(value) &&
+    value.every((item) => typeof item === "number" && Number.isFinite(item))
+    ? (value as number[])
+    : null;
+}
+
+/**
+ * One automation's schedule as a single readable line. A weekly day is named
+ * through `weekdayName`, never printed as its index: the host schema numbers
+ * days from Monday = 0, so `09:00 · 1` would tell a reader nothing. Without a
+ * formatter the line keeps the clock alone rather than falling back to a
+ * number, and a non-weekly cadence has no day to name.
+ */
+function scheduleText(
+  value: unknown,
+  cadence: string | null,
+  weekdayName?: (weekday: number) => string,
+): string | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const interval = numberAt(record, "intervalMinutes");
+  if (interval !== null) return `every ${interval}m`;
+  const hour = numberAt(record, "hour");
+  const minute = numberAt(record, "minute");
+  if (hour === null || minute === null) return null;
+  const clock = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  if (cadence !== "weekly" || !weekdayName) return clock;
+  const legacy = numberAt(record, "weekday");
+  const days = numberArray(record.weekdays) ?? (legacy === null ? [] : [legacy]);
+  const names = days
+    .map((day) => weekdayName(day))
+    .filter((name) => name.trim() !== "");
+  return names.length > 0 ? `${clock} · ${names.join(", ")}` : clock;
+}
+
+/**
+ * `ScheduledTaskList` answers with a list of automations and `Create`/`Update`
+ * with one; each row names the automation and its cadence instead of
+ * stringifying the task objects.
+ */
+function scheduledTaskRows(
+  label: string,
+  value: unknown,
+  weekdayName?: (weekday: number) => string,
+): ToolBlock | null {
+  const entries = Array.isArray(value) ? value : [value];
+  const rows: ToolFieldRow[] = [];
+  for (const entry of entries) {
+    const record = asRecord(entry);
+    if (!record) continue;
+    const title = stringAt(record, "title");
+    const id = stringAt(record, "id");
+    if (!title && !id) continue;
+    const cadence = stringAt(record, "cadence");
+    const parts = [
+      cadence,
+      scheduleText(record.schedule, cadence, weekdayName),
+      typeof record.enabled === "boolean"
+        ? record.enabled
+          ? "enabled"
+          : "paused"
+        : null,
+    ].filter((part): part is string => Boolean(part));
+    rows.push({
+      label: title ?? id ?? label,
+      value: parts.join(" · ") || id || "",
+    });
+  }
+  return rows.length > 0 ? { kind: "fields", role: "details", rows } : null;
+}
+
+/** The untouched payload is offered, not printed: bound what that can cost. */
+const MAX_RAW_CHARS = 20_000;
+
+/** A string list is a path list only when its entries look like paths. */
+function looksLikePath(value: string): boolean {
+  return (
+    value.includes("/") ||
+    value.includes("\\") ||
+    /\.[a-z0-9]{1,10}$/i.test(value)
+  );
+}
+
+/** Attach the raw payload as its own explicit disclosure, when it fits. */
+function withRawBlock(blocks: ToolBlock[], payload: unknown): ToolBlock[] {
+  const text = safeJson(payload);
+  if (!text || text === "{}" || text.length > MAX_RAW_CHARS) return blocks;
+  return [...blocks, { kind: "raw", role: "details", text }];
+}
+
 /**
  * Readable rendering for payloads with no per-tool mapping (plugin tools, MCP
  * results): scalars become field rows, long or multi-line strings become their
@@ -415,7 +672,12 @@ function recordBlocks(
       if (value.length === 0) continue;
       const strings = stringArray(value);
       if (strings) {
-        const block = filesBlock(strings, key);
+        // A list of names is not a list of files: only entries that look like
+        // paths earn the previewable file list, so a plugin's `["deploy",
+        // "rollback"]` reads as values instead of as two unopenable files.
+        const block = strings.every(looksLikePath)
+          ? filesBlock(strings, key)
+          : valuesBlock(key, strings, role);
         if (block) extra.push(block);
         continue;
       }
@@ -471,6 +733,21 @@ function askToolResultBlock(
   }
 
   return { kind: "asktool", role: "details", questions };
+}
+
+/**
+ * Whether the call failed, whichever half recorded it. The live runtime writes
+ * `toolStatus` and `isError` together, but an imported transcript may carry
+ * only the envelope's own `isError` flag, and a denied call reports through
+ * `toolStatus` alone. Both mean the same thing to a reader: this is an error,
+ * not the payload it was supposed to deliver.
+ */
+function resultFailed(message: ToolPresentationMessage): boolean {
+  if (message.toolStatus === "error" || message.toolStatus === "denied") {
+    return true;
+  }
+  if (message.isError === true) return true;
+  return asRecord(message.toolResult)?.isError === true;
 }
 
 /**
@@ -610,26 +887,26 @@ function resultBlocks(
     }
     case "run": {
       const command = stringAt(args, "command", "cmd");
-      // The head already prints the command and copies it, so repeating it here
-      // would open a body that says the same thing twice before reaching the
-      // output the reader expanded for (D226). A permission card has no head of
-      // its own, so it still shows the command it is asking about.
-      if (command !== null && !options.hideSummaryArg) {
-        blocks.push(codeBlock("command", command, "bash"));
-      }
       // Bash progress updates use `details.output`; the completed result uses
-      // `details.stdout`. A present empty stdout is meaningful too: it must
-      // suppress a stale progress snapshot rather than fall back to output.
+      // `details.stdout`. A present-but-empty stdout still means the command
+      // printed nothing, so it suppresses a stale progress snapshot rather than
+      // falling back to `output`; an empty channel is then omitted from the
+      // terminal, because an empty pane says less than no pane at all.
       const stdout =
         typeof details?.stdout === "string"
           ? details.stdout
           : stringAt(details, "output");
-      if (stdout) blocks.push(codeBlock("stdout", stdout));
-      const stderr = stringAt(details, "stderr");
-      if (stderr !== null) {
-        blocks.push(codeBlock("stderr", stderr, "", { tone: "error" }));
-      }
-      mapped = command !== null;
+      // A run row's body is a terminal (D226 follow-up): the command it ran,
+      // then what the command printed. The head still copies the whole command
+      // and states the outcome; these panes are what the reader expanded for.
+      blocks.push({
+        kind: "terminal",
+        role: "command",
+        command,
+        stdout: stdout ? stdout : null,
+        stderr: stringAt(details, "stderr"),
+      });
+      mapped = true;
       break;
     }
     case "list": {
@@ -650,16 +927,22 @@ function resultBlocks(
       break;
     }
     case "todo": {
-      const todoArgs = args ? safeJson(args) : "";
-      if (todoArgs) blocks.push(codeBlock("input", todoArgs, "json"));
+      // A checklist is a list of items, not an argument dump: the host result
+      // carries counts and warnings only, so the rows come from the call's own
+      // `todos` argument (the schema's four states and its priority).
+      const checklist = todosBlock(args, details);
+      if (checklist) blocks.push(checklist);
       const warnings = stringArray(details?.warnings);
       if (warnings) {
         for (const warning of warnings) {
           blocks.push({ kind: "note", role: "notice", text: warning });
         }
       }
-      const text = stringAt(details, "text");
-      if (text) blocks.push({ kind: "note", role: "notice", text });
+      // The host's success line ("Checklist updated: 2/3 completed; current:
+      // …") restates what the checklist above already shows — the counts, the
+      // in-progress item and the warnings it embeds — so a routine write adds
+      // no second section. Warnings still reach the reader above, and a
+      // refused write reports through `error`, which renders as its own note.
       mapped = true;
       break;
     }
@@ -704,6 +987,118 @@ function resultBlocks(
       }
       break;
     }
+    case "skill": {
+      // The Skill tool answers with the loaded document as text; its card names
+      // the document and renders the body (Markdown), instead of printing the
+      // whole answer as one raw block.
+      const text = typeof payload === "string" ? payload : envelopeTextOf(message);
+      if (text !== null) {
+        if (resultFailed(message)) {
+          blocks.push({ kind: "note", role: "error", text });
+        } else {
+          const document = parseSkillDocument(text);
+          const id = stringAt(args, "id") ?? (document?.id || "");
+          // An answer the tool did not shape as a document still gets a name:
+          // its own first line describes it better than the id the row summary
+          // already shows.
+          const heading = text.split("\n")[0].trim().slice(0, 120);
+          const fields: ToolFieldRow[] = [];
+          if (document?.location) {
+            fields.push({ label: "location", value: document.location });
+          }
+          if (document?.references) {
+            fields.push({ label: "references", value: document.references });
+          }
+          blocks.push({
+            kind: "document",
+            role: "output",
+            title: document?.name || heading || id,
+            id,
+            fields,
+            body: document?.body ?? text,
+          });
+        }
+        mapped = true;
+      }
+      break;
+    }
+    case "toolSearch": {
+      // The result names the tools it found and activated; the definitions
+      // themselves stay in the catalog, so the card lists names only.
+      const activated = valuesBlock("activated", details?.activated);
+      const matches = valuesBlock("matches", details?.matches);
+      // A successful activation records the same names again as
+      // `addedToolNames`; that legacy carrier only speaks when the row reports
+      // no `activated` list of its own, so one set of names is listed once.
+      const added = activated
+        ? null
+        : valuesBlock("added", details?.addedToolNames);
+      const groups = [activated, matches, added].filter(
+        (block): block is ToolBlock => block !== null,
+      );
+      blocks.push(...groups);
+      // The envelope sentence ("Activated on-demand tools: X. They are
+      // available on the next model turn.") is the model-facing wrapper of the
+      // lists above, so it is shown only where it is the whole answer — a
+      // search that listed nothing — or where the call failed, and then as the
+      // error it is.
+      const text = envelopeTextOf(message);
+      if (text && (groups.length === 0 || resultFailed(message))) {
+        blocks.push({
+          kind: "note",
+          role: resultFailed(message) ? "error" : "notice",
+          text,
+        });
+      }
+      break;
+    }
+    case "schedule": {
+      const acknowledged = stringAt(details, "id");
+      const rows = scheduledTaskRows(
+        "task",
+        details?.task ?? details?.tasks ?? acknowledged,
+        options.weekdayName,
+      );
+      if (rows) blocks.push(rows);
+      const text = envelopeTextOf(message);
+      if (text) blocks.push({ kind: "note", role: "notice", text });
+      break;
+    }
+    case "browser":
+    case "mode":
+    case "context": {
+      // Each of these answers with one sentence saying what it did; the state
+      // it changed is in that text, and the arguments carry the target.
+      const text = envelopeTextOf(message);
+      if (text) blocks.push({ kind: "note", role: "notice", text });
+      break;
+    }
+    case "image": {
+      // Results embed the image bytes, so the card reads the prompt and the
+      // written files rather than falling back to a payload dump.
+      const items = Array.isArray(args?.items) ? args.items : [];
+      const prompts = valuesBlock(
+        "prompt",
+        items
+          .map((item) => asRecord(item)?.prompt)
+          .filter((prompt): prompt is string => typeof prompt === "string"),
+      );
+      if (prompts) blocks.push(prompts);
+      const results = Array.isArray(details?.results) ? details.results : [];
+      const written: string[] = [];
+      for (const entry of results) {
+        const record = asRecord(entry);
+        if (record?.status === "succeeded" && typeof record.path === "string") {
+          written.push(record.path);
+        } else if (typeof record?.error === "string") {
+          blocks.push({ kind: "note", role: "error", text: record.error });
+        }
+      }
+      const files = filesBlock(written);
+      if (files) blocks.push(files);
+      mapped = true;
+      break;
+    }
     default:
       break;
   }
@@ -716,11 +1111,13 @@ function resultBlocks(
   }
 
   if (blocks.length > 0 || mapped) return blocks;
-  // No per-tool mapping matched: render the payload itself readably.
+  // No per-tool mapping matched: render the payload itself readably, and keep
+  // the untouched payload one explicit disclosure away (never in the summary
+  // and never as the body a reader has to wade through).
   if (typeof payload === "string" && payload.trim()) {
     return [codeBlock("output", payload)];
   }
-  if (details) return recordBlocks(details, "details");
+  if (details) return withRawBlock(recordBlocks(details, "details"), details);
   if (payload !== undefined && payload !== null) {
     return [codeBlock("output", safeJson(payload), "json")];
   }

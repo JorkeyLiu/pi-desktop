@@ -19,10 +19,11 @@
 }
 
 /*
-  Composer controls share one row, but the model chip is the first surface to
-  give up descriptive text as the chat column gets narrower. Keep the action
-  buttons at their normal hit target and let the combined model/reasoning
-  trigger carry the full selection in its menu and accessible name.
+  Composer controls share one row while they fit. When the chat column gets
+  narrower than that, the toolbar takes a second row instead of squeezing the
+  model chip: the chip keeps painting the model name and its reasoning level,
+  and only the model name may ellipsize. The complete ids stay in the trigger's
+  tooltip and accessible name, so nothing that was shortened is lost.
 */
 .composer-left,
 .composer-right {
@@ -44,37 +45,18 @@
 }
 
 @container composer-stack (max-width: 560px) {
-  .composer-model-thinking-dot,
-  .composer-model-thinking-level {
-    display: none;
+  .composer-toolbar {
+    flex-wrap: wrap;
+    row-gap: 6px;
   }
 
-  .composer-model-thinking-model {
-    max-width: 136px;
-  }
-}
-
-@container composer-stack (max-width: 480px) {
-  .composer-model-thinking-model {
-    max-width: 96px;
+  /* On its own row the action cluster owns the width the chip had to share. */
+  .composer-right {
+    flex: 1 1 auto;
   }
 }
 
 @container composer-stack (max-width: 450px) {
-  .composer-right .composer-model-thinking-chip {
-    width: 32px;
-    max-width: 32px;
-    flex: 0 0 32px;
-    justify-content: center;
-    gap: 0 !important;
-    padding: 0 !important;
-  }
-
-  .composer-model-thinking-model,
-  .composer-model-thinking-chevron {
-    display: none;
-  }
-
   .composer-right .context-inspector-trigger {
     gap: 0;
     padding-inline: 3px;
@@ -83,7 +65,6 @@
   .composer-right .context-inspector-ring-value {
     display: none;
   }
-
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,12 +1,9 @@
-import { SubagentStopButton } from "./SubagentStopButton";
-import { activityTimingInputs, cachedVisibleActivityItems } from "../../../lib/transcript-activity-summary";
+import { cachedVisibleActivityItems } from "../../../lib/transcript-activity-summary";
 import { reuseReferences } from "../../../lib/transcript-summary";
 import { ActivityItems } from "./ActivityItems";
-import { DisclosureScope, disclosureKey } from "./disclosure";
 import { ProcessActivityGroup } from "./ProcessActivityGroup";
 import {
   memo,
-  useContext,
   useEffect,
   useId,
   useMemo,
@@ -34,10 +31,9 @@ import {
   delegationRosterSummary,
   collectDelegationStatuses,
   collectDelegationTimings,
-  delegationTimingBounds,
   isDelegationActivityItem,
   lifecycleKindOf,
-  summarizeSubagentActivity,
+  subagentOutcome,
   type SubagentOutcome,
   type SubagentTiming,
 } from "../../../lib/subagent-topology";
@@ -46,19 +42,17 @@ import {
   getToolAction,
   getToolSummary,
 } from "../../../lib/tool-display";
-import { IconChevronRight, IconCircleAlert, IconSparkles, IconWorkflow } from "../../../components/icons";
-import {
-  DisclosureCollapseRail,
-  TOOL_RUNNING_KEYS,
-  useAutomaticDisclosure,
-} from "./shared";
-import { TranscriptSearchContext } from "../../../lib/transcript-search-context";
+import { IconCircleAlert } from "../../../components/icons";
+import { TOOL_RUNNING_KEYS } from "./shared";
 import { useAppStore } from "../../../stores/app-store";
 import { resolveThinkingDisplayMode } from "../../../lib/turn-process";
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
 type ActivityItem = AssistantActivityItem;
+
+/** Nothing to claim: a segment has no disclosure of its own any more. */
+const claimNoop = () => {};
 
 export function activityItemDetail(item: ActivityItem): string {
   if (item.kind === "hostedSearch") return item.round.query ?? "";
@@ -211,16 +205,12 @@ export const ActivityGroup = memo(function ActivityGroup({
   items,
   embedded: _embedded = false,
   isActive,
-  endedAt,
-  runtimeActivity,
   turnDelegationStatuses,
   turnDelegationTimings,
 }: ActivityGroupProps) {
   const compact = useAppStore(
     (state) => resolveThinkingDisplayMode(state.settings?.thinkingDisplayMode) === "compact",
   );
-  const { t } = useTranslation();
-  const detailsId = useId();
   const rawDelegateItems = useMemo(() => items.filter(isDelegationActivityItem), [items]);
   const delegatesRef = useRef(rawDelegateItems);
   const delegateItems = reuseReferences(delegatesRef.current, rawDelegateItems);
@@ -230,192 +220,40 @@ export const ActivityGroup = memo(function ActivityGroup({
   const tools = reuseReferences(toolsRef.current, rawTools);
   toolsRef.current = tools;
   const delegationItems = useMemo(() => tools.map((message) => ({ kind: "tool" as const, message })), [tools]);
-  // One delegation reads the same as five: the card is how a delegation is
-  // presented, not a treatment reserved for fan-out. A lone `Task` rendered as
-  // an ordinary tool row hid the outcome, runtime and step count that the card
-  // states outright, and made the same work look like two different features.
-  const hasSubagentTopology = delegateItems.length > 0;
   // `Task` rows only ever say "running"; the turn's TaskWait/TaskList/TaskStop
   // rows carry how each delegate actually ended (ADR 0089). When the lifecycle
   // tool is in a different activity part (the agent emitted text between Task
   // and TaskWait), the turn-level statuses computed by the parent give us the
-  // cross-part view we need.
+  // cross-part view we need. Each `Task` call reads its own delegation out of
+  // these maps, so the group itself draws no subagent chrome: the card is the
+  // only subagent surface in the transcript.
   const delegationStatuses = useMemo(() => turnDelegationStatuses ?? collectDelegationStatuses(delegationItems), [turnDelegationStatuses, delegationItems]);
   const delegationTimings = useMemo(() => turnDelegationTimings ?? collectDelegationTimings(delegationItems), [turnDelegationTimings, delegationItems]);
-  const subagentSummary = useMemo(() => summarizeSubagentActivity(
-    delegateItems,
-    delegationStatuses,
-  ), [delegateItems, delegationStatuses]);
-  // Parent tools after a Task fan-out live in a later activity part (D319), so
-  // this card is not the turn's live tail while its delegates are still running.
-  const topologyLive = hasSubagentTopology && subagentSummary.running > 0;
-  const live = isActive || topologyLive;
-  const searchTarget = useContext(TranscriptSearchContext);
-  const revealRequest = useMemo(() => searchTarget && items.some((item) => item.message.id === searchTarget.messageId)
-    ? searchTarget.requestId : undefined, [items, searchTarget]);
+  // A delegation still running keeps its group live after the parent stopped
+  // being the turn's tail, so its card keeps counting and stays reachable.
+  const delegationLive = useMemo(
+    () => delegateItems.some((item) => subagentOutcome(item.message, delegationStatuses) === "running"),
+    [delegateItems, delegationStatuses],
+  );
+  const live = isActive || delegationLive;
   const visibleItems = useMemo(() => cachedVisibleActivityItems(items, compact, isActive), [items, compact, isActive]);
-  const first = items[0];
-  const disclosure = useAutomaticDisclosure(
-    hasSubagentTopology ? live : visibleItems.length <= 1 || (!compact && live),
-    revealRequest,
-    disclosureKey("activity", first?.message.id ?? "", first?.kind ?? "", first?.kind === "hostedSearch" ? first.round.id : ""),
-  );
-  const { open, toggle: toggleDisclosure, collapse: collapseDisclosure, claim: claimDisclosure, titleRef } = disclosure;
-  const [now, setNow] = useState(Date.now);
-  const [finishedAt, setFinishedAt] = useState<number | null>(null);
-  const wasActiveRef = useRef(live);
-  const timingInputs = useMemo(() => activityTimingInputs(items), [items]);
-  const topologyTiming = useMemo(() => hasSubagentTopology
-    ? delegationTimingBounds(delegateItems, delegationTimings) : null,
-  [hasSubagentTopology, delegateItems, delegationTimings]);
-  const startedAt = topologyTiming?.startedAt ?? (timingInputs.startedAt || now);
-  const fallbackEnd = Math.max(startedAt, timingInputs.recordedEnd, startedAt + timingInputs.missingStartDuration);
-  const completedAt =
-    topologyTiming?.completedAt ??
-    (Date.parse(endedAt || "") ||
-      finishedAt ||
-      (wasActiveRef.current ? now : fallbackEnd));
-  const elapsedSeconds = Math.max(
-    0,
-    Math.floor(((live ? now : completedAt) - startedAt) / 1000),
-  );
-  const elapsed = formatToolDuration(elapsedSeconds);
-  const lastItem = items[items.length - 1];
-  const thinkingNow =
-    isActive &&
-    lastItem?.kind === "thinking" &&
-    lastItem.message.status === "streaming";
-  const onlyThinking = useMemo(() => items.every((item) => item.kind === "thinking"), [items]);
-  const label = hasSubagentTopology
-    ? t(
-        live
-          ? "chat.subagentsWorking"
-          : subagentSummary.issues > 0
-            ? "chat.subagentsFinishedWithIssues"
-            : subagentSummary.warnings > 0
-              ? "chat.subagentsFinishedWithWarnings"
-              : "chat.subagentsFinished",
-        // A card is now drawn for a lone delegation too, so the aggregate line
-        // has to be able to say "Subagent working" and not only the plural.
-        { count: subagentSummary.total },
-      )
-    : isActive
-      ? t(thinkingNow || onlyThinking ? "chat.thinkingFor" : "chat.processingFor", {
-          time: elapsed,
-        })
-      : onlyThinking
-        ? elapsedSeconds > 0
-          ? t("chat.thoughtFor", { time: elapsed })
-          : // History reloads keep no end timestamp for pure-thinking groups.
-            t("chat.thinking", { defaultValue: "Thinking" })
-        : t("chat.processedFor", { time: elapsed });
-  const runtimeStatus = runtimeActivity
-    ? runActivityLabel(runtimeActivity, t as Translate)
-    : "";
-  const currentDetail = useMemo(() =>
-    live && !runtimeStatus && lastItem && !(compact && lastItem.kind === "thinking")
-      ? activityItemDetail(lastItem) : "",
-  [live, runtimeStatus, lastItem, compact]);
-  const tail = live && !open ? currentDetail : "";
-
-  useEffect(() => {
-    if (wasActiveRef.current && !live) setFinishedAt(Date.now());
-    wasActiveRef.current = live;
-    if (!live) return;
-    setNow(Date.now());
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [live]);
 
   const renderedItems = <ActivityItems
     items={items}
     isActive={isActive}
     live={live}
-    delegateItems={delegateItems}
     delegationStatuses={delegationStatuses}
     delegationTimings={delegationTimings}
-    onUserInteraction={claimDisclosure}
+    onUserInteraction={claimNoop}
   />;
 
-  if (!hasSubagentTopology) {
-    return (
-      <ProcessActivityGroup items={visibleItems} active={isActive} disclosure={disclosure}>
-        {renderedItems}
-      </ProcessActivityGroup>
-    );
-  }
-
+  // The segment's container draws no fold: the turn's process header is the only
+  // disclosure above a row, so the segment is visible the moment that header is
+  // open and every row keeps its own disclosure.
   return (
-    <div
-      className={`tool-activity-group ${hasSubagentTopology ? "has-subagents" : ""} ${
-        open ? "open" : ""
-      } ${live ? "active" : ""}${
-        runtimeActivity ? ` phase-${runtimeActivity.phase}` : ""
-      }`}
-    >
-      <div className="subagent-activity-header">
-      <button
-        ref={titleRef}
-        className="tool-activity-header"
-        aria-expanded={open}
-        aria-controls={detailsId}
-        onClick={toggleDisclosure}
-      >
-        <span className="tool-activity-icon" aria-hidden>
-          {hasSubagentTopology ? (
-            <IconWorkflow size={15} />
-          ) : (
-            <IconSparkles size={14} />
-          )}
-        </span>
-        <span className={`tool-activity-label ${live ? "running" : ""}`}>
-          {label}
-        </span>
-        {hasSubagentTopology ? (
-          <span className="subagent-activity-metrics">
-            {t("chat.subagentCount", { count: subagentSummary.total })}
-            <span aria-hidden> · </span>
-            {t("chat.subagentFinishedCount", {
-              finished: subagentSummary.finished,
-              total: subagentSummary.total,
-            })}
-            <span aria-hidden> · </span>
-            {elapsed}
-          </span>
-        ) : items.length > 1 ? (
-          <span className="tool-activity-count">
-            {t("chat.processingSteps", { count: items.length })}
-          </span>
-        ) : null}
-        <span className="tool-activity-caret" aria-hidden>
-          <IconChevronRight size={12} />
-        </span>
-      </button>
-      <SubagentStopButton running={topologyLive} />
-      </div>
-      {tail ? (
-        <div className="tool-activity-preview" aria-hidden>
-          {tail}
-        </div>
-      ) : null}
-      <div
-        ref={disclosure.bodyRef}
-        {...disclosure.bodyEvents}
-        className="tool-activity-collapse"
-        aria-hidden={!open}
-        inert={!open}
-      >
-        <div className="tool-activity-collapse-inner">
-          <div className="tool-activity-body" id={detailsId}>
-            <DisclosureCollapseRail
-              label={t("chat.collapseActivityGroup")}
-              onCollapse={collapseDisclosure}
-            />
-            <DisclosureScope disclosure={disclosure}>{renderedItems}</DisclosureScope>
-          </div>
-        </div>
-      </div>
-    </div>
+    <ProcessActivityGroup items={visibleItems}>
+      {renderedItems}
+    </ProcessActivityGroup>
   );
 }, activityGroupPropsEqual);
 
@@ -535,6 +373,13 @@ export function RunActivityIndicator({ activity }: { activity: AgentActivity }) 
       observer?.disconnect();
     };
   }, [retryError]);
+  // A parent-side wait on child agents is not this row's status to draw: the
+  // running-subagent dock above the composer already lists every live child
+  // with its own elapsed time, and the turn keeps its `Task` / `TaskWait` rows
+  // as the wait trace. An aggregate copy here would be the second statement of
+  // the same state. Every other phase - the parent's own model wait, starting,
+  // preparation, compaction, recovery and retry - still renders in full.
+  if (activity.phase === "waiting-subagents") return null;
   const retryErrorSummary = retryError
     ? (() => {
         const key = `errors.${retryError.code}`;

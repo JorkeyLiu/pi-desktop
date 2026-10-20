@@ -303,8 +303,11 @@ export async function transcriptLongHistoryProbe() {
       assert(sample.oldBodyReads === 0, `${item.summary.id}: reread ${sample.oldBodyReads} old bodies`);
       assert(sample.unchangedGroupRenders === 0, `${item.summary.id}: unchanged groups rerendered`);
       if (item.summary.id === "long-activity-group") {
-        const groupHeader = element<HTMLButtonElement>(".process-activity-group > .tool-activity-header");
-        if (groupHeader.getAttribute("aria-expanded") !== "true") flushSync(() => groupHeader.click());
+        // The process header is the only fold above a row: a contiguous
+        // activity segment draws no disclosure of its own, so the live thinking
+        // row is revealed by opening its own turn's process header.
+        const processHeader = element<HTMLButtonElement>(".turn-process > .tool-activity-header");
+        if (processHeader.getAttribute("aria-expanded") !== "true") flushSync(() => processHeader.click());
         await settled();
         const updateThinking = (text: string) => send(item.summary.id, {
           type: "message_update", stream: "delta", deltaThinking: text,
@@ -330,7 +333,7 @@ export async function transcriptLongHistoryProbe() {
         await until(() => host.querySelector(`[data-message-id="${liveToolId}"]`)?.textContent?.includes("warm tool output") === true,
           "warm tool_update output", () => ({
             message: useAppStore.getState().messages.find((message) => message.id === liveToolId),
-            groupExpanded: groupHeader.getAttribute("aria-expanded"),
+            groupExpanded: processHeader.getAttribute("aria-expanded"),
             toolExpanded: liveTool.getAttribute("aria-expanded"),
             toolDom: host.querySelector(`[data-message-id="${liveToolId}"]`)?.outerHTML.slice(-3000),
           }));
@@ -347,7 +350,7 @@ export async function transcriptLongHistoryProbe() {
           toolArgs: { command: "printf changed-giant-tool" } } });
         await until(() => host.textContent?.includes("changed-giant-tool") === true, "giant group changed tool");
       } else {
-        flushSync(() => element<HTMLButtonElement>(".subagent-topology-node-header").click());
+        flushSync(() => element<HTMLButtonElement>(".subagent-task-card").click());
         await until(() => host.querySelector('[data-testid="subagent-transcript-tab"]') !== null, "child transcript dock");
         const parent = useAppStore.getState().messages[1];
         send(item.summary.id, { type: "message_update", stream: "delta", deltaText: " child-fresh",

@@ -399,9 +399,17 @@ globalThis.transcriptRenderProbe = async () => {
       message("tail", "assistant", "Continuing"),
     ];
     render(taskMessages());
+    // The child's own card states that it is still running: the group around it
+    // is the ordinary process group and draws no subagent chrome.
     assert(
-      container.querySelector(".has-subagents")?.classList.contains("active"),
-      "running Task group is not active",
+      container
+        .querySelector(".subagent-task-state")
+        ?.textContent?.includes("Running"),
+      "running Task card does not state its running outcome",
+    );
+    assert(
+      !container.querySelector(".has-subagents"),
+      "a Task call must not re-tile its activity group",
     );
     globalThis.__activityGroupRenders = [];
     lifecycle = {
@@ -425,17 +433,13 @@ globalThis.transcriptRenderProbe = async () => {
       globalThis.__activityGroupRenders.includes("task"),
       "Task group ignored a lifecycle status update",
     );
-    const topology = container.querySelector(".has-subagents");
-    const taskDuration = () => container
-      .querySelector(".has-subagents .subagent-activity-metrics")
-      ?.textContent?.split("·").at(-1)?.trim();
+    // The card's own state line carries the outcome and the runtime the
+    // lifecycle rows reported for its delegation.
+    const cardState = () =>
+      container.querySelector(".subagent-task-state")?.textContent ?? "";
     assert(
-      taskDuration() === "2s",
-      "Task completion timing did not update to 2s",
-    );
-    assert(
-      !topology?.classList.contains("active"),
-      "completed Task group is still active",
+      cardState().includes("Completed") && cardState().includes("2s"),
+      `Task completion did not settle to Completed · 2s: ${cardState()}`,
     );
 
     globalThis.__activityGroupRenders = [];
@@ -460,8 +464,8 @@ globalThis.transcriptRenderProbe = async () => {
       "Task group ignored a timing-only update",
     );
     assert(
-      taskDuration() === "4s",
-      "Task completion timing did not update to 4s",
+      cardState().includes("4s"),
+      `Task timing-only update did not reach 4s: ${cardState()}`,
     );
 
     const statusLifecycle = await transcriptStatusProbe();

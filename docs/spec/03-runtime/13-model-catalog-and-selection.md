@@ -426,15 +426,15 @@ background update. A configured non-empty alias is resolved from the binding
 for every equivalent model ID and remains the sole visible model name while
 the catalog is refreshed.
 
-Vision badges in the Composer use the effective image-input capability for the
-exact provider/model binding. An explicit `supportsImages: true` or `false`
-wins over the published record; an absent or `null` value follows it. This lets
-a configured custom or proxied model show the capability the endpoint was
-explicitly configured to use without shaping the published `ModelInfo`.
+The Composer's image-attachment gate uses the effective image-input capability
+for the exact provider/model binding. An explicit `supportsImages: true` or
+`false` wins over the published record; an absent or `null` value follows it.
+This lets a configured custom or proxied model show the capability the endpoint
+was explicitly configured to use without shaping the published `ModelInfo`.
 An OAuth provider heading uses its non-secret account label when present, so
-duplicate accounts from one vendor remain distinguishable; Composer model rows
-show the configured wire model ID, while a configured alias remains available
-as the compact selected-chip label.
+duplicate accounts from one vendor remain distinguishable; a Composer model row
+shows the binding's configured alias when it has one and the model name or wire
+ID otherwise, while that alias also remains the compact selected-chip label.
 
 ## 10. Recent chat model policy
 
@@ -459,8 +459,12 @@ IPC migration is required. Settings has no fixed chat-default picker or service
 "Make default" action. Image-generation selection remains independent.
 
 The combined Composer model menu shows the three most recent available bindings
-first. Each row identifies the provider as well as the model or alias. Search is
-always visible and searches all configured models. Other models expand inline,
+first. Each row is a single line carrying the model label — the alias when the
+binding has one, the wire ID otherwise — clipped with an ellipsis instead of
+wrapping, with the complete value as the row's title; no row shows capability
+icons or a context-window count, and a recent row shows the model label alone
+while its title keeps the provider name. Search is always visible and searches
+all configured models. Other models expand inline,
 grouped by provider, without duplicating recent entries. With no history, all
 models are visible immediately. The current model is checked; reasoning controls
 remain below the list. Discovery enriches exact
@@ -501,10 +505,10 @@ Composer context-window labels resolve the exact binding with `effectiveContextW
    baseline. An absent or `null` value follows the published capability;
    `true` enables image input for a configured endpoint even when its published
    record is text-only, and `false` disables a published image capability.
-3. The Composer model-row vision badge and the main attachment transport gate
-   use this same effective result. An unknown or custom model without an
-   explicit binding override remains on the conservative path-fallback route;
-   discovery or cache metadata alone cannot promote it to image transport.
+3. The main attachment transport gate uses this same effective result. An
+   unknown or custom model without an explicit binding override remains on the
+   conservative path-fallback route; discovery or cache metadata alone cannot
+   promote it to image transport.
 4. The main process prepares pasted images as content-addressed refs. A
    vision-capable model receives images within the 10 MB app-side inline
    bound as transient image blocks; other cases receive a safe `@path`.
@@ -598,7 +602,9 @@ same model to the check mark, the toggle and the duplicate guard.
 - [ ] refresh merges into cache and picker (never destructively replaces)
 - [ ] restart hydrates the prior catalog before live refresh, and offline
       refresh keeps the cached picker populated
-- [ ] capability badges visible
+- [ ] every model row is one line: one ellipsized model label, no capability
+      icons and no context-window count; a recent row omits the provider name
+      and keeps it in the row title
 - [ ] session model change applies to next turn only
 - [ ] a newly created session stores the then-current default provider/model, and later default-model changes do not rewrite that session
 - [ ] a catalog-matched reasoning model defaults a new session to that

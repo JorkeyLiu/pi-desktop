@@ -1,68 +1,24 @@
-import { useId, useMemo, type ReactNode } from "react";
-import { useTranslation } from "react-i18next";
+import type { ReactNode } from "react";
 import type { AssistantActivityItem } from "../../../lib/assistant-turns";
-import { cachedActivitySummary } from "../../../lib/transcript-activity-summary";
-import { IconChevronRight, IconCircleAlert, IconSparkles } from "../../../components/icons";
-import { DisclosureCollapseRail } from "./shared";
-import { DisclosureScope, type useAutomaticDisclosure } from "./disclosure";
 
-/** Keep the body identity stable when a singleton grows into a group. */
+/**
+ * The container that keeps one activity segment's rows together.
+ *
+ * It draws no fold of its own. The turn's process header is the only disclosure
+ * above a row, so every tool, search and reasoning row inside is visible the
+ * moment that header is open; each row still owns its own disclosure, and no
+ * row is expanded by a parent. The container stays because chronology is what
+ * it states: a segment of work is one block, and a thought that produced the
+ * prose beneath it is its own sibling block rather than a row inside the
+ * operation above it.
+ */
 export function ProcessActivityGroup({
   items,
-  active,
-  disclosure,
   children,
 }: {
   items: readonly AssistantActivityItem[];
-  active: boolean;
-  disclosure: ReturnType<typeof useAutomaticDisclosure>;
   children: ReactNode;
 }) {
-  const { t } = useTranslation();
-  const detailsId = useId();
-  const grouped = items.length > 1;
-  const open = !grouped || disclosure.open;
-  const summary = useMemo(() => cachedActivitySummary(items), [items]);
   if (items.length === 0) return null;
-  return (
-    <div className={`process-activity-group${grouped ? " grouped" : " singleton"}${open ? " open" : ""}`}>
-      {grouped ? (
-        <button
-          type="button"
-          className="tool-activity-header"
-          ref={disclosure.titleRef}
-          aria-expanded={open}
-          aria-controls={detailsId}
-          onClick={disclosure.toggle}
-        >
-          <span className="tool-activity-icon" aria-hidden><IconSparkles size={14} /></span>
-          <span className={`tool-activity-label${active ? " running" : ""}`}>
-            {t(summary.label, { count: summary.count })}
-          </span>
-          {summary.thinking > 0 && summary.tools > 0 ? (
-            <span className="tool-activity-count">{t("chat.activityIncludesThinking")}</span>
-          ) : null}
-          {active ? <span className="tool-activity-count">{t("chat.running")}</span> : null}
-          {summary.issues > 0 ? (
-            <span className="turn-process-error">
-              <IconCircleAlert size={14} aria-hidden />
-              {t("chat.activityFailures", { count: summary.issues })}
-            </span>
-          ) : null}
-          <span className="tool-activity-caret" aria-hidden><IconChevronRight size={12} /></span>
-        </button>
-      ) : null}
-      <div
-        id={detailsId}
-        ref={disclosure.bodyRef}
-        className="process-activity-body"
-        hidden={!open}
-        inert={!open}
-        {...disclosure.bodyEvents}
-      >
-        {grouped ? <DisclosureCollapseRail label={t("chat.collapseActivityGroup")} onCollapse={disclosure.collapse} /> : null}
-        <DisclosureScope disclosure={disclosure} open={open}>{children}</DisclosureScope>
-      </div>
-    </div>
-  );
+  return <div className="process-activity-group">{children}</div>;
 }

@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-17
-- Amended: 2026-09-27
+- Amended: 2026-09-27, 2026-10-19
 - Issues: #510, #461
 - Amends: D071, [ADR 0242](0242-delta-only-streaming-updates.md)
 
@@ -103,3 +103,25 @@ E2E-CHAT-turn-process-and-thinking-display for the synchronized scenario text.
 For the 2026-09-27 amendment, `apps/desktop/test/turn-process.test.mjs` covers
 the default selection, and `pnpm test:e2e:transcript-disclosure` exercises
 active-to-completed collapse and user-open retention in real Chromium.
+
+## Current status (amendment, 2026-10-19)
+
+The historical decision above stands; two of its presentation details have since
+changed.
+
+The inner fold is gone: the whole turn process is the one outer disclosure, a
+contiguous tool/search/thinking segment renders plain between the progress
+paragraphs that bound it, and each row keeps only its own item disclosure. The
+ordinary activity-group level this decision introduced therefore no longer
+carries a disclosure or an open/closed default of its own.
+
+The reasoning a turn emits immediately before its closing prose is presented as
+its own row before that prose instead of staying inside the segment it was
+grouped with; the move changes where that leaf is read, not the stored order.
+
+The delegated `Task` card is a row of that same process group, and a checklist
+written by `TodoWrite` opens with the turn because it is the work the reader is
+watching, with the reader's collapse choice for that row surviving later streaming
+updates. Everything else here - one process disclosure per loaded turn, the
+trailing answer outside it, compact mode, disclosure-memory ownership, and the
+search/navigation ancestor path - is unchanged.

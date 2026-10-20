@@ -32,22 +32,25 @@ const chineseCatalogSource = await readFile(
 );
 
 
-test("a topology node opens a real subagent tab in the work panel", () => {
-  assert.match(transcriptSource, /const openSubagentTab = useAppStore\(\(s\) => s\.openSubagentTab\)/);
-  assert.match(transcriptSource, /const panelSelectionId =/);
-  assert.match(transcriptSource, /openSubagentTab\(panelSelectionId, agentName \|\| undefined\)/);
+test("a Task card opens a real subagent tab in the work panel", () => {
+  assert.match(transcriptSource, /const openSubagentTab = useAppStore\(\(state\) => state\.openSubagentTab\)/);
+  assert.match(transcriptSource, /const panelSelectionId = delegationId \|\| message\.toolCallId \|\| message\.id;/);
+  assert.match(transcriptSource, /openSubagentTab\(panelSelectionId, title\)/);
   assert.match(
     transcriptSource,
     /activeWorkPanelTabId === `subagent:\$\{panelSelectionId\}`/,
   );
+  // Nothing to read until the call reports its delegation, so an empty card
+  // stays disabled rather than opening a tab with no transcript behind it.
   assert.match(
     transcriptSource,
-    /aria-controls=\{panelOpen \? `work-panel-surface-subagent:\$\{panelSelectionId\}` : undefined\}/,
+    /const canOpen =\s*localToolsAllowed &&\s*\(Boolean\(delegationId\) \|\| \(delegate\?\.items\.length \?\? 0\) > 0\);/,
   );
-  assert.match(storeSource, /openSubagentTab: \(delegationId, agentName\) => \{/);
+  assert.match(transcriptSource, /disabled=\{!canOpen\}/);
+  assert.match(storeSource, /openSubagentTab: \(delegationId, title\) => \{/);
   assert.match(
     storeSource,
-    /openWorkPanelTab\(subagentWorkPanelTab\(id, agentName \|\| undefined\)\)/,
+    /openWorkPanelTab\(subagentWorkPanelTab\(id, title \|\| undefined\)\)/,
   );
   // The overlay state and its actions are gone: closing happens per tab.
   assert.doesNotMatch(storeSource, /subagentPanel/);
@@ -55,7 +58,7 @@ test("a topology node opens a real subagent tab in the work panel", () => {
   assert.match(tabsSource, /\| "plugin"\s*\|\s*"subagent";/);
   assert.match(
     tabsSource,
-    /export function subagentWorkPanelTab\(\s*delegationId: string,\s*agentName\?: string,\s*\): WorkPanelTab \{/,
+    /export function subagentWorkPanelTab\(\s*delegationId: string,\s*title\?: string,\s*\): WorkPanelTab \{/,
   );
   assert.match(tabsSource, /id: `subagent:\$\{delegationId\}`/);
   assert.match(tabsSource, /tab\.kind === "subagent"\)/);
@@ -136,6 +139,12 @@ test("the delegation tab renders a message list with a child composer", () => {
 test("the tab owns one scroll surface and pins to the latest output", () => {
   assert.match(workPanelCss, /\.subagent-transcript-tab \{[^}]*flex-direction: column/);
   assert.match(workPanelCss, /\.subagent-transcript-scroll \{[^}]*overflow-y: auto/);
+  // The only scroll surface reserves its gutter whether or not the rows
+  // overflow: an opened command detail never narrows the content beside it.
+  assert.match(
+    workPanelCss,
+    /\.subagent-transcript-scroll \{[^}]*scrollbar-gutter: stable;/,
+  );
   assert.match(tabSource, /useFollowScroll\(\)/);
   assert.match(tabSource, /ref=\{scrollRef\}/);
   assert.match(tabSource, /onScroll=\{handleScroll\}/);

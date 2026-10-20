@@ -7,6 +7,7 @@ import {
   IconChevronDown,
 } from "../../../components/icons";
 import { TooltipButton } from "../../../components/ui";
+import { composerModelChipLabel } from "../../../lib/composer-models";
 import type { useComposerModelMenu } from "./hooks/useComposerModelMenu";
 import { ThinkingLevelSlider } from "./ThinkingLevelSlider";
 
@@ -58,6 +59,18 @@ export function ComposerModelPicker({
     onMenuKeyDown,
   } = controller;
 
+  /*
+   * The chip paints the model name alone so the name, not the routing prefix,
+   * owns its width; the trigger keeps every unchanged id in its accessible
+   * name and tooltip, which is also where two routes to the same name stay
+   * distinguishable. A configured alias stays visible as typed.
+   */
+  const chipModel = composerModelChipLabel(modelLabel, selectedModelId);
+  const selectionName =
+    selectedModelId && selectedModelId.trim() !== modelLabel.trim()
+      ? `${modelLabel} (${selectedModelId})`
+      : modelLabel;
+
   return (
     <AnchoredMenu
       className="composer-model-thinking"
@@ -75,8 +88,8 @@ export function ComposerModelPicker({
           ref={ref}
           type="button"
           className={`icon-btn composer-model-thinking-chip ${open ? "active" : ""}`}
-          tooltip={`${modelLabel} · ${t("chat.reasoningLevel")}: ${thinkingLabel}`}
-          ariaLabel={`${t("chat.model")}: ${modelLabel}. ${t("chat.reasoningLevel")}: ${thinkingLabel}`}
+          tooltip={`${selectionName} · ${t("chat.reasoningLevel")}: ${thinkingLabel}`}
+          ariaLabel={`${t("chat.model")}: ${selectionName}. ${t("chat.reasoningLevel")}: ${thinkingLabel}`}
           aria-haspopup="menu"
           aria-expanded={open}
           disabled={controlsBlocked}
@@ -93,7 +106,7 @@ export function ComposerModelPicker({
           <span className="composer-model-thinking-icon" aria-hidden="true">
             <IconBot size={14} />
           </span>
-          <span className="composer-model-thinking-model">{modelLabel}</span>
+          <span className="composer-model-thinking-model">{chipModel.label}</span>
           {thinkingLevel !== "off" ? (
             <>
               <span className="composer-model-thinking-dot" aria-hidden="true">·</span>

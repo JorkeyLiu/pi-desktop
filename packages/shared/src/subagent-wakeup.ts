@@ -273,13 +273,18 @@ export function isSubagentWakeupSettings(value: unknown): value is SubagentWakeu
   );
 }
 
-/** One-line metrics suffix for heartbeats and result headers. */
+/**
+ * One-line metrics suffix for heartbeats and result headers. Occupancy is
+ * compact and labelled `ctx`, plainly — the figure is the same whether the
+ * runtime reported it or estimated it, so no approximation mark is appended
+ * to a number a reader compares across rows.
+ */
 export function formatSubagentProgressMetrics(
   metrics: Pick<SubagentProgressMetrics, "toolCalls" | "contextTokens" | "usage">,
 ): string {
   const parts = [`${metrics.toolCalls} tool call${metrics.toolCalls === 1 ? "" : "s"}`];
   if (typeof metrics.contextTokens === "number") {
-    parts.push(`ctx ~${compactTokens(metrics.contextTokens)} tokens`);
+    parts.push(`ctx ${compactTokens(metrics.contextTokens)} tokens`);
   }
   if (metrics.usage) {
     parts.push(`spent ${compactTokens(metrics.usage.totalTokens)} tokens`);

@@ -37,12 +37,15 @@ test("automatic disclosure does not claim a reading position", () => {
 
 test("every manual title hands over the element the reader clicked", () => {
   // The collapse rail lives inside the collapsing body, so both paths anchor on
-  // the header the reader sees, not on the control that was pressed.
+  // the header the reader sees, not on the control that was pressed. The whole
+  // process is the only level that owns a header row; a contiguous activity
+  // segment has none to hand over, and every row keeps its own.
   assert.match(
     transcript,
-    /ref=\{titleRef\}\s*className="tool-activity-header"/,
+    /ref=\{disclosure\.titleRef\}\s*className="tool-activity-header"/,
   );
-  assert.match(transcript, /onClick=\{toggleDisclosure\}/);
+  assert.match(transcript, /onClick=\{disclosure\.toggle\}/);
+  assert.match(transcript, /onClick=\{toggleRow\}/);
   const toolHeaders = transcript.match(
     /ref=\{titleRef\}\s*className="tool-row-header"/g,
   );
@@ -51,7 +54,8 @@ test("every manual title hands over the element the reader clicked", () => {
     3,
     "the thinking row, the tool row and the hosted search row must each anchor their own header",
   );
-  assert.match(transcript, /onCollapse=\{collapseDisclosure\}/);
+  assert.match(transcript, /onCollapse=\{collapseRow\}/);
+  assert.match(transcript, /onCollapse=\{disclosure\.collapse\}/);
   const collapseWrappers = transcript.match(
     /onUserInteraction\?\.\(\);\s*collapseDisclosure\(\);\s*\}, \[collapseDisclosure, onUserInteraction\]\);/g,
   );

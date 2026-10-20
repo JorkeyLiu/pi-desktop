@@ -106,8 +106,18 @@ test("image generation selection hides the summary when nothing can be chosen", 
   assert.match(imageModelRowSource, /imageModelUnavailable/);
 });
 
-test("the Composer model rows use the provider binding for vision badges", () => {
-  assert.match(composerSource, /composerModelBadges\(model, group\.provider\)/);
+test("Composer model rows carry no capability cells; the vision projection stays in its helper", async () => {
+  // Rows no longer spend their width on capability icons or a token window, so
+  // the provider-binding vision rule lives only in the shared projection that
+  // owns it. The row-level contract is pinned by composer-model-thinking-menu.
+  assert.doesNotMatch(composerSource, /composerModelBadges/);
+  assert.doesNotMatch(composerSource, /composer-model-option-(badge|ctx|meta)/);
+  const projection = await readFile(
+    new URL("../src/lib/composer-models.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(projection, /composerModelBadges/);
+  assert.match(projection, /bindingSupportsImages\(binding, model\)/);
 });
 
 test("capability overrides reach the transport modality arrays", () => {

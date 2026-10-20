@@ -725,6 +725,265 @@
   background: var(--ds-tile-hover);
 }
 
+/* Session-wide running subagents, above the composer. Collapsed it is one
+   summary line behind the dock's disclosure; expanded it is one compact row per
+   running child agent, each row a single open action with its own stop beside
+   it. It shares the todo dock's disclosure geometry so the surfaces docked
+   above the input read as one set. There is no dock-wide stop: stopping belongs
+   to the row of the child it stops. */
+.subagent-dock {
+  margin-bottom: 8px;
+  border: 1px solid var(--ds-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--ds-bg-dock-raised);
+  overflow: hidden;
+}
+
+.subagent-dock-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The disclosure keeps the header's whole width: no control sits beside it any
+   more, and the only stop actions are the ones each running row owns. */
+.subagent-dock-toggle {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  border: 0;
+  padding: 7px 8px 7px 10px;
+  background: transparent;
+  color: var(--ds-text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--motion-duration-fast) var(--motion-ease-out);
+}
+
+/* A disclosure header, not a push button: the shared button's scale press
+   feedback reads as a jelly effect on this compact surface. */
+.subagent-dock-toggle:active:not(:disabled) {
+  transform: none;
+}
+
+.subagent-dock-toggle:hover,
+.subagent-dock-toggle:focus-visible {
+  background: var(--ds-bg-hover);
+}
+.subagent-dock-header-symbol {
+  display: grid;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  color: var(--ds-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.subagent-dock-header-text {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-dock-content {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    grid-template-rows var(--motion-duration-normal) var(--motion-ease-out),
+    opacity var(--motion-duration-fast) var(--motion-ease-out),
+    transform var(--motion-duration-normal) var(--motion-ease-out);
+}
+
+.subagent-dock.is-expanded .subagent-dock-content {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Same collapse contract as the todo dock: the clip layer carries the `0fr`
+   row, so the list's bottom inset cannot hold the closed dock open. */
+.subagent-dock-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.subagent-dock-list {
+  display: grid;
+  gap: 4px;
+  /* The header is its own surface: the rows start below a deliberate gap, so
+     the header's hover fill never touches the first row's tile and the group
+     keeps the same 10px inset at the sides and the bottom. The gap sits inside
+     the clip layer, so the collapsed dock stays header-high. */
+  padding: 8px 10px 10px;
+}
+
+/* Every running row stays mounted and the list scrolls inside its own box, so
+   a wide fan-out never grows the composer past its slot. */
+.subagent-dock.is-expanded .subagent-dock-list {
+  max-height: min(240px, 30dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.subagent-dock-list:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--ds-accent) 72%, transparent);
+  outline-offset: -2px;
+}
+
+/* One row per running child, laid out like the child's own transcript card: the
+   title with that child's state and live duration beside it, then the role and
+   the figures the child reported for itself on a line of their own. The row
+   itself is the highlighting surface: the whole body is a single button
+   (`.subagent-dock-row-main`) and the stop control is its sibling, so the two
+   actions never nest and the fill covers the row's whole box — the symbol, the
+   main action and the gap the stop sits in — instead of a rectangle inside it. */
+.subagent-dock-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  min-height: 28px;
+  border-radius: var(--radius-sm);
+  padding: 3px 4px 3px 1px;
+  background: color-mix(in oklab, var(--ds-accent) 10%, var(--ds-tile-deep));
+  color: var(--ds-text-primary);
+  font-size: var(--text-xs);
+  transition: background-color var(--motion-duration-fast) var(--motion-ease-out);
+}
+
+/* Hovering the open action, or reaching it with the keyboard, lights the row
+   itself so the hit area reads as one row. The stop control keeps its own
+   surface and its own hover, so pointing at Stop never lights the row and
+   stopping stays independent of opening. */
+.subagent-dock-row:has(.subagent-dock-row-main:hover:not(:disabled)),
+.subagent-dock-row:has(.subagent-dock-row-main:focus-visible) {
+  background: color-mix(in oklab, var(--ds-accent) 18%, var(--ds-tile-deep));
+}
+
+.subagent-dock-row-symbol {
+  display: grid;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  color: var(--ds-text-secondary);
+}
+
+.subagent-dock-row-main {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 7px;
+  border: 0;
+  border-radius: inherit;
+  padding: 3px 4px 3px 7px;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The fill belongs to the row above: the open action stays transparent in every
+   state, so the highlight never paints a rectangle inside the row. */
+.subagent-dock-row-main:hover:not(:disabled),
+.subagent-dock-row-main:active:not(:disabled) {
+  background: transparent;
+}
+
+/* Opening a chain is a row action, not a push button: keep the row flat while
+   it is pressed and let the row's own fill show the hit area. */
+.subagent-dock-row-main:active:not(:disabled) {
+  transform: none;
+}
+
+.subagent-dock-row-main:disabled {
+  cursor: default;
+}
+
+.subagent-dock-row-main:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--ds-accent) 72%, transparent);
+  outline-offset: -2px;
+}
+
+/* The row's two stacked lines wrap instead of running past the composer: a
+   narrow dock stacks them, a wide one keeps them on one line each. */
+.subagent-dock-row-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.subagent-dock-row-title-row {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+}
+
+/* The title is the row's flexible column: it ellipsizes while the state keeps
+   its own box. */
+.subagent-dock-row-title {
+  min-width: 0;
+  flex: 1 1 8ch;
+  overflow: hidden;
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The child's state and live duration, tabular so a ticking clock never shifts
+   the text beside it. */
+.subagent-dock-row-state {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: baseline;
+  color: var(--ds-text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The role and the child's own progress, one quiet line under the title. */
+.subagent-dock-row-info {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  color: var(--ds-text-secondary);
+  font-size: var(--text-2xs);
+}
+
+.subagent-dock-row-role {
+  min-width: 0;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The child's own reported figures: tabular digits, wrapping at a narrow
+   composer instead of pushing the row wider than its box. */
+.subagent-dock-row-metrics {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
 .todo-dock {
   margin-bottom: 8px;
   border: 1px solid var(--ds-border-subtle);
@@ -874,6 +1133,9 @@
     animation: none;
   }
 
+  .subagent-dock-header,
+  .subagent-dock-content,
+  .subagent-dock-row,
   .todo-dock-header,
   .todo-dock-content,
   .todo-dock-row {

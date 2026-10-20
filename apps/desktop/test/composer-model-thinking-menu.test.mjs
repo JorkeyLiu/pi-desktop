@@ -157,32 +157,26 @@ test("reasoning projection uses the selected exact catalog row and binding", asy
   assert.match(source, /sameComposerModelId\(candidate\.id, modelId\)/);
 });
 
-test("a model row spends the panel's width instead of stacking at its left edge", () => {
-  // The label and the capability icons share one line, with the icons pinned to
-  // the trailing edge: stacking them in a column left the right half of the
-  // menu empty next to every row.
+test("a model row stays on one line with the label ellipsized, never wrapped", () => {
+  // The label owns the row's width; the selection check sits on the trailing
+  // edge. A long wire id is clipped with an ellipsis instead of wrapping onto a
+  // second line, and the full value stays the row's title.
+  assert.match(stylesSource, /\.composer-model-option-main\s*\{[^}]*flex:\s*1;/);
+  assert.match(stylesSource, /\.composer-model-option-main\s*\{[^}]*min-width:\s*0;/);
+  assert.doesNotMatch(stylesSource, /\.composer-model-option-main\s*\{[^}]*flex-wrap:\s*wrap;/);
   assert.match(
     stylesSource,
-    /\.composer-model-option-main\s*\{[^}]*flex-direction:\s*row;/,
+    /\.composer-model-label\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/,
   );
-  assert.match(
-    stylesSource,
-    /\.composer-model-option-main\s*\{[^}]*flex-wrap:\s*wrap;/,
-  );
-  assert.match(
-    stylesSource,
-    /\.composer-model-option-meta\s*\{[^}]*margin-left:\s*auto;/,
-  );
-  // One label per row, and a long name wraps in full rather than truncating.
-  assert.doesNotMatch(stylesSource, /\.composer-model-full-id/);
-  assert.doesNotMatch(stylesSource, /\.composer-model-display-name/);
-  assert.match(
-    stylesSource,
-    /\.composer-model-label\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*white-space:\s*normal;/,
-  );
+  assert.doesNotMatch(stylesSource, /\.composer-model-label\s*\{[^}]*white-space:\s*normal;/);
+  assert.match(listSource, /title=\{optionTitle\}/);
+  // One label per row, and no row-level capability or window cells.
+  assert.doesNotMatch(stylesSource, /\.composer-model-option-(meta|badge|ctx)/);
+  assert.doesNotMatch(listSource, /composer-model-option-(meta|badge|ctx)/);
+  assert.doesNotMatch(listSource, /composerModelBadges|formatTokenCount/);
 });
 
-test("an alias is told apart from the catalog name, and capabilities are icons", () => {
+test("an alias is told apart from the catalog name, and rows carry no capability cells", () => {
   // A row shows one of the two names, never both: the alias the user set wins
   // over the catalog's, and it carries its own chip so which one is on screen
   // stays visible.
@@ -193,10 +187,23 @@ test("an alias is told apart from the catalog name, and capabilities are icons",
     stylesSource,
     /\.composer-model-label\.is-alias\s*\{[^}]*background:\s*var\(--ds-tile-deep\);/,
   );
-  // Capability markers are icons whose accessible name stays the translated
-  // label, because the spelled-out badges were the widest thing in a row.
-  assert.match(listSource, /IconSparkles size=\{12\}/);
-  assert.match(listSource, /IconEye size=\{12\}/);
-  assert.match(listSource, /chat\.modelBadgeReasoning/);
-  assert.match(listSource, /chat\.modelBadgeVision/);
+  // Capability icons and token windows are not row furniture: the label owns
+  // the row's width.
+  assert.doesNotMatch(listSource, /IconSparkles|IconEye/);
+  assert.doesNotMatch(listSource, /chat\.modelBadgeReasoning|chat\.modelBadgeVision/);
+});
+
+test("a recent row shows the model label only, and keeps its selection check", () => {
+  // The recent group has no provider heading above it, so a provider name beside
+  // a long id was what wrapped those rows. The row keeps the model label, the
+  // radio role and the check; the provider stays one hover away in the title.
+  const recentBlock = listSource.slice(
+    listSource.indexOf("recentEntries.map"),
+    listSource.indexOf("hasOtherModels ?"),
+  );
+  assert.match(recentBlock, /role="menuitemradio" aria-checked=\{active\}/);
+  assert.match(recentBlock, /composer-model-label/);
+  assert.match(recentBlock, /\{active \? <IconCheck size=\{14\} aria-hidden="true" \/> : null\}/);
+  assert.match(recentBlock, /title=\{`\$\{providerDisplayName\(provider\)\} · \$\{model\.modelId\}`\}/);
+  assert.doesNotMatch(recentBlock, /composer-model-option-meta/);
 });

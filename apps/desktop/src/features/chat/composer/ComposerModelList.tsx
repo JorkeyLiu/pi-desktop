@@ -1,10 +1,9 @@
 import { providerDisplayName } from "../../../lib/provider-display";
-import { formatTokenCount, type ModelInfo, type ProviderPublic } from "@pi-desktop/shared";
+import type { ModelInfo, ProviderPublic } from "@pi-desktop/shared";
 import type { TFunction } from "i18next";
 import type { RefObject } from "react";
-import { IconCheck, IconChevronDown, IconChevronRight, IconEye, IconSearch, IconSparkles } from "../../../components/icons";
+import { IconCheck, IconChevronDown, IconChevronRight, IconSearch } from "../../../components/icons";
 import {
-  composerModelBadges,
   composerModelBinding,
   composerModelDisplayName,
   sameComposerModelId,
@@ -71,9 +70,16 @@ export function ComposerModelList({
                           title={`${providerDisplayName(provider)} · ${model.modelId}`}
                           onClick={() => void selectModel(provider, model.modelId)}
                         >
+                          {/*
+                            The recent row carries the model label and nothing
+                            else: the provider heading is missing here, so a
+                            provider name beside a long id was what wrapped the
+                            row onto two lines. Identity stays whole in the
+                            title, and two providers offering the same id are
+                            still told apart by it.
+                          */}
                           <span className="composer-model-option-main">
                             <span className="composer-model-label">{composerModelDisplayName(provider, model.modelId)}</span>
-                            <span className="composer-model-option-meta">{providerDisplayName(provider)}</span>
                           </span>
                           {active ? <IconCheck size={14} aria-hidden="true" /> : null}
                         </button>
@@ -129,42 +135,13 @@ export function ComposerModelList({
                                 One label per row, never both: the name the user
                                 set wins over the catalog's, and an alias carries
                                 its own tone so which one is on screen stays
-                                visible. The wire id remains the row's title, so
-                                identity is still one hover away.
+                                visible. Capability and window markers are not
+                                row furniture — they spent the width the label
+                                needs — so the wire id stays the row's title and
+                                the full value is one hover away.
                               */}
-                              <span
-                                className={`composer-model-label ${alias ? "is-alias" : ""}`}
-                              >
+                              <span className={`composer-model-label ${alias ? "is-alias" : ""}`}>
                                 {alias || optionDisplayName}
-                              </span>
-                              <span className="composer-model-option-meta">
-                                {composerModelBadges(model, group.provider).map((badge) => {
-                                  const badgeLabel = t(
-                                    badge === "reasoning"
-                                      ? "chat.modelBadgeReasoning"
-                                      : "chat.modelBadgeVision",
-                                  );
-                                  return (
-                                    <span
-                                      key={badge}
-                                      className="composer-model-option-badge"
-                                      title={badgeLabel}
-                                      aria-label={badgeLabel}
-                                      role="img"
-                                    >
-                                      {badge === "reasoning" ? (
-                                        <IconSparkles size={12} aria-hidden="true" />
-                                      ) : (
-                                        <IconEye size={12} aria-hidden="true" />
-                                      )}
-                                    </span>
-                                  );
-                                })}
-                                {model.contextWindow ? (
-                                  <span className="composer-model-option-ctx">
-                                    {formatTokenCount(model.contextWindow)}
-                                  </span>
-                                ) : null}
                               </span>
                             </span>
                             {active ? <IconCheck size={14} className="composer-model-check" aria-hidden="true" /> : null}

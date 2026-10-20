@@ -84,12 +84,14 @@ export function composerModelBinding(
   );
 }
 
-/** Short capability markers shown on a composer model row. */
+/** Short capability markers for one configured model. */
 export type ComposerModelBadge = "reasoning" | "vision";
 
 /**
  * Capability markers for one configured model. Vision follows the binding's
- * image-input override when set, the published capability otherwise.
+ * image-input override when set, the published capability otherwise. The
+ * Composer model menu no longer renders them — its rows carry the label alone
+ * — so this stays a pure projection for any surface that wants it.
  */
 export function composerModelBadges(
   model: ModelInfo,
@@ -119,4 +121,32 @@ export function composerModelMatchesQuery(
     providerName,
   ];
   return haystacks.some((value) => value.toLowerCase().includes(needle));
+}
+
+/** The two parts of a Composer chip's model name, as the chip displays it. */
+export type ComposerModelChipLabel = {
+  /** The text the chip paints: the model name, or the alias exactly as typed. */
+  label: string;
+  /** The routing prefix the display dropped; empty when nothing was shortened. */
+  namespace: string;
+};
+
+/**
+ * Display-only shortening of a Composer model name.
+ *
+ * A wire id carries its routing namespace (`opencode-go/deepseek-v4.1-flash`);
+ * the chip paints the model name alone so the name — not the route — owns the
+ * chip's width, while the trigger's own accessible name keeps the unchanged
+ * ids. A configured alias is the user's name for the model and is never
+ * shortened. Nothing here touches the id that reaches the runtime.
+ */
+export function composerModelChipLabel(
+  modelLabel: string,
+  wireId: string | undefined,
+): ComposerModelChipLabel {
+  const label = modelLabel.trim();
+  if (!wireId || label !== wireId.trim()) return { label, namespace: "" };
+  const slash = label.lastIndexOf("/");
+  if (slash <= 0 || slash === label.length - 1) return { label, namespace: "" };
+  return { label: label.slice(slash + 1), namespace: label.slice(0, slash) };
 }

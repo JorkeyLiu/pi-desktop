@@ -153,6 +153,22 @@
   -webkit-app-region: drag;
 }
 
+/*
+ * An open context menu dismisses on any press outside it, and it listens in the
+ * capture phase on `window`, so nothing in the renderer can keep it standing
+ * through such a press — but a native drag rectangle never delivers the press
+ * at all. The header's blank band around the tab strip is exactly that: real
+ * pixels the user can click, resolved by Electron before the renderer sees the
+ * event, which left the tab menu open over a click that looked like any other
+ * outside click. Standing the band down from dragging only while a menu is up
+ * lets that press through and hands dragging straight back once the menu
+ * closes. Dragging any other time stays untouched.
+ */
+body:has(> .context-menu) .work-panel-header {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
 .app-shell.work-panel-maximized .work-panel-header {
   margin-left: calc(var(--preview-chrome-inset) + var(--preview-chrome-action-lane));
   padding-left: 0;
@@ -180,11 +196,52 @@
    the shared control lane and 120px margin reserve the toggle and native
    controls without allowing the strip to claim either hit target. */
 .work-panel-tab-strip-wrap {
+  position: relative;
   display: flex;
   min-width: 0;
   flex: 1 1 auto;
   align-items: center;
   overflow: hidden;
+}
+
+/* Edge fades hint that the single row continues past the viewport. They are
+   decorative and pointer-transparent, so the tab underneath keeps its whole
+   hit area, and the fixed action group stays outside this boundary. */
+.work-panel-tab-strip-wrap::before,
+.work-panel-tab-strip-wrap::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 18px;
+  background: var(--ds-bg-dock-raised);
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-out);
+}
+
+.work-panel-tab-strip-wrap::before {
+  left: 0;
+  background: linear-gradient(
+    to right,
+    var(--ds-bg-dock-raised),
+    transparent
+  );
+}
+
+.work-panel-tab-strip-wrap::after {
+  right: 0;
+  background: linear-gradient(
+    to left,
+    var(--ds-bg-dock-raised),
+    transparent
+  );
+}
+
+.work-panel-tab-strip-wrap[data-overflow-left="true"]::before,
+.work-panel-tab-strip-wrap[data-overflow-right="true"]::after {
+  opacity: 1;
 }
 
 .work-panel-tab-strip {
@@ -212,7 +269,7 @@
 .work-panel-tab {
   position: relative;
   display: inline-flex;
-  min-width: 92px;
+  min-width: 72px;
   max-width: 180px;
   height: 28px;
   flex: 0 0 auto;
@@ -310,6 +367,7 @@
 
 .work-panel-tab:hover .work-panel-tab-close,
 .work-panel-tab.active .work-panel-tab-close,
+.work-panel-tab-close:focus,
 .work-panel-tab-close:focus-visible {
   opacity: 1;
 }
@@ -455,12 +513,17 @@
   flex: none;
 }
 
+/* The tab's scroll area is the pane's only scrollbar, and it reserves that
+   gutter whether or not the rows overflow: expanding a long command detail
+   never narrows the scrollport, so every row keeps its width and its left and
+   right position instead of jumping sideways when the bar appears. */
 .subagent-transcript-scroll {
   min-width: 0;
   min-height: 0;
   flex: 1;
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 0 16px 32px;
 }
 

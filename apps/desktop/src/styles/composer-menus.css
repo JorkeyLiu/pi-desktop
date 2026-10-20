@@ -104,8 +104,8 @@
 .composer-model-thinking-menu {
   z-index: 60;
   /*
-    One label per row plus two capability icons: wide enough for that and no
-    wider, so the panel stays a menu rather than a second window.
+    One label per row and the selection check: wide enough for a readable id
+    and no wider, so the panel stays a menu rather than a second window.
   */
   width: min(280px, calc(100vw - 24px));
 }
@@ -116,7 +116,12 @@
 }
 
 .composer-model-thinking-chip {
-  max-width: min(280px, calc(100vw - 24px));
+  /*
+    The trigger paints the model name and its reasoning level. Its width cap is
+    a readable name plus that level; the complete ids live in the tooltip and
+    accessible name instead of in the paint.
+  */
+  max-width: min(320px, calc(100vw - 24px));
   min-width: 0;
   height: 26px !important;
   padding: 0 8px !important;
@@ -158,12 +163,14 @@
   white-space: nowrap;
 }
 
+/* The model name is the only part that gives up width as the toolbar narrows. */
 .composer-model-thinking-model {
-  max-width: 170px;
+  flex: 0 1 auto;
 }
 
+/* A stable slot: the reasoning level is a short value and never ellipsizes. */
 .composer-model-thinking-level {
-  max-width: 88px;
+  flex: 0 0 auto;
   color: var(--ds-accent);
   font-size: var(--text-sm);
 }
@@ -171,6 +178,19 @@
 .composer-model-thinking-dot {
   flex: 0 0 auto;
   color: var(--ds-text-muted);
+}
+
+.composer-model-thinking-chevron {
+  flex: 0 0 auto;
+}
+
+/*
+  The chip's own cap sits above the shared `.composer-right .icon-btn` cap: this
+  control paints a model name and its reasoning level together, so it may use the
+  row's free width instead of shortening a selection it cannot drop elsewhere.
+*/
+.composer-right .composer-model-thinking-chip {
+  max-width: min(320px, calc(100vw - 24px));
 }
 
 .composer-model-thinking-menu .composer-menu-root {
@@ -533,27 +553,24 @@
 }
 
 /*
-  The full wire id is the identity, and it stays whole: a long route name wraps
-  instead of hiding the part that distinguishes two configured models. The id,
-  its friendly name and the badges share one line — id first, name next, badges
-  on the trailing edge — because the stacked column that preceded it pushed
-  every row's content into the left half of the menu and left the rest empty.
+  A row is one line: the label takes the width the menu has and the check sits
+  on the trailing edge. A long wire id ellipsizes instead of wrapping onto a
+  second line — the row's title carries the full value, so the part that
+  distinguishes two configured models is one hover away — and no row spends
+  that width on capability icons or a token window.
 */
 .composer-model-option-main {
   display: flex;
   min-width: 0;
   flex: 1;
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 8px;
+  align-items: center;
 }
 
 /*
   One label, never the wire id and a name together: the user's alias when the
   binding carries one, the catalog's name otherwise. Which of the two is on
-  screen is visible in the label's own shape, and a long name wraps instead of
-  hiding the part that distinguishes two configured models. The wire id stays
+  screen is visible in the label's own shape, and the label stays on one line,
+  clipped with an ellipsis rather than pushing the row taller. The wire id stays
   the row's title.
 */
 .composer-model-label {
@@ -561,8 +578,9 @@
   flex: 0 1 auto;
   max-width: 100%;
   color: var(--ds-text-primary);
-  overflow-wrap: anywhere;
-  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* A name the user set is a label of its own, and reads as one: the catalog name
@@ -573,32 +591,6 @@
   padding: 1px 6px;
   border-radius: var(--radius-full);
   background: var(--ds-tile-deep);
-}
-
-.composer-model-option-meta {
-  display: flex;
-  flex: 0 0 auto;
-  /* Pinned to the row's trailing edge: the capability icons and the window are
-     what a row shows on the right. */
-  margin-left: auto;
-  align-items: center;
-  gap: 4px;
-}
-
-/* Capability markers are icons, not words: a row carries up to two of them, and
-   the spelled-out labels were the widest thing in it. The accessible name stays
-   the translated label, so nothing is lost to a screen reader. */
-.composer-model-option-badge {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  color: var(--ds-text-faint);
-}
-
-.composer-model-option-ctx {
-  color: var(--ds-text-faint);
-  font-size: var(--text-2xs);
-  font-variant-numeric: tabular-nums;
 }
 
 .composer-plus-item.active {

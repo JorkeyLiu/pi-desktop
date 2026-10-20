@@ -120,8 +120,11 @@ test("resume-chain metrics aggregate spend once and keep latest occupancy", asyn
     assert.equal(metrics.parseSubagentMetrics({ toolCalls: -1 }), null);
     const line = metrics.formatSubagentMetricsLine(aggregated);
     assert.match(line, /6 tool calls/);
-    assert.match(line, /ctx ~/);
-    assert.match(line, /spent /);
+    // Occupancy reads plainly: the number the metrics carry, no approximation
+    // prefix, and spend stays lexically separate from it.
+    assert.match(line, /ctx 18\.0k tokens/);
+    assert.doesNotMatch(line, /~/);
+    assert.match(line, /spent 4\.5k tokens/);
     assert.match(line, /turn/);
   } finally { await vite.close(); }
 });
@@ -275,7 +278,8 @@ test("subagent panel header/footer render token metrics for a settled chain", as
     assert.equal(aggregated.toolCalls, 7);
     const line = metrics.formatSubagentMetricsLine(aggregated);
     assert.match(line, /spent /);
-    assert.match(line, /ctx ~/);
+    assert.match(line, /ctx 22\.0k tokens/);
+    assert.doesNotMatch(line, /~/);
   } finally { await vite.close(); }
 });
 

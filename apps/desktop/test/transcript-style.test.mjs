@@ -57,8 +57,8 @@ test("tool rows render structured blocks instead of dumping JSON", async () => {
   assert.doesNotMatch(permissionSource, /JSON\.stringify|formatToolValue/);
   assert.match(transcriptSource, /buildToolPresentation\(message, \{\n\s+hideSummaryArg: true,/);
   // Formatting remains lazy and the cached blocks are read only while visible.
-  assert.match(transcriptSource, /if \(variant !== "topology" && open && hasDetails && disclosure\.parentVisible/);
-  assert.match(transcriptSource, /const blocks = variant !== "topology" && open && hasDetails \? presentation\.current\?\.blocks : null/);
+  assert.match(transcriptSource, /if \(open && hasDetails && disclosure\.parentVisible &&/);
+  assert.match(transcriptSource, /const blocks = open && hasDetails \? presentation\.current\?\.blocks : null/);
   assert.match(transcriptSource, /<ToolChips chips=\{chips\} \/>/);
   assert.match(
     transcriptSource,
@@ -118,15 +118,16 @@ test("tool block bodies stay bounded and role-coded", () => {
 
 test("tool details do not add a second visual indent", () => {
   const toolDetailStyles = stylesSource.match(
-    /\.tool-row:not\(\.thinking\):not\(\.subagent-topology-node\) > \.tool-row-body \{([^}]*)\}/
+    /\.tool-row:not\(\.thinking\) > \.tool-row-body \{([^}]*)\}/
   )?.[1];
   assert.ok(toolDetailStyles);
   assert.match(toolDetailStyles, /margin-left:\s*0;/);
   assert.match(toolDetailStyles, /padding-left:\s*0;/);
-  // Thinking and topology have separate visual hierarchies and keep their
-  // dedicated layout rules rather than inheriting the flat tool detail rule.
-  assert.match(stylesSource, /\.subagent-topology-node > \.tool-row-body,[\s\S]*?margin-left:\s*38px;/);
+  // A `Task` call is a card, not a row with a body: it has no second inset to
+  // flatten, and its own copy block carries the indentation it needs.
+  assert.doesNotMatch(stylesSource, /subagent-topology-node/);
 });
+
 
 /*
  * The width regression this guards: a content-sized `inline-flex` disclosure
@@ -160,10 +161,6 @@ test("tool-call disclosure headers span the conversation band", () => {
     stylesSource,
     /\.(process-activity-group|turn-process) > \.tool-activity-header[^{]*\{[^}]*width:/,
   );
-  assert.doesNotMatch(
-    stylesSource,
-    /\.tool-activity-group\.has-subagents \.tool-activity-header \{[^}]*width:/,
-  );
 
   // A tool row itself owns the column so no parent display mode can shrink it.
   const row = stylesSource.match(/\n\.tool-row \{([^}]*)\}/)?.[1];
@@ -172,22 +169,15 @@ test("tool-call disclosure headers span the conversation band", () => {
   assert.match(row, /min-width:\s*0;/);
 });
 
-test("delegation node copy wraps within the responsive card", () => {
-  const metrics = stylesSource.match(
-    /\.subagent-activity-metrics \{([^}]*)\}/,
-  )?.[1];
-  assert.ok(metrics);
-  assert.match(metrics, /overflow-wrap:\s*anywhere;/);
-  assert.match(metrics, /white-space:\s*normal;/);
-
+test("delegation card copy wraps within its own card", () => {
   const titleRow = stylesSource.match(
-    /\.subagent-topology-node-title-row \{([^}]*)\}/,
+    /\.subagent-task-title-row \{([^}]*)\}/,
   )?.[1];
   assert.ok(titleRow);
   assert.match(titleRow, /flex-wrap:\s*wrap;/);
 
   const title = stylesSource.match(
-    /\.subagent-topology-node-title \{([^}]*)\}/,
+    /\.subagent-task-title \{([^}]*)\}/,
   )?.[1];
   assert.ok(title);
   assert.match(title, /-webkit-line-clamp:\s*2;/);
@@ -195,22 +185,40 @@ test("delegation node copy wraps within the responsive card", () => {
   assert.match(title, /white-space:\s*normal;/);
   assert.doesNotMatch(title, /white-space:\s*nowrap;/);
 
-  const summary = stylesSource.match(
-    /\.subagent-topology-node-summary \{([^}]*)\}/,
-  )?.[1];
-  assert.ok(summary);
-  assert.match(summary, /-webkit-line-clamp:\s*2;/);
-  assert.match(summary, /overflow-wrap:\s*anywhere;/);
-  assert.match(summary, /white-space:\s*normal;/);
+  // The role reads on its own line under the title: one ellipsized mono slot
+  // that never widens the card, inside the stop control's inset.
+  const role = stylesSource.match(/\.subagent-task-role \{([^}]*)\}/)?.[1];
+  assert.ok(role);
+  assert.match(role, /text-overflow:\s*ellipsis;/);
+  assert.match(role, /font-family:\s*var\(--font-mono\);/);
+  assert.match(role, /padding-right:\s*26px;/);
+  const state = stylesSource.match(/\.subagent-task-state \{([^}]*)\}/)?.[1];
+  assert.ok(state);
+  assert.match(state, /white-space:\s*nowrap;/);
 
-  const steps = stylesSource.match(
-    /\.subagent-topology-node-steps \{([^}]*)\}/,
-  )?.[1];
-  assert.ok(steps);
-  assert.match(steps, /overflow-wrap:\s*anywhere;/);
-  assert.match(steps, /white-space:\s*normal;/);
+  // The inline running mark is the card's only motion while a child runs, and
+  // it holds its slot in every state instead of shifting the status text.
+  const spinner = stylesSource.match(/\.subagent-task-spinner \{([^}]*)\}/)?.[1];
+  assert.ok(spinner);
+  assert.match(spinner, /display:\s*inline-block;/);
+  assert.match(
+    stylesSource,
+    /\.subagent-task-spinner\[data-active="false"\]\s*\{[^}]*visibility:\s*hidden;/,
+  );
+  assert.doesNotMatch(stylesSource, /\.subagent-task > \.tool-spinner/);
+
+  // The figures the child reported wrap instead of forcing a horizontal scroll,
+  // and no card states a step count any more.
+  for (const selector of [".subagent-task-metrics"]) {
+    const rule = stylesSource.match(
+      new RegExp(`${selector.replace(".", "\\.")}[^{]*\\{([^}]*)\\}`),
+    )?.[1];
+    assert.ok(rule, selector);
+    assert.match(rule, /overflow-wrap:\s*anywhere;/);
+    assert.match(rule, /white-space:\s*normal;/);
+  }
+  assert.doesNotMatch(stylesSource, /\.subagent-task-steps/);
 });
-
 test("assistant turns stay transparent full-width prose", () => {
   assert.match(
     stylesSource,
@@ -234,9 +242,12 @@ test("assistant turns stay transparent full-width prose", () => {
     stylesSource,
     /\.message-row\.assistant-turn\.streaming \.message-col\s*\{[^}]*background:\s*var\(--ds-tile\)/,
   );
+  // D323: a delegation raises its own card; the "card" that used to wrap a
+  // whole group of them is gone, so no group chrome can re-tile the prose.
+  assert.doesNotMatch(stylesSource, /\.tool-activity-group\.has-subagents/);
   assert.match(
     stylesSource,
-    /\.tool-activity-group\.has-subagents\s*\{[^}]*background:\s*var\(--ds-tile\)/,
+    /\.subagent-task-card \{[^}]*background: var\(--ds-raised\)/,
   );
 });
 test("assistant error cards follow the responsive transcript column", () => {

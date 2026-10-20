@@ -2584,16 +2584,19 @@ validation still needed.
   updates the active session to that binding's default thinking level; selecting
   the already-active model preserves a manually selected level. Settings opens
   from the command palette/menu. The Composer model trigger ellipsizes long IDs.
-  Each option shows one display name only, and hovering a long option exposes its
-  complete display name in the tooltip without changing the menu layout or adding
-  a visible model ID.
+  Each option is one line showing a single display name — no capability icon and
+  no context-window count — and its tooltip exposes the complete value without
+  changing the menu layout. A recent row shows the model label alone: the
+  provider name lives in the tooltip, not in the row.
 - **Specs linked**: `04-ux/08-component-spec.md` (§11, model menu),
   `03-runtime/13-model-catalog-and-selection.md`
 - **Acceptance**: C
 - **Milestone**: M2
 - **Status**: Component-covered by `pnpm test:e2e:composer-model-selection`
-  (isolated React/Electron with the real Composer hook); full provider/session
-  desktop journey remains Draft.
+  (isolated React/Electron with the real Composer hook) and
+  `apps/desktop/test/composer-model-rows.test.mjs` (rendered rows, flattened
+  keyboard order, reasoning slider); full provider/session desktop journey
+  remains Draft.
 
 #### E2E-COMPOSER-narrow-controls: Composer controls adapt to a narrow chat column
 
@@ -5527,35 +5530,42 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 - **Milestone**: M5 on Windows/Linux (release qualification)
 - **Status**: Draft
 
-#### E2E-204: Explicit quit confirms before shutdown (D363)
+#### E2E-204: Explicit quit confirms only while sessions run (D363)
 
 - **Preconditions**: A normal interactive session is running (not a boot,
   supervision, or capture probe). The main window may be visible or tray-hidden.
-- **Steps**: 1) Choose Quit from the tray menu, or press Cmd+Q / the
-  application-menu Quit item. 2) Cancel the native warning and confirm the
-  window, tray, host-core, and sidecar remain. 3) Repeat and confirm Quit;
-  confirm the ordered shutdown runs. 4) On Windows/Linux with close behavior
+- **Steps**: 1) With no session running, choose Quit from the tray menu,
+  or press Cmd+Q / the application-menu Quit item; confirm the app exits with
+  no warning and the ordered shutdown runs. 2) Start a prompt in one session
+  and switch to another tab (the first session keeps running in the
+  background), then Quit; cancel the native warning and confirm the window,
+  tray, host-core, and sidecar remain. 3) Repeat and confirm Quit; confirm the
+  ordered shutdown runs. 4) On Windows/Linux with close behavior
   unset, close the window and choose Quit on the D230 dialog; confirm no
   second warning. 5) Launch with `PI_DESKTOP_BOOT_PROBE=1` (and the
   supervision/capture equivalents) and confirm `app.quit()` exits without a
   dialog. 6) On a packaged Windows NSIS or Linux AppImage install, download an
   update and choose Restart to update; confirm the quit warning never appears
   and the installer finishes the upgrade and relaunch.
-- **Expected**: Accidental explicit quit is cancellable. A user who already
-  chose Quit on the close-behavior dialog is not asked again. Probes used by
-  automation never block on the warning. An in-app update restart is never
-  deferred behind the warning either: the platform installer is spawned before
-  `app.quit()` and aborts once the app outlives its wait window, so the
-  update-triggered quit must run the ordered shutdown immediately — the user
-  already committed to the restart by choosing that action.
+- **Expected**: An idle quit never prompts; a quit while any session — selected
+  tab or background — still has a live turn prompts once and is cancellable.
+  A user who already chose Quit on the close-behavior dialog is not asked
+  again. Probes used by automation never block on the warning. An in-app
+  update restart is never deferred behind the warning either: the platform
+  installer is spawned before `app.quit()` and aborts once the app outlives
+  its wait window, so the update-triggered quit must run the ordered shutdown
+  immediately — the user already committed to the restart by choosing that
+  action.
 - **Specs linked**: `04-ux/08-component-spec.md`,
   `04-ux/09-interaction-patterns.md`, `08-meta/decisions-log.md` (D216, D230,
   D363), ADR 0022
 - **Acceptance**: A (app startup), Quality
 - **Milestone**: M5
-- **Status**: Unit-covered (`close-behavior-tray.test.mjs` asserts the
-  probe and update-restart exemptions; `auto-update.test.mjs` asserts the
-  install latch is set before `quitAndInstall`); native dialog journey Draft
+- **Status**: Unit-covered (`quit-confirmation-gate.test.mjs` asserts the
+  idle/running/cancel/confirm/reentrancy/probe/update matrix;
+  `close-behavior-tray.test.mjs` asserts the gate contract;
+  `auto-update.test.mjs` asserts the install latch is set before
+  `quitAndInstall`); native dialog journey Draft
   (run only in a capable environment when this surface changes)
 
 #### E2E-067A: Prerelease install discovers newer stable release (D120)
@@ -7827,12 +7837,12 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 - **Steps**:
   1. Run the turn. Without clicking anything, verify the panel stays closed
      while the delegates run (no tab is opened automatically).
-  2. Click the `explorer` topology node. Verify a `subagent` tab opens in the
-     work panel's normal tab strip (labeled `explorer`, bot icon) and the
-     tab strip keeps its other tabs.
-  3. Click the second (resumed) `explorer` node. Verify a second tab opens
-     labeled `explorer#2`, both tabs coexist, and each can be activated,
-     drag-reordered, and closed via ×, middle-click, or Delete.
+  2. Click the first delegation card. Verify a `subagent` tab opens in the
+     work panel's normal tab strip (labeled with that Task call's short
+     description, bot icon) and the tab strip keeps its other tabs.
+  3. Click the second (resumed) card. Verify a second tab opens labeled with
+     the same chain title plus a `#2` suffix, both tabs coexist, and each can
+     be activated, drag-reordered, and closed via ×, middle-click, or Delete.
   4. In the resumed tab, verify the conversation reads `user: first prompt`,
      delegate rows, `user: follow-up prompt`, delegate rows — the same
      message-list language as the main transcript (user bubbles, tool rows,
@@ -7851,8 +7861,9 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
      ended tab persists until manually closed.
   7. Switch to another session and back. Verify the tabs are restored per
      session and closed tabs stay closed.
-- **Expected**: No auto-open on delegate start; N subagents = N coexisting
-  closable tabs with deduplicated `name#n` labels; the tab body is the
+- **Expected**: No auto-open on delegate start; N `Task` calls = N coexisting
+  closable tabs whose labels are the chain's original task description with a
+  strip-order `#n` suffix when it repeats; the tab body is the
   delegation's user/assistant message stream with follow-up prompts as user
   turns; one Send composer serves both states (live steer, settled direct
   `continueSubagent`; never an independent child session and no second
@@ -7874,8 +7885,9 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   `<data_dir>/sessions/<id>.jsonl` and the `messages` index.
 - **Steps**:
   1. Prompt a turn in which the assistant emits two `Task` calls — `scout` and
-     `pinned` — in one message. Observe the delegation card while both run and
-     after each one settles; collapse it, then expand each node.
+     `pinned` — in one message. Observe the two delegation cards while both run
+     and after each one settles; click each card to open its transcript tab and
+     close the tab again.
   2. Prompt a turn whose assistant message emits a single `Task` call — `scout`
      — and compare its presentation with step 1's.
   3. Prompt a turn in which two `fixer` delegates each edit a different file, and
@@ -7887,41 +7899,43 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   6. Prompt a `Task` call naming `broken`, then one naming an agent that does not
      exist, then one whose definition pins an unconfigured provider.
   7. Switch the session to Plan, then to Goal, and inspect the tool catalog.
-  8. Reload the session and re-expand the delegation card and every `Task`
-     node.
-  9. Open a node with a long description and long tool paths. Resize the work
-     panel to its minimum, default, and a wider width and inspect the topology
-     card and the delegation tab at each width. Long content wraps inside the
+  8. Reload the session and verify each `Task` call again renders its own card
+     and opens its own tab.
+  9. Open a card with a long description and long tool paths. Resize the work
+     panel to its minimum, default, and a wider width and inspect the card and
+     the delegation tab at each width. Long content wraps inside the
      committed width without dragging the divider to read a complete line.
 - **Expected**:
   - Both delegates in step 1 run concurrently, and `pinned` streams on its own
     provider/model while the parent keeps the session's.
-  - The two `Task` calls in step 1 form one full-width delegation card. While
-    active it opens once and its header updates the subagent and settled counts;
-    after settlement it keeps the user's expansion choice and reports aggregate
+  - The two `Task` calls in step 1 each draw their own full-width delegation
+    card. A card states its own outcome, runtime and progress, updates them the
+    moment its delegate settles, and is not a disclosure; the group holding the
+    cards states no subagent aggregate, count or Stop all.
     success, warning, or issue state plus elapsed time.
-  - The lone `Task` in step 2 draws the same card with a single delegate node —
-    same root, connector, outcome, runtime and step count — and never the
-    compact one-line tool row (D265). Its aggregate line is worded for one
-    subagent, so no locale reads "1 个 Subagents" or "Subagents working".
-  - The expanded card shows one main-agent root connected to `scout` and
-    `pinned` in parent-row order, with no invented edge between delegates. Each
-    node shows its agent, short description, explicit outcome, duration and step
-    count, with estimated context occupancy and cumulative billed spend as
-    separate figures in one header region (unknown occupancy as a dash; latest
-    segment decides provenance: Task summary, then roster, then latest valid
-    child assistant usage). Expanding a node shows the brief, report exactly once, and
-    `status`/`turns`/`toolCalls`. Delegate rows appear only inside that node,
-    never in the turn stream or the minimap.
-  - At narrow, default, and wide panel widths, topology titles, descriptions,
-    and step summaries reflow within the card instead of using a fixed
-    one-line ellipsis. Long tool paths, commands, and answer fragments in the
+  - The lone `Task` in step 2 draws exactly the same card — one card per call,
+    with the same `scout` title, outcome, runtime and step count — and never
+    the compact one-line tool row (D265).
+  - Both cards name the work the child was given: the Task call's short
+    `description` as the headline, with the role that ran the delegate at the
+    right of it. No card states a model id or a reasoning level, and no card
+    implies a graph: there is no main-agent root, connector, group-level
+    subagent summary or group-level Stop all, and delegate rows appear only in
+    the child's own transcript tab, never in the turn stream or the minimap.
+  - Each card's progress line reports what the child said about itself (steps,
+    turns, tool calls, and estimated context occupancy, with unknown occupancy
+    as a labelled dash), and clicking the card opens its transcript tab, where
+    the brief, the report exactly once, `status`/`turns`/`toolCalls`, and the
+    child's own rows live beside the billed spend figure.
+  - At narrow, default, and wide panel widths, card titles, roles and progress
+    lines reflow within the card instead of using a fixed one-line ellipsis.
+    Long tool paths, commands, and answer fragments in the
     delegation tab wrap inside the committed width, produce no horizontal
     overflow, and retain the tab as the only scroll owner.
   - If the parent keeps working after those `Task` calls — thinking, `Read`,
-    `Grep`, or a lifecycle row — that work is a separate processing group, not
-    rows inside the delegation card (D319). The card's tile, “Subagent working”
-    header, and topology canvas contain only the `Task` nodes.
+    `Grep`, or a lifecycle row — its own rows sit in the same ordered process
+    group as the cards (D319), and a lifecycle row is a compact subagent row
+    rather than another card.
   - The parent's next request contains the reports and **no** delegate message or
     tool row; the rows are nonetheless present in the transcript file and the
     index with `meta.parentToolCallId` and `meta.agentName`.
@@ -7931,16 +7945,16 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   - `scout` cannot call `Edit` or `Write` at all; `fixer` can. Same-file edits in
     step 4 apply in a defined order and neither loses the other's write.
   - Stop denies both the shown and the queued request, and both delegates end
-    `aborted` in text and icon inside their own `Task` nodes — the parent turn
-    ends once and the aggregate card settles with a warning.
+    `aborted` in text and icon on their own cards — the parent turn ends once
+    and each card settles on its own terminal outcome.
   - `broken` is absent from the catalog with a launch diagnostic and the session
     keeps its other three delegates; an unknown agent and an unresolvable model
     pin each fail as a `Task` tool error naming the cause, with no fallback to
     the session provider and no turn failure.
   - `Task` is absent from the catalog in Plan and Goal.
-  - After reload the card is collapsed by default; re-expanding preserves node
-    order, attribution, outcome and nested content exactly as they appeared
-    live.
+  - After reload the cards render again with the same titles, attribution,
+    outcomes and tabs they had live, under the group's ordinary automatic
+    defaults.
 - **Specs linked**: `03-runtime/02-agent-runtime.md` §5f/§7.2b/§8,
   `03-runtime/03-tools-and-permissions.md` §10.2,
   `03-runtime/04-data-storage.md` §4.7a, `04-ux/03-permission-ux.md` §6a,
@@ -7958,11 +7972,16 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   (queue order, id-matched removal, tool-call removal, abort denying the queue,
   card copy), `subagent-wiring.test.mjs` (main-process discovery and model pins)
   and `subagent-transcript.test.mjs` + `assistant-turns.test.mjs` (nesting,
-  single report print, memoization, the card gate that admits a lone delegation
-  and the count-aware aggregate copy in both locales), plus
-  `subagent-topology.test.mjs` (delegate detection, structured outcomes and
-  aggregate counts). Full multi-provider fan-out and rendered topology
-  interaction remain manual.
+  and `subagent-transcript.test.mjs` + `assistant-turns.test.mjs` (nesting,
+  single report print, memoization, one card admitted per `Task` call,
+  chain-original titles), plus
+  `subagent-topology.test.mjs` and `subagent-task-title.test.mjs` (delegate
+  detection, structured outcomes). `node scripts/e2e-tool-cards.mjs` renders
+  and drives the card and its sibling Stop control in a real renderer, and
+  `node scripts/e2e-subagent-dock.mjs` covers the composer dock's metrics and
+  session-wide action; both passed before the current detail-copy corrections,
+  whose revalidation is pending. Full multi-provider fan-out and the rendered
+  cross-turn journeys remain manual.
 
 #### E2E-SUBAGENT-legacy-turn-limit-frontmatter-is-ignored
 
@@ -8038,22 +8057,44 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   5. Read a truncated file and copy each block.
 - **Expected**:
   - No expanded row shows escaped JSON, and no payload appears twice.
-  - Read/Write show highlighted content; Bash shows command, output, and
-    error-hued stderr as separate blocks with empty channels omitted; Glob shows
+  - Read/Write show highlighted content; Bash shows a terminal: the `Command`
+    pane beside `Output` and error-hued `Errors`, each labelled and copyable,
+    side by side on a wide row and stacked on a narrow one, with empty channels
+    omitted and ANSI colour painted rather than printed as escapes; Glob shows
     a path list; Grep shows hits grouped per file with line numbers in `content`
     mode, a path list in `filesWithMatches`, and per-file totals in `count`; the
     failing command carries an `exit 1` chip.
+  - A `TodoWrite` row opens itself on its checklist (progress line plus one row
+    per item with its state and priority, never the serialized `todos`
+    argument), collapses when the reader closes it, and stays closed through the
+    turn's streaming updates. A `Skill` row shows the loaded document's name,
+    its `location`/`references` and its Markdown body, and a failed `Skill` call
+    shows an `Error` note instead. A scheduled-automation row names its weekly
+    days in the session language instead of printing their indices.
+  - A long path hint prints its middle omitted and keeps its last segments; the
+    whole path stays in the row's `title`, its file menu and its preview target,
+    and the path's tail is not clipped again.
   - A Read row's collapsed chip shows the returned window as
     `{lineCount},L{offset+1}-L{offset+lineCount}` (for example,
     `50,L16-L65`), never `fileBytes`; a Read result without valid window
     metadata has no size chip. Write continues to show its byte-size chip.
   - Each Glob/Grep path-list row is start-aligned with natural character
     spacing; glyphs are not distributed across the block width.
-  - The workspace edit shows no inline diff (its ReviewChangeCard owns it); the
-    scratch edit shows a compact diff and a `scratch` chip.
-  - The plugin result renders label/value fields and labeled blocks, not a blob.
+  - The workspace edit shows no inline diff and no second file-name row: its
+    own row ends with the `+a/−d` pair, and expanding it reveals the diff and the
+    rollback action. The scratch edit shows a compact diff and a `scratch` chip.
+  - The plugin result renders label/value fields and labeled blocks, not a blob;
+    its untouched payload stays behind one explicit `Raw` disclosure, and a
+    value the renderer cannot describe degrades to readable text.
   - Clicking a path opens it in the work panel; paths outside the workspace root
     are not clickable.
+  - A delegation card is titled by the task it was given: its headline is the
+    `Task` call's short `description` — the chain's original one for a resumed
+    delegate — with the role that ran it at the right of that title and no
+    model id, reasoning level, or repeated description line. A long title
+    clamps to two lines with the whole value in its hover title, a log without
+    a description falls back to the role, and clicking the card opens the
+    work-panel tab labelled with that same title.
   - The permission card's args preview uses the same blocks.
   - Host truncation markers stay visible, a `truncated` chip appears, a host
     `notice` renders as a neutral note under the block it qualifies, capped
@@ -8063,7 +8104,10 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 - **Acceptance**: C (chat & stream), E (tools & permissions), Quality
 - **Milestone**: M5
 - **Status**: Unit-covered (`tool-presentation.test.mjs`,
-  `transcript-style.test.mjs`); full UI journey Draft
+  `tool-display.test.mjs`, `ansi-text.test.mjs`, `transcript-style.test.mjs`,
+  `subagent-task-title.test.mjs`); rendered Chromium coverage
+  (`scripts/e2e-tool-cards.mjs`, run after `pnpm build:js`); full UI journey
+  Draft
 
 #### E2E-146: A turn that produces no visible text re-runs once
 
@@ -9860,46 +9904,54 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 - **Status:** Candidate validation required; full checkpoint-recovery fault
   injection is not claimed by the settings or multi-Host happy-path suites.
 
-**E2E-CHAT-session-todo-checklist: TodoWrite to session-aware TodoDock**
+**E2E-CHAT-session-todo-checklist: the TodoWrite checklist is the session's work list**
 
 - **Preconditions**: An isolated local Electron profile with a deterministic
   Agent/host fixture, two Desktop sessions, and no real provider or paid API.
 - **Steps**: Start a multi-step Agent turn that calls `TodoWrite` with ordered
-  pending and `in_progress` items. Observe the TodoDock above the Composer,
-  expand it, switch sessions, and confirm the checklist stays session-scoped.
-  Expand a checklist longer than the dock's height cap: every row must render
-  and the list must scroll inside the dock without growing the Composer stack.
+  pending and `in_progress` items. Observe the checklist in its own `TodoWrite`
+  row inside the turn's process: it opens by default, lists the items, and
+  scrolls inside its own body instead of growing the row without bound.
+  Collapse the row and let the turn keep streaming: the collapse must survive
+  later `TodoWrite` updates to that row. Switch sessions and confirm each
+  session keeps its own checklist.
   Complete and cancel items, confirm the all-cancelled label, then clear the
   checklist and reload/restart the host.
   Deliver an out-of-order older `todos.changed` event and confirm it cannot
   replace the newer snapshot. Exercise invalid payload, Plan/Goal, delegated,
-  and remote-session paths.
+  and remote-session paths, and confirm no Composer surface renders a checklist.
 - **Expected**: Host SQLite is authoritative; each successful full replacement
   advances revision, including clear, and emits one committed `todos.changed`
-  snapshot. Invalid or unauthorized writes do not mutate or emit. TodoDock
-  renders plain text, does not take focus, resets expansion on session changes,
-  lists every ordered row with the dock's own list as the scrollport,
-  keeps a collapsed dock to its header height,
-  rejects stale events, and skips local recovery for `remote:` sessions because
+  snapshot. Invalid or unauthorized writes do not mutate or emit. The checklist
+  renders as plain text rows in the tool row that wrote it, never as the
+  serialized `todos` argument, takes no focus, and orders its rows as the host
+  reports them. The Composer stack renders no checklist surface of its own: the
+  legacy bottom dock is not mounted. Stale events are
+  rejected, and local recovery is skipped for `remote:` sessions because
   RACP v1 has no Todo snapshot operation.
 - **Specs**: `03-runtime/03-tools-and-permissions.md`,
   `03-runtime/04-data-storage.md`, `03-runtime/06-host-rpc-protocol.md`,
-  `04-ux/08-component-spec.md`, ADR 0312.
+  `04-ux/08-component-spec.md` §9.2/§9.3, ADR 0312.
 - **Acceptance**: C / E / F / Quality / Security.
 - **Milestone**: M6+.
 - **Automation**: `pnpm test:e2e:todos` exercises the isolated Electron
   checklist journey through the production Agent's ToolSearch/TodoWrite path,
-  the production renderer, and a real host/SQLite profile. Only the external
+  the production renderer, and a real host/SQLite profile. It mounts the
+  checklist component directly, so it no longer stands for a product route now
+  that the Composer dock is unmounted. Only the external
   model stream and preload transport are fixtures; no live provider or user
   profile is used. The scenario includes Unicode truncation with warning replay,
-  single-active-item normalization, full-list rendering with the dock's
+  single-active-item normalization, and stale-event rejection. Runtime
   internal scroll, a failed initial read followed by host recovery without
-  changing sessions,
-  cached-snapshot reconciliation, and stale-event rejection. Runtime
+  changing sessions, cached-snapshot reconciliation, and stale-event
+  rejection. Runtime
   `runtime-todos.test.ts` exercises Agent tool validation, overlong content
-  normalization, and continuation through a deterministic provider.
 - **Status**: Run against the built change after building the
   desktop and host. Host-core and targeted renderer tests are companion checks,
+  not substitutes for the Electron journey. The row's own default-open
+  disclosure and its collapse persistence are additionally rendered and driven
+  by `node scripts/e2e-tool-cards.mjs`, which passed before the current
+  detail-copy corrections; their revalidation is pending.
   not substitutes for the Electron journey.
 
 ## 8. Traceability Matrix
@@ -11760,8 +11812,10 @@ This test plan spec is accepted when:
      message, then, without ending the turn, continues its own tool calls and
      converges with `TaskWait`.
   2. Confirm the parent's visible text keeps streaming between `Task` and
-     `TaskWait` (no dead turn), that the two `Task` rows form one delegation
-     card that opens once, and that `TaskWait`'s row shows both reports.
+     `TaskWait` (no dead turn), that each `Task` call renders its own
+     independent delegation card that opens only that child's transcript —
+     two cards, never one shared card — and that `TaskWait`'s row shows both
+     reports.
   3. With the session in `ask`, prompt a turn that delegates to `fixer` with a
      multi-file spec. Confirm its `Write`/`Edit`, `Bash`, and external-path
      calls each render a card naming `fixer`. Switch the session to
@@ -11774,28 +11828,28 @@ This test plan spec is accepted when:
      settles and that the still-running delegates keep running.
   5. Prompt a turn that starts a delegate and then ends the parent tool loop without
      `TaskWait`/`TaskStop`; confirm the durable turn stays open, the delegate keeps
-     running (node reads `running`, not `aborted`), the idle resume delivers its report
+     running (the card reads `running`, not `aborted`), the idle resume delivers its report
      into the same turn, and that the next turn's model context contains no
      delegate rows (reports arrive only via `TaskWait` / idle resume).
   6. Prompt ten `Task` calls in one turn and one more; confirm the eleventh
      fails as a tool error naming the 10-delegate cap, and that `TaskStop`
      frees a slot so an eleventh delegation can start.
-  7. Reload the session; confirm the delegation card, its nodes, and the
-     `TaskWait` rows persist and re-render collapsed, and that `TaskWait`
+  7. Reload the session; confirm the delegation cards and the `TaskWait` rows
+     persist and re-render under the group's defaults, and that `TaskWait`
      re-reads a settled delegation's report by id without re-running it.
   8. Prompt a turn where the agent starts two Task calls and then emits visible
      text before calling TaskWait (so Task and TaskWait land in different
-     activity parts); confirm the topology card shows "completed" status on
-     both nodes once TaskWait returns, not stuck at "running", and that each
-     node shows a non-zero runtime duration derived from the delegation
+     activity parts); confirm each card shows "completed" status once TaskWait
+     returns, not stuck at "running", and that each card shows a non-zero
+     runtime duration derived from the delegation
      lifecycle timestamps rather than the immediate `Task` start call.
   9. Edit `~/.agents/subagents/readonly.md` to declare `permission: auto` and reload the
      catalog; confirm the definition still loads but carries a warning, and
      that its delegate still resolves under the session's effective mode (a
      `Write` inside the workspace still raises a permission card).
   10. Prompt a turn that starts a delegate, lets the program `time` heartbeat return
-      so the node still says running, then calls `TaskStop` (cancel-obsolete path);
-      confirm the topology node and the `TaskStop` row both read `stopped`
+      so the card still says running, then calls `TaskStop` (cancel-obsolete path);
+      confirm the card and the `TaskStop` row both read `stopped`
       (not `running`). End the turn and reload the session; confirm the card is not
       labelled working and does not keep ticking elapsed.
   10a. Continue the delegate stopped in step 10 — once by an explicit parent
@@ -11826,7 +11880,7 @@ This test plan spec is accepted when:
   turn and ends only via `TaskStop`, user Stop, disposal, or terminal parent error;
   a stopped/aborted delegate's chain is still continuable (a parent `Task(resume)`
   delivers its report, a direct user continue runs detached without waking the
-  parent); reloaded transcripts keep their delegation topology.
+  parent); reloaded transcripts keep their delegation cards and outcomes.
 - **Specs linked**: `03-runtime/02-agent-runtime.md` §5f/§5f.1/§7.1,
   `03-runtime/03-tools-and-permissions.md` §10.2,
   `08-meta/decisions-log.md` (D242 amends D231), ADR 0089 and ADR 0100
@@ -11985,24 +12039,27 @@ This test plan spec is accepted when:
 - **Preconditions**: A project-bound Agent session with a mocked provider stream
   where one `explorer` delegate has a Task description and emits thinking,
   tool, and answer rows over time. The work panel is initially closed.
-- **Steps**: 1) Expand the activity group if needed and click the `explorer`
-  topology node. 2) Click the selected `explorer` node again and confirm the
-  right-side dock closes, then click it once more to reopen it. 3) Observe the
-  right-side dock while the delegate streams. 4) Scroll the task/process
-  conversation upward and then return to the latest output. 5) Switch sessions
+- **Steps**: 1) Open the turn's process if needed and click the `explorer`
+  delegation card. 2) Confirm the card activated a `subagent` tab in the work
+  panel and that clicking the card again only re-activates that tab — the tab,
+  not the card, owns closing. 3) Observe the tab while the delegate streams.
+  4) Scroll the task/process conversation upward and then return to the latest
+  output. 5) Switch sessions
   and return to the original session. 6) Let a delegate start and then fail,
-  open its node, and read the foot of the dock; repeat with a delegate that
-  completes and one that is still running.
-- **Expected**: The right dock shows a sticky identity header (avatar, name,
-  and model caption on the left; status capsule and elapsed time trailing on
-  the same row without wrapping), the Task call's description
-  as a full-width inset grouped card under a Task section label, capped at four
-  lines with an inline Show more / Show less control for longer tasks, and
-  the delegate's live thinking/tool/answer process under an Activity section
-  on one subtle vertical timeline using the same row components as the main
-  conversation.
-  The selected topology node is a full-row toggle without an extra disclosure
-  chevron: its first click opens the dock and its second click closes it.
+  open its tab, and read the header and the conversation; repeat with a delegate
+  that completes and one that is still running.
+- **Expected**: The tab's strip label is the delegation chain's original task
+  description, and its body opens with the same Task description as its first
+  user row, followed by
+  the delegate's live thinking/tool/answer rows using the same row components as
+  the main conversation. The tab header carries only the outcome, the delivery
+  owner while the child runs, and one localized metrics group (context occupancy
+  with the labelled dash and its helper when unknown, billed spend when the child
+  reported it, turns/calls); the child's model and reasoning level sit on the
+  footer's static model chip.
+  The card is a single button that activates this tab — there is no second click
+  on the card that closes it, no caret and no `aria-expanded` on the card — and
+  the tab is closed only through its own close control.
   New rows appear without a reload and follow the bottom while pinned. The
   panel has one body scrollbar; the process does not create a nested scrollbar
   or a second elevated card. At the minimum supported panel width, long
@@ -12011,41 +12068,43 @@ This test plan spec is accepted when:
   jump-to-latest. The transcript remains the same height and keeps its own
   scroll state. Session switching hides the selection and returning never
   shows another session's task.
-  In step 6, a delegate that starts and then fails closes the dock with an
-  error card rather than a bare `Failed` capsule: the localized summary (the
-  registered `errors.<code>` sentence when the runtime reported a known code,
-  the localized `chat.subagentStatus.*` outcome otherwise), the stable code,
-  the raw provider message behind a Show details / Hide details disclosure, and
-  a copy control. The disclosure control stays reachable while the details are
-  collapsed, and the delegate that completed or is still running shows no card
-  at all.
-- **Specs linked**: `04-ux/08-component-spec.md` §5.7,
+  In step 6, a delegate that starts and then fails keeps its readable rows and
+  renders the main transcript's inline assistant error card (localized summary,
+  the stable code, the raw message behind a details disclosure with a copy
+  control) inside its own conversation, while the tab header reads the failed
+  outcome. The delegate that completed or is still running shows no error card.
+- **Specs linked**: `04-ux/08-component-spec.md` §5.7/§9.9,
   `04-ux/09-interaction-patterns.md` §9.1
 - **Acceptance**: C (conversation), Quality
 - **Milestone**: M6+
-- **Status**: Documented; desktop journey pending. The failure card's data
-  source is unit-tested in `subagent-topology.test.mjs`: a settled delegation's
+- **Status**: Documented; desktop journey pending. Delegate failure data is
+  unit-tested in `subagent-topology.test.mjs`: a settled delegation's
   `error: { code, message }` read from `TaskWait` `delegations[]` and `TaskStop`
   `stopped[]`, lifecycle row ordering, entries without an error, and the
-  terminal Task snapshot that carries a failure before parent polling.
+  terminal Task snapshot that carries a failure before parent polling. The
+  opened transcript's metrics, actions and session scoping are rendered by
+  `node scripts/e2e-subagent-dock.mjs`, which passed before the current
+  detail-copy corrections; their revalidation is pending.
 
 #### E2E-SUBAGENT-settlement-updates-before-parent-poll
 
 - **Preconditions**: An Agent session with two parallel delegates; one can
   finish while the other continues and the parent does not poll lifecycle tools.
-- **Steps**: 1) Start both delegates and open the first delegate's detail dock.
-  2) Optionally let TaskList report both as running. 3) Complete only the first
-  delegate while the parent turn remains live. 4) Switch sessions and return,
-  then reload history after the turn finishes. 5) Repeat with failed and stopped
-  delegates, and with a delegate finishing before its Task result arrives.
-- **Expected**: The settled node stops spinning immediately, its status is
+- **Steps**: 1) Start both delegates and open the first delegate's transcript
+  tab. 2) Optionally let TaskList report both as running. 3) Complete only the
+  first delegate while the parent turn remains live. 4) Switch sessions and
+  return, then reload history after the turn finishes. 5) Repeat with failed and
+  stopped delegates, and with a delegate finishing before its Task result
+  arrives.
+- **Expected**: The settled card stops spinning immediately, its status is
   completed (green) or the actual failure/stop outcome, and its elapsed time
-  stops increasing. The sibling remains running; the aggregate reads one of
-  two settled. The open dock updates with the same status and failure details.
-  A stale running TaskList snapshot cannot undo settlement. Reload preserves
-  the actual terminal outcome and original Task identity, arguments, and usage.
+  stops increasing. The sibling's card remains running and states its own
+  outcome; no group-level aggregate reports a settled count. The open tab
+  updates with the same status and failure details. A stale running TaskList
+  snapshot cannot undo settlement. Reload preserves the actual terminal outcome
+  and original Task identity, arguments, and usage.
 - **Specs linked**: `03-runtime/02-agent-runtime.md` §Subagents,
-  `04-ux/08-component-spec.md` delegation topology
+  `04-ux/08-component-spec.md` §9.9
 - **Acceptance criterion**: C, Quality
 - **Milestone**: M6+
 - **Status**: Runtime event-order and renderer projection regressions automated;
@@ -12323,8 +12382,8 @@ This test plan spec is accepted when:
   inspect the `TaskWait` row's summary, badge and expanded body. 3) Start a
   third delegate reusing the `explorer` definition, call `TaskList`, and read
   the summary. 4) Stop a running delegate and inspect the `TaskStop` row.
-  5) Confirm the delegation card's own subagent count is unchanged by all three
-  lifecycle rows. 6) Repeat in Chinese.
+  5) Confirm the three lifecycle rows added no card of their own and changed no
+  existing card's identity. 6) Repeat in Chinese.
 - **Expected**: Every lifecycle row summarizes by agent name — never by its
   `delegationIds` argument, and no bare UUID appears in a collapsed row. A
   `TaskList` that blocked through the program coordinator reads the same
@@ -12334,14 +12393,14 @@ This test plan spec is accepted when:
   badge uses the shared subagent status vocabulary: running while any member
   runs, `Failed` / “失败” once a member failed even though a sibling completed,
   and `Stopped by request` / “已按请求停止” for the stopped delegate — including
-  when the persisted `TaskStop` snapshot still says `running`. The topology
-  card's node matches that stopped outcome and is not labelled working after
+  when the persisted `TaskStop` snapshot still says `running`. The delegation
+  card matches that stopped outcome and is not labelled working after
   the turn ends. A repeated
   definition is counted (`explorer ×2`) rather than listed twice. The expanded
   body shows the joined reports as a notice followed by one named row per
   subagent with status, runtime and turns, and contains no pretty-printed
-  `delegations[]` JSON. The delegation card still reports the number of `Task`
-  calls only, so lifecycle rows never inflate the topology counts.
+  `delegations[]` JSON. A lifecycle row is never presented as a card, and the
+  cards only ever count `Task` calls, so lifecycle rows never inflate them.
 - **Specs linked**: `04-ux/08-component-spec.md` §9.9,
   `03-runtime/02-agent-runtime.md` §5f, ADR 0062, ADR 0089, decisions-log D269
 - **Acceptance**: C (conversation), Quality
@@ -16017,6 +16076,46 @@ plugin-form fixtures in an isolated temporary directory at runtime.
   `scripts/e2e-work-panel-drag.mjs` (`pnpm test:e2e:work-panel-drag`). macOS/Linux
   native dragging remains unqualified.
 
+### E2E-WORK-PANEL-tab-strip-controls
+
+- **Preconditions**: A desktop session with a work panel holding at least twelve
+  open tabs — Review, `pi.file-manager` files with long paths, and a `subagent`
+  transcript — in a panel narrow enough for the strip to overflow.
+- **Steps**: Open a tab that starts off screen and switch between distant tabs;
+  scroll the row with a touchpad gesture, a plain vertical wheel, and
+  `Shift`+wheel; widen and narrow the panel; right-click a tab and reopen the
+  same menu with `Shift`+`F10`; close with the row, middle-click, close others,
+  close to the right, and close all; close an open `subagent` tab while that
+  child is still running.
+- **Expected**: The strip stays one row, tabs hold 72px–180px, the selected tab is
+  revealed on open, on selection, and while the width animates, and a wheel
+  gesture stops later automatic reveals. Hovering a tab reports its complete
+  title or path. Actions in the fixed right lane never overlap a tab. One shared
+  menu offers close, close others, close to the right, and close all, with no
+  all-tabs list. Closing a subagent tab never stops that child.
+- **Specs linked**: `04-ux/08-component-spec.md` §5.2, §5.4, §5.5
+- **Acceptance**: Quality
+- **Status**: Automated (`scripts/e2e-work-panel-tabs.mjs` via
+  `pnpm test:e2e:work-panel-tabs`, 13 checks; passed before the final tab-strip
+  and card UI pass and must be re-run against the shipped build).
+
+### E2E-COMPOSER-model-chip-namespace
+
+- **Preconditions**: A session bound to an unaliased model whose wire id carries a
+  routing namespace, plus a second binding with a configured alias.
+- **Steps**: Read the composer model × reasoning chip at 760px, 340px, and 280px
+  composer container widths; hover and focus it; open the menu and inspect the
+  trigger's accessible name; switch to the aliased binding.
+- **Expected**: The unaliased chip paints the model name without the routing
+  namespace, the aliased chip paints the alias unchanged, the complete ids stay
+  in the tooltip and the accessible name, and the reasoning level keeps a
+  readable slot at every width. At 560px and below the toolbar wraps to a second
+  row instead of hiding a control.
+- **Specs linked**: `04-ux/08-component-spec.md` §11.3, §12.2
+- **Acceptance**: Quality
+- **Status**: Automated (`node scripts/e2e-composer-model-chip.mjs`, widths
+  760/340/280; run directly — no package script alias).
+
 #### E2E-LAYOUT-sidebar-project-group-fold
 
 - **Preconditions**: Five retained sidebar project groups, seeded through the
@@ -17843,10 +17942,11 @@ host-created files. The full app's file-preview viewer is covered separately.
 
 - Environment: isolated Desktop profile, real Main/sidecar/Host and a local
   streaming provider fixture; no real API account or user data.
-- Start two delegates, open A's detail panel and stop A with its icon-only
-  Stop control. Verify B and the parent
+- Start two delegates, open A's transcript tab and stop A with the icon-only
+  Stop control on A's card. Verify B and the parent
   remain active, A's partial output remains readable, and no model request was
-  needed. Stop all from the group header; B stops and the parent remains active.
+  needed. Then stop every running child from the composer subagent dock's
+  session-wide control; B stops and the parent remains active.
 - Terminal cards remove their Stop controls and persisted Task snapshots record
   `stopped`. An empty explicit ID list is rejected rather than stopping all.
 - Run `node scripts/e2e-subagent-stop.mjs`. Runtime tests additionally cover

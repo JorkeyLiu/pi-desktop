@@ -123,19 +123,20 @@ export function pluginWorkPanelTab(pluginId: string, viewId: string): WorkPanelT
  * A subagent transcript tab (ADR 0062 delegations).
  *
  * Keyed by the delegation id, so re-opening the same delegate reuses its tab
- * and parallel delegates coexist as independent tabs. The agent name is
- * captured at open time so the strip can label the tab even before the
- * delegate produced any row.
+ * and parallel delegates coexist as independent tabs. The task title is
+ * captured at open time so the strip can label the tab before the delegate
+ * produced any row; a delegation without one is labelled by the role that ran
+ * it, and the strip falls back to its own localized name after that.
  */
 export function subagentWorkPanelTab(
   delegationId: string,
-  agentName?: string,
+  title?: string,
 ): WorkPanelTab {
   return {
     id: `subagent:${delegationId}`,
     kind: "subagent",
     resource: delegationId,
-    ...(agentName ? { label: agentName } : {}),
+    ...(title ? { label: title } : {}),
   };
 }
 
@@ -407,6 +408,51 @@ export function closeWorkPanelTabState(
     tabs,
     activeTabId: tabs[Math.min(index, tabs.length - 1)]?.id ?? null,
   };
+}
+
+/** Which tabs a strip menu action removes, in strip order. */
+export type WorkPanelTabCloseScope = "others" | "right" | "all";
+
+export function workPanelTabCloseTargets(
+  tabs: readonly WorkPanelTab[],
+  anchorTabId: string,
+  scope: WorkPanelTabCloseScope,
+): string[] {
+  const anchorIndex = tabs.findIndex((tab) => tab.id === anchorTabId);
+  if (anchorIndex < 0) return [];
+  const closing =
+    scope === "all"
+      ? tabs
+      : scope === "others"
+        ? tabs.filter((_, index) => index !== anchorIndex)
+        : tabs.slice(anchorIndex + 1);
+  return closing.map((tab) => tab.id);
+}
+
+/**
+ * Close a whole set in one pass. The survivors keep their strip order, and
+ * when the active tab is among the closed ones the nearest surviving tab at or
+ * after its old position takes selection, falling back to the tab before it —
+ * the same rule a single close already applies.
+ */
+export function closeWorkPanelTabsState(
+  state: WorkPanelTabsState,
+  tabIds: readonly string[],
+): WorkPanelTabsState {
+  if (!tabIds.length) return state;
+  const closing = new Set(tabIds);
+  const tabs = state.tabs.filter((tab) => !closing.has(tab.id));
+  if (tabs.length === state.tabs.length) return state;
+  if (state.activeTabId === null) return { tabs, activeTabId: null };
+  if (!closing.has(state.activeTabId)) return { tabs, activeTabId: state.activeTabId };
+
+  const activeIndex = state.tabs.findIndex((tab) => tab.id === state.activeTabId);
+  const anchor = Math.max(activeIndex, 0);
+  const nearestAfter = tabs.find(
+    (tab) => state.tabs.findIndex((item) => item.id === tab.id) >= anchor,
+  );
+  const nearestBefore = tabs.at(-1);
+  return { tabs, activeTabId: (nearestAfter ?? nearestBefore)?.id ?? null };
 }
 
 /**

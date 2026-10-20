@@ -159,13 +159,20 @@ test("failed and scratch tool rows cannot manufacture review evidence", () => {
   );
 });
 
-test("chat renders one message-owned card immediately after its tool row", () => {
+test("chat renders one message-owned review inside the tool row that made it", () => {
   assert.equal(transcriptSource.includes("<WorkspaceChangesEntry />"), false);
   assert.equal(transcriptSource.includes("review-changes-entry"), false);
+  // The change lives in the row that produced it: its +a/−d sit at the end of
+  // the row and its diff in the row's own body, so the transcript never grows a
+  // second collapsed row naming the same file (D192).
   assert.match(
     transcriptSource,
-    /<ToolRow message=\{item\.message\} \/>[\s\S]*<ReviewChangeCard message=\{item\.message\} \/>/,
+    /\{review \? <ReviewChangeCounts change=\{review\} \/> : null\}[\s\S]*?<ReviewChangeBody message=\{message\} \/>/,
   );
+  assert.doesNotMatch(transcriptSource, /<ReviewChangeCard\b/);
+  // The standalone card is the review panel's row for a change no tool row
+  // shows, and it stays the only place that repeats the file name.
+  assert.match(reviewSource, /<ReviewChangeCard/);
   assert.doesNotMatch(transcriptSource, /workspaceDiff|findWorkspaceChange/);
   assert.match(cardSource, /aria-expanded=\{open\}/);
   assert.match(cardSource, /chat\.reviewChangeShow/);

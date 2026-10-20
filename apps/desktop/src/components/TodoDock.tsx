@@ -1,21 +1,11 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { SessionTodo, TodoStatus } from "@pi-desktop/shared";
+import type { SessionTodo } from "@pi-desktop/shared";
 import { Button } from "./ui";
-import { IconCheck, IconChevronDown, IconChevronUp } from "./icons";
+import { IconChevronDown, IconChevronUp } from "./icons";
+import { TodoStatusGlyph } from "./TodoStatusGlyph";
 import { useSessionTodosRecovery } from "../features/chat/todos/useSessionTodosRecovery";
 import { useAppStore } from "../stores/app-store";
-
-function statusSymbol(status: TodoStatus): string {
-  switch (status) {
-    case "in_progress":
-      return "◐";
-    case "cancelled":
-      return "⊘";
-    default:
-      return "○";
-  }
-}
 
 export function TodoDock({ sessionId }: { sessionId: string }) {
   const { t } = useTranslation();
@@ -79,16 +69,16 @@ export function TodoDock({ sessionId }: { sessionId: string }) {
     </div>
   );
 }
-
 function TodoRow({ todo }: { todo: SessionTodo }) {
   const { t } = useTranslation();
   const label = t(`chat.todo.status.${todo.status}`);
-  const completed = todo.status === "completed";
   return (
     <div className={`todo-dock-row todo-dock-row-${todo.status}`} role="listitem">
-      <span className="todo-dock-row-symbol" role="img" aria-label={label} title={label}>
-        {completed ? <IconCheck size={13} aria-hidden /> : statusSymbol(todo.status)}
-      </span>
+      <TodoStatusGlyph
+        status={todo.status}
+        label={label}
+        className="todo-dock-row-symbol"
+      />
       <span className="todo-dock-row-content" title={todo.content}>
         {todo.content}
       </span>

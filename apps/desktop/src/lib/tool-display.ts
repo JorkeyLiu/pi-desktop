@@ -9,7 +9,15 @@ export type ToolAction =
   | "fork"
   | "delegate"
   | "todo"
-  | "use";
+  | "use"
+  /* Built-in on-demand tools with their own presentation (D192 follow-up). */
+  | "skill"
+  | "toolSearch"
+  | "mode"
+  | "context"
+  | "browser"
+  | "image"
+  | "schedule";
 
 const SUMMARY_KEYS: Record<ToolAction, string[]> = {
   read: ["path", "file_path", "filePath"],
@@ -25,7 +33,20 @@ const SUMMARY_KEYS: Record<ToolAction, string[]> = {
   // tool (ADR 0089) carries only delegation ids, which read as bare UUIDs, so
   // it summarizes from the agent names in its own result roster instead (D268).
   delegate: ["description", "agent"],
+  // The checklist title carries the state; the list itself belongs to the
+  // expanded body, never to the collapsed row as a serialized array.
   todo: [],
+  // `Skill` is called with the exact skill id; its document is the body.
+  skill: ["id", "name"],
+  toolSearch: ["query"],
+  // The mode comes from the tool name (`EnterPlanMode`), not from an argument.
+  mode: [],
+  context: [],
+  // `BrowserPreview` takes the file it previews.
+  browser: ["path", "url"],
+  // The prompt lives inside `items[0]`, so it is read explicitly below.
+  image: [],
+  schedule: ["title", "id", "name"],
   use: [
     "command",
     "cmd",
@@ -38,6 +59,33 @@ const SUMMARY_KEYS: Record<ToolAction, string[]> = {
     "prompt",
   ],
 };
+
+/** Argument keys that hold a filesystem path rather than free text. */
+const PATH_ARG_KEYS = new Set(["path", "file_path", "filePath"]);
+
+/**
+ * Scalar labels a plugin/MCP tool is likely to summarize with. Reading one of
+ * these beats printing the argument object, which is what an unrecognized tool
+ * used to get (a serialized blob in the collapsed row).
+ */
+const GENERIC_SUMMARY_KEYS = [
+  "description",
+  "title",
+  "name",
+  "label",
+  "task",
+  "prompt",
+  "query",
+  "pattern",
+  "url",
+  "path",
+  "id",
+  "text",
+  "message",
+  "reason",
+  "command",
+];
+
 function compact(value: string, limit = 220) {
   const singleLine = value.replace(/\s+/g, " ").trim();
   return singleLine.length > limit
@@ -97,6 +145,27 @@ export function delegationLifecycleKind(
   }
 }
 
+/**
+ * The exact names of the built-in tools that carry their own card. They are
+ * matched exactly, minus any provider namespace, so a plugin tool that merely
+ * sounds similar keeps the generic presentation.
+ */
+const EXACT_TOOL_ACTIONS: Record<string, ToolAction> = {
+  skill: "skill",
+  toolsearch: "toolSearch",
+  enterplanmode: "mode",
+  entergoalmode: "mode",
+  submitplan: "mode",
+  submitgoal: "mode",
+  newcontext: "context",
+  browserpreview: "browser",
+  generateimages: "image",
+  scheduledtasklist: "schedule",
+  scheduledtaskcreate: "schedule",
+  scheduledtaskupdate: "schedule",
+  scheduledtaskdelete: "schedule",
+};
+
 export function getToolAction(toolName?: string): ToolAction {
   const normalized = (toolName || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   const matches = (aliases: string[]) =>
@@ -109,6 +178,8 @@ export function getToolAction(toolName?: string): ToolAction {
   if (isDelegationStartTool(toolName) || delegationLifecycleKind(toolName)) {
     return "delegate";
   }
+  const exact = EXACT_TOOL_ACTIONS[bareToolName(toolName)];
+  if (exact) return exact;
   if (bareToolName(toolName) === "todowrite") return "todo";
   if (matches(["websearch", "searchquery", "fetch", "http", "browser"])) {
     return "fetch";
@@ -148,6 +219,134 @@ function summaryText(value: unknown): string {
   return "";
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function firstKeyValue(
+  record: Record<string, unknown> | null,
+  keys: readonly string[],
+): { key: string; text: string } | null {
+  if (!record) return null;
+  for (const key of keys) {
+    const text = summaryText(record[key]).trim();
+    if (text) return { key, text: summaryText(record[key]) };
+  }
+  return null;
+}
+
+/**
+ * Which mode a mode tool changed, read from its own name (`EnterPlanMode`,
+ * `SubmitGoal`): the arguments carry nothing that says it. A name that names
+ * neither mode says nothing, and the row falls back to its action label.
+ */
+export function toolModeName(toolName?: string): string {
+  const bare = bareToolName(toolName);
+  if (bare.includes("goal")) return "Goal";
+  if (bare.includes("plan")) return "Plan";
+  return "";
+}
+
+/** `GenerateImages` carries its prompts inside `items[]`. */
+function imageSummary(record: Record<string, unknown> | null): string {
+  const items = Array.isArray(record?.items) ? record.items : [];
+  const prompts = items
+    .map((item) => asRecord(item)?.prompt)
+    .filter((prompt): prompt is string => typeof prompt === "string" && !!prompt.trim());
+  if (prompts.length === 0) return "";
+  const first = compact(prompts[0], 160);
+  return prompts.length > 1 ? `${first} (+${prompts.length - 1})` : first;
+}
+
+/**
+ * The one honest scalar an unrecognized tool's arguments offer, so a plugin or
+ * MCP call reads as a label instead of a serialized object. A bare number is
+ * reported with its own key, because "3" alone explains nothing.
+ */
+function genericScalar(
+  record: Record<string, unknown> | null,
+): { key: string; text: string } | null {
+  if (!record) return null;
+  const preferred = firstKeyValue(record, GENERIC_SUMMARY_KEYS);
+  if (preferred) return preferred;
+  for (const [key, value] of Object.entries(record)) {
+    if (typeof value === "string" && value.trim()) {
+      return { key, text: value };
+    }
+  }
+  for (const [key, value] of Object.entries(record)) {
+    if (typeof value === "number" || typeof value === "boolean") {
+      return { key, text: `${key}: ${String(value)}` };
+    }
+  }
+  return null;
+}
+
+export type ToolSummarySpec = {
+  /** The argument the collapsed row already shows, or `null`. */
+  key: string | null;
+  /** Single-line text for the collapsed row. A path stays whole. */
+  text: string;
+  /** The value is a filesystem path, so its middle may be omitted visually. */
+  path: boolean;
+};
+
+/**
+ * What one tool call says when it is collapsed. Every branch reads the tool's
+ * own argument names; none of them falls back to stringifying the arguments,
+ * because a serialized object is not a summary.
+ */
+export function toolSummarySpec(
+  toolName: string | undefined,
+  args: unknown,
+): ToolSummarySpec {
+  const action = getToolAction(toolName);
+  const record = asRecord(args);
+  const none: ToolSummarySpec = { key: null, text: "", path: false };
+
+  // AskTool asks its first question; the rest is the card's own business.
+  if (isAskToolName(toolName) && Array.isArray(record?.questions)) {
+    const first = asRecord(record.questions[0]);
+    const question = typeof first?.question === "string" ? first.question : "";
+    if (question.trim()) return { key: null, text: compact(question), path: false };
+  }
+
+  if (action === "todo" || action === "context") return none;
+  if (action === "mode") return { key: null, text: toolModeName(toolName), path: false };
+  if (action === "image") {
+    return { key: null, text: imageSummary(record), path: false };
+  }
+
+  const found =
+    action === "run" && record && summaryText(record.description).trim()
+      ? { key: "description", text: summaryText(record.description) }
+      : firstKeyValue(record, SUMMARY_KEYS[action]);
+  if (found) {
+    return {
+      key: found.key,
+      text: PATH_ARG_KEYS.has(found.key)
+        ? summaryText(found.text).replace(/\s+/g, " ").trim()
+        : compact(found.text),
+      path: PATH_ARG_KEYS.has(found.key),
+    };
+  }
+
+  if (action === "use") {
+    const scalar = genericScalar(record);
+    if (scalar) {
+      return {
+        key: scalar.key,
+        text: PATH_ARG_KEYS.has(scalar.key) ? scalar.text.trim() : compact(scalar.text),
+        path: PATH_ARG_KEYS.has(scalar.key),
+      };
+    }
+    return { key: null, text: getToolDisplayName(toolName), path: false };
+  }
+  return none;
+}
+
 /**
  * Which argument the collapsed row summary is showing, so expanded detail
  * blocks can skip repeating it.
@@ -156,48 +355,63 @@ export function getToolSummaryKey(
   toolName: string | undefined,
   args: unknown,
 ): string | null {
-  if (!args || typeof args !== "object") return null;
-  const record = args as Record<string, unknown>;
-  for (const key of SUMMARY_KEYS[getToolAction(toolName)]) {
-    if (summaryText(record[key]).trim()) return key;
-  }
-  return null;
+  return toolSummarySpec(toolName, args).key;
+}
+
+/** Whether the collapsed row is showing a filesystem path. */
+export function isToolPathSummary(
+  toolName: string | undefined,
+  args: unknown,
+): boolean {
+  return toolSummarySpec(toolName, args).path;
 }
 
 /**
  * The whole argument the collapsed row summarizes, unwrapped and untrimmed.
  * The summary is squeezed onto one line to fit the row; a reader copying a
  * multi-line command out of the head needs it the way it was written (D226).
+ * A run row always hands back its command, even when the row summarizes the
+ * model's own `description` of it.
  */
 export function getToolSummaryValue(
   toolName: string | undefined,
   args: unknown,
 ): string {
+  const record = asRecord(args);
+  if (!record) return "";
+  if (getToolAction(toolName) === "run") {
+    for (const key of ["command", "cmd"]) {
+      const text = summaryText(record[key]);
+      if (text.trim()) return text;
+    }
+    return "";
+  }
   const key = getToolSummaryKey(toolName, args);
-  if (!key) return "";
-  return summaryText((args as Record<string, unknown>)[key]);
+  return key ? summaryText(record[key]) : "";
 }
 
 export function getToolSummary(toolName: string | undefined, args: unknown) {
-  const action = getToolAction(toolName);
-  if (args && typeof args === "object") {
-    const record = args as Record<string, unknown>;
-    if (isAskToolName(toolName) && Array.isArray(record.questions)) {
-      const first = record.questions[0];
-      if (first && typeof first === "object" && !Array.isArray(first)) {
-        const question = (first as Record<string, unknown>).question;
-        if (typeof question === "string" && question.trim()) {
-          return compact(question);
-        }
-      }
-    }
-    const key = getToolSummaryKey(toolName, args);
-    if (key) return compact(summaryText(record[key]));
-    const fallback = formatToolValue(record);
-    if (fallback && fallback !== "{}") return compact(fallback);
-  }
-  if (action === "use") return getToolDisplayName(toolName);
-  return "";
+  return toolSummarySpec(toolName, args).text;
+}
+
+/**
+ * Middle omission for display only: the start of a path and its last segments
+ * are what a reader recognizes, and the middle is the least informative part.
+ * The untruncated value stays available through the element's title, copy
+ * affordance and preview target.
+ */
+export function middleEllipsis(value: string, limit = 88): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (text.length <= limit) return text;
+  const segments = text.split(/[/\\]/).filter((segment) => segment.length > 0);
+  const isAbsolute = /^[/\\]/.test(text);
+  const tailLength = Math.min(
+    Math.max(14, Math.floor(limit / 2)),
+    segments.slice(-2).join("/").length + (isAbsolute ? 1 : 0),
+  );
+  const tail = text.slice(-tailLength);
+  const headLength = Math.max(6, limit - tail.length - 1);
+  return `${text.slice(0, headLength).trimEnd()}…${tail}`;
 }
 
 export function formatToolDuration(totalSeconds: number) {

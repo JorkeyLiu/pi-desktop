@@ -323,7 +323,7 @@ permission mode and the current default provider/model. Each selector writes onl
 to that task. The prompt is labelled Instruction, and these three selectors sit
 inside its bottom toolbar using the same shell, chip and anchored-menu treatment
 as the main Composer. Both surfaces render the same controlled permission picker
-and searchable, provider-grouped model list with capability badges. The task model
+and searchable, provider-grouped model list. The task model
 chip displays the model name or alias without a provider prefix. Task selection
 callbacks update only the task draft, never the active conversation or app defaults.
 The instruction input has its own rounded border and tonal

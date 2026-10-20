@@ -1799,8 +1799,8 @@
 }
 
 /* Live parent turns stay transparent like completed prose (D323). The
-   `--ds-tile` card belongs only to `.tool-activity-group.has-subagents`
-   (D319) and the nested `.subagent-run`. */
+   `--ds-tile` card belongs only to the nested `.subagent-run`; a `Task` call is
+   its own raised child card inside the ordinary group. */
 
 .message-error {
   /* The message column owns the dynamic chat width; do not add a second cap. */
@@ -2090,85 +2090,61 @@
 }
 
 /*
- * Parallel Task calls become one compact, truthful topology. The runtime only
- * supports one delegation level, so the canvas connects the main agent to a
- * flat list instead of implying dependencies between delegates (ADR 0062).
+ * A `Task` call is the child's own card, one per call (D201, D265, ADR 0062).
+ *
+ * The card states the work the child was given — its delegation chain's
+ * original title — with that child's own outcome and runtime inline at the
+ * right of the title, then the role that ran it and the figures the child
+ * reported for itself on lines of their own. It is not a disclosure: the brief,
+ * the report and the child's rows live in the child's transcript, which the
+ * whole card opens.
+ * A group of Task calls therefore draws no coordinator, no connectors and no
+ * aggregate summary — there is no delegate-to-delegate edge to draw, and the
+ * group header above already says what the turn did.
  */
-.tool-activity-group.has-subagents {
-  container: subagent-activity / inline-size;
-  overflow: hidden;
-  border-radius: var(--radius-md-plus);
-  background: var(--ds-tile);
+.tool-row.subagent-task {
+  position: relative;
+  margin: 4px 0;
 }
 
-/* The subagent card only re-dresses the shared header row: its material is the
-   card itself, so the row loses the radius and the bleed. */
-.tool-activity-group.has-subagents .tool-activity-header {
-  min-height: 42px;
-  margin: 0;
-  border-radius: 0;
-  padding: 10px 16px;
-}
-
-.subagent-activity-metrics {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--ds-text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: var(--leading-normal);
-  overflow-wrap: anywhere;
-  text-overflow: clip;
-  white-space: normal;
-}
-
-.tool-activity-group.has-subagents .tool-activity-preview {
-  margin: -3px 38px 8px;
-}
-
-.tool-activity-group.has-subagents .tool-activity-body {
-  margin: 0;
-  border-left: 0;
-  padding: 0;
-}
-
-/*
- * Parent thinking/tool rows must not sit on the tile's edge if they still share
- * this card (D319 splits them out; this is the remaining inset).
- */
-.tool-activity-group.has-subagents .tool-activity-body > .tool-row {
-  margin-right: 16px;
-  margin-left: 16px;
-}
-
-.tool-activity-group.has-subagents .tool-activity-body > .tool-row:last-child {
-  margin-bottom: 12px;
-}
-
-/* Nodes are raised tiles on the group's tile; connectors are tinted 2px bars
-   rather than hairlines, and the dotted canvas is gone (D297). */
-.subagent-topology {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(138px, 0.58fr) 34px minmax(248px, 1.42fr);
-  align-items: center;
-  padding: 8px 16px 16px;
-}
-
-.subagent-topology-root {
+.subagent-task-card {
   display: flex;
+  width: 100%;
   min-width: 0;
-  min-height: 72px;
+  min-height: 58px;
   align-items: flex-start;
   gap: 9px;
   border-radius: var(--radius-md);
+  padding: 10px;
   background: var(--ds-raised);
-  padding: 11px;
   box-shadow: var(--ds-raised-shadow);
+  color: var(--ds-text-secondary);
+  text-align: left;
 }
 
-.subagent-topology-root-icon,
-.subagent-topology-avatar {
+.subagent-task-card:hover {
+  background: var(--ds-bg-hover);
+}
+
+.subagent-task-card:disabled {
+  cursor: default;
+}
+
+.subagent-task-card:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--ds-accent) 58%, transparent);
+  outline-offset: -2px;
+}
+
+/* The card's stop handle sits over its trailing corner rather than taking a line
+   of its own below the card. The title row and the figures already reserve its
+   width, so the control never covers the child's name or its own report. */
+.subagent-task > .subagent-stop-button {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+}
+
+.subagent-task-avatar {
   position: relative;
   display: inline-flex;
   width: 28px;
@@ -2181,147 +2157,7 @@
   color: var(--ds-text-secondary);
 }
 
-.subagent-topology-root-copy,
-.subagent-topology-node-copy {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-}
-
-.subagent-topology-root-copy strong {
-  overflow: hidden;
-  color: var(--ds-text-primary);
-  font-size: var(--text-sm-plus);
-  font-weight: var(--font-weight-semibold);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.subagent-topology-root-copy > span {
-  margin-top: 4px;
-  color: var(--ds-text-muted);
-  font-size: var(--text-xs);
-  line-height: var(--leading-normal);
-}
-
-.subagent-topology-connector {
-  height: 2px;
-  border-radius: var(--radius-full);
-  background: var(--ds-tile-deep);
-}
-
-.subagent-topology-agents {
-  position: relative;
-  display: grid;
-  min-width: 0;
-  gap: 10px;
-  padding-left: 14px;
-}
-
-.subagent-topology-agents::before {
-  position: absolute;
-  top: 36px;
-  bottom: 36px;
-  left: 0;
-  width: 2px;
-  border-radius: var(--radius-full);
-  background: var(--ds-tile-deep);
-  content: "";
-}
-
-.subagent-topology-node {
-  position: relative;
-  min-width: 0;
-  margin: 0;
-  border-radius: var(--radius-md);
-  background: var(--ds-raised);
-  box-shadow: var(--ds-raised-shadow);
-}
-
-.subagent-topology-node::before {
-  position: absolute;
-  top: 35px;
-  right: 100%;
-  width: 15px;
-  height: 2px;
-  background: var(--ds-tile-deep);
-  content: "";
-}
-
-/* Non-compact card/node slot: icon-only TooltipButton that composes with the
-   shared `.stop-btn` look; this rule (messages.css, after composer.css) pins
-   the 26px box and drops the old text-pill gap/nowrap. */
-.subagent-stop-button {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-}
-
-.subagent-activity-header {
-  display: flex;
-  align-items: center;
-  padding-right: 10px;
-}
-
-.subagent-activity-header > .tool-activity-header {
-  flex: 1;
-}
-
-.tool-activity-group.open > .subagent-activity-header > .tool-activity-header > .tool-activity-caret {
-  transform: rotate(90deg);
-}
-
-.subagent-topology-node-actions {
-  position: relative;
-}
-
-.subagent-topology-node-actions > .subagent-stop-button {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
-}
-
-.subagent-topology-node-actions:has(> .subagent-stop-button) .subagent-topology-node-header {
-  min-height: 88px;
-}
-
-/* The card stop is icon-only, so reserve icon width, not text width. */
-.subagent-topology-node-actions:has(> .subagent-stop-button) :is(.subagent-topology-node-summary, .subagent-topology-node-steps) {
-  padding-right: 48px;
-}
-
-.subagent-topology-node-header {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  min-height: 70px;
-  align-items: flex-start;
-  gap: 9px;
-  border-radius: inherit;
-  padding: 10px;
-  color: var(--ds-text-secondary);
-  text-align: left;
-}
-
-.subagent-topology-node-header:hover {
-  background: var(--ds-bg-hover);
-}
-
-.subagent-topology-node-header:disabled {
-  cursor: default;
-}
-
-.subagent-topology-node-header:focus-visible {
-  outline: 2px solid color-mix(in oklab, var(--ds-accent) 58%, transparent);
-  outline-offset: -2px;
-}
-
-.subagent-topology-status-icon {
+.subagent-task-status-icon {
   position: absolute;
   right: -3px;
   bottom: -2px;
@@ -2330,48 +2166,54 @@
   height: 13px;
   align-items: center;
   justify-content: center;
-  /* Knockout ring in the node's own surface colour, not a divider. */
+  /* Knockout ring in the card's own surface colour, not a divider. */
   border: 2px solid var(--ds-raised);
   border-radius: var(--radius-round);
   background: var(--ds-text-muted);
   color: var(--ds-bg-primary);
 }
 
-.subagent-topology-status-icon > span {
+.subagent-task-status-icon > span {
   width: 5px;
   height: 5px;
   border-radius: var(--radius-round);
   background: currentColor;
 }
 
-.subagent-topology-node.outcome-completed .subagent-topology-status-icon {
+.subagent-task[data-outcome="completed"] .subagent-task-status-icon {
   background: var(--ds-success);
 }
 
-.subagent-topology-node.outcome-truncated .subagent-topology-status-icon {
+.subagent-task[data-outcome="truncated"] .subagent-task-status-icon,
+.subagent-task[data-outcome="timed_out"] .subagent-task-status-icon,
+.subagent-task[data-outcome="interrupted"] .subagent-task-status-icon {
   background: var(--ds-warning);
 }
 
-.subagent-topology-node.outcome-timed-out .subagent-topology-status-icon {
-  background: var(--ds-warning);
-}
-
-.subagent-topology-node.outcome-failed .subagent-topology-status-icon {
+.subagent-task[data-outcome="failed"] .subagent-task-status-icon {
   background: var(--ds-error);
 }
 
-.subagent-topology-node.outcome-aborted .subagent-topology-status-icon,
-.subagent-topology-node.outcome-denied .subagent-topology-status-icon {
+.subagent-task[data-outcome="aborted"] .subagent-task-status-icon,
+.subagent-task[data-outcome="stopped"] .subagent-task-status-icon,
+.subagent-task[data-outcome="denied"] .subagent-task-status-icon {
   background: var(--ds-text-muted);
 }
 
-.subagent-topology-node.outcome-creating .subagent-topology-status-icon {
+.subagent-task.is-running .subagent-task-status-icon,
+.subagent-task.is-creating .subagent-task-status-icon {
   background: var(--ds-purple);
-  animation: subagent-creating-pulse 1.4s var(--motion-ease-standard) infinite;
 }
 
-.subagent-topology-node.outcome-creating .subagent-topology-node-status {
+.subagent-task.is-creating .subagent-task-status {
   color: var(--ds-purple);
+}
+
+/* A child that is still spawning has no inline running mark yet, so its badge
+   pulses; once the child is running the inline mark carries the motion and the
+   badge stays still — one moving thing per card. */
+.subagent-task.is-creating .subagent-task-status-icon {
+  animation: subagent-creating-pulse 1.4s var(--motion-ease-standard) infinite;
 }
 
 @keyframes subagent-creating-pulse {
@@ -2385,58 +2227,67 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .subagent-topology-node.outcome-creating .subagent-topology-status-icon {
+  .subagent-task.is-creating .subagent-task-status-icon {
     animation: none;
   }
 }
 
-.subagent-topology-node-title-row {
+
+.subagent-task-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.subagent-task-title-row {
   display: flex;
   min-width: 0;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 3px 8px;
+  /* The stop control sits over the card's trailing corner. */
+  padding-right: 26px;
 }
 
-.subagent-topology-node-title {
+.subagent-task-title {
+  display: -webkit-box;
   min-width: 0;
   flex: 1 1 12ch;
   overflow: hidden;
   color: var(--ds-text-primary);
-  display: -webkit-box;
   font-size: var(--text-sm-plus);
   font-weight: var(--font-weight-semibold);
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
   overflow-wrap: anywhere;
   text-overflow: clip;
   white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   word-break: break-word;
 }
 
-.subagent-topology-node-model {
-  display: inline-flex;
+/* The role reads on its own line under the title, where the child's step count
+   used to sit: the title keeps its whole width for the work's own name, and no
+   card states the resolved model or reasoning level — the child's transcript
+   states its runtime once. */
+.subagent-task-role {
   min-width: 0;
-  max-width: 100%;
-  flex: 0 1 auto;
+  overflow: hidden;
+  padding-right: 26px;
   color: var(--ds-text-muted);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  white-space: nowrap;
-}
-
-.subagent-topology-node-model-name {
-  min-width: 0;
-  overflow: hidden;
+  line-height: var(--leading-normal);
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.subagent-topology-node-thinking {
-  flex: none;
-  white-space: pre;
-}
-
-.subagent-topology-node-status {
+/* The child's state sits inline at the right of the title: the running mark,
+   then the localized outcome, then the runtime, every boundary the shared dot.
+   The mark keeps its slot in every state — only its visibility changes — so a
+   child starting or settling never shifts the status text. */
+.subagent-task-state {
   flex: none;
   color: var(--ds-text-muted);
   font-family: var(--font-mono);
@@ -2444,83 +2295,69 @@
   white-space: nowrap;
 }
 
-.subagent-topology-node-summary {
-  display: -webkit-box;
+/* The inline running mark is decoration for the outcome the adjacent localized
+   text already states, so it is hidden from assistive technology rather than
+   announced twice, and it never leaves the card's state slot for the corner. */
+.subagent-task-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 4px;
+  border: 1.5px solid color-mix(in oklab, var(--ds-purple) 45%, transparent);
+  border-top-color: var(--ds-purple);
+  border-radius: var(--radius-round);
+  vertical-align: -1px;
+}
+
+.subagent-task-spinner[data-active="true"] {
+  animation: spin 0.8s linear infinite;
+}
+
+.subagent-task-spinner[data-active="false"] {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .subagent-task-spinner[data-active="true"] {
+    animation: none;
+  }
+}
+
+/* The figures the child reported for itself: its turns, its tool calls, the
+   occupancy of its own window and its own cumulative spend. */
+.subagent-task-metrics {
   min-width: 0;
   overflow: hidden;
+  padding-right: 26px;
   color: var(--ds-text-muted);
-  font-size: var(--text-xs);
-  line-height: var(--leading-normal);
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow-wrap: anywhere;
-  text-overflow: clip;
-  white-space: normal;
-  word-break: break-word;
-}
-
-.subagent-topology-node-summary {
-  margin-top: 4px;
-}
-
-.subagent-topology-node-steps {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  white-space: normal;
-  word-break: break-word;
-  margin-top: 3px;
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
-.subagent-topology-node > .tool-row-body,
-.subagent-topology-node > .subagent-run {
-  margin-right: 10px;
-  margin-left: 38px;
+/* One centred dot between two pieces of child information, on the card and in
+   the dock. The boundary is an element rather than whitespace: a flex row drops
+   whitespace-only text nodes, and that is how an inline list loses its dot. Its
+   own spaces are the separator's spacing, so it reads identically inline and in
+   a flex row. */
+.subagent-sep {
+  color: var(--ds-text-muted);
+}
+/* Non-compact slot (the delegate's transcript tab): icon-only TooltipButton
+   that composes with the shared `.stop-btn` look; this rule (messages.css,
+   after composer.css) pins the 26px box and drops the old text-pill gap. */
+.subagent-stop-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
 }
 
-.subagent-topology-node.open {
-  box-shadow:
-    var(--ds-raised-shadow),
-    0 0 0 2px color-mix(in oklab, var(--ds-accent) 22%, transparent);
-}
-
-@container subagent-activity (max-width: 520px) {
-  .tool-activity-group.has-subagents .tool-activity-header {
-    flex-wrap: wrap;
-  }
-
-  .subagent-activity-metrics {
-    order: 3;
-    width: calc(100% - 24px);
-    margin-left: 20px;
-  }
-
-  .subagent-topology {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .subagent-topology-connector {
-    width: 2px;
-    height: 18px;
-    margin-left: 28px;
-  }
-
-  .subagent-topology-agents {
-    padding-left: 28px;
-  }
-
-  .subagent-topology-agents::before {
-    top: 0;
-    bottom: 36px;
-    left: 14px;
-  }
-
-  .subagent-topology-node::before {
-    width: 14px;
-  }
-}
 
 /* A tool row claims the conversation column whatever its parent displays as:
    the disclosure header is the row's only width-bearing box. */
@@ -2704,8 +2541,8 @@
 }
 
 /* A lifecycle row is a subagent row (D268): it carries the same accent the
-   topology node's avatar uses, so scanning the transcript groups it with the
-   Task card it reports on rather than with the file tools around it. */
+   child's `Task` card avatar uses, so scanning the transcript groups it with
+   the card it reports on rather than with the file tools around it. */
 .tool-row-icon.is-subagent {
   color: var(--ds-accent);
 }
@@ -2804,7 +2641,7 @@
 }
 
 /* Tool details stay in the tool row's level rather than adding a second inset. */
-.tool-row:not(.thinking):not(.subagent-topology-node) > .tool-row-body {
+.tool-row:not(.thinking) > .tool-row-body {
   margin-left: 0;
   padding-left: 0;
 }
@@ -3306,6 +3143,373 @@
   font-size: var(--text-xs);
 }
 
+/* ---------------------------------------------------------------------------
+ * Tool cards (D192 follow-up). Each shape a tool's own result earns — a
+ * terminal, a checklist, a loaded document, a labeled list, a raw payload —
+ * instead of one serialized dump. Bounded like every other detail block so a
+ * long run cannot push the reader's position down the page.
+ * ------------------------------------------------------------------------ */
+
+/* One column at every width: the command stands alone and its output follows
+   underneath, so a long command line never has to share the row with it. */
+
+.tool-terminal {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 10px;
+}
+
+.tool-terminal-pane {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 6px;
+}
+
+.tool-terminal-command {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: var(--ds-tool-row-bg);
+  padding: 10px 12px;
+  color: var(--ds-text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-terminal-output {
+  tab-size: 4;
+}
+
+.tool-terminal-stream.is-stderr .tool-row-section-head {
+  color: var(--ds-error);
+}
+
+.tool-terminal .is-bold {
+  font-weight: var(--font-weight-semibold);
+}
+
+.tool-terminal .is-underline {
+  text-decoration: underline;
+}
+
+.tool-terminal .is-black {
+  color: var(--ds-ansi-black);
+}
+
+.tool-terminal .is-red {
+  color: var(--ds-ansi-red);
+}
+
+.tool-terminal .is-green {
+  color: var(--ds-ansi-green);
+}
+
+.tool-terminal .is-yellow {
+  color: var(--ds-ansi-yellow);
+}
+
+.tool-terminal .is-blue {
+  color: var(--ds-ansi-blue);
+}
+
+.tool-terminal .is-magenta {
+  color: var(--ds-ansi-magenta);
+}
+
+.tool-terminal .is-cyan {
+  color: var(--ds-ansi-cyan);
+}
+
+.tool-terminal .is-white {
+  color: var(--ds-ansi-white);
+}
+
+.tool-terminal .is-gray {
+  color: var(--ds-ansi-gray);
+}
+
+.tool-terminal .is-bright-red {
+  color: var(--ds-ansi-bright-red);
+}
+
+.tool-terminal .is-bright-green {
+  color: var(--ds-ansi-bright-green);
+}
+
+.tool-terminal .is-bright-yellow {
+  color: var(--ds-ansi-bright-yellow);
+}
+
+.tool-terminal .is-bright-blue {
+  color: var(--ds-ansi-bright-blue);
+}
+
+.tool-terminal .is-bright-magenta {
+  color: var(--ds-ansi-bright-magenta);
+}
+
+.tool-terminal .is-bright-cyan {
+  color: var(--ds-ansi-bright-cyan);
+}
+
+.tool-terminal .is-bright-white {
+  color: var(--ds-ansi-bright-white);
+}
+
+/* A checklist: what the call wrote, with the same status glyph the Composer's
+   dock uses. */
+.tool-todo {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.tool-todo-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-todo-bar {
+  display: block;
+  min-width: 0;
+  flex: 1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--ds-tile-deep);
+}
+
+.tool-todo-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--ds-success);
+}
+
+.tool-todo-progress-text {
+  flex: none;
+  color: var(--ds-text-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-todo-list {
+  display: grid;
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  overscroll-behavior-y: contain;
+  border-radius: var(--radius-md);
+  background: var(--ds-tile);
+  padding: 6px 8px;
+  gap: 2px;
+  list-style: none;
+  scrollbar-gutter: stable;
+}
+
+.tool-todo-row {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  border-radius: var(--radius-sm);
+  padding: 5px 6px;
+  color: var(--ds-text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+.tool-todo-row.is-in_progress {
+  background: color-mix(in oklab, var(--ds-accent) 10%, transparent);
+  color: var(--ds-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+.tool-todo-row.is-completed,
+.tool-todo-row.is-cancelled {
+  color: var(--ds-text-muted);
+}
+
+.tool-todo-row.is-completed .tool-todo-content {
+  text-decoration: line-through;
+}
+
+.tool-todo-symbol {
+  display: inline-flex;
+  flex: none;
+  width: 16px;
+  justify-content: center;
+  color: var(--ds-text-muted);
+}
+
+.tool-todo-row.is-completed .tool-todo-symbol {
+  color: var(--ds-success);
+}
+
+.tool-todo-content {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.tool-todo-priority {
+  flex: none;
+  border-radius: var(--radius-xs);
+  background: var(--ds-tile-deep);
+  padding: 0 6px;
+  color: var(--ds-text-muted);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-row);
+  white-space: nowrap;
+}
+
+/* A loaded document (the `Skill` tool): name, its own metadata, its body. */
+.tool-document {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.tool-document-head {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.tool-document-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ds-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-document-id {
+  flex: none;
+  border-radius: var(--radius-xs);
+  background: var(--ds-tile-deep);
+  padding: 0 5px;
+  color: var(--ds-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-row);
+}
+
+.tool-document-meta {
+  max-height: 120px;
+}
+
+.tool-document-body {
+  max-height: 360px;
+  overflow: auto;
+  overscroll-behavior-y: contain;
+  border-radius: var(--radius-md);
+  background: var(--ds-tool-row-bg);
+  padding: 10px 12px;
+  color: var(--ds-text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+.tool-document-body > :first-child {
+  margin-top: 0;
+}
+
+.tool-document-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* A labeled list of scalar names (activated tools, task ids). */
+.tool-values {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.tool-values-head {
+  color: var(--ds-text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.tool-values-list {
+  display: grid;
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  overscroll-behavior-y: contain;
+  border-radius: var(--radius-md);
+  background: var(--ds-tile);
+  padding: 6px 10px;
+  gap: 2px;
+  list-style: none;
+  scrollbar-gutter: stable;
+}
+
+.tool-value-item {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ds-text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+}
+
+/* The untouched payload, one explicit disclosure away. */
+.tool-raw {
+  border-radius: var(--radius-md);
+  background: var(--ds-tile);
+  padding: 4px 8px;
+}
+
+.tool-raw-summary {
+  cursor: pointer;
+  padding: 4px 2px;
+  color: var(--ds-text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.tool-raw-summary:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--ds-accent) 58%, transparent);
+  outline-offset: 2px;
+}
+
+.tool-raw-body {
+  padding: 4px 0 8px;
+}
+
+.tool-raw-content {
+  white-space: pre-wrap;
+}
+
+/* A mutation's diff is hosted by the tool row that made it, so the row ends
+   with its +a/−d instead of a second collapsed row naming the same file. */
+.tool-row-header > .review-change-card-counts {
+  flex: none;
+  margin-left: 2px;
+}
+
+.tool-row-review {
+  margin-top: 10px;
+}
+
+/* A path row prints its middle omitted and keeps the whole value in the title
+   and the file menu; nothing here clips it a second time. */
+.tool-row-summary.is-path {
+  min-width: 0;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -3349,15 +3553,16 @@
   font-size: var(--text-xs);
 }
 
-/* Process, activity groups and item details own independent disclosure levels. */
+/* Process and item details own independent disclosure levels: a contiguous
+   activity segment draws no fold of its own, so its rows are visible the
+   moment the process header is open. */
 .turn-process {
   width: 100%;
   margin: 0 0 8px;
   min-width: 0;
 }
 
-.turn-process.open > .tool-activity-header > .tool-activity-caret,
-.process-activity-group.open > .tool-activity-header > .tool-activity-caret {
+.turn-process.open > .tool-activity-header > .tool-activity-caret {
   transform: rotate(90deg);
 }
 
@@ -3366,8 +3571,7 @@
   padding-left: 18px;
 }
 
-.turn-process-body[hidden],
-.process-activity-body[hidden] {
+.turn-process-body[hidden] {
   display: none;
 }
 
@@ -3376,25 +3580,17 @@
   margin-block: 8px;
 }
 
+/* One activity segment. The container states chronology and nothing else:
+   consecutive segments read as separate beats of the turn without a fold
+   between them. */
 .process-activity-group {
   width: 100%;
   min-width: 0;
   margin-block: 6px;
 }
 
-.process-activity-body {
-  position: relative;
-  min-width: 0;
-}
-
-.process-activity-group.grouped > .process-activity-body {
-  margin-block: 3px 6px;
-  padding-inline-start: 12px;
-}
-
-/* The nested process levels share the base header row: no level-specific
-   width, label or caret overrides are needed now that the row claims the
-   band itself (see `.tool-activity-header`). */
+/* The process header is the only row of its kind now, and the base
+   `.tool-activity-header` row claims the band itself. */
 
 .thinking-compact {
   display: flex;

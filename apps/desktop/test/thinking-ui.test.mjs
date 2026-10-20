@@ -25,6 +25,9 @@ const transcriptSharedSource = await readTranscriptModule("shared.tsx");
 const transcriptToolRowSource = await readTranscriptModule("ToolRow.tsx");
 const transcriptDisclosureSource = await readTranscriptModule("disclosure.tsx");
 const transcriptActivityGroupSource = await readTranscriptModule("ActivityGroup.tsx");
+const transcriptProcessGroupSource = await readTranscriptModule(
+  "ProcessActivityGroup.tsx",
+);
 const appSource = await readFile(
   new URL("../src/components/ChatSurface.tsx", import.meta.url),
   "utf8",
@@ -245,14 +248,20 @@ test("transcript keeps assistant thinking in a separate disclosure", () => {
   assert.match(transcriptSource, /tool-row thinking/);
   assert.match(transcriptSource, /className="tool-row-header"/);
   assert.match(transcriptSource, /aria-expanded=\{open\}/);
-  assert.match(transcriptSource, /aria-hidden=\{!open\}/);
-  assert.match(transcriptSource, /inert=\{!open\}/);
+  assert.match(
+    transcriptSource,
+    /\{open \? \(\s*<div className="tool-row-body" id=\{detailsId\} ref=\{disclosure\.bodyRef\}/,
+  );
+  // The process body is inert, not merely hidden, while its header is closed.
+  assert.match(transcriptSource, /inert=\{!disclosure\.open\}/);
   assert.match(transcriptSource, /IconSparkles/);
   assert.match(transcriptSource, /messageThinking as thinkingText/);
   assert.match(transcriptSource, /thinking-prose[\s\S]*?Markdown source=\{text\}/);
   assert.match(transcriptSource, /CopyButton text=\{content\}/);
   assert.match(transcriptSource, /messageThinking as thinkingText/);
-  assert.match(transcriptSource, /onlyThinking = useMemo\(\(\) => items\.every/);
+  // The thinking disclosure owns its own body; a group's header copy is the
+  // ordinary process summary, so the group no longer computes a thinking label.
+  assert.doesNotMatch(transcriptSource, /const onlyThinking =/);
   assert.match(stylesSource, /\.thinking-prose/);
 });
 
@@ -265,9 +274,15 @@ test("expanded assistant activity rails collapse their disclosures", () => {
     transcriptToolRowSource,
     /className="tool-row-body"[\s\S]*?<DisclosureCollapseRail[\s\S]*?onCollapse=\{collapseRow\}/,
   );
+  // The whole process owns the only group-level rail: a contiguous activity
+  // segment has no body of its own to collapse.
   assert.match(
-    transcriptActivityGroupSource,
-    /className="tool-activity-body"[\s\S]*?<DisclosureCollapseRail[\s\S]*?onCollapse=\{collapseDisclosure\}/,
+    transcriptSource,
+    /className="turn-process-body"[\s\S]*?<DisclosureCollapseRail label=\{t\("chat\.collapseProcess"\)\} onCollapse=\{disclosure\.collapse\}/,
+  );
+  assert.doesNotMatch(
+    transcriptProcessGroupSource,
+    /DisclosureCollapseRail|collapseActivityGroup|tool-activity-header/,
   );
   assert.match(
     stylesSource,
@@ -276,25 +291,43 @@ test("expanded assistant activity rails collapse their disclosures", () => {
   assert.match(stylesSource, /\.disclosure-collapse-rail:focus-visible\s*\{/);
 });
 
-test("tool and search rows stay collapsed while thinking keeps its leaf default", () => {
+test("tool and search rows stay collapsed while the checklist and thinking hold the live defaults", () => {
   assert.match(transcriptDisclosureSource, /export function useAutomaticDisclosure\(/);
   assert.match(transcriptDisclosureSource, /revealRequest\?: number/);
   assert.match(transcriptDisclosureSource, /const currentOpen = useRef\(open\)/);
   assert.match(transcriptDisclosureSource, /const setManualOpen = useCallback/);
-  assert.match(transcriptSource, /useAutomaticDisclosure\(\s*hasSubagentTopology \? live : visibleItems\.length <= 1/);
+  // No contiguous segment draws a fold of its own any more: the process header is
+  // the only automatic level above a row, so nothing can hide a row it holds and
+  // no segment can default open or closed behind the reader's back.
+  assert.doesNotMatch(transcriptActivityGroupSource, /useAutomaticDisclosure\(/);
+  assert.doesNotMatch(transcriptProcessGroupSource, /tool-activity-header|aria-expanded|inert=/);
   assert.match(
     transcriptSource,
     /<ThinkingRow[\s\S]*?autoOpen=\{live && item === lastItem\}/,
   );
-  // The leaf default stays with thinking only; a tool, hosted-search or plan
-  // row waits for an explicit user action in either mode.
+  // Only the checklist opens itself: its body is the plan the user is watching,
+  // and it is a derived default, so a later manual collapse still wins. A read,
+  // run, search or plan row waits for an explicit user action in either mode.
   assert.doesNotMatch(transcriptSource, /autoOpenLatest/);
   assert.doesNotMatch(transcriptSource, /<ToolRow[^>]*\sautoOpen/);
-  assert.match(transcriptToolRowSource, /const disclosure = useAutomaticDisclosure\(\s*false,\s*revealRequest,\s*disclosureKey\("tool", message\.id\),\s*\);/);
-  assert.match(transcriptSource, /onClick=\{toggleDisclosure\}/);
-  assert.match(transcriptSource, /onCollapse=\{collapseDisclosure\}/);
-  assert.match(transcriptSource, /onUserInteraction=\{claimDisclosure\}/);
-  assert.match(transcriptSource, /const tail = live && !open \? currentDetail : ""/);
+  assert.match(
+    transcriptToolRowSource,
+    /const disclosure = useAutomaticDisclosure\(\s*action === "todo",\s*revealRequest,\s*disclosureKey\("tool", message\.id\),\s*\);/,
+  );
+  // No status, failure or streaming state may become a second opening default.
+  assert.doesNotMatch(
+    transcriptToolRowSource,
+    /useAutomaticDisclosure\(\s*(status|failed|run|open|live)\b/,
+  );
+  // The process owns its own toggle and rail; the segment between it and a row
+  // adds no level, so a row's interaction claims the process directly.
+  assert.match(transcriptSource, /onClick=\{disclosure\.toggle\}/);
+  assert.doesNotMatch(
+    transcriptActivityGroupSource,
+    /onUserInteraction=\{disclosure\.claim\}/,
+  );
+  assert.match(transcriptActivityGroupSource, /onUserInteraction=\{claimNoop\}/);
+  assert.doesNotMatch(transcriptSource, /const tail = live && !open/);
 });
 
 test("activity headers omit the redundant status capsule", () => {

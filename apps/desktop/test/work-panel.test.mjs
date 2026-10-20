@@ -299,13 +299,20 @@ test("work panel header exposes a scrollable tab strip and direct new-page actio
   );
   assert.doesNotMatch(pluginSurface, /isResizing/);
   assert.doesNotMatch(panelSource, /createPortal|newTabMenuRef|menuOpen/);
-  assert.doesNotMatch(panelSource, /onContextMenu|work-panel-context-menu/);
+  // The strip menu is the shared pointer-anchored primitive, not a private
+  // all-tabs list: no portal of its own, only per-tab close scopes.
+  assert.match(panelSource, /useContextMenu\(\)/);
+  assert.match(panelSource, /<ContextMenu state=\{contextMenu\} onClose=\{closeContextMenu\} \/>/);
+  assert.match(panelSource, /panel\.closeOtherTabs/);
+  assert.match(panelSource, /panel\.closeTabsToRight/);
+  assert.match(panelSource, /panel\.closeAllTabs/);
+  assert.doesNotMatch(panelSource, /work-panel-context-menu/);
   assert.doesNotMatch(globalStyles, /work-panel-new-menu|work-panel-menu-item|work-panel-open-dot/);
   assert.match(globalStyles, /\.work-panel-tab-strip \{[^}]*overflow-x:\s*auto;/s);
   assert.match(globalStyles, /\.work-panel-tab-strip \{[^}]*gap:\s*6px;/s);
   assert.match(
     globalStyles,
-    /\.work-panel-tab \{[^}]*min-width:\s*92px;[^}]*flex:\s*0 0 auto;/s,
+    /\.work-panel-tab \{[^}]*min-width:\s*72px;[^}]*flex:\s*0 0 auto;/s,
   );
   assert.doesNotMatch(globalStyles, /\.work-panel-actions \{[^}]*margin-left:\s*auto;/s);
   assert.doesNotMatch(
@@ -539,8 +546,8 @@ test("file preview request ids stay unique across session contexts", () => {
     /const nextFileRequest = \(tab\?: WorkPanelTab\)[\s\S]*?createWorkPanelFileRequest\(tab, \+\+workPanelFileRequestSeq\)/,
   );
   assert.ok(
-    storeSource.match(/nextFileRequest\((?:tab|activeTab)\)/g)?.length === 4,
-    "open, replace, activation, and close paths must share the position-preserving request",
+    storeSource.match(/nextFileRequest\((?:tab|activeTab)\)/g)?.length === 5,
+    "open, replace, activation, close, and batch close paths must share the position-preserving request",
   );
   assert.doesNotMatch(storeSource, /seq:\s*\([^)]*fileRequest\?\.seq[^)]*\) \+ 1/);
 });

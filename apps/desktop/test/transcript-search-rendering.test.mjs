@@ -199,11 +199,14 @@ test("rendered Markdown and file chips map source-only hits to their visible own
           ),
         ),
       );
-    assert.match(group(null), /class="tool-activity-header" aria-expanded="false"/);
-    assert.match(
-      group({ ...focus, messageId: parent.id, query: "" }),
-      /class="tool-activity-header" aria-expanded="true"/,
-    );
+    // A contiguous activity segment draws no fold of its own: the row it holds is
+    // rendered with or without a search targeting it, and the process above it is
+    // the only disclosure left to reveal.
+    const revealed = group({ ...focus, messageId: parent.id, query: "" });
+    assert.doesNotMatch(group(null), /tool-activity-header/);
+    assert.doesNotMatch(revealed, /tool-activity-header/);
+    assert.match(group(null), /data-message-id="parent-row"/);
+    assert.match(revealed, /data-message-id="parent-row"/);
 
     assert.match(panel, /<strong data-source-start="5" data-source-end="15">needle<\/strong>/);
     assert.doesNotMatch(panel, /subagent-transcript-empty/);

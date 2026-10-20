@@ -328,13 +328,17 @@ export function aggregateChainMetricsFromMessages(
 
 /**
  * One-line token summary for topology nodes, panel headers/footers.
- * Keeps occupancy and spend lexically separate: `ctx ~` vs `spent`.
+ * Keeps occupancy and spend lexically separate: `ctx` vs `spent`. Occupancy
+ * stays an estimate — the number is never presented as a runtime report — but
+ * it is not prefixed with a tilde: the displayed delegation cards, dock and
+ * tab state the figure plainly and the estimate is flagged where the detail
+ * surfaces carry it.
  */
 export function formatSubagentMetricsLine(metrics: SubagentMetrics): string {
   const spend = metrics.usage ? `spent ${compactTokens(metrics.usage.totalTokens)}` : null;
   const occupancy =
     metrics.contextTokens !== undefined
-      ? `ctx ~${compactTokens(metrics.contextTokens)}`
+      ? `ctx ${compactTokens(metrics.contextTokens)}`
       : null;
   const base = formatSubagentProgressMetrics({
     toolCalls: metrics.toolCalls,
