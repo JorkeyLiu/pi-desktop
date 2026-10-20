@@ -36,6 +36,7 @@ export type ShutdownDependencies = {
   getSidecar: () => AgentSidecar | null;
   getMcpControl: () => McpControlServer | null;
   activeTurns: Map<string, string>;
+  hasRunningSessions: () => boolean;
   persistenceOutbox: PersistenceOutbox;
   inflightCheckpointer: InflightCheckpointer;
   flushEventPersistence: () => Promise<void>;
@@ -61,6 +62,7 @@ export function registerShutdownHandlers({
   getSidecar,
   getMcpControl,
   activeTurns,
+  hasRunningSessions,
   persistenceOutbox,
   inflightCheckpointer,
   flushEventPersistence,
@@ -96,9 +98,9 @@ export function registerShutdownHandlers({
     if (state.shutdownComplete) return;
     event.preventDefault();
     if (state.shutdownPromise) return;
-
-    // Show a confirmation dialog on the first explicit quit (Cmd+Q, tray quit,
-    // application-menu Quit). The data-saving shutdown runs after confirmation.
+    // Confirm the first explicit quit (Cmd+Q, tray quit, application-menu
+    // Quit) only while agent work is still running in any session. An idle
+    // quit keeps the existing ordered shutdown below but skips the dialog.
     // Skip confirmation in automated probe/capture modes where no human is
     // present to interact with the dialog.
     const isAutomatedMode =
@@ -111,7 +113,8 @@ export function registerShutdownHandlers({
     // behind a dialog fails the update. There is no decision left either: the
     // user chose "restart to update" to get here.
     const isUpdateRestart = updater.isInstallingUpdate();
-    if (!state.quitConfirmed && !isAutomatedMode && !isUpdateRestart) {
+    const needsQuitConfirmation = !state.quitConfirmed && hasRunningSessions();
+    if (needsQuitConfirmation && !isAutomatedMode && !isUpdateRestart) {
       state.quitConfirmed = true;
       void confirmQuitDialog().then((confirmed) => {
         if (confirmed) {

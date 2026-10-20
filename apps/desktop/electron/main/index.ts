@@ -1040,6 +1040,7 @@ registerShutdownHandlers({
   getSidecar,
   getMcpControl: () => mainState.mcpControl,
   activeTurns,
+  hasRunningSessions: () => activeTurns.size > 0,
   persistenceOutbox,
   inflightCheckpointer,
   flushEventPersistence: eventPersistence.flush,

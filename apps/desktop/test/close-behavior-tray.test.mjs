@@ -115,7 +115,7 @@ test("close behavior is not settable on macOS", () => {
   assert.match(body, /behavior !== "tray" && behavior !== "quit"/);
 });
 
-test("explicit quit asks for confirmation except probes and update restarts", () => {
+test("explicit quit confirms only while sessions are still running", () => {
   assert.match(closeBehaviorSource, /const confirmQuitDialog = async/);
   assert.match(closeBehaviorSource, /labels\.tray\.confirmQuitTitle/);
   const quitHandler = shutdownSource.slice(
@@ -123,10 +123,17 @@ test("explicit quit asks for confirmation except probes and update restarts", ()
   );
   const body = quitHandler.slice(0, quitHandler.indexOf("shutdownPromise ="));
   assert.match(body, /PI_DESKTOP_BOOT_PROBE/);
+  // The dialog fires only when agent work is still running in any session;
+  // an idle quit proceeds straight to the ordered shutdown below.
   assert.match(
     body,
-    /!state\.quitConfirmed && !isAutomatedMode && !isUpdateRestart/,
-    "automated probes and update restarts are the only confirmation exemptions",
+    /const needsQuitConfirmation = !state\.quitConfirmed && hasRunningSessions\(\);/,
+    "confirmation requires a still-running session in any tab",
+  );
+  assert.match(
+    body,
+    /if \(needsQuitConfirmation && !isAutomatedMode && !isUpdateRestart\)/,
+    "probes and update restarts skip the dialog even with running sessions",
   );
   assert.match(
     body,
@@ -144,6 +151,13 @@ test("explicit quit asks for confirmation except probes and update restarts", ()
   assert.match(
     windowSource,
     /already chose to quit in the close-behavior dialog[\s\S]*?windowState\.quitConfirmed = true/,
+  );
+  // The production call site feeds the live turn map, which records every
+  // session's turn (foreground, background, child and approved-plan turns).
+  assert.match(
+    mainSource,
+    /hasRunningSessions: \(\) => activeTurns\.size > 0,/,
+    "the quit gate reads the authoritative active-turn map",
   );
 });
 
