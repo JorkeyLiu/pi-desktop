@@ -504,27 +504,22 @@ globalThis.toolCardsProbe = async () => {
       todoHeader().getAttribute("aria-expanded") === "true" && Boolean(todoBody()),
     );
 
-    // ── 5. A path summary keeps its tail and its literal title ──
+    // ── 5. A path summary names its file and keeps the whole value ──
     const editHost = mount(wide, <ToolRow message={editWithReview("edit-1")} />);
-    // The hint is fitted from the row's measured width, so it is read after the
-    // layout pass that paints it rather than at the mount that enqueued it.
     await settle();
     const summary = editHost.querySelector<HTMLElement>(".tool-row-summary")!;
     check(
-      // Either the value fits whole, which prints the tail as well, or the
-      // middle is the only thing omitted.
-      "a long path prints its tail",
-      summary.textContent!.endsWith("ToolTerminal.tsx") &&
-        (summary.textContent === LONG_PATH || summary.textContent!.includes("…")),
+      "a long path prints the file's own name",
+      summary.textContent === "ToolTerminal.tsx",
       summary.textContent,
     );
     check(
-      "the summary carries a title for the whole value",
-      summary.title.length > 0,
+      "the summary carries the whole value as its title",
+      summary.title === LONG_PATH,
       summary.title,
     );
     check(
-      "the row does not clip the tail a second time",
+      "the name is painted without overflowing its row",
       summary.scrollWidth <= summary.clientWidth + 1,
       { scrollWidth: summary.scrollWidth, clientWidth: summary.clientWidth },
     );
@@ -1234,27 +1229,28 @@ globalThis.toolCardsProbe = async () => {
         shown(fixHost.querySelector('[data-message-id="fix-bash-1"] .tool-terminal')),
     );
 
-    // ── 6. A file row keeps the file's own name at every row width ──
-    // The collapsed hint names a file and the reader recognizes it by its last
-    // segment, so that tail has to be painted inside the row, not merely
-    // present in the DOM, however narrow the column happens to be (the child
-    // transcript mounts this same row). The directory gives up its width
-    // first; only a file name that cannot fit at all may omit its own middle,
-    // and then its extension stays. Nothing here re-spells the path: the raw
-    // value keeps its absolute/relative form, its separators and its case.
+    // ── 7. A file row names the file and offers the whole path on hover ──
+    // The collapsed hint is scanned, not read, so it prints the last segment
+    // and nothing else: the directory never takes the line and no omission is
+    // composed. The whole raw value is still one hover (and one screen-reader
+    // description) away, and a name too long for the row ellipsizes at the
+    // row's own edge instead of overflowing it. Nothing here is measured: the
+    // hint is the same text at every width.
     const EXTERNAL_ROOT = "/Users/jorkeyliu/workspace/repos/pi-desktop-mw/apps/desktop";
     const EXTERNAL_NAME = "use-transcript-scroll.ts";
     const EXTERNAL_PATH = `${EXTERNAL_ROOT}/src/features/chat/transcript/hooks/${EXTERNAL_NAME}`;
     const SIBLING_PATH = `${EXTERNAL_ROOT}/src/features/chat/transcript/hooks/use-transcript-window.ts`;
-    const LONG_NAME_PATH = `${EXTERNAL_ROOT}/src/features/chat/transcript/hooks/a-considerably-longer-name-for-one-row-of-the-transcript.spec.mjs`;
+    const LONG_NAME = "a-considerably-longer-name-for-one-row-of-the-transcript.spec.mjs";
+    const LONG_NAME_PATH = `${EXTERNAL_ROOT}/src/features/chat/transcript/hooks/${LONG_NAME}`;
     const WINDOWS_PATH = `C:\\Users\\jorkeyliu\\workspace\\repos\\pi-desktop-mw\\apps\\desktop\\src\\features\\hooks\\${EXTERNAL_NAME}`;
     const RELATIVE_PATH = `src/features/chat/transcript/hooks/${EXTERNAL_NAME}`;
+    const DIRECTORY_PATH = `${EXTERNAL_ROOT}/src/features/chat/`;
     const pathCases = [
-      { key: "absolute-external", path: EXTERNAL_PATH, tail: EXTERNAL_NAME },
-      { key: "same-prefix-sibling", path: SIBLING_PATH, tail: "use-transcript-window.ts" },
-      { key: "long-name", path: LONG_NAME_PATH, tail: ".spec.mjs" },
-      { key: "windows-separators", path: WINDOWS_PATH, tail: EXTERNAL_NAME },
-      { key: "relative", path: RELATIVE_PATH, tail: EXTERNAL_NAME },
+      { key: "absolute-external", path: EXTERNAL_PATH, name: EXTERNAL_NAME },
+      { key: "same-prefix-sibling", path: SIBLING_PATH, name: "use-transcript-window.ts" },
+      { key: "long-name", path: LONG_NAME_PATH, name: LONG_NAME },
+      { key: "windows-separators", path: WINDOWS_PATH, name: EXTERNAL_NAME },
+      { key: "relative", path: RELATIVE_PATH, name: EXTERNAL_NAME },
     ];
     const readPathRow = (id: string, path: string) =>
       message(id, "", {
@@ -1276,45 +1272,44 @@ globalThis.toolCardsProbe = async () => {
       pathStage.scrollIntoView({ block: "start" });
     };
 
-    /** The tail's own painted box, against the box that would clip it. */
-    const tailPaint = (summary: HTMLElement, tail: string) => {
+    /** Where the hint's own text is painted, against the box that clips it. */
+    const namePaint = (summary: HTMLElement, name: string) => {
       const box = summary.getBoundingClientRect();
       const walker = document.createTreeWalker(summary, NodeFilter.SHOW_TEXT);
       for (let node = walker.nextNode(); node; node = walker.nextNode()) {
         const data = (node as Text).data;
-        const at = data.lastIndexOf(tail);
+        const at = data.indexOf(name);
         if (at < 0) continue;
         const range = document.createRange();
+        // The hint starts at the row's own left edge; what the row does with a
+        // name too long for it is the stylesheet's ellipsis, not a shortened
+        // string.
         range.setStart(node, at);
-        range.setEnd(node, at + tail.length);
+        range.setEnd(node, at + Math.min(name.length, 8));
         const rect = range.getBoundingClientRect();
         return {
-          painted: rect.width > 0 && rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5,
-          tailBox: [Math.round(rect.left), Math.round(rect.right)],
+          painted: rect.width > 0 && rect.left >= box.left - 0.5 && rect.left <= box.right,
+          startBox: [Math.round(rect.left), Math.round(rect.right)],
           rowBox: [Math.round(box.left), Math.round(box.right)],
           text: summary.textContent,
           title: summary.title,
         };
       }
-      return { painted: false, missing: tail, text: summary.textContent, title: summary.title };
+      return { painted: false, missing: name, text: summary.textContent, title: summary.title };
     };
-    /**
-     * The printed hint is a prefix and a suffix of the raw value and nothing
-     * else. A head either spells the start of the whole value or — once the
-     * directory has given up its room entirely — the start of the file name.
-     */
-    const sameSpelling = (shown: string, raw: string) => {
-      const [head = "", ...rest] = shown.split("…");
-      const tail = rest.join("…");
-      const name = raw.split(/[/\\]/).pop() ?? raw;
-      return (
-        (raw.startsWith(head) || name.startsWith(head)) &&
-        raw.endsWith(tail) &&
-        shown.replace("…", "").length <= raw.length
-      );
+    /** The whole path the row gives a screen reader, from its description. */
+    const describedPath = (host: HTMLElement) => {
+      const header = host.querySelector<HTMLElement>(".tool-row-header");
+      const id = header?.getAttribute("aria-describedby") ?? "";
+      if (!id) return null;
+      const target = document.getElementById(id);
+      return {
+        id,
+        text: target?.textContent ?? null,
+        hidden: target?.classList.contains("sr-only") === true,
+      };
     };
 
-    const rootsSeen: Record<number, number> = {};
     for (const width of [280, 340, 700]) {
       const column = document.createElement("div");
       column.style.cssText = `width:${width}px;min-width:0`;
@@ -1325,40 +1320,58 @@ globalThis.toolCardsProbe = async () => {
         await settle(2);
         const summary = host.querySelector<HTMLElement>(".tool-row-summary")!;
         summaries.push(summary);
-        const paint = tailPaint(summary, item.tail);
+        const paint = namePaint(summary, item.name);
+        check(
+          `${width}px: the hint is the file name alone (${item.key})`,
+          summary.textContent === item.name,
+          { shown: summary.textContent, name: item.name },
+        );
         check(
           `${width}px: the file name is painted inside the row (${item.key})`,
           paint.painted,
           paint,
         );
+        // The name either fits the row whole or is clipped by the row's own
+        // ellipsis: the hint never leaves its box, and nothing shortened it.
+        const whole = document.createRange();
+        const text = summary.firstChild;
+        if (text) {
+          whole.selectNodeContents(text);
+        }
+        const nameWidth = text ? whole.getBoundingClientRect().width : 0;
         check(
-          `${width}px: the row keeps no clipped overhang (${item.key})`,
-          summary.scrollWidth <= summary.clientWidth + 1,
-          { scrollWidth: summary.scrollWidth, clientWidth: summary.clientWidth },
+          `${width}px: the name fits whole or ellipsizes inside the row (${item.key})`,
+          nameWidth <= summary.clientWidth
+            ? summary.scrollWidth <= summary.clientWidth + 1
+            : getComputedStyle(summary).textOverflow === "ellipsis",
+          {
+            nameWidth: Math.round(nameWidth * 100) / 100,
+            scrollWidth: summary.scrollWidth,
+            clientWidth: summary.clientWidth,
+            textOverflow: getComputedStyle(summary).textOverflow,
+          },
         );
         const rowHeader = host.querySelector<HTMLElement>(".tool-row-header");
-        const hoverText = [summary.title, rowHeader?.title ?? ""].filter(Boolean);
         check(
           `${width}px: the whole raw path stays available on hover (${item.key})`,
-          hoverText.includes(item.path),
-          hoverText,
+          summary.title === item.path && rowHeader?.title === item.path,
+          { hintTitle: summary.title, headerTitle: rowHeader?.title, raw: item.path },
         );
+        const described = describedPath(host);
         check(
-          `${width}px: the row prints the original spelling (${item.key})`,
-          sameSpelling(summary.textContent ?? "", item.path),
-          { shown: summary.textContent, raw: item.path },
+          `${width}px: the row describes itself with the whole path (${item.key})`,
+          described?.text === item.path && described.hidden === true,
+          described ?? { described: null },
         );
       }
       const [first, sibling] = summaries;
       check(
         `${width}px: two files under one prefix stay distinguishable`,
         first.textContent !== sibling.textContent &&
-          Boolean(first.textContent?.endsWith(EXTERNAL_NAME)) &&
-          Boolean(sibling.textContent?.endsWith("use-transcript-window.ts")),
+          first.textContent === EXTERNAL_NAME &&
+          sibling.textContent === "use-transcript-window.ts",
         { first: first.textContent, sibling: sibling.textContent },
       );
-      // The leading root is what the width buys: a wider row keeps more of it.
-      rootsSeen[width] = (first.textContent ?? "").split("…")[0].length;
 
       // The chips and the diff counts keep their own space; the name yields
       // before them, never the other way round.
@@ -1381,17 +1394,68 @@ globalThis.toolCardsProbe = async () => {
       );
       check(
         `${width}px: the mutation row still paints its file name`,
-        tailPaint(countsPaint, "ToolTerminal.tsx").painted,
-        tailPaint(countsPaint, "ToolTerminal.tsx"),
+        countsPaint.textContent === "ToolTerminal.tsx" &&
+          namePaint(countsPaint, "ToolTerminal.tsx").painted,
+        { text: countsPaint.textContent, paint: namePaint(countsPaint, "ToolTerminal.tsx") },
       );
     }
-    check(
-      "a wider row keeps more of the leading root",
-      rootsSeen[700] > rootsSeen[340] && rootsSeen[340] >= rootsSeen[280],
-      rootsSeen,
-    );
 
-    // A pane drag re-fits the hint: the row's width is observed, not read once.
+    // An unusually long name ellipsizes where the row ends, and the whole name
+    // is still what the row holds — the clipping is the stylesheet's, not a
+    // shortened string. A wider row then fits it whole, unchanged.
+    {
+      const column = document.createElement("div");
+      column.style.cssText = "width:280px;min-width:0";
+      pathStage.append(column);
+      const host = mount(column, <ToolRow message={readPathRow("long-narrow", LONG_NAME_PATH)} />);
+      await settle(2);
+      const summary = host.querySelector<HTMLElement>(".tool-row-summary")!;
+      const header = host.querySelector<HTMLElement>(".tool-row-header")!;
+      const style = getComputedStyle(summary);
+      check(
+        "a name too long for the row ellipsizes inside it",
+        summary.textContent === LONG_NAME &&
+          style.textOverflow === "ellipsis" &&
+          style.whiteSpace === "nowrap" &&
+          summary.scrollWidth - summary.clientWidth > 100 &&
+          summary.getBoundingClientRect().right <= header.getBoundingClientRect().right + 0.5,
+        {
+          text: summary.textContent,
+          textOverflow: style.textOverflow,
+          scrollWidth: summary.scrollWidth,
+          clientWidth: summary.clientWidth,
+          title: summary.title,
+        },
+      );
+      check(
+        "the long name is still the whole path's name on hover",
+        summary.title === LONG_NAME_PATH,
+        summary.title,
+      );
+      column.style.width = "900px";
+      await settle(2);
+      check(
+        "the same name fits whole once the row is wide enough",
+        summary.textContent === LONG_NAME &&
+          summary.scrollWidth <= summary.clientWidth + 1,
+        {
+          text: summary.textContent,
+          scrollWidth: summary.scrollWidth,
+          clientWidth: summary.clientWidth,
+        },
+      );
+      // A value that names a directory prints its last segment, so a Grep row
+      // never reads as a file that does not exist.
+      const dirHost = mount(column, <ToolRow message={readPathRow("directory", DIRECTORY_PATH)} />);
+      await settle(2);
+      check(
+        "a directory path prints its last segment and keeps the separator",
+        dirHost.querySelector<HTMLElement>(".tool-row-summary")?.textContent === "chat/",
+        dirHost.querySelector<HTMLElement>(".tool-row-summary")?.textContent,
+      );
+    }
+
+    // A pane drag changes nothing about the hint: there is no fit to redo.
     const dragColumn = document.createElement("div");
     dragColumn.style.cssText = "width:700px;min-width:0";
     pathStage.append(dragColumn);
@@ -1402,24 +1466,23 @@ globalThis.toolCardsProbe = async () => {
     await settle(2);
     const dragSummary = dragHost.querySelector<HTMLElement>(".tool-row-summary")!;
     const dragWide = {
-      head: (dragSummary.textContent ?? "").split("…")[0].length,
-      painted: tailPaint(dragSummary, EXTERNAL_NAME).painted,
       text: dragSummary.textContent,
+      overhang: dragSummary.scrollWidth - dragSummary.clientWidth,
     };
     dragColumn.style.width = "280px";
     await settle(2);
     const dragNarrow = {
-      head: (dragSummary.textContent ?? "").split("…")[0].length,
-      painted: tailPaint(dragSummary, EXTERNAL_NAME).painted,
       text: dragSummary.textContent,
       overhang: dragSummary.scrollWidth - dragSummary.clientWidth,
+      title: dragSummary.title,
     };
     check(
-      "a pane drag re-fits the path to the width it now has",
-      dragWide.painted &&
-        dragNarrow.painted &&
+      "a pane drag leaves the name and the full-path hover unchanged",
+      dragNarrow.text === EXTERNAL_NAME &&
+        dragNarrow.text === dragWide.text &&
+        dragWide.overhang <= 1 &&
         dragNarrow.overhang <= 1 &&
-        dragNarrow.head < dragWide.head,
+        dragNarrow.title === EXTERNAL_PATH,
       { wide: dragWide, narrow: dragNarrow },
     );
 

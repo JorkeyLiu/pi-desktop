@@ -202,6 +202,9 @@ function HostToolRow({
     [i18n.language],
   );
   const detailsId = useId();
+  // The row shows a file name; the whole path is its description, so a reader
+  // who needs the directory hears it without it taking the hint's line.
+  const pathId = useId();
   const localToolsAllowed = useChatSessionCapability("canUseLocalTools");
   const root = useAppStore((s) => localToolsAllowed ? s.workspace?.path : undefined);
   const openTarget = useOpenPreviewTarget();
@@ -411,6 +414,7 @@ function HostToolRow({
             className="tool-row-header"
             aria-expanded={open}
             aria-controls={hasDetails ? detailsId : undefined}
+            aria-describedby={summaryIsPath && summary ? pathId : undefined}
             disabled={!hasDetails}
             title={summary || rawName}
             onClick={() => hasDetails && toggleRow()}
@@ -448,12 +452,14 @@ function HostToolRow({
               <span
                 className={`tool-row-summary${previewTarget && localToolsAllowed ? " linked" : ""}${summaryIsPath ? " is-path" : ""}`}
                 title={
-                  previewTarget && localToolsAllowed
-                    ? previewTarget.kind === "file"
-                      ? t("chat.previewFile")
-                      : t("chat.previewUrl")
-                    : summaryIsPath
-                      ? summary
+                  // A file row prints its file name, so the whole path is what
+                  // hovering it offers; any other hint keeps its preview label.
+                  summaryIsPath
+                    ? summary
+                    : previewTarget && localToolsAllowed
+                      ? previewTarget.kind === "file"
+                        ? t("chat.previewFile")
+                        : t("chat.previewUrl")
                       : undefined
                 }
                 onClick={
@@ -524,6 +530,13 @@ function HostToolRow({
             </button>
           ) : null}
         </div>
+      {summaryIsPath && summary ? (
+        // Outside the header button on purpose: it describes the row without
+        // joining the name that button is read by.
+        <span id={pathId} className="sr-only">
+          {summary}
+        </span>
+      ) : null}
       {open && (Boolean(blocks && blocks.length > 0) || Boolean(review)) ? (
         <div className="tool-row-body" id={detailsId} ref={disclosure.bodyRef} {...disclosure.bodyEvents}>
           <DisclosureCollapseRail

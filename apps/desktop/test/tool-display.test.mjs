@@ -12,7 +12,7 @@ import {
   isToolPathSummary,
   toolSummarySpec,
 } from "../src/lib/tool-display.ts";
-import { fitToolPath } from "../src/lib/tool-path-display.ts";
+import { toolPathName } from "../src/lib/tool-path-display.ts";
 
 test("maps built-in tools to concise Codex-style actions", () => {
   assert.equal(getToolAction("Read"), "read");
@@ -117,38 +117,31 @@ test("provider-namespaced aliases reach the same action and summary", () => {
   assert.equal(getToolAction("plugin_EnterPlanMode"), "use");
 });
 
-test("a path summary stays literal while the row may omit its middle", () => {
+test("a path summary keeps the whole value while the row names the file", () => {
   const path =
     "/Users/me/workspace/repos/pi-desktop/apps/desktop/src/components/transcript/nested/tool/ToolTerminal.tsx";
   const spec = toolSummarySpec("Read", { path, limit: 20 });
-  // The literal value is what `title`, the copy menu and the preview target
-  // need, so it is never shortened, however long it is.
+  // The literal value is what `title`, the copy menu, the preview target and the
+  // row's description need, so it is never shortened, however long it is.
   assert.equal(spec.text, path);
   assert.equal(spec.path, true);
   assert.equal(spec.key, "path");
   assert.equal(isToolPathSummary("Read", { path }), true);
   assert.equal(getToolSummaryValue("Read", { path }), path);
 
-  // The row fits the pair from measured widths; the file's own name is what it
-  // keeps whole, and the directory gives way around it.
-  const printed = fitToolPath(path, 280, (text) => text.length * 6.92);
-  const shown = `${printed.dir}${printed.base}`;
-  assert.ok(shown.length < path.length);
-  assert.ok(printed.dir.includes("…"));
-  assert.ok(printed.base.length > 0);
-  assert.ok(path.endsWith(printed.base));
-  // The tail a reader recognizes — the file's own name — stays visible.
-  assert.ok(shown.endsWith("ToolTerminal.tsx"));
+  // The row prints the file's own name out of that value; the directory is not
+  // painted and no omission is composed, because the row ellipsizes the name.
+  assert.equal(toolPathName(spec.text), "ToolTerminal.tsx");
+  assert.equal(toolPathName(spec.text), toolPathName(path));
 
-  // A free-text summary is not a path: it is neither middle-omitted nor given a
-  // file title, and a long one is bounded like every other hint.
+  // A free-text summary is not a path: it is neither reduced to a name nor given
+  // a file title, and a long one is bounded like every other hint.
   const query = toolSummarySpec("Grep", { pattern: "a/b/c" });
   assert.equal(query.path, false);
   assert.equal(isToolPathSummary("Grep", { pattern: "a/b/c" }), false);
   assert.equal(getToolSummary("Grep", { pattern: "x".repeat(400) }).length, 220);
-  // A value that fits is painted untouched.
-  const short = fitToolPath("src/App.tsx", 200, (text) => text.length * 6.92);
-  assert.equal(`${short.dir}${short.base}`, "src/App.tsx");
+  // A relative value with no directory is already the name it prints.
+  assert.equal(toolPathName("App.tsx"), "App.tsx");
 });
 
 test("an unrecognized tool summarizes with the one scalar it was called with", () => {

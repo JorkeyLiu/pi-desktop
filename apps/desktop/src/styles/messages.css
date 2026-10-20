@@ -3506,41 +3506,16 @@
   margin-top: 10px;
 }
 
-/* A path row hands its width to the file name: the directory is its own box
-   that shrinks — and omits its middle — first, and the name only gives way when
-   it cannot fit alone. Both are fitted from measured widths, so the tail a
-   reader matches on is painted inside the row at any width; the whole value
-   stays in the title and the file menu. */
+/* A path row names its file: the last segment is what a reader matches on, so
+   it is the only thing the hint spends its line on, and a name too long for the
+   row ellipsizes at the row's own right edge. The whole value stays in the
+   title, the file menu, the preview target and the row's screen-reader
+   description. Nothing is measured, so the hint costs one line of text. */
 .tool-row-summary.is-path {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  overflow: hidden;
-  text-overflow: clip;
-}
-
-.tool-row-summary.is-path > .tool-path-dir {
-  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.tool-row-summary.is-path > .tool-path-file {
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
-
-/* Off the flow and unpainted: it exists only to read the row's own font. */
-.tool-row-summary.is-path > .tool-path-measure {
-  position: absolute;
-  top: 0;
-  left: 0;
-  visibility: hidden;
-  white-space: nowrap;
-  pointer-events: none;
 }
 
 @keyframes spin {

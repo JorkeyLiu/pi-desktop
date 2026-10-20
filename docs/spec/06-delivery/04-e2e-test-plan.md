@@ -434,6 +434,30 @@
   session, clicks an outline dash while follow is pinned, and asserts the
   scroller's distance from the bottom once the exchange has settled.
 
+### E2E-TOOL-ROW-filename-hint-and-full-path-hover
+
+- **Preconditions:** Built desktop renderer and its own stylesheet; the fixture
+  mounts the production `SubagentTranscriptTab` with the production `ToolRow`
+  cards and the real store, seeding a delegate that read a hundred file paths
+  (absolute, relative, Windows and an unusually long name). No provider, paid
+  API or running desktop is used.
+- **Steps:** Open the child transcript tab on a delegate that read many files,
+  narrow the pane to the work panel's small width, switch to another session
+  whose own tab is open, close the tab, then open it again.
+- **Expected:** A collapsed file row prints the file's own name only — never the
+  directory and never an omission the row composed — at every width. The whole
+  raw path stays in the row's hover text and in the row's screen-reader
+  description, the name a file's row cannot fit is ellipsized inside the row
+  instead of overflowing it, a directory value prints its last segment, and no
+  element exists in a row to measure path candidates. The chips and the
+  `+a/−d` pair keep their place.
+- **Status:** Automated in `pnpm test:e2e:tool-path-name`, which drives the
+  rendered tab through the open, narrow, switch, close and reopen sequence.
+  `node scripts/e2e-tool-cards.mjs` covers the same hint at 280/340/700 px
+  together with the rest of the tool-row cards, and
+  `apps/desktop/test/tool-path-display.test.mjs` covers the name for every
+  path spelling.
+
 ### E2E-ASKTOOL-compact-card-interaction
 
 - **Preconditions:** No live provider is required; the fixture stubs

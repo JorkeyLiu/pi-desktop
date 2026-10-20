@@ -2379,16 +2379,18 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
   `truncated` chip follows `details.truncated` and therefore appears only when
   this result was cut short, not when a Read window of a longer file was filled
   (D306).
-- A path hint belongs to the file: the file name keeps its width and the
-  directory gives way around it, omitting its own middle (`…`) because the
-  leading root and the segment holding the file are what a reader recognizes.
-  Only a name that cannot fit the row at all omits its own middle, and then it
-  keeps its start and its extension. Both boxes are fitted from the row's
-  measured width, so the name is painted inside the row at every column width
-  instead of being clipped away, and the fit never re-spells the value: the raw
-  absolute or relative form, its separators and its case are what is fitted.
-  The whole value stays in the row's `title`, its file menu and its preview
-  target, and a non-path hint is never middle-omitted.
+- A path hint names the file: the row prints the last segment of the path and
+  nothing else, because the hint is scanned rather than read and the name is
+  what a reader matches on. A name too long for the row ellipsizes at the row's
+  own right edge instead of being clipped away or rewritten, and a value that
+  ends in a separator prints its last segment with that separator, so a
+  directory never reads as a file. The whole value stays in the row's `title`,
+  its file menu, its preview target and the row's screen-reader description, so
+  hovering the hint still offers the raw absolute or relative spelling with its
+  own separators. Nothing is measured to paint the hint: it is the same text at
+  every column width, which is why a transcript of many file rows costs one line
+  of text per row. A non-path hint is printed whole (clamped like every other
+  hint) and is never reduced to a name.
 - Live activity remains in the processing group, its latest row, or the
   dedicated runtime indicator; no additional status capsule is rendered.
 - A workspace mutation's row ends with its own `+a/−d` pair, which is where the
