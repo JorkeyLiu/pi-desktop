@@ -75,6 +75,11 @@ type BlockBase = {
   role: ToolBlockRole;
   /** Raw key for generic payload entries; overrides the role heading. */
   label?: string;
+  /**
+   * An i18n key that names a semantic group (a roster outcome, task counters)
+   * where the payload itself is not the label; the React layer translates it.
+   */
+  labelKey?: string;
 };
 
 export type ToolTodoItem = {
@@ -144,6 +149,7 @@ export type ToolBlock =
       body: string;
     })
   | (BlockBase & { kind: "raw"; text: string })
+  | (BlockBase & { kind: "empty"; scope: "files" | "matches" })
   | (BlockBase & { kind: "note"; text: string; code?: string });
 
 export type ToolPresentationOptions = {
@@ -247,15 +253,21 @@ function envelopeTextOf(message: ToolPresentationMessage): string | null {
  * A lifecycle row's roster as field rows: one line per subagent, named, with
  * its status and runtime. Without this the row falls back to a JSON dump of
  * `delegations[]`, which is the least readable part of a delegation (D268).
+ *
+ * `TaskStop` answers with three distinct outcomes — `stopped`, `stopPending`
+ * (cancellation was requested but the worker never confirmed termination) and
+ * `settled` (it had already finished) — and each keeps its own group. Merging
+ * them would give a still-running worker the same roster as a stopped one,
+ * which is a state the runtime never reports (D268).
  */
-function rosterRows(
-  details: Record<string, unknown> | null,
-): ToolBlock | null {
-  if (!details) return null;
-  const entries = [
-    ...(Array.isArray(details.delegations) ? details.delegations : []),
-    ...(Array.isArray(details.stopped) ? details.stopped : []),
-  ];
+const ROSTER_GROUPS = [
+  { key: "delegations", labelKey: "chat.toolBlockSubagents" },
+  { key: "stopped", labelKey: "chat.subagentRosterStopped" },
+  { key: "stopPending", labelKey: "chat.subagentRosterStopPending" },
+  { key: "settled", labelKey: "chat.subagentRosterSettled" },
+] as const;
+
+function rosterRows(entries: unknown[]): ToolFieldRow[] {
   const rows: ToolFieldRow[] = [];
   for (const entry of entries) {
     const record = asRecord(entry);
@@ -280,7 +292,26 @@ function rosterRows(
     ].filter((part): part is string => Boolean(part));
     rows.push({ label: agent || id, value: parts.join(" · ") });
   }
-  return rows.length > 0 ? { kind: "fields", role: "details", rows } : null;
+  return rows;
+}
+
+/** One readable table per roster group the result actually carries. */
+function rosterBlocks(details: Record<string, unknown> | null): ToolBlock[] {
+  if (!details) return [];
+  const blocks: ToolBlock[] = [];
+  for (const group of ROSTER_GROUPS) {
+    const entries = details[group.key];
+    if (!Array.isArray(entries)) continue;
+    const rows = rosterRows(entries);
+    if (rows.length === 0) continue;
+    blocks.push({
+      kind: "fields",
+      role: "details",
+      rows,
+      labelKey: group.labelKey,
+    });
+  }
+  return blocks;
 }
 
 /** Extension-derived Shiki tag; `resolveLang` normalizes it at render time. */
@@ -393,6 +424,15 @@ function filesBlock(paths: string[], label?: string): ToolBlock | null {
     hidden: Math.max(0, paths.length - MAX_LIST_ITEMS),
     ...(label ? { label } : {}),
   };
+}
+
+/**
+ * An empty result is a result. The block carries no text of its own — the React
+ * layer names the scope in the session language — so the payload's `count` and
+ * `truncated` metadata never have to stand in for a body.
+ */
+function emptyBlock(scope: "files" | "matches"): ToolBlock {
+  return { kind: "empty", role: "notice", scope };
 }
 
 /** Group Grep hits by file so repeated paths collapse into one heading. */
@@ -509,6 +549,9 @@ function todosBlock(
   return {
     kind: "todos",
     role: "details",
+    // The checklist names itself through its progress row; the key names it for
+    // the copy control and for screen readers.
+    labelKey: "chat.toolBlockChecklist",
     items: items.slice(0, MAX_TODO_ITEMS),
     completed: numberAt(summary, "completed") ?? countOf("completed"),
     // A cancelled item is neither completed nor outstanding, which is how the
@@ -631,7 +674,9 @@ function scheduledTaskRows(
       value: parts.join(" · ") || id || "",
     });
   }
-  return rows.length > 0 ? { kind: "fields", role: "details", rows } : null;
+  return rows.length > 0
+    ? { kind: "fields", role: "details", rows, labelKey: "chat.toolScheduledTask" }
+    : null;
 }
 
 /** The untouched payload is offered, not printed: bound what that can cost. */
@@ -661,6 +706,7 @@ function withRawBlock(blocks: ToolBlock[], payload: unknown): ToolBlock[] {
 function recordBlocks(
   record: Record<string, unknown>,
   role: ToolBlockRole,
+  options: { labelKey?: string } = {},
 ): ToolBlock[] {
   const rows: ToolFieldRow[] = [];
   const extra: ToolBlock[] = [];
@@ -700,7 +746,17 @@ function recordBlocks(
     }
     extra.push(codeBlock(role, safeJson(value), "json", { label: key }));
   }
-  return rows.length > 0 ? [{ kind: "fields", role, rows }, ...extra] : extra;
+  return rows.length > 0
+    ? [
+        {
+          kind: "fields",
+          role,
+          rows,
+          ...(options.labelKey ? { labelKey: options.labelKey } : {}),
+        },
+        ...extra,
+      ]
+    : extra;
 }
 
 function safeJson(value: unknown): string {
@@ -864,18 +920,26 @@ function resultBlocks(
 
   switch (action) {
     case "read": {
-      const content = stringAt(details, "content");
+      // A present-but-empty `content` is an empty file, not a missing body.
+      const content =
+        details && typeof details.content === "string" ? details.content : null;
       if (content !== null) {
         const path = stringAt(details, "path") ?? stringAt(args, "path");
         blocks.push(codeBlock("content", content, langForPath(path)));
+        mapped = true;
+      } else if (resultFailed(message)) {
+        mapped = true;
       }
       break;
     }
     case "write": {
-      const content = stringAt(args, "content");
+      const content = typeof args?.content === "string" ? args.content : null;
       if (content !== null) {
         const path = stringAt(args, "path") ?? stringAt(details, "path");
         blocks.push(codeBlock("written", content, langForPath(path)));
+        mapped = true;
+      } else if (resultFailed(message)) {
+        mapped = true;
       }
       break;
     }
@@ -894,6 +958,12 @@ function resultBlocks(
           blocks.push({ kind: "note", role: "notice", text: warning });
         }
       }
+      // The mutation mapping has said its whole say: a reviewed change is the
+      // diff the row hosts, a scratch edit is its ops. The record's own
+      // `path`/`root`/`tag`/`deleted`/`ops` fields restate that at lower
+      // fidelity, so an empty body here is an answer rather than a payload the
+      // generic fallback still has to render (D226).
+      mapped = reviewed || ops !== null || resultFailed(message);
       break;
     }
     case "run": {
@@ -922,8 +992,14 @@ function resultBlocks(
     }
     case "list": {
       const paths = stringArray(details?.matches) ?? stringArray(details?.files);
-      const block = paths ? filesBlock(paths) : null;
-      if (block) blocks.push(block);
+      if (paths) {
+        // An empty list is the answer to the pattern, so it has to be stated:
+        // the payload's `count`/`truncated` fields are not a body.
+        blocks.push(filesBlock(paths) ?? emptyBlock("files"));
+        mapped = true;
+      } else if (resultFailed(message)) {
+        mapped = true;
+      }
       break;
     }
     case "search": {
@@ -934,7 +1010,20 @@ function resultBlocks(
       const paths = block ? null : stringArray(details?.files);
       const grouped = block ?? (paths ? filesBlock(paths) : null);
       const resolved = grouped ?? countsBlock(details?.counts);
-      if (resolved) blocks.push(resolved);
+      if (resolved) {
+        blocks.push(resolved);
+        mapped = true;
+      } else if (
+        Array.isArray(hits) ||
+        paths !== null ||
+        Array.isArray(details?.counts) ||
+        resultFailed(message)
+      ) {
+        // The mode's own array came back empty: nothing matched, which the
+        // reader is entitled to read as a result.
+        blocks.push(emptyBlock(paths ? "files" : "matches"));
+        mapped = true;
+      }
       break;
     }
     case "todo": {
@@ -971,8 +1060,10 @@ function resultBlocks(
         // height and carries a copy button (D271).
         const text = envelopeTextOf(message);
         if (text) blocks.push(codeBlock("output", text, "markdown"));
-        const roster = rosterRows(details);
-        if (roster) blocks.push(roster);
+        const roster = rosterBlocks(details);
+        blocks.push(...roster);
+        // A stop request that found nothing running still has its sentence.
+        mapped = text !== null || roster.length > 0 || resultFailed(message);
         break;
       }
       // A delegation reads as brief in, report out. The counters that pi hands
@@ -998,7 +1089,11 @@ function resultBlocks(
           )
         : {};
       if (Object.keys(counters).length > 0) {
-        blocks.push(...recordBlocks(counters, "details"));
+        blocks.push(
+          ...recordBlocks(counters, "details", {
+            labelKey: "chat.toolBlockStats",
+          }),
+        );
       }
       break;
     }
@@ -1065,6 +1160,9 @@ function resultBlocks(
           text,
         });
       }
+      // What a tool search answers with is the names it found and that
+      // sentence; its query and legacy carriers are not a second body.
+      mapped = true;
       break;
     }
     case "schedule": {
@@ -1077,6 +1175,7 @@ function resultBlocks(
       if (rows) blocks.push(rows);
       const text = envelopeTextOf(message);
       if (text) blocks.push({ kind: "note", role: "notice", text });
+      mapped = rows !== null || text !== null;
       break;
     }
     case "browser":
@@ -1086,6 +1185,7 @@ function resultBlocks(
       // it changed is in that text, and the arguments carry the target.
       const text = envelopeTextOf(message);
       if (text) blocks.push({ kind: "note", role: "notice", text });
+      mapped = text !== null;
       break;
     }
     case "image": {
@@ -1121,7 +1221,7 @@ function resultBlocks(
   // Host-side scoping notes ("results are truncated…", "N long lines were cut")
   // explain a short result, so they ride along with the blocks they qualify.
   const notice = stringAt(details, "notice");
-  if (notice && blocks.length > 0) {
+  if (notice && (blocks.length > 0 || mapped)) {
     blocks.push({ kind: "note", role: "notice", text: notice });
   }
 
@@ -1170,14 +1270,23 @@ export function buildToolPresentation(
     action === "run" &&
     options.hideSummaryArg === true &&
     getToolSummaryKey(message.toolName, args) !== null;
+  // A workspace mutation's record already states the file, the operation and
+  // the change; `path`/`tag`/`ops` are how the change was requested, not what
+  // it did, so the body must not print them beside the diff.
+  const reviewedEdit =
+    action === "edit" &&
+    reviewChangeFromMessage(message as unknown as UiMessage) !== null;
   const wantArgs =
     action !== "delegate" &&
+    !reviewedEdit &&
     !(action === "todo" && resultFailed(message)) &&
     !headHasCommand &&
     (blocks.length === 0 ||
-      blocks.every(
+      // An empty result is the answer, not a preamble the arguments explain.
+      (blocks.every(
         (block) => block.role === "error" || block.role === "notice",
-      ) ||
+      ) &&
+        !blocks.some((block) => block.kind === "empty")) ||
       action === "use" ||
       action === "fork" ||
       action === "fetch");

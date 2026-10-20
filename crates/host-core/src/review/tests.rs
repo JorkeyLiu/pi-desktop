@@ -676,6 +676,47 @@ fn a_legacy_record_without_a_root_is_unavailable_in_a_multi_root_session() {
     assert!(files[0].reversible);
 }
 
+/// The record's operation is stored in the shared contract vocabulary, and a
+/// record written before that casing existed still reads back: its counts, its
+/// diff and its rollback survive. A value outside the vocabulary is not a review
+/// operation and stays rejected instead of being guessed at.
+#[test]
+fn a_record_written_with_the_old_operation_spelling_is_still_read() {
+    let data = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let target = workspace.path().join("src.txt");
+    fs::write(&target, "one\n").unwrap();
+    let pending = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
+    fs::write(&target, "one\ntwo\n").unwrap();
+    let change = finalize_change(&pending).unwrap();
+    assert_eq!(change.operation, ReviewChangeOperation::Edit);
+    let dir = snapshot_dir(data.path(), "s1", &change.snapshot_id).unwrap();
+    let meta_path = dir.join("meta.json");
+    let mut meta: Value = serde_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
+    assert_eq!(meta["operation"], json!("edit"));
+
+    // Rewrite the record as hosts wrote it before the contract casing.
+    meta["operation"] = json!("Edit");
+    fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+    let roots = roots_of(workspace.path());
+    let files = file_changes(data.path(), "s1", &roots).files;
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].additions, Some(1));
+    assert!(files[0].reversible);
+    let outcome = rollback_change(data.path(), "s1", &change.snapshot_id, &roots).unwrap();
+    assert_eq!(outcome.status, "rolledBack");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "one\n");
+
+    // A value outside the vocabulary leaves the record unreadable rather than
+    // turning into a row with an invented operation.
+    let mut meta: Value = serde_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
+    meta["operation"] = json!("wipe");
+    fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+    let outcome = file_changes(data.path(), "s1", &roots);
+    assert_eq!(outcome.unreadable_records, 1);
+    assert!(outcome.files.is_empty());
+}
+
 /// A long conversation's first edit can sit outside the renderer's message
 /// window. The baseline is still the first recorded bytes, and a file
 /// rollback restores them rather than a mid-conversation state.

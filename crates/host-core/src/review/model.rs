@@ -1,9 +1,16 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum ReviewChangeOperation {
+    /// Records written before the contract casing existed hold `Write`/`Edit`/
+    /// `Delete`; the alias keeps them readable while new records serialize in
+    /// the shared `write | edit | delete` vocabulary. Unknown values still fail.
+    #[serde(alias = "Write")]
     Write,
+    #[serde(alias = "Edit")]
     Edit,
+    #[serde(alias = "Delete")]
     Delete,
 }
 

@@ -426,6 +426,11 @@ type SidebarPreferences = {
 - `openProjectPaths` retains sidebar tabs. The selected workspace remains
   host-owned `kv(app, currentProjectId)` and is restored through
   `workspace.get`; the renderer does not persist a competing active path.
+  Its order is the visit order the user built by opening projects: selecting a
+  conversation in another project activates it without reordering the retained
+  paths — an already retained path keeps its position and a project without a
+  tab is appended last — so reading conversations never rewrites the stored
+  order.
 
 ### 4.2 projects — places work happens
 

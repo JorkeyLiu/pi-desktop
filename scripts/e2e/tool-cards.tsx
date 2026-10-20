@@ -159,6 +159,40 @@ const skillError = (id: string): UiMessage =>
     toolResult: 'Skill "missing" was not found',
   });
 
+/** A search that matched nothing: the empty answer is the result. */
+const emptySearch = (id: string): UiMessage =>
+  message(id, "", {
+    toolName: "Grep",
+    toolCallId: `call-${id}`,
+    toolStatus: "success",
+    toolArgs: { pattern: "nothing-matches" },
+    toolResult: {
+      content: [{ type: "text", text: '{"matches":[]}' }],
+      details: { matches: [], count: 0, truncated: false },
+    },
+  });
+
+/** A stop request with one worker stopped and one that never confirmed. */
+const stopRoster = (id: string): UiMessage =>
+  message(id, "", {
+    toolName: "TaskStop",
+    toolCallId: `call-${id}`,
+    toolStatus: "success",
+    toolArgs: { delegationIds: ["a", "b"] },
+    toolResult: {
+      content: [
+        {
+          type: "text",
+          text: "Cancellation requested for 2 subagents; 1 have not confirmed termination and remain running.",
+        },
+      ],
+      details: {
+        stopped: [{ delegationId: "a", agent: "fixer", status: "stopped" }],
+        stopPending: [{ delegationId: "b", agent: "runner", status: "running" }],
+      },
+    },
+  });
+
 const unknownPayload = (id: string): UiMessage =>
   message(id, "", {
     toolName: "plugin_issue_tracker_create",
@@ -606,6 +640,53 @@ globalThis.toolCardsProbe = async () => {
       "the readable fields come first",
       unknownHost.textContent!.includes("https://example.test/41") &&
         !unknownHost.querySelector(".tool-row-body")!.textContent!.includes('"details"'),
+    );
+    // The raw entry names itself once: its own disclosure summary, with no
+    // second "Details"/"Raw" heading above the same bytes.
+    const unknownHeads = [
+      ...unknownHost.querySelectorAll(".tool-row-section-head"),
+    ].map((head) => head.textContent ?? "");
+    check(
+      "the raw entry is named once",
+      unknownHeads.filter((text) => text.trim() !== "").join("|") ===
+        "Details|labels" &&
+        unknownHost.querySelector(".tool-raw-summary")!.textContent === "Raw",
+      {
+        heads: unknownHeads,
+        summary: unknownHost.querySelector(".tool-raw-summary")?.textContent,
+      },
+    );
+
+    // An empty search states its empty result, without a heading above the
+    // sentence and without printing the payload's count/truncated metadata.
+    const emptyHost = mount(wide, <ToolRow message={emptySearch("empty-1")} />);
+    await open(emptyHost);
+    const emptyBody = emptyHost.querySelector<HTMLElement>(".tool-row-body");
+    check(
+      "an empty search says it matched nothing",
+      Boolean(emptyBody) &&
+        emptyBody!.textContent!.includes("No matches") &&
+        emptyHost.querySelector(".tool-row-section-head") === null &&
+        !emptyBody!.textContent!.includes("truncated"),
+      emptyBody?.textContent,
+    );
+
+    // A stop roster keeps each outcome its own heading, in the reader's words.
+    const stopHost = mount(wide, <ToolRow message={stopRoster("stop-1")} />);
+    await open(stopHost);
+    const stopHeads = [...stopHost.querySelectorAll(".tool-row-section-head")].map(
+      (head) => head.textContent,
+    );
+    check(
+      "a stop roster heads each outcome",
+      stopHeads.includes("Stopped") &&
+        stopHeads.includes("Stop requested — still running"),
+      stopHeads,
+    );
+    check(
+      "a stop roster is not a payload dump",
+      !stopHost.querySelector(".tool-row-body")!.textContent!.includes("stopPending") &&
+        stopHost.querySelector(".tool-raw") === null,
     );
     const liveBash = mount(narrow, <Live initial={bashWithLines("bash-live", 2)} />);
     await open(liveBash);

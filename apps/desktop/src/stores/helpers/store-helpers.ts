@@ -151,6 +151,18 @@ export function promoteProjectPath(paths: string[], rawPath: string): string[] {
   return [...withoutPath, rawPath];
 }
 
+/**
+ * Record a project the user reached through a conversation: an already retained
+ * path keeps its position and a new path is appended like any first open. The
+ * sidebar order is a tab history, so conversation navigation never rewrites it.
+ */
+export function retainProjectPath(paths: string[], rawPath: string): string[] {
+  const key = normalizeProjectPath(rawPath);
+  if (!key) return paths;
+  const known = paths.some((path) => normalizeProjectPath(path) === key);
+  return known ? paths : [...paths, rawPath];
+}
+
 export function removeProjectPath(paths: string[], rawPath: string): string[] {
   const key = normalizeProjectPath(rawPath);
   return key

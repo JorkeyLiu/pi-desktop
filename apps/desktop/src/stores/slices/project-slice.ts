@@ -49,6 +49,7 @@ export type ProjectSliceDependencies = StoreAccess & {
     projectMeta: Record<string, ProjectMeta>,
   ) => ProjectWorkspace;
   promoteProjectPath: (paths: string[], path: string) => string[];
+  retainProjectPath: (paths: string[], path: string) => string[];
   removeProjectPath: (paths: string[], path: string) => string[];
   upsertWorkspace: (
     projects: ProjectWorkspace[],
@@ -225,6 +226,7 @@ export function createProjectSlice({
   withoutRecordKey,
   withProjectDisplayName,
   promoteProjectPath,
+  retainProjectPath,
   removeProjectPath,
   upsertWorkspace,
   persistCurrentSidebar,
@@ -293,10 +295,11 @@ export function createProjectSlice({
         const switchesVisibleProject =
           normalizeProjectPath(state.activeProjectPath) !==
           normalizeProjectPath(workspace.path);
-        const openProjectPaths = promoteProjectPath(
-          state.openProjectPaths,
-          workspace.path,
-        );
+        // A conversation activation keeps every retained tab in place; only an
+        // explicit project open moves the tab it activates to the front.
+        const openProjectPaths = opts?.preserveProjectOrder
+          ? retainProjectPath(state.openProjectPaths, workspace.path)
+          : promoteProjectPath(state.openProjectPaths, workspace.path);
         const openProjects = upsertWorkspace(state.openProjects, workspace);
         return {
           workspace,

@@ -1360,3 +1360,286 @@ test("an unknown payload degrades to readable fields plus its own disclosure", (
   assert.equal(huge.find((block) => block.kind === "raw"), undefined);
   assert.ok(huge.some((block) => block.label === "note"));
 });
+
+/*
+ * A workspace mutation owns its review record: the row hosts the real diff, so
+ * the body must state that change and nothing else. The record's own `path`,
+ * `root`, `tag`, `ops` and `deleted` are how the change was requested, not what
+ * it did, and printing them beside the diff was a second, coarser account of
+ * the same file.
+ */
+const reviewedEditMessage = (details, args = {}) => ({
+  id: "msg-review",
+  role: "tool",
+  toolName: "Edit",
+  toolStatus: "success",
+  toolArgs: { path: "src/main.ts", tag: "A1B2", ops: "PUT 2.=2:\n+TWO\n", ...args },
+  toolResult: envelope({
+    review: {
+      version: 1,
+      snapshotId: "snap-1",
+      messageId: "msg-review",
+      path: String(details.path ?? "src/main.ts"),
+      status: "modified",
+      operation: "edit",
+      state: "active",
+      additions: 1,
+      deletions: 1,
+      hunks: [
+        {
+          header: "@@ -1,1 +1,1 @@",
+          lines: [
+            { type: "del", text: "one" },
+            { type: "add", text: "TWO" },
+          ],
+        },
+      ],
+      reversible: true,
+    },
+    ...details,
+  }),
+});
+
+test("a reviewed workspace edit body is its diff and nothing else", () => {
+  const variants = {
+    modify: { path: "src/main.ts", root: "workspace", tag: "C3D4", warnings: [] },
+    delete: { path: "src/main.ts", root: "workspace", deleted: true, warnings: [] },
+    move: {
+      path: "src/renamed.ts",
+      root: "workspace",
+      tag: "C3D4",
+      movedFrom: "src/main.ts",
+      warnings: [],
+    },
+  };
+  for (const [name, details] of Object.entries(variants)) {
+    const blocks = buildToolPresentation(reviewedEditMessage(details), {
+      hideSummaryArg: true,
+    });
+    assert.deepEqual(blocks, [], `${name}: the row's own review body is the whole body`);
+  }
+});
+
+test("a reviewed edit still reports its warnings, and only those", () => {
+  const warning = "stale tag A1B2 applied at file head/tail; live tag is C3D4";
+  const blocks = buildToolPresentation(
+    reviewedEditMessage({
+      path: "src/main.ts",
+      root: "workspace",
+      tag: "C3D4",
+      warnings: [warning],
+    }),
+    { hideSummaryArg: true },
+  );
+  assert.deepEqual(roles(blocks), ["notice"]);
+  assert.equal(blocks[0].text, warning);
+  assert.equal(blocks.some((block) => block.kind === "raw"), false);
+  assert.equal(blocks.some((block) => block.kind === "fields"), false);
+});
+
+test("a scratch edit keeps its ops, and a failed one keeps its diagnosis", () => {
+  const scratch = buildToolPresentation({
+    toolName: "Edit",
+    toolArgs: { path: "tmp/notes.txt", tag: "A1B2", ops: "PUT 1.=1:\n+x\n" },
+    toolResult: envelope({ path: "tmp/notes.txt", root: "scratch", tag: "C3D4" }),
+  });
+  assert.deepEqual(roles(scratch), ["input"]);
+
+  // A refused workspace edit has no review record; its error and the ops the
+  // model sent are the only account of the attempt.
+  const failed = buildToolPresentation({
+    toolName: "Edit",
+    toolStatus: "error",
+    toolArgs: { path: "src/main.ts", tag: "A1B2", ops: "PUT 9.=9:\n+x\n" },
+    toolResult: envelope({ error: "tag mismatch", code: "EDIT_TAG_MISMATCH" }),
+  }, { hideSummaryArg: true });
+  assert.deepEqual(roles(failed), ["error", "input"]);
+  assert.equal(failed[0].text, "tag mismatch");
+  assert.match(failed[1].text, /PUT 9\.=9/);
+});
+
+test("an empty Glob or Grep states the empty result in every output mode", () => {
+  const empty = (scope) => ({ kind: "empty", role: "notice", scope });
+  const glob = {
+    toolName: "Glob",
+    toolArgs: { pattern: "src/**/*.nope" },
+    toolResult: envelope({ matches: [], count: 0, truncated: false }),
+  };
+  assert.deepEqual(buildToolPresentation(glob, { hideSummaryArg: true }), [
+    empty("files"),
+  ]);
+
+  const modes = {
+    content: { matches: [], count: 0, files: 0, truncated: false },
+    filesWithMatches: { files: [], count: 0, truncated: false },
+    count: { counts: [], count: 0, truncated: false },
+  };
+  for (const [mode, details] of Object.entries(modes)) {
+    const blocks = buildToolPresentation(
+      {
+        toolName: "Grep",
+        toolArgs: { pattern: "nothing-matches", outputMode: mode },
+        toolResult: envelope(details),
+      },
+      { hideSummaryArg: true },
+    );
+    assert.equal(blocks.length, 1, `${mode}: one answering block`);
+    assert.equal(blocks[0].kind, "empty", mode);
+    assert.equal(blocks[0].scope, mode === "filesWithMatches" ? "files" : "matches", mode);
+  }
+
+  // An empty result the host qualified keeps that qualification.
+  const qualified = buildToolPresentation(
+    {
+      toolName: "Grep",
+      toolArgs: { pattern: "TODO" },
+      toolResult: envelope({
+        matches: [],
+        count: 0,
+        truncated: true,
+        notice: "results truncated; narrow the pattern or scan a path",
+      }),
+    },
+    { hideSummaryArg: true },
+  );
+  assert.deepEqual(roles(qualified), ["notice", "notice"]);
+  assert.equal(qualified[0].kind, "empty");
+  assert.match(qualified[1].text, /narrow the pattern/);
+  // The metadata is not a body: no field row restates `count` or `truncated`.
+  assert.equal(qualified.some((block) => block.kind === "fields"), false);
+});
+
+test("TaskStop keeps stopped, stop-pending and settled apart", () => {
+  const payload = {
+    content: [
+      {
+        type: "text",
+        text: "Cancellation requested for 3 subagents; 1 have not confirmed termination and remain running.",
+      },
+    ],
+    details: {
+      stopped: [{ delegationId: "a", agent: "fixer", status: "stopped" }],
+      stopPending: [{ delegationId: "b", agent: "runner", status: "running" }],
+      settled: [{ delegationId: "c", agent: "planner", status: "completed" }],
+    },
+  };
+  const blocks = buildToolPresentation({
+    toolName: "TaskStop",
+    toolArgs: { delegationIds: ["a", "b", "c"] },
+    toolResult: payload,
+  });
+  assert.deepEqual(
+    blocks.map((block) => block.labelKey ?? block.kind),
+    [
+      "code",
+      "chat.subagentRosterStopped",
+      "chat.subagentRosterStopPending",
+      "chat.subagentRosterSettled",
+    ],
+  );
+  assert.deepEqual(blocks[1].rows, [{ label: "fixer", value: "stopped" }]);
+  // A worker that never confirmed termination is still running: the roster
+  // says so instead of borrowing the stopped group.
+  assert.deepEqual(blocks[2].rows, [{ label: "runner", value: "running" }]);
+  assert.deepEqual(blocks[3].rows, [{ label: "planner", value: "completed" }]);
+  assert.equal(blocks.some((block) => block.kind === "raw"), false);
+
+  // Only pending: the row must not read as a completed stop.
+  const pendingOnly = buildToolPresentation({
+    toolName: "TaskStop",
+    toolArgs: {},
+    toolResult: {
+      content: [{ type: "text", text: "Cancellation requested for 1 subagent; 1 have not confirmed termination and remain running." }],
+      details: { stopped: [], stopPending: [{ delegationId: "b", agent: "runner", status: "running" }] },
+    },
+  });
+  assert.deepEqual(
+    pendingOnly.slice(1).map((block) => block.labelKey),
+    ["chat.subagentRosterStopPending"],
+  );
+
+  // A stop that found nothing to stop still answers with its sentence.
+  const none = buildToolPresentation({
+    toolName: "TaskStop",
+    toolArgs: {},
+    toolResult: {
+      content: [{ type: "text", text: "No matching running subagents to stop." }],
+      details: { stopped: [] },
+    },
+  });
+  assert.deepEqual(roles(none), ["output"]);
+  assert.equal(none.some((block) => block.kind === "raw"), false);
+});
+
+test("known tools whose result is empty do not fall back to a payload dump", () => {
+  // A Read of an empty file, a TaskWait with no roster, and a scheduled-task
+  // list mutation all keep their own answer rather than a JSON body.
+  const emptyFile = buildToolPresentation({
+    toolName: "Read",
+    toolArgs: { path: "empty.txt" },
+    toolResult: envelope({ path: "empty.txt", root: "workspace", content: "", truncated: false }),
+  }, { hideSummaryArg: true });
+  assert.deepEqual(roles(emptyFile), ["content"]);
+  assert.equal(emptyFile[0].text, "");
+
+  const clearedList = buildToolPresentation({
+    toolName: "ScheduledTaskList",
+    toolArgs: {},
+    toolResult: {
+      content: [{ type: "text", text: "No scheduled automations in this project." }],
+      details: { tasks: [] },
+    },
+  });
+  assert.deepEqual(roles(clearedList), ["notice"]);
+  assert.equal(clearedList.some((block) => block.kind === "raw"), false);
+});
+
+test("task counters and scheduled rows are named, not left as generic details", () => {
+  const delegation = buildToolPresentation({
+    toolName: "Task",
+    toolArgs: { agent: "worker", task: "Do the thing" },
+    toolResult: {
+      content: [{ type: "text", text: "Done." }],
+      details: { agent: "worker", turns: 4, toolCalls: 9 },
+    },
+  });
+  const stats = delegation.find((block) => block.labelKey === "chat.toolBlockStats");
+  assert.ok(stats, "the counter footer names itself");
+  assert.deepEqual(stats.rows, [
+    { label: "turns", value: "4" },
+    { label: "toolCalls", value: "9" },
+  ]);
+
+  const scheduled = buildToolPresentation({
+    toolName: "ScheduledTaskList",
+    toolArgs: {},
+    toolResult: {
+      content: [{ type: "text", text: "1 automation" }],
+      details: {
+        tasks: [
+          { id: "t1", title: "Daily sync", cadence: "daily", schedule: { hour: 9, minute: 0 }, enabled: true },
+        ],
+      },
+    },
+  });
+  const rows = scheduled.find((block) => block.labelKey === "chat.toolScheduledTask");
+  assert.ok(rows, "the automation list names itself");
+  assert.deepEqual(rows.rows, [{ label: "Daily sync", value: "daily · 09:00 · enabled" }]);
+});
+
+test("an unknown payload keeps its fields and one clearly named raw entry", () => {
+  const blocks = buildToolPresentation({
+    toolName: "plugin_deployer",
+    toolArgs: {},
+    toolResult: envelope({ id: 7, label: "deploy" }),
+  });
+  const fields = byRole(blocks, "details");
+  assert.equal(fields.kind, "fields");
+  // The generic payload still earns the plain "details" heading; the raw entry
+  // names itself through its own disclosure, never a second "details" head.
+  assert.equal(fields.labelKey, undefined);
+  const raw = blocks.find((block) => block.kind === "raw");
+  assert.ok(raw);
+  assert.equal(raw.labelKey, undefined);
+  assert.equal(raw.label, undefined);
+});

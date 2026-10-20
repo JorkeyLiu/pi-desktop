@@ -74,6 +74,46 @@ export function createHostRuntime({
   wireHost: (host: HostProcess) => void;
   startHost: () => Promise<void>;
 } {
+  /**
+   * Stop the agent runs whose turn belonged to the host process that just died.
+   *
+   * host-core gives up every running turn when it boots, so the turn each of
+   * these runs holds can no longer write through the replacement host: a
+   * `TodoWrite` from it already comes back `TOOL_TURN_CANCELLED`. The run itself
+   * lives in the sidecar, which survives a host restart, and nothing else would
+   * ever tell it to stop — it keeps executing a turn the host no longer has, and
+   * its session stays busy so the next prompt is refused. The owner of the host
+   * process therefore settles it here, the way the sidecar crash path settles its
+   * own dead runs, with the identity captured before the first await because a
+   * newer turn may own the session by the time this unwinds.
+   *
+   * The settlement is claimed before the stop request leaves: the stop makes the
+   * run emit its own terminal event, and that event must join this abort instead
+   * of closing the turn as completed. Nothing is revived or retried — the durable
+   * row already ended as aborted inside the replacement host.
+   */
+  const settleTurnsInterruptedByHostExit = (skip: ReadonlySet<string>) => {
+    const sidecar = runtimeState.sidecar;
+    for (const [sessionId, turnId] of [...activeTurns]) {
+      if (skip.has(sessionId)) continue;
+      finishTurn(sessionId, "aborted", "TURN_ABORTED", { turnId }).catch((error: unknown) => {
+        logger.app("runtime", "warn", "turn finalization failed after host exit", {
+          sessionId,
+          data: String(error),
+        });
+      });
+      if (!sidecar) continue;
+      // A run that already ended, and a turn that moved on, are refused by the
+      // sidecar's own identity check, so this can never stop a newer turn.
+      void sidecar.call("agent.abort", { sessionId, turnId }).catch((error: unknown) => {
+        logger.app("runtime", "warn", "interrupted turn was not stopped in the agent sidecar", {
+          sessionId,
+          data: String(error),
+        });
+      });
+    }
+  };
+
   const wireHost = (h: HostProcess) => {
   const remoteTools = createRemoteWorkspaceToolRelay(h, {
     getBoot: getActiveRemoteHostsBoot,
@@ -342,12 +382,16 @@ export function createHostRuntime({
     logger.flushChild("host");
     runtimeState.host = null;
     if (intentional || isQuitting()) return;
+    // Sessions whose interrupted turn the approved-execution branch settles with
+    // its own error code and its own execution record.
+    const settledWithExecution = new Set<string>();
     for (const [executionId, sessionId] of claimedExecutionSessions) {
       if (approvedExecutionIdsBySession.get(sessionId) === executionId) {
         // Captured before the teardown awaits: the turn this interrupted is the
         // one running now, and it must not be inferred later.
         const interruptedTurnId = activeTurns.get(sessionId);
         if (interruptedTurnId) {
+          settledWithExecution.add(sessionId);
           void finishTurn(sessionId, "aborted", "PLAN_EXECUTION_INTERRUPTED", {
             turnId: interruptedTurnId,
           }).catch((error: unknown) => {
@@ -366,6 +410,7 @@ export function createHostRuntime({
         "PLAN_EXECUTION_INTERRUPTED",
       );
     }
+    settleTurnsInterruptedByHostExit(settledWithExecution);
     logger.app("runtime", "error", "host-core exited unexpectedly", {
       code: ErrorCodes.HOST_UNAVAILABLE,
       data: { exitCode: code, signal },

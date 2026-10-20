@@ -95,7 +95,7 @@ errors remain readable instead of becoming replacement characters.
 | Crash | Policy |
 |---|---|
 | Renderer crash | reload the current window after an unexpected renderer exit, unless the window is closing or the app is quitting; keep host/agent processes; same-host reload restores only live pending Plan/Goal approvals and their deadlines, not terminal cards |
-| Rust host crash | mark app degraded, interrupt pending/queued/running approval work, keep pending sessions in their contract mode (Plan or Goal) and already-approved sessions in Agent, attempt restart host, and fail active sessions closed |
+| Rust host crash | mark app degraded, interrupt pending/queued/running approval work, keep pending sessions in their contract mode (Plan or Goal) and already-approved sessions in Agent, abort the agent run of every turn the dead process owned and settle those turns as aborted, attempt restart host, and fail active sessions closed |
 | Node agent crash | abort active turns and live approval waiters/queue entries, keep pending sessions in their contract mode, preserve already-approved Agent mode in Rust, restart sidecar, and never replay an execution; the sidecar's stderr tail is classified at exit — a V8 heap-exhaustion banner settles the owning turn as `AGENT_SIDECAR_OOM`, any other unexpected exit as `AGENT_SIDECAR_CRASHED` (issue #1077) |
 | Electron main crash | full app exit |
 
@@ -178,6 +178,16 @@ renderer-facing status):
 - Restart supervision is single-flight per child. A host process has a unique
   generation; stale generation requests and notifications are rejected before
   they reach the current bridge.
+- A restarted host boots with every turn the previous process left `running`
+  already aborted, so a turn-scoped write from that turn can only be refused
+  (`TodoWrite` answers `TOOL_TURN_CANCELLED`). The agent run that owned such a
+  turn lives in the sidecar, which survives the restart: at host exit each live
+  turn's identity is captured, the run is aborted in the sidecar with that
+  identity, and the turn is settled as `aborted` / `TURN_ABORTED` through the
+  same finalizer a Stop uses. A run that ended on its own, and a turn that moved
+  on, are refused by the sidecar's own identity check, so a newer turn is never
+  stopped; nothing is replayed, revived, or retried, and an idle restart settles
+  nothing.
 - Host persistence appends are buffered in an Electron-main-owned outbox while
   the host is unavailable and flushed sequentially after a new handshake. A
   missing sessions row is restored from the live transcript (or created as a

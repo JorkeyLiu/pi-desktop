@@ -14,7 +14,15 @@ const REVIEW_CHANGE_STATUSES = new Set<ReviewChangeStatus>([
   "modified",
   "deleted",
 ]);
-const REVIEW_CHANGE_OPERATIONS = new Set(["write", "edit", "delete"]);
+// Contract spelling plus the pre-contract spelling hosts already persisted.
+const REVIEW_CHANGE_OPERATIONS = new Map<string, ReviewChange["operation"]>([
+  ["write", "write"],
+  ["edit", "edit"],
+  ["delete", "delete"],
+  ["Write", "write"],
+  ["Edit", "edit"],
+  ["Delete", "delete"],
+]);
 const REVIEW_CHANGE_STATES = new Set<ReviewChangeState>([
   "active",
   "rolledBack",
@@ -111,6 +119,18 @@ function parseReason(value: unknown): ReviewDiffReason | undefined {
 }
 
 /**
+ * The record's operation, in the contract vocabulary. Hosts wrote
+ * `Write`/`Edit`/`Delete` before the contract was enforced and those tool
+ * messages stay persisted, so both spellings are read; anything else is not a
+ * review operation and rejects the record.
+ */
+function parseOperation(value: unknown): ReviewChange["operation"] | null {
+  return typeof value === "string"
+    ? (REVIEW_CHANGE_OPERATIONS.get(value) ?? null)
+    : null;
+}
+
+/**
  * Read the durable change record embedded in one successful tool message.
  * The message owns this evidence; no current Git state is consulted.
  *
@@ -134,7 +154,7 @@ export function reviewChangeFromMessage(message: UiMessage): ReviewChange | null
   const snapshotId = nonEmptyString(review.snapshotId);
   const messageId = nonEmptyString(review.messageId);
   const path = nonEmptyString(review.path);
-  const operation = review.operation;
+  const operation = parseOperation(review.operation);
   const status = review.status;
   const state = review.state;
   const additions = nonNegativeInteger(review.additions);
@@ -143,8 +163,7 @@ export function reviewChangeFromMessage(message: UiMessage): ReviewChange | null
     !snapshotId ||
     !messageId ||
     !path ||
-    typeof operation !== "string" ||
-    !REVIEW_CHANGE_OPERATIONS.has(operation) ||
+    operation === null ||
     typeof status !== "string" ||
     !REVIEW_CHANGE_STATUSES.has(status as ReviewChangeStatus) ||
     typeof state !== "string" ||
@@ -159,7 +178,7 @@ export function reviewChangeFromMessage(message: UiMessage): ReviewChange | null
     snapshotId,
     messageId,
     path,
-    operation: operation as ReviewChange["operation"],
+    operation,
     status: status as ReviewChangeStatus,
     state: state as ReviewChangeState,
     ...(additions === null ? {} : { additions }),

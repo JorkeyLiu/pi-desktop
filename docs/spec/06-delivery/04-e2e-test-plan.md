@@ -853,7 +853,17 @@ validation still needed.
 - **Status**: Cross-session admission is automated by
   `node scripts/e2e-tool-admission.mjs` against an isolated real host. Class,
   session, global, mutation, queue bounds, fairness, cancellation, and timeout
-  are unit-covered by `tool_budget/tests.rs`; restart coverage remains pending.
+  are unit-covered by `tool_budget/tests.rs`; the burst-restart lane remains pending.
+  Restart turn settlement is automated by
+  `node --test apps/desktop/test/host-restart-turn-settlement.test.mjs`, which
+  drives a real host-core child through an unexpected exit and supervised
+  respawn: the agent run that owned the interrupted turn is stopped with that
+  turn's identity, the turn settles once as `aborted` and is released, the
+  replacement host refuses the dead turn with `TOOL_TURN_CANCELLED`, a turn
+  started after the restart still writes, an idle restart settles nothing, a
+  repeated restart stops only the turn it interrupted, and a restart that never
+  comes back still settles the turn. It needs a built host-core
+  (`cargo build -p host-core`) or `PI_DESKTOP_HOST_BIN`.
 
 ### Release & Packaging
 
@@ -4604,10 +4614,18 @@ window; opening a normal panel afterward must still work.
   `review.*` RPC tests in `crates/host-core` (bounded long-file diff, exact and
   unknown counts, session-scanned per-file baseline, per-root rows and rollback,
   record row cap and aggregate work budget, unreadable records, lock scope);
-  renderer-covered by `chat-review-entry.test.mjs`; the panel's rendered rows,
-  root labels, lower-bound totals, reason copy, session-switch clearing and file
-  rollback are driven by `node scripts/e2e-review-files.mjs` after
-  `pnpm build:js`. Full UI journey Draft.
+  renderer-covered by `chat-review-entry.test.mjs` (contract and pre-contract
+  operation spellings); the panel's rendered rows, root labels, lower-bound
+  totals, reason copy, session-switch clearing and file rollback are driven by
+  `node scripts/e2e-review-files.mjs` after `pnpm build:js`. The inline
+  +additions/−deletions and the expanded diff on the transcript row and on the
+  delegate row, taken from a real host `tools.execute` record and its
+  pre-contract spelling, are driven by `node scripts/e2e-tool-review-inline.mjs`
+  after `pnpm build:js`; that scenario also drives a real `MV` move, a real
+  `REM` delete and a real stale-tag edit carrying a host warning, and asserts
+  each expanded body is that record's diff plus, when the host reported one,
+  its warning — with no `Raw` disclosure, no field dump and no `ops` text. Full
+  UI journey Draft.
 
 #### E2E-058: Built-in interactive terminal is absent
 
@@ -10735,7 +10753,10 @@ This test plan spec is accepted when:
   above the newest row. 6) Restart the app. 7) Create another conversation. 8)
   Drag a conversation from Temporary onto a project row. 9) Pin a conversation.
   10) Open the sort menu, choose a Projects mode, then a Sessions mode, then
-  Projects → Recently opened.
+  Projects → Recently opened. 11) With two projects retained, click a
+  conversation that lives in the project whose tab is not the most recent.
+  12) Pin a conversation in that same project, activate the other project, then
+  open the pinned row. 13) Click a project title that is not active.
 - **Expected**: Conversations list newest-created first and no row moves when
   activity changes. Project groups keep the order the user opened them, and
   activity across several projects never reorders a group. A new conversation
@@ -10748,8 +10769,13 @@ This test plan spec is accepted when:
   restore-defaults entry; choosing a Projects mode reorders projects only and
   leaves the session order untouched, choosing a Sessions mode leaves the
   project order untouched, and the existing Recently opened project mode
-  returns to the visit order. `pnpm test:e2e:sidebar-session-order` covers this
-  scenario with the real Sidebar component.
+  returns to the visit order. Opening a conversation in another project
+  activates that project and its conversation without moving any project group:
+  the retained-tab order stays as it was, and a project without a tab is
+  appended last. A pinned conversation opened across projects behaves the same
+  way, while clicking a project title still promotes that project's tab.
+  `pnpm test:e2e:sidebar-session-order` covers this scenario with the real
+  Sidebar component.
 - **Milestone**: M5
 - **Status**: Automated (`scripts/e2e-sidebar-session-order.mjs`)
 

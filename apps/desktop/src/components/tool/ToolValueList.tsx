@@ -51,7 +51,11 @@ export function ToolRawPayload({ block }: { block: RawBlock }) {
     <details className="tool-raw">
       <summary className="tool-raw-summary">{t("chat.toolRaw")}</summary>
       <div className="tool-raw-body">
-        <BlockHead label={t("chat.toolRaw")} copy={block.text} />
+        <BlockHead
+          label={t("chat.toolRaw")}
+          copy={block.text}
+          showLabel={false}
+        />
         <LargeTextPreview
           text={block.text}
           preClassName="tool-row-content tool-raw-content"

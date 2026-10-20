@@ -618,7 +618,12 @@ visually distinct from list content.
   Dragging a session row draws a 2px accent line on the row it will land
   against, inside its own list only. Pinned projects still precede unpinned
   projects within the project sort, and the default project order follows the
-  retained tabs the user opened rather than conversation activity.
+  retained tabs the user opened rather than conversation activity. Selecting a
+  conversation keeps that order: opening a conversation in another project
+  activates it without moving any group, of which a project with no retained
+  tab is appended last. Only an explicit project open — the directory title,
+  the Projects index, or dropping a folder to add a project — promotes that
+  project's tab to the most recent position.
   Project rows have no reorder grip. Pressing the project title and moving
   8px starts a pointer reorder and selects the persisted `manual` project order without changing the session sort.
 - When a session hover card is revealed for the active project, the renderer
@@ -2409,24 +2414,28 @@ twice.
 |---|---|
 | Read | `File content` — syntax highlighted from the file extension |
 | Write | `Written content` — highlighted from the target extension |
-| Edit | `Changes` — compact diff, only when no ReviewChangeCard owns one |
+| Edit | when a ReviewChangeCard owns the change (every workspace mutation, including `MV` and `REM`), the body is that record and nothing else: the card's +a/−d, its diff and its rollback, beside any `Note` the host reported as a warning. The record's own `path`, `root`, `tag`, `deleted` and echoed `ops` are not printed as fields and no `Raw` disclosure is offered, because they restate the change at lower fidelity. A scratch or imported edit has no record, so its stated `ops` appear as `Input`; a failed edit keeps its `Error` plus those `ops` |
 | Bash | `Command` (shell, highlighted) beside `Output` and `Errors` (error hue) as terminal panes (D226 follow-up, §9.10); each pane is labelled and copies its own bytes, and an empty channel is omitted rather than shown as an empty pane |
-| Glob | `Files` — clickable workspace paths |
-| Grep | `Matches` — grouped by file with a `line` gutter and clickable path headings for `outputMode: content`; a clickable path list for `filesWithMatches`; `path` → hit count fields for `count` |
+| Glob | `Files` — clickable workspace paths; a pattern that matched nothing states `No files matched` instead of a heading over an empty list |
+| Grep | `Matches` — grouped by file with a `line` gutter and clickable path headings for `outputMode: content`; a clickable path list for `filesWithMatches`; `path` → hit count fields for `count`. An empty array in any of the three modes states `No matches` (or `No files matched`) as the answer: the payload's `count` and `truncated` are never printed in place of a body, and an empty-only list carries no heading above that sentence |
 | TodoWrite | the checklist the call committed — a progress line from the host's own counts plus one row per item with its state and priority; never the serialized `todos` argument. Rows and counts come from the committed list in the result rather than the call's argument, so truncation and single-active-item demotion are what the reader sees. A cancelled item is neither completed nor outstanding: it leaves the ratio and is reported as its own count beside it. A list with no outstanding item names its state instead of printing `0/0` — `All N items cancelled` when every item was dropped, and a cleared note when the write emptied the checklist — and neither renders a progress bar. A cleared row still has a body, because a row's `aria-controls` must name the element it renders. A refused write keeps its `Error` note and no rows: an uncommitted list is never shown as the session's checklist |
 | Skill | the loaded document as a card: the skill's name, the `location`/`references` it reported, and its body as Markdown. A failed call is an `Error` note instead |
-| ScheduledTaskList/Create/Update/Delete | one row per automation: title, cadence, its clock, the weekly days **named in the session language** (the schema numbers them from Monday = 0, so a bare index is never printed), and enabled/paused |
+| ScheduledTaskList/Create/Update/Delete | one row per automation under the `Scheduled task` heading: title, cadence, its clock, the weekly days **named in the session language** (the schema numbers them from Monday = 0, so a bare index is never printed), and enabled/paused |
 | ToolSearch, EnterPlanMode/SubmitPlan, NewContext, BrowserPreview, GenerateImages | the names they activated or matched, each name set listed once and read in the session language (the legacy `addedToolNames` carrier is used only when the row reports no `activated` list), the mode the tool's own name states (`Plan`, `Goal`), or the prompts and written images the call carried |
 | any host `notice` | `Note` — an error, warning or truncation notice stays visible after the blocks it qualifies; a routine informational notice is not printed in a successful row's body |
 | any failure | `Error` — message plus code, listed first |
-| unmapped payload | scalar entries as label/value fields; long or multi-line strings as their own labeled block; nested objects as JSON, all of it beside one explicit `Raw` disclosure of the untouched payload |
+| TaskWait/List/Stop roster | one table per roster group the runtime returned: `Subagents` for `delegations`, then `Stopped`, `Stop requested — still running` and `Already finished` as the runtime's own `stopped` / `stopPending` / `settled` groups. Each group keeps its heading so a worker whose cancellation was only requested never reads as stopped |
+| Task counters | `Stats` — the delegate's turns, tool calls and usage, after its brief and report |
+| unmapped payload | scalar entries as label/value fields; long or multi-line strings as their own labeled block; nested objects as JSON, all of it beside one explicit `Raw` disclosure of the untouched payload. The disclosure names itself in its own summary, so no second `Details` heading is drawn above it |
 | list of names | a labelled value list when the entries are not paths (activated tools, task ids); a file list when they are |
 
 - Arguments appear as an `Input` field block only when the result blocks did not
   already carry them, or for opaque tools (`use`, `fork`, `fetch`) whose
   arguments are the interesting part. The argument already shown as the row hint
   is not repeated, and a command withheld from the body never returns as one:
-  a run that printed nothing opens on an empty body, not on its arguments.
+  a run that printed nothing opens on an empty body, not on its arguments. A
+  workspace mutation whose review card owns the change prints no arguments at
+  all: `path`, `tag` and `ops` are how the change was requested.
 - Every block exposes a compact copy action that copies the full payload, not
   the visible slice.
 - A payload with no per-tool mapping never stringifies itself at the reader: an
@@ -2435,6 +2444,11 @@ twice.
   printed inline.
 - A checklist never prints the arguments it was called with, and a `run` row
   never prints its command back as an argument.
+- A card that names itself is not wrapped in a second, vaguer section heading:
+  the loaded document keeps its own title and body section, the checklist its
+  own progress line (the frame keeps only the copy control, with a localized
+  accessible name), and the raw payload its own summary. The section head is
+  drawn only where the block has no other name.
 
 ### 9.4 Layout
 

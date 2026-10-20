@@ -143,6 +143,51 @@ test("review evidence is read from the successful message, not Git", () => {
   });
 });
 
+test("a record reads the operation in either spelling the host wrote", () => {
+  // The host serialized `Edit`/`Write`/`Delete` before the shared contract was
+  // enforced, and those tool messages stay persisted, so the same record must
+  // read as the contract operation and keep its counts and its diff.
+  for (const [stored, expected] of [
+    ["Edit", "edit"],
+    ["Write", "write"],
+    ["Delete", "delete"],
+    ["edit", "edit"],
+  ]) {
+    const change = reviewChangeFromMessage(
+      message({
+        toolResult: {
+          details: {
+            root: "workspace",
+            review: { ...baseReview, operation: stored },
+          },
+        },
+      }),
+    );
+    assert.equal(change?.operation, expected, `operation ${stored}`);
+    assert.equal(change?.additions, 4, `additions ${stored}`);
+    assert.equal(change?.deletions, 1, `deletions ${stored}`);
+    assert.equal(change?.hunks.length, 1, `diff ${stored}`);
+    assert.equal(change?.hunks[0].lines[2].type, "add", `diff ${stored}`);
+  }
+  // Anything outside the contract still rejects the whole record instead of
+  // reaching a renderer with a guessed operation.
+  for (const unknown of ["wipe", "EDIT", "", 3, null]) {
+    assert.equal(
+      reviewChangeFromMessage(
+        message({
+          toolResult: {
+            details: {
+              root: "workspace",
+              review: { ...baseReview, operation: unknown },
+            },
+          },
+        }),
+      ),
+      null,
+      `operation ${String(unknown)}`,
+    );
+  }
+});
 test("failed and scratch tool rows cannot manufacture review evidence", () => {
   assert.equal(reviewChangeFromMessage(message({ toolStatus: "error" })), null);
   assert.equal(

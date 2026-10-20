@@ -9737,6 +9737,151 @@ mod tests {
         assert_eq!(fs::read(&source).unwrap(), b"changed\n");
     }
 
+    /// A successful workspace `Edit` carries its review record in the same
+    /// response the renderer turns into the tool row: the row's +a/−d and its
+    /// diff are read from that payload, so the renderer only shows them when
+    /// the record matches the shared `ReviewChange` contract
+    /// (`packages/shared/src/types/workpanel.ts`), whose `operation` is
+    /// `"write" | "edit" | "delete"`.
+    /// The record must spell the operation in the shared vocabulary. A host
+    /// that serialized `ReviewChangeOperation` as `"Edit"` made
+    /// `reviewChangeFromMessage` reject the record, so the row lost its
+    /// +a/−d and its diff even though both were present here.
+    #[tokio::test]
+    async fn tools_execute_edit_returns_a_contract_cased_review_record() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let project = data_dir.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        let source = project.join("source.txt");
+        fs::write(&source, "one\ntwo\n").unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let session = sessions::create_session(
+            &app_state.db,
+            Some("Review".into()),
+            Some("agent".into()),
+            None,
+            None,
+            Some(project.to_string_lossy().into_owned()),
+        )
+        .unwrap();
+        // The session's permission mode decides whether a high-risk Edit is
+        // auto-approved or asks the (absent) user; a test owns no approval
+        // channel, so the fixture states its mode explicitly.
+        sessions::configure_session_with_thinking(
+            &app_state.db,
+            &session.id,
+            "agent",
+            None,
+            None,
+            None,
+            Some("auto"),
+        )
+        .unwrap();
+        let state = Arc::new(Mutex::new(app_state));
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let read = handle_request(
+            state.clone(),
+            "tools.execute",
+            json!({"sessionId": session.id, "toolCallId": "read-source",
+                "toolName": "Read", "args": {"path": "source.txt"}, "mode": "agent"}),
+            tx.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(read["ok"], true, "{read}");
+        let tag = read["content"]["tag"].clone();
+        let edited = handle_request(
+            state,
+            "tools.execute",
+            json!({"sessionId": session.id, "toolCallId": "edit-source",
+                "toolName": "Edit", "args": {"path": "source.txt", "tag": tag,
+                    "ops": "PUT 2.=2:\n+TWO\n"}, "mode": "agent"}),
+            tx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(edited["ok"], true, "{edited}");
+        let review = &edited["content"]["review"];
+        assert_eq!(edited["content"]["root"], json!("workspace"), "{edited}");
+        assert_eq!(review["version"], json!(1), "{edited}");
+        assert_eq!(review["path"], json!("source.txt"), "{edited}");
+        assert_eq!(review["operation"], json!("edit"), "{edited}");
+        assert_eq!(review["additions"], json!(1), "{edited}");
+        assert_eq!(review["deletions"], json!(1), "{edited}");
+        assert!(
+            review["hunks"]
+                .as_array()
+                .is_some_and(|hunks| !hunks.is_empty()),
+            "the change carries its diff: {edited}"
+        );
+    }
+
+    /// The same contract for the other mutating tool, from a real `Write`: a
+    /// created file's record still names the contract operation, and its
+    /// counts and hunks travel with it.
+    #[tokio::test]
+    async fn tools_execute_write_returns_a_contract_cased_review_record() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let project = data_dir.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let session = sessions::create_session(
+            &app_state.db,
+            Some("Review".into()),
+            Some("agent".into()),
+            None,
+            None,
+            Some(project.to_string_lossy().into_owned()),
+        )
+        .unwrap();
+        // A test owns no approval channel, so the fixture states the session's
+        // permission mode instead of leaving a high-risk Write waiting on one.
+        sessions::configure_session_with_thinking(
+            &app_state.db,
+            &session.id,
+            "agent",
+            None,
+            None,
+            None,
+            Some("auto"),
+        )
+        .unwrap();
+        let state = Arc::new(Mutex::new(app_state));
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let written = handle_request(
+            state,
+            "tools.execute",
+            json!({"sessionId": session.id, "toolCallId": "write-created",
+                "toolName": "Write",
+                "args": {"path": "created.txt", "content": "one\ntwo\n"},
+                "mode": "agent"}),
+            tx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(written["ok"], true, "{written}");
+        let review = &written["content"]["review"];
+        assert_eq!(written["content"]["root"], json!("workspace"), "{written}");
+        assert_eq!(review["version"], json!(1), "{written}");
+        assert_eq!(review["path"], json!("created.txt"), "{written}");
+        assert_eq!(review["operation"], json!("write"), "{written}");
+        assert_eq!(review["status"], json!("added"), "{written}");
+        assert_eq!(review["additions"], json!(2), "{written}");
+        assert_eq!(review["deletions"], json!(0), "{written}");
+        assert!(
+            review["hunks"]
+                .as_array()
+                .is_some_and(|hunks| !hunks.is_empty()),
+            "the change carries its diff: {written}"
+        );
+        assert_eq!(
+            fs::read_to_string(project.join("created.txt")).unwrap(),
+            "one\ntwo\n"
+        );
+    }
+
     /// D137: the audit row for a tool call must carry the three segments
     /// separately, so "the tool was slow" can be told apart from "the user
     /// took 20s to approve it".

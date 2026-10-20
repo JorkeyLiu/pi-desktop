@@ -299,6 +299,11 @@ type ReviewChange = {
 
 - The renderer persists and displays this record with the tool message; it
   does not recompute Review from Git, `HEAD`, or the current dirty tree.
+- `operation` is written in the contract casing above. Records and tool
+  messages persisted before that casing was enforced hold `Write`/`Edit`/
+  `Delete`; the host and the renderer still read those spellings, so an
+  existing conversation keeps its counts and its diff, while a value outside
+  the vocabulary is refused instead of displayed.
 - Scratch-root, failed, denied, and unresolvable writes have no `review`
   record. Binary or oversized content may omit hunks and be non-reversible.
 - Rollback is host-owned and hash-guarded. It restores the captured previous

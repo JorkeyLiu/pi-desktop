@@ -96,6 +96,15 @@ export type NavigationOptions = {
   navigationIntent?: number;
 };
 
+/**
+ * Project activation options. `preserveProjectOrder` exists for conversation
+ * navigation: opening a conversation is not the explicit project open that
+ * moves a retained tab, so it must leave the sidebar project order untouched.
+ */
+export type ActivateProjectOptions = NavigationOptions & {
+  preserveProjectOrder?: boolean;
+};
+
 export type RefreshSessionsOptions = {
   /** Restore archived project presentation state for newly imported sessions. */
   revealImportedProjects?: boolean;
@@ -299,7 +308,7 @@ export type AppState = {
   refreshProject: (path: string) => Promise<ProjectWorkspace | null>;
   activateProject: (
     path: string,
-    opts?: NavigationOptions,
+    opts?: ActivateProjectOptions,
   ) => Promise<ProjectWorkspace | null>;
   openProjectPath: (path: string) => Promise<ProjectWorkspace | null>;
   switchProjectPath: (path: string) => Promise<ProjectWorkspace | null>;

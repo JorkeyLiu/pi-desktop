@@ -19,6 +19,7 @@ const ready = i18n.init({ lng: "en", resources: { en: { translation: en } }, ini
 
 const PROJECT = "/fixture/session-order";
 const PROJECT_B = "/fixture/session-order-b";
+const PROJECT_C = "/fixture/session-order-c";
 const MINUTE = 60_000;
 const startedAt = Date.now();
 const iso = (offsetMs: number) => new Date(startedAt - offsetMs).toISOString();
@@ -65,6 +66,85 @@ const storedRecord = {
   openProjectPaths: [PROJECT],
 };
 
+
+/**
+ * Host-boundary stub. The probe drives the real Sidebar and the real store; only
+ * the preload bridge is replaced, so a project activation reaches a real
+ * `project/set` reply instead of a live host.
+ */
+const sessionProjectPath: Record<string, string> = {};
+
+function workspaceFor(path: string) {
+  return { path, name: path.slice(path.lastIndexOf("/") + 1), branch: "main" };
+}
+
+function sessionDetailFor(id: string) {
+  return {
+    id,
+    title: id,
+    projectPath: sessionProjectPath[id] ?? PROJECT,
+    messageCount: 1,
+    mode: "agent",
+    thinkingLevel: "off",
+    permissionMode: "inherit",
+    createdAt: iso(MINUTE),
+    updatedAt: iso(MINUTE),
+    messages: [
+      {
+        id: `${id}-m1`,
+        role: "user",
+        content: id,
+        createdAt: iso(MINUTE),
+        updatedAt: iso(MINUTE),
+      },
+    ],
+  };
+}
+
+function rememberSessionProjects(items: readonly FixtureSession[]) {
+  for (const item of items) {
+    if (item.projectPath) sessionProjectPath[item.id] = item.projectPath;
+  }
+}
+
+Object.defineProperty(window, "piDesktop", {
+  configurable: true,
+  value: {
+    platform: "darwin",
+    on() {
+      return () => undefined;
+    },
+    invoke(channel: string, ...args: unknown[]) {
+      switch (channel) {
+        case "pi-desktop/project/set":
+          return Promise.resolve({
+            ok: true,
+            data: { workspace: workspaceFor(String(args[0])) },
+          });
+        case "pi-desktop/session/get":
+          return Promise.resolve({
+            ok: true,
+            data: {
+              session: sessionDetailFor(
+                String((args[0] as { id?: string } | undefined)?.id ?? ""),
+              ),
+            },
+          });
+        case "pi-desktop/plans/pending":
+          return Promise.resolve({ ok: true, data: { plans: [] } });
+        case "pi-desktop/agent/pendingInteractive":
+          return Promise.resolve({
+            ok: true,
+            data: { asks: [], questions: [], permissions: [] },
+          });
+        default:
+          return Promise.resolve({ ok: true, data: {} });
+      }
+    },
+  },
+});
+
+rememberSessionProjects(initialSessions);
 const elements: Root[] = [];
 function mount(preferences: SidebarPreferences) {
   const host = document.getElementById("root");
@@ -158,6 +238,15 @@ function projectGroupKeys(): string[] {
       ".sidebar-session-groups [data-sidebar-project-group]",
     ),
   ].map((node) => node.getAttribute("data-sidebar-project-group") ?? "");
+}
+
+/** Clicks a project title the way a user opens a project group. */
+function projectTitleClick(path: string): void {
+  const title = document.querySelector<HTMLElement>(
+    `[data-sidebar-project-group="${path}"] [data-action="toggle-project-collapse"]`,
+  );
+  if (!title) throw new Error(`missing project title ${path}`);
+  title.click();
 }
 
 function sortMenu(): HTMLElement | null {
@@ -458,6 +547,175 @@ async function probe() {
     },
   );
 
+  // Opening a conversation is not an explicit project open: the project order
+  // the user built by opening tabs must survive a cross-project row click.
+  const orderSessions: FixtureSession[] = [
+    session({ id: "alpha", projectPath: PROJECT, createdAt: iso(3 * MINUTE) }),
+    session({ id: "beta", projectPath: PROJECT, createdAt: iso(2 * MINUTE) }),
+    session({ id: "b-one", projectPath: PROJECT_B, createdAt: iso(6 * MINUTE) }),
+    session({ id: "c-one", projectPath: PROJECT_C, createdAt: iso(7 * MINUTE) }),
+  ];
+  rememberSessionProjects(orderSessions);
+  const orderFixture = (pinned: readonly string[] = ["beta"]): void => {
+    useAppStore.setState({
+      page: "chat",
+      workspace: { path: PROJECT_B, name: "session-order-b" } as never,
+      openProjects: [
+        { path: PROJECT, name: "session-order" },
+        { path: PROJECT_B, name: "session-order-b" },
+      ] as never,
+      openProjectPaths: [PROJECT, PROJECT_B],
+      activeProjectPath: PROJECT_B,
+      activeSessionId: undefined,
+      sessions: orderSessions as never,
+      sessionMeta: Object.fromEntries(pinned.map((id) => [id, { pinned: true }])),
+      projectMeta: {},
+      projectSort: "recent",
+      sessionView: { sort: "created", archived: false },
+      runningSessions: {},
+    });
+  };
+  const currentProjectPath = (): string | undefined =>
+    useAppStore.getState().activeProjectPath;
+  const tabOrder = (): string => useAppStore.getState().openProjectPaths.join(",");
+
+  orderFixture();
+  await until(() => projectGroupKeys().length === 2, "the order fixture renders");
+  const orderBaseline = projectGroupKeys().join(",");
+  check(
+    "the retained tabs decide the group order before any conversation opens",
+    orderBaseline === `${PROJECT_B},${PROJECT}`,
+    projectGroupKeys(),
+  );
+
+  row("alpha").click();
+  await until(
+    () =>
+      currentProjectPath() === PROJECT &&
+      useAppStore.getState().activeSessionId === "alpha",
+    "a conversation row in another project activates that project",
+  );
+  check(
+    "opening a conversation keeps the retained-tab order",
+    tabOrder() === `${PROJECT},${PROJECT_B}`,
+    useAppStore.getState().openProjectPaths,
+  );
+  check(
+    "opening a conversation does not reorder project groups",
+    projectGroupKeys().join(",") === orderBaseline,
+    projectGroupKeys(),
+  );
+  check(
+    "opening a conversation still makes its row the current one",
+    Boolean(
+      document.querySelector(
+        '[data-sidebar-session-row="alpha"] [aria-current="page"]',
+      ),
+    ),
+    row("alpha").outerHTML.slice(0, 240),
+  );
+
+  orderFixture();
+  await until(() => pinnedRows().includes("beta"), "the pinned row renders");
+  document
+    .querySelector<HTMLElement>(
+      '[data-sidebar-session-section="pinned"] [data-sidebar-session-row="beta"]',
+    )!
+    .click();
+  await until(
+    () =>
+      currentProjectPath() === PROJECT &&
+      useAppStore.getState().activeSessionId === "beta",
+    "a pinned conversation in another project activates that project",
+  );
+  check(
+    "a pinned conversation opened across projects keeps the retained-tab order",
+    tabOrder() === `${PROJECT},${PROJECT_B}` &&
+      projectGroupKeys().join(",") === orderBaseline,
+    { tabs: tabOrder(), groups: projectGroupKeys() },
+  );
+
+  orderFixture(["beta", "c-one"]);
+  await until(() => pinnedRows().includes("c-one"), "the closed project's pin renders");
+  document
+    .querySelector<HTMLElement>(
+      '[data-sidebar-session-section="pinned"] [data-sidebar-session-row="c-one"]',
+    )!
+    .click();
+  await until(
+    () =>
+      currentProjectPath() === PROJECT_C &&
+      useAppStore.getState().activeSessionId === "c-one",
+    "a conversation in a project without a tab activates that project",
+  );
+  check(
+    "a project reached through its conversation is appended after the existing tabs",
+    tabOrder() === `${PROJECT},${PROJECT_B},${PROJECT_C}`,
+    useAppStore.getState().openProjectPaths,
+  );
+  check(
+    "the existing tabs keep their relative order when one is appended",
+    useAppStore.getState().openProjectPaths.slice(0, 2).join(",") ===
+      `${PROJECT},${PROJECT_B}`,
+    useAppStore.getState().openProjectPaths,
+  );
+  check(
+    "the appended tab is the most recently opened group",
+    projectGroupKeys().join(",") === `${PROJECT_C},${PROJECT_B},${PROJECT}`,
+    projectGroupKeys(),
+  );
+
+  orderFixture();
+  useAppStore.setState({
+    projectSort: "manual",
+    projectMeta: {
+      [PROJECT]: { order: 2 },
+      [PROJECT_B]: { order: 0 },
+      [PROJECT_C]: { order: 1 },
+    },
+  });
+  await frame();
+  const manualBaseline = projectGroupKeys().join(",");
+  check(
+    "the manual project order follows the stored ranks",
+    manualBaseline === `${PROJECT_B},${PROJECT}`,
+    projectGroupKeys(),
+  );
+  row("alpha").click();
+  await until(
+    () =>
+      currentProjectPath() === PROJECT &&
+      useAppStore.getState().activeSessionId === "alpha",
+    "a conversation opens under the manual project order",
+  );
+  check(
+    "the manual project order and the chosen sorts ignore conversation activation",
+    projectGroupKeys().join(",") === manualBaseline &&
+      useAppStore.getState().projectSort === "manual" &&
+      useAppStore.getState().sessionView.sort === "created",
+    {
+      groups: projectGroupKeys(),
+      projectSort: useAppStore.getState().projectSort,
+      sessionSort: useAppStore.getState().sessionView.sort,
+    },
+  );
+
+  orderFixture();
+  await until(
+    () => currentProjectPath() === PROJECT_B,
+    "the order fixture resets to the other project",
+  );
+  await frame();
+  projectTitleClick(PROJECT);
+  await until(
+    () => currentProjectPath() === PROJECT,
+    "an explicit project open activates that project",
+  );
+  check(
+    "opening a project from its title still promotes its tab",
+    tabOrder() === `${PROJECT_B},${PROJECT}`,
+    useAppStore.getState().openProjectPaths,
+  );
   return { ok: checks.every((entry) => entry.ok), checks };
 }
 

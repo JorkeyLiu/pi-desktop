@@ -76,6 +76,9 @@ function blockCopyText(block: ToolBlock): string {
       return block.body;
     case "raw":
       return block.text;
+    case "empty":
+      // Nothing matched, so there are no bytes to hand back.
+      return "";
     case "note":
       return block.code ? `${block.code}: ${block.text}` : block.text;
   }
@@ -200,6 +203,31 @@ function MatchList({ block }: { block: Extract<ToolBlock, { kind: "matches" }> }
   );
 }
 
+/**
+ * An empty search or listing: nothing matched, which is the result the call
+ * delivered. The card says so in the session language instead of leaving the
+ * payload's `count`/`truncated` metadata to stand in for a body.
+ */
+function EmptyResult({
+  block,
+}: {
+  block: Extract<ToolBlock, { kind: "empty" }>;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="tool-note is-empty">
+      <IconInfo size={13} />
+      <span className="tool-note-text">
+        {t(
+          block.scope === "files"
+            ? "chat.toolEmptyFiles"
+            : "chat.toolEmptyMatches",
+        )}
+      </span>
+    </div>
+  );
+}
+
 function BlockBody({
   block,
   streaming,
@@ -275,6 +303,8 @@ function BlockBody({
       return <ToolDocumentCard block={block} />;
     case "raw":
       return <ToolRawPayload block={block} />;
+    case "empty":
+      return <EmptyResult block={block} />;
     case "note":
       return (
         <div className={cx("tool-note", block.role === "error" && "is-error")}>
@@ -304,8 +334,11 @@ export function ToolDetailBlocks({
   return (
     <>
       {blocks.map((block, index) => {
-        // The terminal brings its own labeled panes and copy controls, so it
-        // bypasses the generic section frame instead of nesting a second one.
+        // Cards that name themselves and bring their own copy control bypass
+        // the generic section frame instead of nesting a second heading above
+        // their own: the terminal labels its panes, the document card its
+        // title, the raw payload its disclosure summary. An empty result has
+        // no bytes to head and no control to offer.
         if (block.kind === "terminal") {
           return (
             <div className="tool-block is-terminal" key={`terminal-${index}`}>
@@ -313,15 +346,34 @@ export function ToolDetailBlocks({
             </div>
           );
         }
-        const label =
-          block.label ??
-          (block.kind === "asktool"
-            ? t("askTool.historyTitle")
-            : t(BLOCK_LABEL_KEYS[block.role]));
+        if (block.kind === "document") {
+          return (
+            <div className="tool-block is-document" key={`document-${index}`}>
+              <ToolDocumentCard block={block} />
+            </div>
+          );
+        }
+        if (block.kind === "raw") {
+          return (
+            <div className="tool-block is-raw" key={`raw-${index}`}>
+              <ToolRawPayload block={block} />
+            </div>
+          );
+        }
+        const label = block.labelKey
+          ? t(block.labelKey)
+          : block.label ??
+            (block.kind === "asktool"
+              ? t("askTool.historyTitle")
+              : t(BLOCK_LABEL_KEYS[block.role]));
         return (
           <section
-            className={cx("tool-block", plain && "is-plain")}
-            key={`${block.role}-${block.label ?? index}`}
+            className={cx(
+              "tool-block",
+              plain && "is-plain",
+              block.kind === "empty" && "is-empty",
+            )}
+            key={`${block.role}-${block.labelKey ?? block.label ?? index}`}
           >
             {plain ? (
               // A run row's terminal owns the labeled panes, so any other
@@ -329,6 +381,10 @@ export function ToolDetailBlocks({
               // channel name for screen readers instead of a heading the
               // terminal would have had to repeat next to its own.
               <span className="sr-only">{label}</span>
+            ) : block.kind === "empty" ? null : block.kind === "todos" ? (
+              // A checklist's own progress row is its heading; the frame only
+              // keeps the copy control it would otherwise have carried.
+              <BlockHead label={label} copy={blockCopyText(block)} showLabel={false} />
             ) : (
               <BlockHead label={label} copy={blockCopyText(block)} />
             )}
