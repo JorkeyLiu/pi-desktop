@@ -27,8 +27,8 @@ import {
   getToolSummary,
   getToolSummaryValue,
   isToolPathSummary,
-  middleEllipsis,
 } from "../../../lib/tool-display";
+import { ToolPathSummary } from "./ToolPathSummary";
 import {
   buildToolPresentation,
   hasToolDetails,
@@ -472,7 +472,7 @@ function HostToolRow({
                     : undefined
                 }
               >
-                {summaryIsPath ? middleEllipsis(summary) : summary}
+                {summaryIsPath ? <ToolPathSummary path={summary} /> : summary}
               </span>
             ) : null}
             <ToolChips chips={chips} />

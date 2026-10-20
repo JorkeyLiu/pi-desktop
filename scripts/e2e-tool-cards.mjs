@@ -112,6 +112,12 @@ app.whenReady().then(async () => {
     const result = await window.webContents.executeJavaScript("globalThis.toolCardsProbe()");
     const image = await window.webContents.capturePage();
     await writeFile(path.join(${JSON.stringify(artifactDir)}, "tool-cards.png"), image.toPNG());
+    // The narrow path rows get their own frame: the painted file name is the
+    // evidence, so it is captured rather than only read back from the probe.
+    await window.webContents.executeJavaScript("globalThis.toolCardsPathFocus?.()");
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const pathImage = await window.webContents.capturePage();
+    await writeFile(path.join(${JSON.stringify(artifactDir)}, "tool-cards-paths.png"), pathImage.toPNG());
     console.log("TOOL_CARDS_PROBE " + JSON.stringify(result));
     app.quit();
   } catch (error) {

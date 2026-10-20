@@ -3506,10 +3506,41 @@
   margin-top: 10px;
 }
 
-/* A path row prints its middle omitted and keeps the whole value in the title
-   and the file menu; nothing here clips it a second time. */
+/* A path row hands its width to the file name: the directory is its own box
+   that shrinks — and omits its middle — first, and the name only gives way when
+   it cannot fit alone. Both are fitted from measured widths, so the tail a
+   reader matches on is painted inside the row at any width; the whole value
+   stays in the title and the file menu. */
 .tool-row-summary.is-path {
+  position: relative;
+  display: flex;
   min-width: 0;
+  align-items: baseline;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.tool-row-summary.is-path > .tool-path-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-row-summary.is-path > .tool-path-file {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Off the flow and unpainted: it exists only to read the row's own font. */
+.tool-row-summary.is-path > .tool-path-measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 @keyframes spin {
