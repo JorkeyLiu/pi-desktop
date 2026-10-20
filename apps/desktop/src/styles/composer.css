@@ -879,7 +879,15 @@
   color: var(--ds-text-secondary);
 }
 
-.subagent-dock-row-main {
+/* The open action is a shared `Button` (`.btn.btn-ghost`), and `ui-kit.css` is
+   imported after this partial. At equal specificity the shared rules would win
+   the cascade: `.btn` repaints the button's padding, font size and gap with its
+   own push-button geometry, and `.btn-ghost:hover:not(:disabled)` paints a hover
+   fill inside the row. The row therefore qualifies its own action, so this
+   surface's geometry and its transparent fill win on specificity rather than on
+   import order — no `!important`, no change to the shared button, no reordering
+   of the stylesheet entry point. */
+.subagent-dock-row > .subagent-dock-row-main {
   display: flex;
   min-width: 0;
   flex: 1 1 auto;
@@ -898,22 +906,22 @@
 
 /* The fill belongs to the row above: the open action stays transparent in every
    state, so the highlight never paints a rectangle inside the row. */
-.subagent-dock-row-main:hover:not(:disabled),
-.subagent-dock-row-main:active:not(:disabled) {
+.subagent-dock-row > .subagent-dock-row-main:hover:not(:disabled),
+.subagent-dock-row > .subagent-dock-row-main:active:not(:disabled) {
   background: transparent;
 }
 
 /* Opening a chain is a row action, not a push button: keep the row flat while
    it is pressed and let the row's own fill show the hit area. */
-.subagent-dock-row-main:active:not(:disabled) {
+.subagent-dock-row > .subagent-dock-row-main:active:not(:disabled) {
   transform: none;
 }
 
-.subagent-dock-row-main:disabled {
+.subagent-dock-row > .subagent-dock-row-main:disabled {
   cursor: default;
 }
 
-.subagent-dock-row-main:focus-visible {
+.subagent-dock-row > .subagent-dock-row-main:focus-visible {
   outline: 2px solid color-mix(in oklab, var(--ds-accent) 72%, transparent);
   outline-offset: -2px;
 }

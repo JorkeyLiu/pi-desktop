@@ -4673,7 +4673,9 @@ eleven-tool-round desktop paths are verified by
   `subagent-topology.test.mjs` 和 `subagent-task-title.test.mjs`（委托检测、
   结构化结果）。`node scripts/e2e-tool-cards.mjs` 在真实渲染器中渲染并驱动卡片
   及其同级停止控件，`node scripts/e2e-subagent-dock.mjs` 覆盖 Composer 停靠栏的
-  指标与其会话级操作；两者都在当前的详情文案修正前通过，重新验证仍然待办。满
+  指标与其会话级操作（只加载构建后的渲染器样式表，不追加源样式分片，因此测到的
+  是用户实际运行的导入顺序）；两者都在当前的详情文案修正前通过，重新验证仍然待
+  办。满
   多提供商扇出和渲染的跨轮旅程仍然是手动的。
 
 #### E2E-SUBAGENT-legacy-turn-limit-frontmatter-is-ignored

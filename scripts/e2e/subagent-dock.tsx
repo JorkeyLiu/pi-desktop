@@ -189,6 +189,11 @@ flushSync(() => {
   } as never);
 });
 
+// Fixture chrome only: this page has no application shell, so the stage owns
+// the canvas colour and the body inset. Inline element styles, not a stylesheet:
+// the rules under test are the built production CSS and nothing else.
+document.documentElement.style.backgroundColor = "var(--ds-bg-canvas, #111)";
+if (document.body) document.body.style.margin = "0";
 const stage = document.createElement("div");
 stage.id = "stage";
 stage.style.cssText =
@@ -240,6 +245,34 @@ const paint = (node: Element | null) => (node ? getComputedStyle(node).backgroun
 const TRANSPARENT = "rgba(0, 0, 0, 0)";
 /** Long enough for the row's own fill transition to land before it is read. */
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 260));
+/** A layout box rounded to a tenth of a pixel, for state-to-state comparison. */
+const boxOf = (node: Element | null) => {
+  const rect = node?.getBoundingClientRect();
+  return rect
+    ? {
+        x: +rect.x.toFixed(1),
+        y: +rect.y.toFixed(1),
+        w: +rect.width.toFixed(1),
+        h: +rect.height.toFixed(1),
+      }
+    : null;
+};
+/**
+ * The same layout box within half a pixel: no interaction state may move or
+ * resize the open action, which is what keeps the row's hit area whole.
+ */
+const sameBox = (
+  a: { x: number; y: number; w: number; h: number } | null,
+  b: { x: number; y: number; w: number; h: number } | null,
+) =>
+  Boolean(a && b) &&
+  [a, b].every(
+    (box) =>
+      Math.abs(box!.x - a!.x) <= 0.5 &&
+      Math.abs(box!.y - a!.y) <= 0.5 &&
+      Math.abs(box!.w - a!.w) <= 0.5 &&
+      Math.abs(box!.h - a!.h) <= 0.5,
+  );
 const reservedHeight = () =>
   document.documentElement.style.getPropertyValue("--composer-dock-height");
 const expanded = () => toggle()?.getAttribute("aria-expanded") === "true";
@@ -527,6 +560,35 @@ globalThis.subagentDockProbePhase = async (phase: string) => {
     facts.hoverPoint = box
       ? { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) }
       : null;
+    const mainStyle = main ? getComputedStyle(main) : null;
+    const rowStyle = row ? getComputedStyle(row) : null;
+    const sibling = rows()[1] ?? null;
+    // What the shared Button would paint for the same classes, measured on a
+    // throwaway element: the dock's row action must win over `.btn`/`.btn-ghost`
+    // because `ui-kit.css` is imported after `composer.css`.
+    const probe = document.createElement("button");
+    probe.type = "button";
+    probe.className = "btn btn-ghost";
+    probe.textContent = "probe";
+    stage.append(probe);
+    const probeStyle = getComputedStyle(probe);
+    const sharedButton = {
+      padding: `${probeStyle.paddingTop} ${probeStyle.paddingRight} ${probeStyle.paddingBottom} ${probeStyle.paddingLeft}`,
+      fontSize: probeStyle.fontSize,
+      gap: probeStyle.gap,
+    };
+    probe.remove();
+    const geometry = {
+      padding: `${mainStyle?.paddingTop} ${mainStyle?.paddingRight} ${mainStyle?.paddingBottom} ${mainStyle?.paddingLeft}`,
+      fontSize: mainStyle?.fontSize,
+      gap: mainStyle?.gap,
+      radius: mainStyle?.borderRadius,
+    };
+    facts.sharedButton = sharedButton;
+    facts.restGeometry = geometry;
+    facts.restBox = boxOf(main);
+    facts.restRowBox = boxOf(row);
+    facts.restSibling = { row: paint(sibling), main: paint(rowMain(1)) };
     failures.push(
       ...run([
         [
@@ -536,6 +598,28 @@ globalThis.subagentDockProbePhase = async (phase: string) => {
         [
           paint(row) !== TRANSPARENT,
           "the resting row already paints its own surface",
+        ],
+        [
+          geometry.padding === "3px 4px 3px 7px" &&
+            geometry.padding !== sharedButton.padding,
+          `the open action keeps the dock row's own padding, not the shared button's (${geometry.padding} vs ${sharedButton.padding})`,
+        ],
+        [
+          geometry.fontSize === rowStyle?.fontSize &&
+            geometry.fontSize !== sharedButton.fontSize,
+          `the open action inherits the row's font size, not the shared button's (${geometry.fontSize} vs ${sharedButton.fontSize})`,
+        ],
+        [
+          geometry.gap === "7px" && geometry.gap !== sharedButton.gap,
+          `the open action keeps the dock row's gap (${geometry.gap} vs ${sharedButton.gap})`,
+        ],
+        [
+          geometry.radius === rowStyle?.borderRadius,
+          `the open action keeps the row's corner radius (${geometry.radius} vs ${rowStyle?.borderRadius})`,
+        ],
+        [
+          paint(main) === TRANSPARENT,
+          `the resting open action paints no surface of its own (${paint(main)})`,
         ],
       ]),
     );
@@ -562,6 +646,11 @@ globalThis.subagentDockProbePhase = async (phase: string) => {
       rowExtendsPastStop:
         rowBox && stopBox ? Math.round(rowBox.right - stopBox.right) : null,
     };
+    const sibling = rows()[1] ?? null;
+    const siblingPaint = { row: paint(sibling), main: paint(rowMain(1)) };
+    const siblingRest = facts.restSibling as
+      | { row: string; main: string }
+      | undefined;
     failures.push(
       ...run([
         [main?.matches(":hover") === true, "the real pointer hovers the row's open action"],
@@ -588,6 +677,67 @@ globalThis.subagentDockProbePhase = async (phase: string) => {
           `the gap between the open action and stop is the row's surface (hit ${
             gutter?.className ?? "none"
           })`,
+        ],
+        [
+          sameBox(boxOf(main), facts.restBox),
+          `hovering does not move or resize the open action (${JSON.stringify(
+            boxOf(main),
+          )} vs ${JSON.stringify(facts.restBox)})`,
+        ],
+        [
+          siblingPaint.row === siblingRest?.row,
+          `the unhovered sibling row keeps its resting surface (${siblingPaint.row})`,
+        ],
+        [
+          siblingPaint.main === TRANSPARENT,
+          `the unhovered sibling paints no surface inside its row (${siblingPaint.main})`,
+        ],
+      ]),
+    );
+  }
+
+  if (phase === "pressed-check") {
+    await settle();
+    const row = rows()[0] ?? null;
+    const main = rowMain(0);
+    const stop = rowStop(0);
+    const rest = facts.hoverRest as Record<string, string>;
+    const hovered = (facts.hoverPaint as { hovered?: Record<string, string> } | undefined)
+      ?.hovered;
+    const style = main ? getComputedStyle(main) : null;
+    facts.pressed = {
+      row: paint(row),
+      main: paint(main),
+      stop: paint(stop),
+      transform: style?.transform,
+      box: boxOf(main),
+    };
+    failures.push(
+      ...run([
+        [main?.matches(":active") === true, "the real pointer holds the open action pressed"],
+        [
+          paint(main) === TRANSPARENT,
+          `the pressed open action paints no surface of its own (${paint(main)})`,
+        ],
+        [
+          paint(row) === hovered?.row,
+          `the pressed row keeps the whole-row fill (${paint(row)} vs ${hovered?.row})`,
+        ],
+        [
+          style?.transform === "none",
+          `pressing does not scale the row action (${style?.transform})`,
+        ],
+        [
+          sameBox(boxOf(main), facts.restBox),
+          `pressing does not move or resize the open action (${JSON.stringify(
+            boxOf(main),
+          )} vs ${JSON.stringify(facts.restBox)})`,
+        ],
+        [
+          paint(stop) === rest.stop,
+          `the stop control keeps its own surface while the row action is pressed (${paint(
+            stop,
+          )})`,
         ],
       ]),
     );
@@ -663,6 +813,12 @@ globalThis.subagentDockProbePhase = async (phase: string) => {
         [
           style?.outlineStyle === "solid" && style?.outlineWidth === "2px",
           `the focused open action keeps a visible ring (${style?.outlineWidth} ${style?.outlineStyle})`,
+        ],
+        [
+          sameBox(boxOf(main), facts.restBox),
+          `keyboard focus does not move or resize the row action (${JSON.stringify(
+            boxOf(main),
+          )} vs ${JSON.stringify(facts.restBox)})`,
         ],
       ]),
     );

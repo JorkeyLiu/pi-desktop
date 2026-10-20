@@ -7979,7 +7979,9 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   detection, structured outcomes). `node scripts/e2e-tool-cards.mjs` renders
   and drives the card and its sibling Stop control in a real renderer, and
   `node scripts/e2e-subagent-dock.mjs` covers the composer dock's metrics and
-  session-wide action; both passed before the current detail-copy corrections,
+  session-wide action against the built renderer stylesheet alone (no source
+  partial is appended to the page, so the crate's import order is the one the
+  user runs); both passed before the current detail-copy corrections,
   whose revalidation is pending. Full multi-provider fan-out and the rendered
   cross-turn journeys remain manual.
 

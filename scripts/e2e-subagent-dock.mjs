@@ -8,10 +8,12 @@
  * action and i18n. Only the preload bridge is stubbed: it records the one IPC
  * call Stop makes.
  *
- * The dock's rules are new, so they are inlined from `styles/composer.css`
- * rather than requiring a full desktop build: the built stylesheet provides the
- * tokens and every other surface, and the probe fails if the inlined section is
- * missing or empty.
+ * The dock is measured against the built renderer stylesheet alone — the same
+ * asset links the application's `index.html` loads. Nothing from `src/styles` is
+ * copied into the page: a source partial appended after the built CSS would
+ * reverse the real import order and hide a cascade defect. The probe fails fast
+ * when the build predates the dock's own rules, and it asserts that the fixture
+ * page carries exactly those links and no stylesheet of its own.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -48,25 +50,6 @@ const viteUrlStub = {
   },
 };
 
-function dockStylesheet(source) {
-  const start = source.indexOf("/* Session-wide running subagents");
-  const end = source.indexOf(".todo-dock {");
-  assert(start >= 0 && end > start, "styles/composer.css has no subagent dock section");
-  const section = source.slice(start, end);
-  for (const rule of [
-    ".subagent-dock {",
-    ".subagent-dock-header {",
-    ".subagent-dock-toggle {",
-    ".subagent-dock.is-expanded .subagent-dock-content",
-    ".subagent-dock-row-main",
-    ".subagent-dock-row-metrics",
-    ".subagent-dock-row-title",
-  ]) {
-    assert(section.includes(rule), `the subagent dock section is missing ${rule}`);
-  }
-  return section;
-}
-
 try {
   await build({
     entryPoints: [join(root, "scripts/e2e/subagent-dock.tsx")],
@@ -94,23 +77,42 @@ try {
   const renderer = join(root, "apps/desktop/out/renderer");
   const appHtml = await readFile(join(renderer, "index.html"), "utf8");
   const css = [...appHtml.matchAll(/href="([^" ]+\.css)"/g)].map((match) => match[1]);
-  assert(css.length, "Build the app renderer stylesheet once (pnpm build:js) before this check");
-  await cp(join(renderer, "assets"), join(temp, "assets"), { recursive: true });
-  const dockCss = dockStylesheet(
-    await readFile(join(root, "apps/desktop/src/styles/composer.css"), "utf8"),
+  assert(
+    css.length,
+    "Build the app renderer once (pnpm --filter @pi-desktop/desktop build) before this check",
   );
-  await writeFile(join(temp, "dock.css"), dockCss);
+  // The gate is the built stylesheet itself: whatever the shipped app loads is
+  // what the probe measures. An old build that predates the dock's own rules is
+  // reported as stale rather than papered over with the source partial.
+  const builtCss = (
+    await Promise.all(
+      css.map((href) => readFile(join(renderer, href.replace(/^\.?\//, "")), "utf8")),
+    )
+  ).join("\n");
+  for (const rule of [
+    /\.subagent-dock-row\{/,
+    /\.subagent-dock-row>\.subagent-dock-row-main\{/,
+    /\.subagent-dock-row>\.subagent-dock-row-main:hover:not\(:disabled\)/,
+  ]) {
+    assert.match(
+      builtCss,
+      rule,
+      "the built renderer CSS is stale or lacks the dock's own row-action rules: rebuild it before running this probe",
+    );
+  }
+  await cp(join(renderer, "assets"), join(temp, "assets"), { recursive: true });
 
   await writeFile(
     join(temp, "index.html"),
     `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:"><title>Subagent dock</title>${css
       .map((path) => `<link rel="stylesheet" href="${path}">`)
-      .join("")}<link rel="stylesheet" href="dock.css"><style>body{margin:0;background:var(--ds-bg-canvas,#111)}</style><script src="renderer.js"></script>`,
+      .join("")}<script src="renderer.js"></script>`,
   );
 
   await writeFile(
     join(temp, "main.cjs"),
     `
+const assert = require("node:assert/strict");
 const { app, BrowserWindow } = require("electron");
 const path = require("node:path");
 const { writeFile } = require("node:fs/promises");
@@ -167,6 +169,27 @@ async function hover(contents, point) {
     if (!attached) dbg.detach();
   }
 }
+/*
+ * A real pointer button press and release, not a synthetic event: the pressed
+ * paint claim is about Chromium's own :active state.
+ */
+async function mouse(contents, type, point) {
+  const dbg = contents.debugger;
+  const attached = dbg.isAttached();
+  if (!attached) dbg.attach("1.3");
+  try {
+    await dbg.sendCommand("Input.dispatchMouseEvent", {
+      type,
+      x: point.x,
+      y: point.y,
+      button: "left",
+      buttons: type === "mousePressed" ? 1 : 0,
+      clickCount: 1,
+    });
+  } finally {
+    if (!attached) dbg.detach();
+  }
+}
 app.whenReady().then(async () => {
   const window = new BrowserWindow({ show: false, width: 900, height: 720, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
   window.webContents.on("console-message", (event) => console.error(event.message));
@@ -179,6 +202,19 @@ app.whenReady().then(async () => {
   try {
     await window.loadFile(path.join(__dirname, "index.html"));
     await window.webContents.executeJavaScript("window.addEventListener('error', event => console.error(event.error?.stack ?? event.message)); window.addEventListener('unhandledrejection', event => console.error(event.reason?.stack ?? String(event.reason)));");
+    /*
+     * The page must load the production stylesheets and nothing else: a source
+     * partial linked or inlined here would reverse the real import order.
+     */
+    const audit = await window.webContents.executeJavaScript(
+      "(() => ({ links: [...document.querySelectorAll('link[rel=stylesheet]')].map((link) => link.getAttribute('href')), styles: document.querySelectorAll('style').length }))()",
+    );
+    assert.deepEqual(
+      audit.links,
+      ${JSON.stringify(css)},
+      "the probe page must load the built renderer stylesheets and nothing else",
+    );
+    assert.equal(audit.styles, 0, "no fixture stylesheet may be layered over the production CSS");
     phases.collapsed = await run("collapsed");
     await shot("subagent-dock-collapsed.png");
     phases.expanded = await run("expand");
@@ -190,6 +226,12 @@ app.whenReady().then(async () => {
     await hover(window.webContents, phases.hoverPrepare.facts.hoverPoint);
     phases.hover = await run("hover-check");
     await shot("subagent-dock-hover.png");
+    // Pressed paint: the same real pointer held down on the same action, with
+    // the sibling row still resting beside it.
+    await mouse(window.webContents, "mousePressed", phases.hoverPrepare.facts.hoverPoint);
+    phases.pressed = await run("pressed-check");
+    await shot("subagent-dock-pressed.png");
+    await mouse(window.webContents, "mouseReleased", phases.hoverPrepare.facts.hoverPoint);
     await hover(window.webContents, { x: 4, y: 4 });
     phases.hoverAway = await run("hover-away");
     // Keyboard paint: walk the real Tab order from the disclosure onto the row's
@@ -263,6 +305,7 @@ app.whenReady().then(async () => {
         join(artifactDir, "subagent-dock-expanded.png"),
         join(artifactDir, "subagent-dock-actions.png"),
         join(artifactDir, "subagent-dock-hover.png"),
+        join(artifactDir, "subagent-dock-pressed.png"),
         join(artifactDir, "subagent-dock-focus.png"),
       ].join(" "),
   );

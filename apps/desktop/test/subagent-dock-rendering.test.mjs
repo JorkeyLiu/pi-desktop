@@ -366,9 +366,17 @@ test("the dock keeps the todo dock's disclosure contract in the stylesheet", asy
     css,
     /\.subagent-dock\.is-expanded \.subagent-dock-list\s*\{[\s\S]*?max-height:[\s\S]*?overflow-y:\s*auto;[\s\S]*?overscroll-behavior:\s*contain;/,
   );
-  // The row action fills the row and the stop control keeps its own box.
-  assert.match(css, /\.subagent-dock-row-main\s*\{[\s\S]*?flex:\s*1 1 auto;/);
-  assert.match(css, /\.subagent-dock-row-main:focus-visible\s*\{[\s\S]*?outline:/);
+  // The row action fills the row and the stop control keeps its own box. The
+  // action is qualified by its own row, so the shared button rules that load
+  // after this partial cannot repaint its geometry or its fill.
+  assert.match(
+    css,
+    /\.subagent-dock-row > \.subagent-dock-row-main \{[^}]*flex: 1 1 auto;/,
+  );
+  assert.match(
+    css,
+    /\.subagent-dock-row > \.subagent-dock-row-main:focus-visible \{[^}]*outline:/,
+  );
   // Two stacked lines: the title row, then the role and the figures.
   assert.match(css, /\.subagent-dock-row-copy\s*\{[\s\S]*?flex-direction:\s*column;/);
   assert.match(css, /\.subagent-dock-row-title-row\s*\{[\s\S]*?flex-wrap:\s*wrap;/);
@@ -423,13 +431,16 @@ test("the whole row paints the hover and keyboard focus surface, not the inner b
   );
   // The button inside stays transparent in every state, so no second rectangle is
   // painted: the row's own fill is the only surface, including behind the stop.
-  const main = blocksFor(css, ".subagent-dock-row-main");
+  const main = blocksFor(css, ".subagent-dock-row > .subagent-dock-row-main");
   assert.equal(main.length, 1);
   assert.match(main[0], /background: transparent;/);
+  assert.match(main[0], /padding: 3px 4px 3px 7px;/);
+  assert.match(main[0], /font-size: inherit;/);
+  assert.match(main[0], /gap: 7px;/);
   const states = [
-    ".subagent-dock-row-main:hover:not(:disabled)",
-    ".subagent-dock-row-main:active:not(:disabled)",
-    ".subagent-dock-row-main:focus-visible",
+    ".subagent-dock-row > .subagent-dock-row-main:hover:not(:disabled)",
+    ".subagent-dock-row > .subagent-dock-row-main:active:not(:disabled)",
+    ".subagent-dock-row > .subagent-dock-row-main:focus-visible",
   ].flatMap((selector) => blocksFor(css, selector));
   assert.ok(states.length > 0, "the open action declares no state rules");
   for (const body of states) {
@@ -441,7 +452,9 @@ test("the whole row paints the hover and keyboard focus surface, not the inner b
   }
   // The focused open action keeps a visible ring, and Stop keeps its own hover.
   assert.match(
-    blocksFor(css, ".subagent-dock-row-main:focus-visible").join("\n"),
+    blocksFor(css, ".subagent-dock-row > .subagent-dock-row-main:focus-visible").join(
+      "\n",
+    ),
     /outline:\s*2px solid/,
   );
   const stopHover = blocksFor(css, ".stop-btn:hover");
@@ -454,4 +467,102 @@ test("the whole row paints the hover and keyboard focus surface, not the inner b
     css,
     /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.subagent-dock-row,/,
   );
+});
+
+/** CSS specificity as `[ids, classes/attributes/pseudo-classes, elements]`. */
+function specificity(selector) {
+  const ids = (selector.match(/#[\w-]+/g) ?? []).length;
+  const classes = (selector.match(/\.[\w-]+/g) ?? []).length;
+  const attributes = (selector.match(/\[[^\]]*\]/g) ?? []).length;
+  const pseudoClasses = (selector.match(/:(?!:)[a-z-]+/g) ?? []).length;
+  const elements = (
+    selector
+      .replace(/::?[\w-]+(\([^)]*\))?/g, " ")
+      .replace(/\.[\w-]+/g, " ")
+      .replace(/\[[^\]]*\]/g, " ")
+      .replace(/#[\w-]+/g, " ")
+      .match(/[a-z][\w-]*/gi) ?? []
+  ).length;
+  return [ids, classes + attributes + pseudoClasses, elements];
+}
+
+const outranks = (winner, loser) => {
+  const [winnerIds, winnerClasses, winnerElements] = specificity(winner);
+  const [loserIds, loserClasses, loserElements] = specificity(loser);
+  if (winnerIds !== loserIds) return winnerIds > loserIds;
+  if (winnerClasses !== loserClasses) return winnerClasses > loserClasses;
+  return winnerElements > loserElements;
+};
+
+test("the row action's own rules outrank the shared button that loads after them", async () => {
+  const composerCss = await readFile(
+    fileURLToPath(new URL("../src/styles/composer.css", import.meta.url)),
+    "utf8",
+  );
+  const uiKitCss = await readFile(
+    fileURLToPath(new URL("../src/styles/ui-kit.css", import.meta.url)),
+    "utf8",
+  );
+  const globalsCss = await readFile(
+    fileURLToPath(new URL("../src/styles/globals.css", import.meta.url)),
+    "utf8",
+  );
+  // The hazard: the shared button lives in a partial imported after the dock's,
+  // so equal specificity hands the shared declaration to the later file.
+  const composerImport = globalsCss.indexOf('@import "./composer.css"');
+  const uiKitImport = globalsCss.indexOf('@import "./ui-kit.css"');
+  assert.ok(
+    composerImport >= 0 && uiKitImport > composerImport,
+    "composer styles no longer load before the shared ui-kit styles",
+  );
+  const action = ".subagent-dock-row > .subagent-dock-row-main";
+  const states = {
+    hover: `${action}:hover:not(:disabled)`,
+    active: `${action}:active:not(:disabled)`,
+    focus: `${action}:focus-visible`,
+    disabled: `${action}:disabled`,
+  };
+  for (const selector of [action, ...Object.values(states)]) {
+    assert.ok(
+      blocksFor(composerCss, selector).length >= 1,
+      `${selector} is not declared in composer.css`,
+    );
+  }
+  assert.match(
+    blocksFor(composerCss, states.active).join("\n"),
+    /transform: none;/,
+  );
+  assert.match(
+    blocksFor(composerCss, states.hover).join("\n"),
+    /background: transparent;/,
+  );
+  assert.match(
+    blocksFor(composerCss, states.active).join("\n"),
+    /background: transparent;/,
+  );
+  assert.match(blocksFor(composerCss, action)[0], /padding: 3px 4px 3px 7px;/);
+  // Every shared declaration that would repaint the action, and the dock rule
+  // that has to win it on specificity instead of import order.
+  const shared = [
+    [".btn", ["padding", "font-size", "gap", "border-radius"]],
+    [".btn-ghost", ["color"]],
+    [".btn-ghost:hover:not(:disabled)", ["background", "color"]],
+    [".btn:active:not(:disabled)", ["transform"]],
+  ];
+  for (const [sharedSelector, properties] of shared) {
+    assert.equal(
+      blocksFor(uiKitCss, sharedSelector).length,
+      1,
+      `ui-kit.css does not declare ${sharedSelector}`,
+    );
+    const winner = sharedSelector.includes(":hover")
+      ? states.hover
+      : sharedSelector.includes(":active")
+        ? states.active
+        : action;
+    assert.ok(
+      outranks(winner, sharedSelector),
+      `${winner} must outrank ${sharedSelector} (${properties.join(", ")})`,
+    );
+  }
 });
