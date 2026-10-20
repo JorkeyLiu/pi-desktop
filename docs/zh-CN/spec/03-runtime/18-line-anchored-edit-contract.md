@@ -58,7 +58,7 @@
 tag(text) = uppercase_hex_4( low_16_bits( digest( normalize_for_hash(text) ) ) )
 ```
 
-`digest` 是 `crates/host-core/src/review.rs` 已在使用的 SHA-256 原语；tag 取其低 16
+`digest` 是 `crates/host-core/src/review/layout.rs` 已在使用的 SHA-256 原语；tag 取其低 16
 位。复用已有原语让 host-core 只有一套哈希叙事，也避免新增依赖。代价是每次读取与每次
 写入各做一次整文件摘要，其上界由文件大小决定，对 `Read` 所服务的文件规模而言是个位数
 毫秒。

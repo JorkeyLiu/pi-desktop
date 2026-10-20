@@ -66,7 +66,7 @@ tag(text) = uppercase_hex_4( low_16_bits( digest( normalize_for_hash(text) ) ) )
 ```
 
 `digest` is the SHA-256 primitive already used by
-`crates/host-core/src/review.rs`; the tag takes its low 16 bits. Reusing the
+`crates/host-core/src/review/layout.rs`; the tag takes its low 16 bits. Reusing the
 existing primitive keeps one hashing story in host-core and avoids a new
 dependency. The cost is one whole-file digest per read and per write, which is
 bounded by file size and measured in single-digit milliseconds for the file sizes

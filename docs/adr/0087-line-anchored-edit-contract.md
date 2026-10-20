@@ -85,7 +85,7 @@ contract cannot express:
 The store is in-memory, per session, bounded, and dropped with the session. It is
 distinct from ADR 0043's review snapshots, which are on-disk, per tool call, and
 exist for rollback; the two share only the hashing primitive already in
-`crates/host-core/src/review.rs`.
+`crates/host-core/src/review/layout.rs`.
 
 `execute_tool_with_path_access` therefore gains a session identity parameter.
 Today only `BashExecutionOptions` carries `session_id`, so Read/Edit/Grep have no
