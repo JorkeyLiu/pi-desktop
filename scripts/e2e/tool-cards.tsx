@@ -1365,22 +1365,19 @@ globalThis.toolCardsProbe = async () => {
       },
     );
     check(
-      "a settled process starts folded",
-      processHeader.getAttribute("aria-expanded") === "false" &&
-        !shown(fixHost.querySelector(".tool-todo-list")),
+      "a settled process starts expanded",
+      processHeader.getAttribute("aria-expanded") === "true" &&
+        shown(fixHost.querySelector(".tool-todo-list")),
     );
 
-    processHeader.click();
-    await settle();
     const toolRows = ["fix-bash-1", "fix-todo", "fix-bash-2"];
     check(
-      "one click on the process shows its work",
-      processHeader.getAttribute("aria-expanded") === "true" &&
-        toolRows.every((id) => shown(fixHost.querySelector(`[data-message-id="${id}"]`))),
+      "the settled process shows its work without a click",
+      toolRows.every((id) => shown(fixHost.querySelector(`[data-message-id="${id}"]`))),
       { rows: toolRows.map((id) => shown(fixHost.querySelector(`[data-message-id="${id}"]`))) },
     );
     check(
-      "a checklist still opens itself, with no second click",
+      "a checklist still opens itself",
       shown(fixHost.querySelector(".tool-todo-list")) &&
         fixHost.querySelectorAll(".tool-todo-row").length === 3,
       fixHost.querySelectorAll(".tool-todo-row").length,
@@ -1389,7 +1386,7 @@ globalThis.toolCardsProbe = async () => {
       (header) => header.getAttribute("aria-expanded") === "true",
     );
     check(
-      "opening the process expands no tool detail",
+      "an expanded process expands no tool detail",
       opened.length === 1 &&
         opened[0].closest(".tool-row")?.getAttribute("data-message-id") === "fix-todo",
       {

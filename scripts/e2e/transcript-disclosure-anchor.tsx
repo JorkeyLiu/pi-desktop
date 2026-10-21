@@ -295,47 +295,55 @@ globalThis.transcriptDisclosureProbe = async () => {
     const processBefore = geometry(processScroller, processTitle);
     assert(
       processTitle.getAttribute("aria-expanded") === "true",
-      "an active detailed process should start open",
+      "an active process should start expanded",
     );
     renderProcess(false);
+    await settle();
+    const processSettled = geometry(processScroller, processTitle);
+    assert(
+      processTitle.getAttribute("aria-expanded") === "true" &&
+        processSettled.scrollHeight >= processBefore.scrollHeight - 1,
+      `a completed process must stay expanded (expanded=${processTitle.getAttribute("aria-expanded")}, before=${processBefore.scrollHeight}, settled=${processSettled.scrollHeight})`,
+    );
+    processTitle.click();
     await settle();
     const processCollapsed = geometry(processScroller, processTitle);
     assert(
       processTitle.getAttribute("aria-expanded") === "false",
-      `an untouched process should collapse when its turn completes (expanded=${processTitle.getAttribute("aria-expanded")}, active=${processContainer.querySelector(".turn-process")?.classList.contains("active") ?? false}, bodyHidden=${processContainer.querySelector<HTMLElement>(".turn-process-body")?.hidden ?? true}, focusInside=${processContainer.querySelector(".turn-process-body")?.contains(document.activeElement) ?? false}, selected=${window.getSelection()?.isCollapsed === false})`,
+      "a user collapse should close the process",
     );
     assert(
-      processCollapsed.scrollHeight < processBefore.scrollHeight - 100,
-      "completed process content remained visible",
+      processCollapsed.scrollHeight < processSettled.scrollHeight - 100,
+      "collapsed process content remained visible",
+    );
+    renderProcess(true);
+    renderProcess(false);
+    await settle();
+    assert(
+      processTitle.getAttribute("aria-expanded") === "false",
+      "a user-collapsed process should stay closed through streaming and completion",
     );
     processTitle.click();
     await settle();
     const processExpanded = geometry(processScroller, processTitle);
     assert(
       processTitle.getAttribute("aria-expanded") === "true",
-      "a completed process should expand on user request",
+      "a completed process should reopen on user request",
     );
     assert(
       processExpanded.scrollHeight > processCollapsed.scrollHeight + 100,
       "process did not expand",
     );
     // Expansion grows content under a pinned bottom, which is the case the held
-    // anchor has to compensate; the automatic collapse above may legitimately clamp.
+    // anchor has to compensate.
     assert(
       Math.abs(processExpanded.titleTop - processCollapsed.titleTop) < 2,
       "process expansion moved its title",
     );
-    renderProcess(true);
-    renderProcess(false);
-    await settle();
-    assert(
-      processTitle.getAttribute("aria-expanded") === "true",
-      "a user-expanded process should stay open after completion",
-    );
     assert(renderErrors.length === 0, `React render errors: ${renderErrors.map(String).join("; ")}`);
     return {
       ok: true,
-      process: { before: processBefore, collapsed: processCollapsed, expanded: processExpanded },
+      process: { before: processBefore, settled: processSettled, collapsed: processCollapsed, expanded: processExpanded },
       transcript: { before, expanded, collapsed },
       dock: { before: dockBefore, expanded: dockExpanded },
     };

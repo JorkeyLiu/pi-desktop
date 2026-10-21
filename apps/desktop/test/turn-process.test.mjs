@@ -7,7 +7,6 @@ const {
   projectTurnProcess,
   visibleProcessSteps,
   resolveThinkingDisplayMode,
-  shouldAutoOpenTurnProcess,
   shouldGroupTurnProcess,
   turnProcessTiming,
 } = await import("../src/lib/turn-process.ts");
@@ -98,17 +97,9 @@ test("missing and unknown display settings retain detailed mode", () => {
   assert.equal(resolveThinkingDisplayMode("compact"), "compact");
 });
 
-test("completed turn processes stay closed by default while active failures remain visible", () => {
+test("both display modes group each turn into one process", () => {
   assert.equal(shouldGroupTurnProcess("detailed"), true);
   assert.equal(shouldGroupTurnProcess("compact"), true);
-  assert.equal(shouldAutoOpenTurnProcess("detailed", false, false), false);
-  assert.equal(shouldAutoOpenTurnProcess("detailed", false, true), false);
-  assert.equal(shouldAutoOpenTurnProcess("detailed", true, false), true);
-  assert.equal(shouldAutoOpenTurnProcess("detailed", true, true), true);
-  assert.equal(shouldAutoOpenTurnProcess("compact", false, false), false);
-  assert.equal(shouldAutoOpenTurnProcess("compact", true, false), false);
-  assert.equal(shouldAutoOpenTurnProcess("compact", true, true), true);
-  assert.equal(shouldAutoOpenTurnProcess("compact", false, true), false);
 });
 
 test("history timing uses recorded ends and rejects invalid timestamps and durations", () => {

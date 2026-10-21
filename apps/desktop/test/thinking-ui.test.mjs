@@ -28,6 +28,7 @@ const transcriptActivityGroupSource = await readTranscriptModule("ActivityGroup.
 const transcriptProcessGroupSource = await readTranscriptModule(
   "ProcessActivityGroup.tsx",
 );
+const transcriptTurnProcessSource = await readTranscriptModule("TurnProcess.tsx");
 const appSource = await readFile(
   new URL("../src/components/ChatSurface.tsx", import.meta.url),
   "utf8",
@@ -332,6 +333,12 @@ test("tool and search rows stay collapsed while the checklist and thinking hold 
   assert.match(
     transcriptToolRowSource,
     /const disclosure = useAutomaticDisclosure\(\s*action === "todo",\s*revealRequest,\s*disclosureKey\("tool", message\.id\),\s*\);/,
+  );
+  // The whole turn process is expanded by default in both modes: no activity,
+  // failure or completion state is a second auto-close condition.
+  assert.match(
+    transcriptTurnProcessSource,
+    /const disclosure = useAutomaticDisclosure\(\s*true,\s*revealRequest,\s*disclosureKey\("turn", turnId\),\s*\);/,
   );
   // No status, failure or streaming state may become a second opening default.
   assert.doesNotMatch(

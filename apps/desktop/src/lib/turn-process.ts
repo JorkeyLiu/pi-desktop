@@ -54,15 +54,6 @@ export function shouldGroupTurnProcess(mode: ThinkingDisplayMode): boolean {
   return mode === "detailed" || mode === "compact";
 }
 
-/** Active processes open in Detailed; settled processes default closed. */
-export function shouldAutoOpenTurnProcess(
-  mode: ThinkingDisplayMode,
-  isActive: boolean,
-  hasToolFailure: boolean,
-): boolean {
-  return isActive && (mode === "detailed" || hasToolFailure);
-}
-
 /**
  * Only a trailing assistant text can be the answer: text followed by tools is
  * progress. The stream carries no final-answer marker, so a live trailing text

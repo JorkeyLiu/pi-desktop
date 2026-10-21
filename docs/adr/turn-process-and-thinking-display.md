@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-17
-- Amended: 2026-09-27, 2026-10-19
+- Amended: 2026-09-27, 2026-10-19, 2026-10-21
 - Issues: #510, #461
 - Amends: D071, [ADR 0242](0242-delta-only-streaming-updates.md)
 
@@ -125,3 +125,12 @@ watching, with the reader's collapse choice for that row surviving later streami
 updates. Everything else here - one process disclosure per loaded turn, the
 trailing answer outside it, compact mode, disclosure-memory ownership, and the
 search/navigation ancestor path - is unchanged.
+
+A later amendment on 2026-10-21 removed the last automatic close. Every
+whole-process disclosure now opens by default in both modes, for the live turn
+and for history alike, and a settling turn leaves it open; only an explicit
+reader choice closes one, and that choice outlives later streaming updates and
+the active-to-completed transition. Everything else in this amendment - one
+process disclosure per loaded turn, the trailing answer outside it, the compact
+payload and reasoning rules, the item-level defaults, disclosure-memory ownership,
+and the search/navigation ancestor path - is unchanged.

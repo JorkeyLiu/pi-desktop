@@ -9,7 +9,6 @@ import {
   isTurnThinking,
   processContainsMessage,
   resolveThinkingDisplayMode,
-  shouldAutoOpenTurnProcess,
   turnProcessTiming,
 } from "../../../lib/turn-process";
 import { useAppStore } from "../../../stores/app-store";
@@ -46,8 +45,11 @@ export function TurnProcess({
   ), [processParts, delegationStatuses]);
   const thinkingNow = useMemo(() => isTurnThinking(turnParts, isActive), [turnParts, isActive]);
   const visibleSteps = useMemo(() => cachedVisibleProcessSteps(processParts, mode === "compact", isActive), [processParts, mode, isActive]);
+  // A whole turn process is expanded by default in both modes, live or history,
+  // and completing the turn never closes it. Only an explicit user choice does,
+  // and that choice outlives later streaming updates and the completion itself.
   const disclosure = useAutomaticDisclosure(
-    shouldAutoOpenTurnProcess(mode, isActive, summary.issues > 0),
+    true,
     revealRequest,
     disclosureKey("turn", turnId),
   );

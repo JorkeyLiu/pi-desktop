@@ -115,36 +115,40 @@ export async function turnProcessProbe() {
       "detailed wraps one process per turn",
     );
     check(
-      header()?.getAttribute("aria-expanded") === "false" && !visible(process()),
-      "detailed completed process starts collapsed",
+      header()?.getAttribute("aria-expanded") === "true" && visible(process()),
+      "detailed historical process starts expanded",
     );
     check(
       visible(container.querySelector('[data-message-id="answer"]')),
       "final answer stays visible",
     );
     check(
-      !visible(container.querySelector('[data-message-id="progress"]')),
-      "completed progress stays hidden until expanded",
+      visible(container.querySelector('[data-message-id="progress"]')),
+      "historical progress is readable without a click",
     );
     render(messages, true, null, "active-process");
     check(
       header()?.getAttribute("aria-expanded") === "true" && visible(process()),
-      "active detailed process starts open",
+      "active detailed process stays expanded",
     );
     render(messages, false, null, "active-process");
     check(
-      header()?.getAttribute("aria-expanded") === "false" && !visible(process()),
-      "untouched detailed process collapses on completion",
+      header()?.getAttribute("aria-expanded") === "true" && visible(process()),
+      "detailed process is still expanded after its turn completes",
     );
-    render(messages);
+    click(header());
+    check(
+      !visible(container.querySelector('[data-message-id="progress"]')),
+      "a user collapse closes a completed process",
+    );
     click(header());
     check(
       visible(container.querySelector('[data-message-id="progress"]')),
-      "user can expand completed progress",
+      "a user reopen restores a completed process",
     );
     check(
-      container.querySelector('[data-message-id="edit"]')?.classList.contains("open") === true,
-      "detailed opens the last tool",
+      container.querySelector('[data-message-id="edit"]')?.classList.contains("open") !== true,
+      "an expanded process opens no tool payload by itself",
     );
     check(
       container.querySelector('[data-message-id="read"]')?.classList.contains("open") !== true,
@@ -212,8 +216,8 @@ export async function turnProcessProbe() {
       "one process per turn",
     );
     check(
-      header()?.getAttribute("aria-expanded") === "false" && !visible(process()),
-      "compact completed process starts collapsed",
+      header()?.getAttribute("aria-expanded") === "true" && visible(process()),
+      "compact historical process starts expanded",
     );
     check(
       container.querySelector('[data-message-id="edit"]')?.classList.contains("open") !== true,
@@ -223,26 +227,38 @@ export async function turnProcessProbe() {
       header()?.textContent?.includes("2 tools"),
       "process counts tools and progress once",
     );
-    click(header());
     check(
       visible(container.querySelector('[data-message-id="progress"]')),
-      "expanding reveals intermediate progress",
+      "compact shows intermediate progress by default",
     );
     check(
       process()?.querySelectorAll(".tool-row").length === 2,
-      "compact expanding retains both tools without thinking",
+      "compact retains both tools without thinking",
     );
+    click(header());
+    check(!visible(process()), "a compact user collapse closes the process");
     render(messages, true, null, "compact-group");
     render(messages, false, null, "compact-group");
     check(
-      header()?.getAttribute("aria-expanded") === "true",
-      "manual disclosure survives active-to-complete transition",
+      header()?.getAttribute("aria-expanded") === "false",
+      "a user-collapsed process survives streaming and completion",
+    );
+    click(header());
+    check(
+      header()?.getAttribute("aria-expanded") === "true" && visible(process()),
+      "a user can reopen the compact process",
     );
 
     render([intro, read], true, null, "live");
     check(
-      header()?.getAttribute("aria-expanded") === "false",
-      "compact live process stays collapsed without a tool failure",
+      header()?.getAttribute("aria-expanded") === "true",
+      "a compact live process is expanded without a tool failure",
+    );
+    render(messages, false, null, "search");
+    click(header());
+    check(
+      !visible(container.querySelector('[data-message-id="progress"]')),
+      "a manual collapse hides the searched message first",
     );
     render(
       messages,
@@ -252,7 +268,7 @@ export async function turnProcessProbe() {
     );
     check(
       visible(container.querySelector('[data-message-id="progress"]')),
-      "search reveals folded progress",
+      "search reveals a manually collapsed process",
     );
 
     const liveThought = message("live-thought", "assistant", "", {
@@ -350,10 +366,9 @@ export async function turnProcessProbe() {
       Boolean(header()) && !container.textContent?.includes("hidden thinking words"),
       "compact live thinking has status without reasoning text",
     );
-    click(header());
     check(
       visible(container.querySelector(".thinking-compact")),
-      "compact live thinking remains indicator-only when expanded",
+      "compact live thinking renders indicator-only in the expanded process",
     );
     render([{ ...thought, status: "complete" }], false, null, "compact");
     check(
@@ -368,10 +383,9 @@ export async function turnProcessProbe() {
     );
     render(messages, false, null, "compact-tools");
     check(
-      header()?.getAttribute("aria-expanded") === "false" && !visible(process()),
-      "compact completed process starts collapsed",
+      header()?.getAttribute("aria-expanded") === "true" && visible(process()),
+      "compact completed process is expanded",
     );
-    click(header());
     check(
       !container.querySelector(".thinking") &&
         process()?.querySelectorAll(".tool-row").length === 2,

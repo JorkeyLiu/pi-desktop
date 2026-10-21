@@ -17215,22 +17215,24 @@ plugin-form fixtures in an isolated temporary directory at runtime.
   answer; Detailed and Compact display modes; legacy message-level transcript
   search targets.
 - **Steps:** In Detailed, confirm a live process starts open, let that same turn
-  finish without interacting, and confirm the process collapses. On a second
-  turn, explicitly open the completed process and confirm the choice survives
-  subsequent updates. Review the nested path, including independent group/item
+  finish without interacting, and confirm it is still open. Also confirm a
+  historical turn loads with its process open. On a second turn, collapse the
+  completed process, confirm the collapse survives a streaming update, and
+  reopen it. Review the nested path, including independent group/item
   toggles, parent close/reopen, a singleton segment, literal-final-item leaf
   selection, failure/denial/recovery, retained-pane remounts and a legacy search
   reveal. Repeat in Compact with permission/question/plan/goal cards, a stopped
   partial answer, an assistant error and delegated child work.
 - **Expected:** Both modes use one whole-process disclosure and leave the final
   answer, assistant errors, stopped trailing text and pending actions outside it.
-  Detailed starts active processes open; untouched processes collapse at
-  completion, while explicit user choices persist. The active multi-item group
-  is open and an untouched group closes on completion. Compact starts processes
-  and groups closed, hides reasoning, and keeps payloads closed; an untouched
-  active process with a recorded failed/denied tool stays open through recovery
-  and closes on completion. Singletons have no group. No item payload opens
-  itself: a tool/search row stays closed until the user opens it, while a final
+  Every whole process starts open in both modes, for the live turn and for
+  history alike, and completion never closes one; explicit user choices persist,
+  so a process the reader collapsed stays collapsed and one the reader reopened
+  stays open across later updates and the active-to-completed transition. The
+  active multi-item group is open and an untouched group closes on completion.
+  Compact hides reasoning and keeps payloads closed. Singletons have no group. No
+  item payload opens itself: a tool/search row stays closed until the user opens
+  it, while a final
   thinking item keeps its own leaf default. Parent/child/
   sibling states remain independent, pane-owned user choices survive updates,
   mode changes and remounts, and renderer restart reapplies defaults. Search
@@ -17241,10 +17243,12 @@ plugin-form fixtures in an isolated temporary directory at runtime.
 - **Validation scope for the 2026-09-20 change:** Nested disclosure and activity
   group presentation only; precise item-level transcript search targeting is out
   of scope and keeps the existing message-level search behavior.
-- **Automation:** `pnpm test:e2e:transcript` covers default and active-to-completed
-  process disclosure behavior; `pnpm test:e2e:transcript-disclosure` verifies
-  manual-open retention and viewport anchoring; `apps/desktop/test/turn-process.test.mjs`
-  covers default selection.
+- **Automation:** `pnpm test:e2e:transcript` covers the default-expanded,
+  completion-stable and manual-collapse process disclosure behavior plus the
+  search reveal; `pnpm test:e2e:transcript-disclosure` verifies manual-choice
+  retention against real viewport geometry;
+  `apps/desktop/test/thinking-ui.test.mjs` pins the unconditional
+  whole-process default.
 - **Specs:** 04-ux/06-settings-ia, 04-ux/08-component-spec,
   04-ux/09-interaction-patterns; ADR turn-process-and-thinking-display.
 

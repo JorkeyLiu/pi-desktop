@@ -891,13 +891,13 @@ grouped with, and it folds like any other reasoning row. The move only changes
 where that leaf is read: the stored transcript order the model produced is
 unchanged.
 
-Detailed opens whole-process disclosures while a turn is active. When a turn
-settles, an untouched process defaults closed; an explicit user choice remains
-authoritative. The ordinary group owning the active execution segment starts
-open, then closes on completion only if untouched; other completed groups start
-closed. Compact starts the process and ordinary groups closed. Its untouched
-active process remains open when any failed or denied tool has been recorded,
-through later successful recovery, and closes on completion if still untouched.
+Both modes open every whole-process disclosure by default, for the live turn and
+for history alike, and a settling turn never closes one. An explicit user choice
+remains authoritative: a process the reader collapsed stays collapsed and one the
+reader opened stays open, across later streaming updates and the
+active-to-completed transition. The ordinary group owning the active execution
+segment starts open, then closes on completion only if untouched; other completed
+groups start closed.
 Group headers summarize count, running state and issue count without treating a
 failed child as a failed turn.
 

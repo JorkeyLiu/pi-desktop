@@ -967,10 +967,9 @@ may be retained while exactly one workspace supplies the visible shell context.
   process group rather than a second container, and the reasoning emitted
   immediately before the closing prose is presented as its own sibling row before
   that prose.
-- Detailed starts active and completed whole processes open, and an untouched
-  active process closes on completion. Compact starts the process closed, except
-  an untouched active process with any recorded failed/denied tool remains open
-  through recovery and closes on completion.
+- Both modes start every whole process open, live or historical, and completing a
+  turn never closes one. An explicit user collapse still wins over that default:
+  it survives later streaming updates and the active-to-completed transition.
 - No item payload opens itself in either mode: a tool, hosted-search or plan call
   stays a header row until the user opens it, including the literal final item of
   the last group. The one exception is the `TodoWrite` row, which opens with the
