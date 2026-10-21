@@ -370,7 +370,9 @@ test("a lifecycle roster row supplies the counts when the Task snapshot has none
         },
       ]),
     ]);
-    assert.deepEqual(rows[0].metrics, { turns: 2, toolCalls: 0, contextTokens: 9_800 });
+    // The lifecycle row reported turns but no tool calls: the missing counter
+    // stays absent so the row renders its labelled dash, never a zero.
+    assert.deepEqual(rows[0].metrics, { turns: 2, contextTokens: 9_800 });
   } finally {
     await server.close();
   }
@@ -392,9 +394,9 @@ test("a child's own reported usage is the last resort, and the parent's is never
         parentToolCallId: "call-1",
       }),
     ]);
+    // A child that reported no counter at all carries none: the row states the
+    // occupancy it derived and dashes for turns and calls.
     assert.deepEqual(rows[0].metrics, {
-      turns: 0,
-      toolCalls: 0,
       contextTokens: 7_700,
       contextEstimated: true,
       // The child's own spend travels with its occupancy; the presenter states

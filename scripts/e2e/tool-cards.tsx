@@ -12,6 +12,9 @@ import { TranscriptDisclosureProvider } from "../../apps/desktop/src/features/ch
 import { useAppStore } from "../../apps/desktop/src/stores/app-store";
 import { ActivityItems } from "../../apps/desktop/src/features/chat/transcript/ActivityItems";
 import { SubagentTitleProvider } from "../../apps/desktop/src/lib/subagent-title-provider";
+import { SubagentChainMetricsProvider } from "../../apps/desktop/src/lib/subagent-metrics-provider";
+import { aggregateChainMetricsFromMessages } from "../../apps/desktop/src/lib/subagent-metrics";
+import { subagentMetricsLine } from "../../apps/desktop/src/lib/subagent-ui-metrics";
 
 declare global {
   var toolCardsProbe: () => Promise<unknown>;
@@ -221,6 +224,7 @@ const taskCall = (
     resume,
     status = "completed",
     thinkingLevel = "high",
+    metrics,
   }: {
     description?: string;
     delegationId: string;
@@ -228,6 +232,8 @@ const taskCall = (
     resume?: string;
     status?: "running" | "completed";
     thinkingLevel?: string;
+    /** The counters this run reported; the default is one run's own figures. */
+    metrics?: Record<string, unknown>;
   },
 ): UiMessage =>
   message(id, "", {
@@ -248,12 +254,14 @@ const taskCall = (
         startedAt: Date.parse(createdAt),
         modelId: DELEGATE_MODEL,
         thinkingLevel,
-        toolCalls: 2,
-        turns: 1,
-        // The child's own occupancy and its own cumulative spend, so the card
-        // and the dock state the same four figures for the same report.
-        contextTokens: 12_000,
-        usage: { totalTokens: 3_400 },
+        ...(metrics ?? {
+          toolCalls: 2,
+          turns: 1,
+          // The child's own occupancy and its own cumulative spend, so the card
+          // and the dock state the same four figures for the same report.
+          contextTokens: 12_000,
+          usage: { totalTokens: 3_400 },
+        }),
       },
     },
   });
@@ -279,6 +287,29 @@ const settle = async (ticks = 4) => {
 
 const tracks = (value: string) => value.split(" ").filter(Boolean).length;
 
+
+/**
+ * Two cards of one chain whose messages can be replaced, exactly as a live
+ * resume segment is replaced when its run reports again.
+ */
+let chainLiveSetter: ((messages: UiMessage[]) => void) | null = null;
+function LiveChain({
+  initial,
+  render,
+}: {
+  initial: UiMessage[];
+  render: (messages: UiMessage[]) => ReactNode;
+}) {
+  const [messages, setMessages] = useState(initial);
+  chainLiveSetter = setMessages;
+  return (
+    <SubagentTitleProvider messages={messages}>
+      <SubagentChainMetricsProvider messages={messages}>
+        {render(messages)}
+      </SubagentChainMetricsProvider>
+    </SubagentTitleProvider>
+  );
+}
 /** A row whose message can be replaced, exactly as streaming replaces it. */
 function Live({ initial }: { initial: UiMessage }) {
   const [current, setCurrent] = useState(initial);
@@ -740,10 +771,25 @@ globalThis.toolCardsProbe = async () => {
       workPanelTabs: [],
       activeWorkPanelTabId: null,
     });
+    // One chain, two runs with their own counters: the resume segment did most
+    // of the work, so a per-invocation figure on either card would disagree with
+    // the child's own tab header, which states the chain's totals.
     const original = taskCall("task-original", {
       description: TASK_TITLE,
       delegationId: "del-original",
       agent: "manifestor",
+      metrics: {
+        turns: 1,
+        toolCalls: 2,
+        contextTokens: 12_000,
+        usage: {
+          inputTokens: 2_000,
+          outputTokens: 1_400,
+          totalTokens: 3_400,
+          operationId: "op-original",
+          aggregation: "operation",
+        },
+      },
     });
     const continuation = taskCall("task-resume", {
       description: CONTINUATION_TITLE,
@@ -751,6 +797,18 @@ globalThis.toolCardsProbe = async () => {
       delegationId: "del-resume",
       agent: "inspector",
       status: "running",
+      metrics: {
+        turns: 3,
+        toolCalls: 4,
+        contextTokens: 22_000,
+        usage: {
+          inputTokens: 2_000,
+          outputTokens: 1_000,
+          totalTokens: 3_000,
+          operationId: "op-resume",
+          aggregation: "operation",
+        },
+      },
     });
     const longTitled = taskCall("task-long", {
       description: LONG_TASK_TITLE,
@@ -761,6 +819,34 @@ globalThis.toolCardsProbe = async () => {
       delegationId: "del-role",
       agent: "verifier",
       thinkingLevel: "low",
+    });
+    // Two cards at the two ends of "reported nothing": a run whose counters are
+    // real zeros, and a run that has reported no figure at all. Both keep the
+    // same four slots, so a transcript of cards never changes the line's shape.
+    const zeroReport = taskCall("task-zero", {
+      description: "Audit the empty queue",
+      delegationId: "del-zero",
+      agent: "auditor",
+      metrics: {
+        turns: 0,
+        toolCalls: 0,
+        contextTokens: 0,
+        usage: { totalTokens: 0 },
+      },
+    });
+    const silentReport = taskCall("task-silent", {
+      description: "Watch the queue",
+      delegationId: "del-silent",
+      agent: "watcher",
+      metrics: {},
+    });
+    // A run that reported its occupancy and spend but no counters: the two
+    // counters it never sent are dashes, and the two figures it did send stay.
+    const metricOnlyReport = taskCall("task-metric-only", {
+      description: "Measure the empty queue",
+      delegationId: "del-metric",
+      agent: "surveyor",
+      metrics: { contextTokens: 9_000, usage: { totalTokens: 1_200 } },
     });
     // A lifecycle row is not a delegation: it keeps its ordinary tool row and
     // its roster, and must never become a second card for the same child.
@@ -776,7 +862,16 @@ globalThis.toolCardsProbe = async () => {
         },
       },
     });
-    const sessionCalls = [original, continuation, longTitled, untitled, wait];
+    const sessionCalls = [
+      original,
+      continuation,
+      longTitled,
+      untitled,
+      zeroReport,
+      silentReport,
+      metricOnlyReport,
+      wait,
+    ];
     const chainStart = Date.parse(createdAt);
     const timings = new Map([
       ["del-original", { startedAt: chainStart - 32_000, completedAt: chainStart }],
@@ -798,8 +893,19 @@ globalThis.toolCardsProbe = async () => {
     const cardsHost = mount(
       wide,
       <SubagentTitleProvider messages={sessionCalls}>
-        <div data-part="first">{part([original, longTitled, untitled])}</div>
-        <div data-part="second">{part([continuation, wait])}</div>
+        <SubagentChainMetricsProvider messages={sessionCalls}>
+          <div data-part="first">
+            {part([
+              original,
+              longTitled,
+              untitled,
+              zeroReport,
+              silentReport,
+              metricOnlyReport,
+            ])}
+          </div>
+          <div data-part="second">{part([continuation, wait])}</div>
+        </SubagentChainMetricsProvider>
       </SubagentTitleProvider>,
     );
     await settle();
@@ -817,10 +923,16 @@ globalThis.toolCardsProbe = async () => {
 
     check(
       "one card per Task call, and the lifecycle row stays a tool row",
-      cardsHost.querySelectorAll(".subagent-task").length === 4 &&
-        ["task-original", "task-resume", "task-long", "task-role-only"].every(
-          (id) => Boolean(cardOf(id)),
-        ),
+      cardsHost.querySelectorAll(".subagent-task").length === 7 &&
+        [
+          "task-original",
+          "task-resume",
+          "task-long",
+          "task-role-only",
+          "task-zero",
+          "task-silent",
+          "task-metric-only",
+        ].every((id) => Boolean(cardOf(id))),
       cardsHost.querySelectorAll(".subagent-task").length,
     );
     check(
@@ -960,14 +1072,78 @@ globalThis.toolCardsProbe = async () => {
         stateOf("task-resume").textContent!.includes("Running"),
       stateOf("task-original").textContent,
     );
+    // The child session's totals, exactly as its own tab header states them:
+    // both segments of the chain read one canonical fold, and the neighbouring
+    // single-run cards keep their own figures.
+    const chainLine = subagentMetricsLine(
+      aggregateChainMetricsFromMessages(sessionCalls, "del-original"),
+      i18n.t.bind(i18n),
+      "en",
+    );
+    const metricsOf = (host: HTMLElement, id: string) =>
+      host
+        .querySelector<HTMLElement>(`.subagent-task[data-message-id="${id}"] .subagent-task-metrics`)
+        ?.textContent ?? "";
     check(
-      "a card states the child's own four figures, as the dock does",
-      cardOf("task-original").querySelector(".subagent-task-metrics")?.textContent ===
-        "Turns 1 · Tool calls 2 · Context 12K · Spent 3.4K" &&
+      "a card states the child session's totals, as its tab header does",
+      chainLine === "Turns 4 · Tool calls 6 · Context 22K · Spent 6.4K" &&
+        metricsOf(cardsHost, "task-original") === chainLine &&
+        metricsOf(cardsHost, "task-resume") === chainLine &&
         cardOf("task-original")
           .querySelector(".subagent-task-metrics")
-          ?.getAttribute("title") === "Turns 1 · Tool calls 2 · Context 12K · Spent 3.4K",
-      cardOf("task-original").querySelector(".subagent-task-metrics")?.textContent,
+          ?.getAttribute("title") === chainLine,
+      {
+        header: chainLine,
+        original: metricsOf(cardsHost, "task-original"),
+        resume: metricsOf(cardsHost, "task-resume"),
+      },
+    );
+    check(
+      "a single-run card keeps its own figures, untouched by the chain beside it",
+      metricsOf(cardsHost, "task-long") === "Turns 1 · Tool calls 2 · Context 12K · Spent 3.4K" &&
+        metricsOf(cardsHost, "task-role-only") === "Turns 1 · Tool calls 2 · Context 12K · Spent 3.4K",
+      {
+        long: metricsOf(cardsHost, "task-long"),
+        roleOnly: metricsOf(cardsHost, "task-role-only"),
+      },
+    );
+    // The four figures are never conditional: a run that reported real zeros
+    // states those zeros, and a run that reported nothing keeps the four
+    // labelled placeholders. Both cards hold the same line the reported cards
+    // hold, so a transcript of cards keeps one line height.
+    check(
+      "a card states reported zeros as zeros",
+      metricsOf(cardsHost, "task-zero") === "Turns 0 · Tool calls 0 · Context 0 · Spent 0",
+      metricsOf(cardsHost, "task-zero"),
+    );
+    check(
+      "a card whose run reported nothing keeps all four labelled placeholders",
+      metricsOf(cardsHost, "task-silent") ===
+        "Turns — · Tool calls — · Context — · Spent —" &&
+        cardOf("task-silent")
+          .querySelector(".subagent-task-metrics")
+          ?.getAttribute("title") === "Turns — · Tool calls — · Context — · Spent —",
+      {
+        line: metricsOf(cardsHost, "task-silent"),
+        title: cardOf("task-silent")
+          .querySelector(".subagent-task-metrics")
+          ?.getAttribute("title"),
+      },
+    );
+    check(
+      "a card whose run reported only context and spend states no counters",
+      metricsOf(cardsHost, "task-metric-only") ===
+        "Turns — · Tool calls — · Context 9K · Spent 1.2K",
+      metricsOf(cardsHost, "task-metric-only"),
+    );
+    check(
+      "the figures line never disappears from a card",
+      cardsHost.querySelectorAll(".subagent-task .subagent-task-metrics").length ===
+        cardsHost.querySelectorAll(".subagent-task").length,
+      {
+        cards: cardsHost.querySelectorAll(".subagent-task").length,
+        lines: cardsHost.querySelectorAll(".subagent-task .subagent-task-metrics").length,
+      },
     );
 
     // A long title clamps instead of stretching the card, and its hover keeps
@@ -1051,6 +1227,62 @@ globalThis.toolCardsProbe = async () => {
       {
         resume: cardOf("task-resume").className,
         original: cardOf("task-original").className,
+      },
+    );
+
+    // A live resume segment reports again: every card of its chain states the
+    // new totals, including the earlier card whose own message never changed.
+    // The chain fold the transcript owns is the only source, so a memoized card
+    // cannot be left stating its own segment's older figures.
+    const liveChain = mount(
+      wide,
+      <LiveChain initial={[original, continuation]} render={part} />,
+    );
+    await settle();
+    check(
+      "a resumed chain renders the same totals on both cards",
+      metricsOf(liveChain, "task-original") === chainLine &&
+        metricsOf(liveChain, "task-resume") === chainLine,
+      {
+        original: metricsOf(liveChain, "task-original"),
+        resume: metricsOf(liveChain, "task-resume"),
+      },
+    );
+    const laterReport = taskCall("task-resume", {
+      description: CONTINUATION_TITLE,
+      resume: "del-original",
+      delegationId: "del-resume",
+      agent: "inspector",
+      status: "running",
+      metrics: {
+        turns: 6,
+        toolCalls: 8,
+        contextTokens: 31_000,
+        usage: {
+          inputTokens: 3_000,
+          outputTokens: 2_000,
+          totalTokens: 5_000,
+          operationId: "op-resume",
+          aggregation: "operation",
+        },
+      },
+    });
+    flushSync(() => chainLiveSetter!([original, laterReport]));
+    await settle();
+    const laterLine = subagentMetricsLine(
+      aggregateChainMetricsFromMessages([original, laterReport], "del-original"),
+      i18n.t.bind(i18n),
+      "en",
+    );
+    check(
+      "a later segment's report moves the earlier card with it",
+      laterLine === "Turns 7 · Tool calls 10 · Context 31K · Spent 8.4K" &&
+        metricsOf(liveChain, "task-original") === laterLine &&
+        metricsOf(liveChain, "task-resume") === laterLine,
+      {
+        header: laterLine,
+        original: metricsOf(liveChain, "task-original"),
+        resume: metricsOf(liveChain, "task-resume"),
       },
     );
 

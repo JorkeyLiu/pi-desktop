@@ -549,8 +549,9 @@ function todosBlock(
   return {
     kind: "todos",
     role: "details",
-    // The checklist names itself through its progress row; the key names it for
-    // the copy control and for screen readers.
+    // The checklist names itself through its progress row, so this key never
+    // heads a card: it stays the block's translated name for whatever reads the
+    // block data, not the label of a copy control.
     labelKey: "chat.toolBlockChecklist",
     items: items.slice(0, MAX_TODO_ITEMS),
     completed: numberAt(summary, "completed") ?? countOf("completed"),

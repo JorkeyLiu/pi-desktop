@@ -27,6 +27,7 @@ import {
 import { delegationIdForMessage } from "../../../lib/subagent-panel";
 import { delegateTaskTitle } from "../../../lib/subagent-title";
 import { useSubagentTaskTitles } from "../../../lib/subagent-title-provider";
+import { useSubagentChainMetrics } from "../../../lib/subagent-metrics-provider";
 import { delegateAgentName } from "./model";
 import { SubagentStopButton } from "./SubagentStopButton";
 
@@ -128,13 +129,22 @@ export function SubagentTaskCard({
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, [outcome]);
-  // Progress the child reported for itself, read from its own Task snapshot:
-  // its turns, its tool calls, the occupancy of its own window and its own
-  // cumulative spend. A figure the run never stated is left out; a legacy row
-  // that reported no occupancy keeps the panel's labelled dash.
-  const metrics = parseSubagentMetrics(payload);
+  // The child session's totals, read from the conversation-wide chain fold the
+  // transcript supplies: a `Task(resume …)` continuation is one child session,
+  // so this card states the same turns, tool calls, spend and latest occupancy
+  // its child tab header states instead of its own segment's share. A surface
+  // without the provider falls back to this call's own snapshot.
+  const chainMetrics = useSubagentChainMetrics();
+  const metrics =
+    (message.toolCallId ? chainMetrics?.get(message.toolCallId) : undefined) ??
+    parseSubagentMetrics(payload);
   const language = i18n.language;
+  // All four figures are always stated — a reported zero as a zero, an
+  // unreported figure as the labelled dash — so the card holds the same line
+  // the dock row for the same child holds, and neither surface changes height
+  // as a child's report arrives.
   const metricsParts = subagentMetricsParts(metrics, t, language);
+  const metricsLine = joinSubagentInfo(metricsParts);
   const stateParts = subagentStateParts({
     status: statusLabel,
     duration,
@@ -216,15 +226,13 @@ export function SubagentTaskCard({
               {role}
             </span>
           ) : null}
-          {metricsParts.length > 0 ? (
-            <span
-              className="subagent-task-metrics"
-              title={joinSubagentInfo(metricsParts)}
-              aria-label={t("chat.subagentMetricsLabel")}
-            >
-              {joinSubagentInfo(metricsParts)}
-            </span>
-          ) : null}
+          <span
+            className="subagent-task-metrics"
+            title={metricsLine}
+            aria-label={t("chat.subagentMetricsLabel")}
+          >
+            {metricsLine}
+          </span>
         </span>
       </button>
       {/* A sibling of the card, never a button inside it: opening the child's

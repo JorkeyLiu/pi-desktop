@@ -125,7 +125,10 @@ function SubagentDockRow({
       ? formatToolDuration(elapsed / 1000)
       : "";
   // The same presenter the child card uses: the row cannot state a different
-  // figure, in a different order, than the card for the same child does.
+  // figure, in a different order, than the card for the same child does. All
+  // four figures are always stated — a reported zero as a zero, an unreported
+  // figure as the labelled dash — so the row keeps one height whether or not
+  // the child has reported yet.
   const metricsParts = subagentMetricsParts(agent.metrics, t, i18n.language);
   const metricsLine = joinSubagentInfo(metricsParts);
   const detail = joinSubagentInfo([
@@ -167,21 +170,19 @@ function SubagentDockRow({
               ) : null}
             </span>
           </span>
-          {agent.role || metricsLine ? (
-            <span className="subagent-dock-row-info">
-              {agent.role ? (
-                <span className="subagent-dock-row-role">{agent.role}</span>
-              ) : null}
-              {agent.role && metricsLine ? (
-                <span className="subagent-sep" aria-hidden="true">{" · "}</span>
-              ) : null}
-              {metricsLine ? (
-                <span className="subagent-dock-row-metrics" title={metricsLine}>
-                  {metricsLine}
-                </span>
-              ) : null}
+          {/* The figures are never conditional: a child that has reported
+              nothing holds the same four labelled slots as one that has. */}
+          <span className="subagent-dock-row-info">
+            {agent.role ? (
+              <span className="subagent-dock-row-role">{agent.role}</span>
+            ) : null}
+            {agent.role ? (
+              <span className="subagent-sep" aria-hidden="true">{" · "}</span>
+            ) : null}
+            <span className="subagent-dock-row-metrics" title={metricsLine}>
+              {metricsLine}
             </span>
-          ) : null}
+          </span>
         </span>
       </Button>
       <SubagentStopButton

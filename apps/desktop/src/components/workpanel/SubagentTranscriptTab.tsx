@@ -447,16 +447,30 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     scheduleFollowScroll();
   }, [messages, scheduleFollowScroll]);
 
-  const contextKnown = chainMetrics?.contextTokens !== undefined;
+  const contextKnown =
+    typeof chainMetrics?.contextTokens === "number" &&
+    Number.isFinite(chainMetrics.contextTokens);
   const contextValue = contextKnown
     ? formatCompactTokens(chainMetrics.contextTokens as number, language)
     : "—";
-  const spendValue = chainMetrics?.usage
-    ? formatCompactTokens(chainMetrics.usage.totalTokens, language)
-    : null;
-  const turnsLabel = chainMetrics
-    ? `${formatCount(chainMetrics.turns, language)} ${t("chat.subagentMetricsTurnsUnit", { count: chainMetrics.turns })} · ${formatCount(chainMetrics.toolCalls, language)} ${t("chat.subagentMetricsCallsUnit", { count: chainMetrics.toolCalls })}`
-    : null;
+  const spendTokens = chainMetrics?.usage?.totalTokens;
+  const spendValue =
+    typeof spendTokens === "number" && Number.isFinite(spendTokens)
+      ? formatCompactTokens(spendTokens, language)
+      : null;
+  // Only counters the chain actually reported are stated: a Task result that
+  // carried context/spend alone states no activity figure at all instead of
+  // inventing `0 turns · 0 calls`, while a reported zero is stated as zero.
+  const activityLabel = [
+    typeof chainMetrics?.turns === "number"
+      ? `${formatCount(chainMetrics.turns, language)} ${t("chat.subagentMetricsTurnsUnit", { count: chainMetrics.turns })}`
+      : null,
+    typeof chainMetrics?.toolCalls === "number"
+      ? `${formatCount(chainMetrics.toolCalls, language)} ${t("chat.subagentMetricsCallsUnit", { count: chainMetrics.toolCalls })}`
+      : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ") || null;
   const modelLabel = [delegateSettings.modelId, delegateSettings.thinkingLevel]
     .filter(Boolean)
     .join(" · ");
@@ -523,7 +537,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
               className="subagent-transcript-metrics"
               role="group"
               aria-label={t("chat.subagentMetricsLabel")}
-              title={turnsLabel ?? undefined}
+              title={activityLabel ?? undefined}
             >
               <span className="subagent-transcript-metric">
                 <span className="subagent-transcript-metric-label">
@@ -548,10 +562,10 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                   </span>
                 </span>
               ) : null}
-              {turnsLabel ? (
+              {activityLabel ? (
                 <span className="subagent-transcript-metric">
                   <span className="subagent-transcript-metric-value" data-testid="subagent-metrics-activity">
-                    {turnsLabel}
+                    {activityLabel}
                   </span>
                 </span>
               ) : null}

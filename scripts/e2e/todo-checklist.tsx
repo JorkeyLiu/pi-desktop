@@ -162,6 +162,17 @@ window.todoChecklistProbe = async () => {
     rows().map((row) => row.className.replace(/.*is-/, "")).join(",") === "completed,in_progress,pending",
     "the rows keep the host's order and states",
   );
+  // The body is the checklist itself: the progress line heads it, so the
+  // generic block frame above it would leave an empty header row holding only
+  // a copy control.
+  assert(
+    !body()!.querySelector(".tool-row-section-head"),
+    "an expanded checklist carries no section header row",
+  );
+  assert(
+    !body()!.querySelector(".tool-row-copy"),
+    "an expanded checklist carries no copy-only header row",
+  );
   checks.push("agent-turn-card-opens-with-the-committed-rows");
 
   // A collapse is the reader's choice; the next update to that row keeps it.

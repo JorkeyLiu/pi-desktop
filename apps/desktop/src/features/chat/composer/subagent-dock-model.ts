@@ -39,8 +39,9 @@ export type DockSubagent = {
    *
    * Absent when nothing has been reported yet — a still-spawning child, or a
    * run that has produced no result, no lifecycle roster row, and no child
-   * usage so far. The row then shows no count at all rather than a zero the
-   * runtime never sent.
+   * usage so far. The row then keeps the same four labelled placeholders every
+   * other row holds (`Turns — · Tool calls — · Context — · Spent —`) rather
+   * than a zero the runtime never sent.
    */
   metrics?: DockSubagentMetrics;
 };
@@ -57,8 +58,10 @@ export type DockSubagent = {
  * reported usage last.
  */
 export type DockSubagentMetrics = {
-  turns: number;
-  toolCalls: number;
+  /** Turns the runtime reported; absent when it never reported any. */
+  turns?: number;
+  /** Tool calls the runtime reported; absent when it never reported any. */
+  toolCalls?: number;
   contextTokens?: number;
   /** True when the occupancy is an estimate rather than a runtime report. */
   contextEstimated?: boolean;
@@ -202,8 +205,10 @@ function dockSubagentMetrics(
   const chain = aggregateChainMetricsFromMessages(messages, delegationId);
   if (!chain) return undefined;
   return {
-    turns: chain.turns,
-    toolCalls: chain.toolCalls,
+    // A counter the chain never reported stays absent, so the row renders the
+    // labelled dash rather than an invented zero.
+    ...(chain.turns !== undefined ? { turns: chain.turns } : {}),
+    ...(chain.toolCalls !== undefined ? { toolCalls: chain.toolCalls } : {}),
     ...(chain.contextTokens !== undefined
       ? { contextTokens: chain.contextTokens }
       : {}),

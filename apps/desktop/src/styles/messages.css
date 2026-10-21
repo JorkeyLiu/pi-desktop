@@ -3502,8 +3502,16 @@
   margin-left: 2px;
 }
 
+/*
+ * The expanded preview is one bordered frame: the hunk rows carry only their
+ * add/del tints, so without an edge the preview dissolves into the transcript
+ * behind it. The radius shapes the border alone, so the rows' fills and the
+ * rollback row's focus ring are left unclipped.
+ */
 .tool-row-review {
   margin-top: 10px;
+  border: 1px solid var(--ds-border-default);
+  border-radius: var(--radius-sm);
 }
 
 /* A path row names its file: the last segment is what a reader matches on, so

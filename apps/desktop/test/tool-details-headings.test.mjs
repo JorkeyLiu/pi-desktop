@@ -121,9 +121,12 @@ test("a real warning still opens its own note section", async (t) => {
   const blocks = buildToolPresentation(todoMessage([warning]));
 
   const html = ssr.render(createElement(ToolDetailBlocks, { blocks }));
-  // Trimming routine notes must not silence the ones that carry information.
+  // Trimming routine notes must not silence the ones that carry information,
+  // and the checklist beside it still carries no frame of its own.
   assert.match(html, />Note</);
   assert.match(html, new RegExp(warning));
+  assert.match(html, /tool-row-section-head/);
+  assert.doesNotMatch(html, />Checklist</);
 });
 
 /*
@@ -131,7 +134,9 @@ test("a real warning still opens its own note section", async (t) => {
  * The document card prints its own title and section heads, the checklist its
  * own progress row, the raw payload its own disclosure summary — so the frame
  * above them would only repeat a word ("Output"/"Details"/"Raw") the reader
- * already has.
+ * already has. The checklist goes one step further than a suppressed label: the
+ * copy control the frame carried left an empty header row above the progress
+ * line, so that block renders as its own body.
  */
 
 const unknownPayloadMessage = {
@@ -201,18 +206,24 @@ test("a loaded document is not wrapped in an extra output heading", async (t) =>
   assert.match(html, />File content</);
 });
 
-test("a checklist keeps its copy control but no generic heading", async (t) => {
+test("a checklist renders as its own block, with no frame header at all", async (t) => {
   const ssr = await slotSsr(t);
   const { buildToolPresentation } = await ssr.load("/src/lib/tool-presentation.ts");
   const { ToolDetailBlocks } = await ssr.load("/src/components/ToolDetails.tsx");
   const blocks = buildToolPresentation(todoMessage([]));
   const html = ssr.render(createElement(ToolDetailBlocks, { blocks }));
 
-  // No visible "Details" heading above a card that states its own progress…
-  assert.doesNotMatch(html, />Details</);
-  // …but the copy control keeps an accessible name for what it copies.
-  assert.match(html, /aria-label="Copy Checklist"/);
-  assert.match(html, /tool-row-copy/);
+  // The progress row is the whole head: no generic "Details" label, and no
+  // empty header row left behind by the frame's copy control.
+  assert.doesNotMatch(html, /tool-row-section-head/);
+  assert.doesNotMatch(html, /tool-row-copy/);
+  assert.doesNotMatch(html, />Checklist</);
+  // The checklist is still the body, in the block wrapper that gives it the
+  // same spacing as every other block beside it.
+  assert.match(html, /class="tool-block is-todos"/);
+  assert.match(html, /class="tool-todo"/);
+  assert.match(html, /1\/2 completed/);
+  assert.equal(html.match(/class="tool-todo-row/g)?.length, 2);
 });
 
 test("an empty search says so without a heading above the sentence", async (t) => {

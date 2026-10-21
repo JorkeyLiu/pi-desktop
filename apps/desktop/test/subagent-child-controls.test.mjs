@@ -126,6 +126,33 @@ test("resume-chain metrics aggregate spend once and keep latest occupancy", asyn
     assert.doesNotMatch(line, /~/);
     assert.match(line, /spent 4\.5k tokens/);
     assert.match(line, /turn/);
+    // A counter the payload never carried stays absent — the presenter renders
+    // it as a dash — while a counter it did carry, zero included, survives.
+    const metricOnly = metrics.parseSubagentMetrics({ contextTokens: 9000 });
+    assert.equal(metricOnly.toolCalls, undefined);
+    assert.equal(metricOnly.turns, undefined);
+    const zeroed = metrics.parseSubagentMetrics({ toolCalls: 0, turns: 0 });
+    assert.equal(zeroed.toolCalls, 0);
+    assert.equal(zeroed.turns, 0);
+    // The fold sums only reported counters: an unreported counter in one
+    // segment never becomes a zero of its own or a zero total.
+    const folded = metrics.aggregateSubagentChainMetrics([
+      { contextTokens: 12000, usage: usageA },
+      { toolCalls: 2 },
+    ]);
+    assert.equal(folded.toolCalls, 2);
+    assert.equal(folded.turns, undefined);
+    const noCounters = metrics.aggregateSubagentChainMetrics([
+      { contextTokens: 12000, usage: usageA },
+    ]);
+    assert.equal(noCounters.toolCalls, undefined);
+    assert.equal(noCounters.turns, undefined);
+    // The compact line states no counter it was never given, and still states
+    // the occupancy and spend it has.
+    const counterlessLine = metrics.formatSubagentMetricsLine(noCounters);
+    assert.doesNotMatch(counterlessLine, /0 tool call|0 turn/);
+    assert.match(counterlessLine, /ctx 12\.0k tokens/);
+    assert.match(counterlessLine, /spent 1\.5k tokens/);
   } finally { await vite.close(); }
 });
 

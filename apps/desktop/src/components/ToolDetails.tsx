@@ -334,11 +334,11 @@ export function ToolDetailBlocks({
   return (
     <>
       {blocks.map((block, index) => {
-        // Cards that name themselves and bring their own copy control bypass
-        // the generic section frame instead of nesting a second heading above
-        // their own: the terminal labels its panes, the document card its
-        // title, the raw payload its disclosure summary. An empty result has
-        // no bytes to head and no control to offer.
+        // Cards that name themselves bypass the generic section frame instead
+        // of nesting a second heading above their own: the terminal labels its
+        // panes, the document card its title, the raw payload its disclosure
+        // summary, the checklist its progress line. An empty result has no
+        // bytes to head and no control to offer.
         if (block.kind === "terminal") {
           return (
             <div className="tool-block is-terminal" key={`terminal-${index}`}>
@@ -357,6 +357,17 @@ export function ToolDetailBlocks({
           return (
             <div className="tool-block is-raw" key={`raw-${index}`}>
               <ToolRawPayload block={block} />
+            </div>
+          );
+        }
+        if (block.kind === "todos") {
+          // The checklist states its progress and lists its items itself, so
+          // it is the whole body: framing it could only draw an empty header
+          // row over the progress line — no label to print, and nothing left
+          // for that row to hold but a copy control over the list itself.
+          return (
+            <div className="tool-block is-todos" key={`todos-${index}`}>
+              <ToolChecklist block={block} />
             </div>
           );
         }
@@ -381,11 +392,7 @@ export function ToolDetailBlocks({
               // channel name for screen readers instead of a heading the
               // terminal would have had to repeat next to its own.
               <span className="sr-only">{label}</span>
-            ) : block.kind === "empty" ? null : block.kind === "todos" ? (
-              // A checklist's own progress row is its heading; the frame only
-              // keeps the copy control it would otherwise have carried.
-              <BlockHead label={label} copy={blockCopyText(block)} showLabel={false} />
-            ) : (
+            ) : block.kind === "empty" ? null : (
               <BlockHead label={label} copy={blockCopyText(block)} />
             )}
             <BlockBody block={block} streaming={streaming} plain={plain} />

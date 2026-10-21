@@ -1,9 +1,5 @@
 import { addUsage, formatSubagentProgressMetrics } from "@pi-desktop/shared";
-import type {
-  MessageUsage,
-  SubagentProgressMetrics,
-  UiMessage,
-} from "@pi-desktop/shared";
+import type { MessageUsage, UiMessage } from "@pi-desktop/shared";
 import { subagentChainCallIds } from "./subagent-chain";
 import { contextOccupancyTokens } from "./context-usage";
 import { delegationLifecycleKind } from "./tool-display";
@@ -16,10 +12,26 @@ export type SubagentContextProvenance =
   | "child"
   | "unknown";
 
-export type SubagentMetrics = Pick<
-  SubagentProgressMetrics,
-  "toolCalls" | "turns" | "contextTokens" | "usage"
-> & {
+/**
+ * The figures the renderer derives for one child, per segment and folded over a
+ * chain.
+ *
+ * This is deliberately renderer-local and its counters are optional. The
+ * runtime's own `SubagentProgressMetrics` always carries both counters, but a
+ * historical Task payload (a resumed segment, a lifecycle roster row) may not:
+ * "the child never reported this counter" and "the child reported zero" are
+ * different facts, and only the second one is a figure. Callers render an
+ * absent counter as the labelled dash, never as an invented zero.
+ */
+export type SubagentMetrics = {
+  /** Turns the runtime reported; absent when it never reported any. */
+  turns?: number;
+  /** Tool calls the runtime reported; absent when it never reported any. */
+  toolCalls?: number;
+  /** Occupancy of the child's window; absent means "not reported". */
+  contextTokens?: number;
+  /** Cumulative billed spend, ledger-deduped by operation identity. */
+  usage?: MessageUsage;
   /**
    * Where the occupancy figure came from. `snapshot` is a Task result's own
    * `contextTokens`; `lifecycle` is a TaskWait/TaskList/TaskStop roster entry
@@ -59,8 +71,9 @@ function asUsage(value: unknown): MessageUsage | undefined {
  * Live/settled progress from one Task result payload (`delegationSummary`).
  * Returns null when the payload carries no metrics at all, so callers render
  * nothing instead of a zero row. A metric-only payload (context and/or spend
- * without counters) is accepted: counters default to 0 while the reported
- * fields survive. `contextTokens` is occupancy (how full the child window
+ * without counters) is accepted, and a counter it never carried stays absent
+ * rather than becoming a zero: a real `0` survives, an unreported counter does
+ * not turn into one. `contextTokens` is occupancy (how full the child window
  * is); `usage.totalTokens` is cumulative billed spend — never mixed.
  */
 export function parseSubagentMetrics(payload: unknown): SubagentMetrics | null {
@@ -79,8 +92,8 @@ export function parseSubagentMetrics(payload: unknown): SubagentMetrics | null {
     return null;
   }
   return {
-    toolCalls: toolCalls ?? 0,
-    turns: turns ?? 0,
+    ...(toolCalls !== undefined ? { toolCalls } : {}),
+    ...(turns !== undefined ? { turns } : {}),
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     ...(usage ? { usage } : {}),
   };
@@ -92,13 +105,18 @@ export function parseSubagentMetrics(payload: unknown): SubagentMetrics | null {
  * re-report or replay never double-charges. Occupancy is the latest segment's
  * own value (a gauge, not a sum): when the latest entry carries no occupancy,
  * the chain reports unknown rather than masking it with an older segment.
- * Tool calls/turns accumulate across the chain.
+ *
+ * Tool calls and turns accumulate across the chain, but only over the segments
+ * that reported them: a counter no segment reported stays absent (the surfaces
+ * render a dash), while a counter some segment reported is the sum of the
+ * reported values — a reported `0` included, so a chain whose segments all
+ * reported zero reports zero.
  */
 export function aggregateSubagentChainMetrics(
   entries: readonly (SubagentMetrics | null | undefined)[],
 ): SubagentMetrics | null {
-  let toolCalls = 0;
-  let turns = 0;
+  let toolCalls: number | undefined;
+  let turns: number | undefined;
   let seen = false;
   let usage: MessageUsage | undefined;
   let contextTokens: number | undefined;
@@ -107,8 +125,14 @@ export function aggregateSubagentChainMetrics(
   for (const entry of entries) {
     if (!entry) continue;
     seen = true;
-    toolCalls += entry.toolCalls;
-    turns += entry.turns;
+    // Only a reported counter contributes: an absent one neither adds a zero
+    // of its own nor wakes the total.
+    if (entry.toolCalls !== undefined) {
+      toolCalls = (toolCalls ?? 0) + entry.toolCalls;
+    }
+    if (entry.turns !== undefined) {
+      turns = (turns ?? 0) + entry.turns;
+    }
     usage = addUsage(usage, entry.usage);
     // Latest segment wins, even when it reports no occupancy: an older
     // gauge must not mask a latest segment that went unmeasured.
@@ -121,8 +145,8 @@ export function aggregateSubagentChainMetrics(
   // reports no occupancy, never an absent field callers must re-derive.
   const provenance: SubagentContextProvenance = contextProvenance ?? "unknown";
   return {
-    toolCalls,
-    turns,
+    ...(toolCalls !== undefined ? { toolCalls } : {}),
+    ...(turns !== undefined ? { turns } : {}),
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     ...(usage ? { usage } : {}),
     contextProvenance: provenance,
@@ -311,14 +335,11 @@ export function aggregateChainMetricsFromMessages(
 
   const base = aggregateSubagentChainMetrics(entries);
   if (!base && !usage && latestOccupancy === undefined) return null;
-  const toolCalls = base?.toolCalls ?? 0;
-  const turns = base?.turns ?? 0;
-  if (!base && toolCalls === 0 && turns === 0 && !usage && latestOccupancy === undefined) {
-    return null;
-  }
   return {
-    toolCalls,
-    turns,
+    // A counter no segment reported stays absent: the surfaces state the
+    // labelled dash, never an invented zero.
+    ...(base?.toolCalls !== undefined ? { toolCalls: base.toolCalls } : {}),
+    ...(base?.turns !== undefined ? { turns: base.turns } : {}),
     ...(latestOccupancy !== undefined ? { contextTokens: latestOccupancy } : {}),
     ...(usage ? { usage } : {}),
     contextProvenance: latestProvenance,
@@ -333,21 +354,38 @@ export function aggregateChainMetricsFromMessages(
  * it is not prefixed with a tilde: the displayed delegation cards, dock and
  * tab state the figure plainly and the estimate is flagged where the detail
  * surfaces carry it.
+ *
+ * Only reported figures are stated. A counter the child never reported leaves
+ * no `0 tool calls` behind, and a line with no counter still states the
+ * occupancy and spend it does have.
  */
 export function formatSubagentMetricsLine(metrics: SubagentMetrics): string {
-  const spend = metrics.usage ? `spent ${compactTokens(metrics.usage.totalTokens)}` : null;
+  // The occupancy and spend fragments keep the shared formatter's own wording
+  // (`ctx … tokens`, `spent … tokens`) so the fallback below reads the same.
+  const spend = metrics.usage
+    ? `spent ${compactTokens(metrics.usage.totalTokens)} tokens`
+    : null;
   const occupancy =
     metrics.contextTokens !== undefined
-      ? `ctx ${compactTokens(metrics.contextTokens)}`
+      ? `ctx ${compactTokens(metrics.contextTokens)} tokens`
       : null;
-  const base = formatSubagentProgressMetrics({
-    toolCalls: metrics.toolCalls,
-    ...(metrics.contextTokens !== undefined ? { contextTokens: metrics.contextTokens } : {}),
-    ...(metrics.usage ? { usage: metrics.usage } : {}),
-  });
-  const turns = metrics.turns > 0 ? `${metrics.turns} turn${metrics.turns === 1 ? "" : "s"}` : null;
-  // Shared formatter already covers tool calls + occupancy + spend; prepend turns.
+  // The shared formatter owns the tool-call wording and the ordering of the
+  // figures it covers; a chain that never reported a counter composes the same
+  // list from the figures it does have instead of claiming `0 tool calls`.
+  const base =
+    metrics.toolCalls !== undefined
+      ? formatSubagentProgressMetrics({
+          toolCalls: metrics.toolCalls,
+          ...(metrics.contextTokens !== undefined
+            ? { contextTokens: metrics.contextTokens }
+            : {}),
+          ...(metrics.usage ? { usage: metrics.usage } : {}),
+        })
+      : [occupancy, spend].filter((part): part is string => part !== null).join(", ");
+  const turns =
+    metrics.turns !== undefined && metrics.turns > 0
+      ? `${metrics.turns} turn${metrics.turns === 1 ? "" : "s"}`
+      : null;
   if (turns && base) return `${turns} · ${base}`;
-  if (turns) return spend && occupancy ? `${turns} · ${occupancy} · ${spend}` : turns;
-  return base;
+  return turns ?? base;
 }

@@ -855,19 +855,22 @@
   min-height: 28px;
   border-radius: var(--radius-sm);
   padding: 3px 4px 3px 1px;
-  background: color-mix(in oklab, var(--ds-accent) 10%, var(--ds-tile-deep));
+  /* The resting fill is the shared quiet tile, not an accent tint: a row that
+     is merely mounted is not a selection, so it must not read as hovered. */
+  background: var(--ds-tile);
   color: var(--ds-text-primary);
   font-size: var(--text-xs);
   transition: background-color var(--motion-duration-fast) var(--motion-ease-out);
 }
 
 /* Hovering the open action, or reaching it with the keyboard, lights the row
-   itself so the hit area reads as one row. The stop control keeps its own
-   surface and its own hover, so pointing at Stop never lights the row and
+   itself so the hit area reads as one row: the shared neutral hover token, one
+   step above the resting tile, never an accent wash. The stop control keeps its
+   own surface and its own hover, so pointing at Stop never lights the row and
    stopping stays independent of opening. */
 .subagent-dock-row:has(.subagent-dock-row-main:hover:not(:disabled)),
 .subagent-dock-row:has(.subagent-dock-row-main:focus-visible) {
-  background: color-mix(in oklab, var(--ds-accent) 18%, var(--ds-tile-deep));
+  background: var(--ds-bg-hover);
 }
 
 .subagent-dock-row-symbol {

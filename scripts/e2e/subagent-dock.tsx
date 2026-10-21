@@ -400,8 +400,9 @@ globalThis.subagentDockProbePhase = async (phase: string) => {
           "the reported progress sits inside the row's own open action",
         ],
         [
-          present[1]?.querySelector(".subagent-dock-row-metrics") === null,
-          "a child that reported no counters shows no numbers",
+          text(present[1]?.querySelector(".subagent-dock-row-metrics") ?? null) ===
+            "Turns — · Tool calls — · Context — · Spent —",
+          "a child that reported nothing keeps all four labelled placeholders",
         ],
         [
           text(present[1]?.querySelector(".subagent-dock-row-title") ?? null) ===

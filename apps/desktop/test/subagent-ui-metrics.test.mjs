@@ -46,25 +46,34 @@ async function translator(language) {
 }
 
 function taskCall({
+  id = "t1",
+  toolCallId = "call-1",
+  delegationId = "d1",
   status = "completed",
   agent = "manifestor",
   description = "Fix the cache stampede",
+  resume,
   metrics,
   toolDurationMs = 32_000,
 } = {}) {
   return {
-    id: "t1",
+    id,
     role: "tool",
     content: "",
     createdAt: CREATED_AT,
     toolName: "Task",
-    toolCallId: "call-1",
+    toolCallId,
     toolStatus: status === "running" ? "running" : "success",
     toolDurationMs,
-    toolArgs: { agent, description, task: "a long brief that is never a title" },
+    toolArgs: {
+      agent,
+      description,
+      task: "a long brief that is never a title",
+      ...(resume === undefined ? {} : { resume }),
+    },
     toolResult: {
       details: {
-        delegationId: "d1",
+        delegationId,
         agent,
         status,
         ...(metrics ?? {}),
@@ -116,21 +125,39 @@ test("the figures read label then value, in one order, in the reader's language"
   assert.equal(SUBAGENT_INFO_SEPARATOR, " · ");
 });
 
-test("a figure the runtime never reported is absent or dashed, never invented", async () => {
+test("the four slots always exist: a reported zero is a zero, an unreported figure is a dash", async () => {
   const english = await translator("en");
-  // Nothing reported at all: no line, so the surface renders no figures.
-  assert.deepEqual(subagentMetricsParts(undefined, english, "en"), []);
-  assert.equal(subagentMetricsLine(null, english, "en"), "");
-  assert.deepEqual(subagentMetricsParts({ turns: 0, toolCalls: 0 }, english, "en"), []);
-  // Counters without an occupancy keep the panel's labelled dash.
+  // Nothing reported at all still holds four labelled slots, so the card and
+  // the dock row keep the same line height instead of collapsing it away.
+  assert.deepEqual(subagentMetricsParts(undefined, english, "en"), [
+    "Turns —",
+    "Tool calls —",
+    "Context —",
+    "Spent —",
+  ]);
   assert.equal(
-    subagentMetricsLine({ turns: 3, toolCalls: 0 }, english, "en"),
-    "Turns 3 · Context —",
+    subagentMetricsLine(null, english, "en"),
+    "Turns — · Tool calls — · Context — · Spent —",
   );
-  // An occupancy without counters is a metrics-only report, not a zero row.
+  // A zero the runtime did report is that zero, formatted like any other count.
+  assert.deepEqual(
+    subagentMetricsParts(
+      { turns: 0, toolCalls: 0, contextTokens: 0, usage: { totalTokens: 0 } },
+      english,
+      "en",
+    ),
+    ["Turns 0", "Tool calls 0", "Context 0", "Spent 0"],
+  );
+  // A mixed report dashes only the slots the runtime never sent.
+  assert.equal(
+    subagentMetricsLine({ turns: 3, contextTokens: 0 }, english, "en"),
+    "Turns 3 · Tool calls — · Context 0 · Spent —",
+  );
+  // An occupancy without counters is a metrics-only report; the counters it
+  // never sent stay dashes rather than becoming invented zeros.
   assert.equal(
     subagentMetricsLine({ contextTokens: 41_200 }, english, "en"),
-    "Context 41.2K",
+    "Turns — · Tool calls — · Context 41.2K · Spent —",
   );
   // An estimate keeps its label and is never rewritten as a tilde.
   assert.equal(
@@ -139,13 +166,43 @@ test("a figure the runtime never reported is absent or dashed, never invented", 
       english,
       "en",
     ),
-    "Context 7.7K (est.)",
+    "Turns — · Tool calls — · Context 7.7K (est.) · Spent —",
+  );
+  // An estimate flag without an occupancy marks nothing: there is no figure.
+  assert.equal(
+    subagentMetricsLine({ turns: 1, contextEstimated: true }, english, "en"),
+    "Turns 1 · Tool calls — · Context — · Spent —",
   );
   // Legacy child usage without a total states no spend.
   assert.equal(
     subagentMetricsLine({ usage: { inputTokens: 7_400 } }, english, "en"),
-    "",
+    "Turns — · Tool calls — · Context — · Spent —",
   );
+  // A value that is not a non-negative finite number is not a report: it keeps
+  // the dash instead of printing `NaN`, `-1` or `Infinity`.
+  assert.equal(
+    subagentMetricsLine(
+      {
+        turns: -1,
+        toolCalls: Number.NaN,
+        contextTokens: -5,
+        usage: { totalTokens: Number.POSITIVE_INFINITY },
+      },
+      english,
+      "en",
+    ),
+    "Turns — · Tool calls — · Context — · Spent —",
+  );
+  // Every report is the same four slots, in the same order, with the same
+  // labels — the line never grows and never shrinks.
+  for (const input of [undefined, null, {}, { turns: 0 }, { contextTokens: 1 }]) {
+    const parts = subagentMetricsParts(input, english, "en");
+    assert.equal(parts.length, 4, JSON.stringify(input));
+    assert.deepEqual(
+      parts.map((part) => part.split(" ")[0]),
+      ["Turns", "Tool", "Context", "Spent"],
+    );
+  }
 });
 
 test("the separator never starts, ends or doubles a line", async () => {
@@ -184,18 +241,28 @@ async function setup(language) {
   const { SubagentTitleProvider } = await vite.ssrLoadModule(
     "/src/lib/subagent-title-provider.tsx",
   );
-  const render = (message) =>
+  const { SubagentChainMetricsProvider } = await vite.ssrLoadModule(
+    "/src/lib/subagent-metrics-provider.tsx",
+  );
+  // A card is mounted the way the transcript mounts it: under the
+  // conversation-wide title and chain-metrics providers, with the same
+  // `ToolRow` variant the transcript uses for a `Task` call.
+  const render = (message, conversation = [message]) =>
     renderToStaticMarkup(
       createElement(
         I18nextProvider,
         { i18n },
         createElement(
           SubagentTitleProvider,
-          { messages: [message] },
+          { messages: conversation },
           createElement(
-            TranscriptDisclosureProvider,
-            null,
-            createElement(ToolRow, { message, variant: "task" }),
+            SubagentChainMetricsProvider,
+            { messages: conversation },
+            createElement(
+              TranscriptDisclosureProvider,
+              null,
+              createElement(ToolRow, { message, variant: "task" }),
+            ),
           ),
         ),
       ),
@@ -287,6 +354,328 @@ test("a card reads its figures in the reader's language, like the dock row for t
     assert.doesNotMatch(html, /Context|Spent|turns/);
     // The takeaway label is localized too.
     assert.match(html, /aria-label="子智能体 token 用量"/);
+  } finally {
+    await vite.close();
+  }
+});
+
+/**
+ * The four figures are never conditional: a card whose child reported nothing
+ * keeps all four labelled slots, and a child that reported zeros states those
+ * zeros. The line is the same shape on every card, so a transcript of cards
+ * does not change height from one child to the next.
+ */
+test("a card keeps all four figures visible whether the run reported zeros or nothing", async () => {
+  const { vite, render } = await setup("en");
+  try {
+    const lineOf = (html) =>
+      html.match(/class="subagent-task-metrics"[^>]*>([\s\S]*?)<\/span>/)?.[1] ?? null;
+    const tooltipOf = (html) =>
+      html.match(/class="subagent-task-metrics" title="([^"]*)"/)?.[1] ?? null;
+    // A run that reported nothing at all still holds the four slots.
+    const silent = render(taskCall({ metrics: {} }));
+    assert.equal(lineOf(silent), "Turns — · Tool calls — · Context — · Spent —");
+    assert.equal(tooltipOf(silent), "Turns — · Tool calls — · Context — · Spent —");
+    // Zeros the runtime did report are the figures it reported.
+    assert.equal(
+      lineOf(
+        render(
+          taskCall({
+            metrics: {
+              turns: 0,
+              toolCalls: 0,
+              contextTokens: 0,
+              usage: { totalTokens: 0 },
+            },
+          }),
+        ),
+      ),
+      "Turns 0 · Tool calls 0 · Context 0 · Spent 0",
+    );
+    // A mixed report dashes only what was never sent, at every layer: the
+    // parser keeps an unreported counter absent rather than turning it into 0.
+    assert.equal(
+      lineOf(render(taskCall({ metrics: { turns: 2, contextTokens: 900 } }))),
+      "Turns 2 · Tool calls — · Context 900 · Spent —",
+    );
+    // The line is never dropped, so the card's height never depends on the
+    // child's report.
+    for (const html of [silent, render(taskCall({ metrics: reported }))]) {
+      assert.equal((html.match(/class="subagent-task-metrics"/g) ?? []).length, 1);
+    }
+  } finally {
+    await vite.close();
+  }
+});
+
+/**
+ * The canonical reader is the one place the four figures are derived from a
+ * Task payload, so "never reported" must stay distinguishable from "reported
+ * zero" here — not only in the presenter. A context/spend-only payload carries
+ * no counters; a chain sums only the counters its segments actually reported;
+ * a reported zero is a report and survives the fold.
+ */
+test("the canonical reader keeps an unreported counter absent and a reported zero at zero", async () => {
+  const { vite } = await setup("en");
+  try {
+    const metrics = await vite.ssrLoadModule("/src/lib/subagent-metrics.ts");
+    const ui = await vite.ssrLoadModule("/src/lib/subagent-ui-metrics.ts");
+    const t = await translator("en");
+    const line = (value) => ui.subagentMetricsLine(value, t, "en");
+
+    // A metrics-only payload (occupancy and spend, no counters).
+    const metricOnly = metrics.parseSubagentMetrics({
+      contextTokens: 9_000,
+      usage: { totalTokens: 1_200 },
+    });
+    assert.equal(metricOnly.turns, undefined);
+    assert.equal(metricOnly.toolCalls, undefined);
+    assert.equal(metricOnly.contextTokens, 9_000);
+    assert.equal(
+      line(metricOnly),
+      "Turns — · Tool calls — · Context 9K · Spent 1.2K",
+    );
+
+    // A payload that reported real zeros keeps them.
+    const zeros = metrics.parseSubagentMetrics({ turns: 0, toolCalls: 0 });
+    assert.equal(zeros.turns, 0);
+    assert.equal(zeros.toolCalls, 0);
+    assert.equal(line(zeros), "Turns 0 · Tool calls 0 · Context — · Spent —");
+
+    // Values that are not non-negative counts are not reports: no poison, and
+    // a fractional count is the floor the parser already applied.
+    const invalid = metrics.parseSubagentMetrics({
+      turns: "3",
+      toolCalls: 1.9,
+      contextTokens: -5,
+    });
+    assert.equal(invalid.turns, undefined);
+    assert.equal(invalid.toolCalls, 1);
+    assert.equal(invalid.contextTokens, undefined);
+    assert.doesNotMatch(line(invalid), /NaN|Infinity|-5/);
+
+    // A chain sums only what its segments reported. The first segment reported
+    // no counters; the second reported a real zero for tool calls.
+    const folded = metrics.aggregateSubagentChainMetrics([
+      { contextTokens: 4_000 },
+      { toolCalls: 0, turns: 2 },
+    ]);
+    assert.equal(folded.toolCalls, 0);
+    assert.equal(folded.turns, 2);
+    assert.equal(
+      line(folded),
+      "Turns 2 · Tool calls 0 · Context — · Spent —",
+    );
+
+    // No segment reported a counter: the chain reports none, never a zero.
+    const silentCounters = metrics.aggregateSubagentChainMetrics([
+      { contextTokens: 4_000, usage: { totalTokens: 500 } },
+      { usage: { totalTokens: 700 } },
+    ]);
+    assert.equal(silentCounters.turns, undefined);
+    assert.equal(silentCounters.toolCalls, undefined);
+    // Spend still folds and its total is untouched by the missing counters.
+    assert.equal(silentCounters.usage.totalTokens, 1_200);
+    assert.equal(
+      line(silentCounters),
+      "Turns — · Tool calls — · Context — · Spent 1.2K",
+    );
+  } finally {
+    await vite.close();
+  }
+});
+
+/**
+ * The same reading through the transcript's own fold: a Task row that reported
+ * only context and spend states no counters on its card, a neighbouring row
+ * that reported zeros still states zeros.
+ */
+test("a card reads a context-and-spend-only run as no counters, end to end", async () => {
+  const { vite, render } = await setup("en");
+  try {
+    const lineOf = (html) =>
+      html.match(/class="subagent-task-metrics"[^>]*>([\s\S]*?)<\/span>/)?.[1] ?? null;
+    const metricOnly = taskCall({
+      metrics: { contextTokens: 9_000, usage: { totalTokens: 1_200 } },
+    });
+    assert.equal(
+      lineOf(render(metricOnly)),
+      "Turns — · Tool calls — · Context 9K · Spent 1.2K",
+    );
+    const zeros = taskCall({
+      metrics: {
+        turns: 0,
+        toolCalls: 0,
+        contextTokens: 0,
+        usage: { totalTokens: 0 },
+      },
+    });
+    assert.equal(
+      lineOf(render(zeros)),
+      "Turns 0 · Tool calls 0 · Context 0 · Spent 0",
+    );
+  } finally {
+    await vite.close();
+  }
+});
+
+/**
+ * A resume chain's numbers are the child session's, not one invocation's: the
+ * card states exactly what the child's tab header states, so a `Task(resume …)`
+ * continuation never restarts the figures its earlier segment already reported.
+ */
+test("a resumed card states the child session's totals, exactly as its tab header does", async () => {
+  const { vite, render } = await setup("en");
+  try {
+    const metrics = await vite.ssrLoadModule("/src/lib/subagent-metrics.ts");
+    const ui = await vite.ssrLoadModule("/src/lib/subagent-ui-metrics.ts");
+    const first = taskCall({
+      id: "t1",
+      toolCallId: "call-1",
+      delegationId: "d1",
+      metrics: {
+        turns: 1,
+        toolCalls: 2,
+        contextTokens: 12_000,
+        usage: {
+          inputTokens: 2_000,
+          outputTokens: 1_400,
+          totalTokens: 3_400,
+          operationId: "op-1",
+          aggregation: "operation",
+        },
+      },
+    });
+    const resumed = taskCall({
+      id: "t2",
+      toolCallId: "call-2",
+      delegationId: "d2",
+      resume: "d1",
+      description: "Continue the reconciliation",
+      status: "running",
+      metrics: {
+        turns: 3,
+        toolCalls: 4,
+        contextTokens: 22_000,
+        usage: {
+          inputTokens: 2_000,
+          outputTokens: 1_000,
+          totalTokens: 3_000,
+          operationId: "op-2",
+          aggregation: "operation",
+        },
+      },
+    });
+    const other = taskCall({
+      id: "t3",
+      toolCallId: "call-3",
+      delegationId: "d3",
+      description: "Unrelated work",
+      metrics: { turns: 1, toolCalls: 5, contextTokens: 8_000, usage: { totalTokens: 900 } },
+    });
+    const conversation = [first, resumed, other];
+    // One canonical fold, the same one the tab header renders.
+    const canonical = metrics.aggregateChainMetricsFromMessages(conversation, "d1");
+    assert.deepEqual(
+      {
+        turns: canonical.turns,
+        toolCalls: canonical.toolCalls,
+        contextTokens: canonical.contextTokens,
+        spent: canonical.usage.totalTokens,
+      },
+      { turns: 4, toolCalls: 6, contextTokens: 22_000, spent: 6_400 },
+    );
+    const t = await translator("en");
+    const expected = ui.subagentMetricsLine(canonical, t, "en");
+    assert.equal(expected, "Turns 4 · Tool calls 6 · Context 22K · Spent 6.4K");
+    // The header derives its own values from that same object with the same
+    // formatters, so the card line is the header line.
+    assert.equal(ui.formatCompactTokens(canonical.contextTokens, "en"), "22K");
+    assert.equal(ui.formatCompactTokens(canonical.usage.totalTokens, "en"), "6.4K");
+    assert.deepEqual(
+      [ui.formatCount(canonical.turns, "en"), ui.formatCount(canonical.toolCalls, "en")],
+      ["4", "6"],
+    );
+    const lineOf = (html) =>
+      html.match(/class="subagent-task-metrics"[^>]*>([\s\S]*?)<\/span>/)?.[1] ?? "";
+    // Both segments of the chain state the child session's totals.
+    assert.equal(lineOf(render(first, conversation)), expected);
+    assert.equal(lineOf(render(resumed, conversation)), expected);
+    // The earlier segment never falls back to its own per-run counters.
+    assert.doesNotMatch(lineOf(render(first, conversation)), /Turns 1 · Tool calls 2/);
+    // Occupancy is the latest segment's gauge, never a sum of the chain's
+    // windows, and the totals are not the latest segment's spend either.
+    assert.doesNotMatch(expected, /34K/);
+    // An unrelated chain is untouched by its neighbours.
+    assert.equal(
+      lineOf(render(other, conversation)),
+      ui.subagentMetricsLine(
+        metrics.aggregateChainMetricsFromMessages(conversation, "d3"),
+        t,
+        "en",
+      ),
+    );
+  } finally {
+    await vite.close();
+  }
+});
+
+/**
+ * The transcript folds each chain once and hands the result to every card of
+ * it, so a live update in a later segment moves the earlier card with it
+ * instead of leaving a stale per-run figure behind.
+ */
+test("one fold serves every card of a chain, and a resumed run updates all of them", async () => {
+  const { vite } = await setup("en");
+  try {
+    const provider = await vite.ssrLoadModule("/src/lib/subagent-metrics-provider.tsx");
+    const chain = (resumeMetrics) => [
+      taskCall({
+        id: "t1",
+        toolCallId: "call-1",
+        delegationId: "d1",
+        metrics: { turns: 1, toolCalls: 2, contextTokens: 12_000, usage: { totalTokens: 3_400 } },
+      }),
+      taskCall({
+        id: "t2",
+        toolCallId: "call-2",
+        delegationId: "d2",
+        resume: "d1",
+        metrics: resumeMetrics,
+      }),
+      taskCall({
+        id: "t3",
+        toolCallId: "call-3",
+        delegationId: "d3",
+        metrics: { turns: 1, toolCalls: 5, contextTokens: 8_000, usage: { totalTokens: 900 } },
+      }),
+    ];
+    const before = provider.subagentChainMetricsByIdentity(
+      chain({ turns: 3, toolCalls: 4, contextTokens: 22_000, usage: { totalTokens: 3_000 } }),
+    );
+    // Every card of the chain reads one folded object, not a fold of its own.
+    assert.equal(before.get("call-1"), before.get("call-2"));
+    assert.equal(before.get("call-1").turns, 4);
+    assert.equal(before.get("call-1").toolCalls, 6);
+    // A neighbouring chain keeps its own figures.
+    assert.equal(before.get("call-3").turns, 1);
+    assert.equal(before.get("call-3").toolCalls, 5);
+    // The running segment reports more: both cards of the chain move together.
+    const after = provider.subagentChainMetricsByIdentity(
+      chain({ turns: 4, toolCalls: 6, contextTokens: 31_000, usage: { totalTokens: 5_000 } }),
+    );
+    assert.equal(after.get("call-1"), after.get("call-2"));
+    assert.equal(after.get("call-1").turns, 5);
+    assert.equal(after.get("call-1").toolCalls, 8);
+    assert.equal(after.get("call-1").contextTokens, 31_000);
+    assert.equal(after.get("call-1").usage.totalTokens, 8_400);
+    assert.equal(after.get("call-3").turns, 1);
+    // A call that has reported nothing carries no entry: the card states
+    // nothing rather than an invented zero row.
+    const silent = provider.subagentChainMetricsByIdentity([
+      taskCall({ id: "t9", toolCallId: "call-9", delegationId: "d9" }),
+    ]);
+    assert.equal(silent.get("call-9"), undefined);
   } finally {
     await vite.close();
   }

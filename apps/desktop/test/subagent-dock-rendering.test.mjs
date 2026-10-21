@@ -271,7 +271,7 @@ test("the row reads the child's own figures in the reader's language", async () 
   }
 });
 
-test("a child that reported no counters shows no numbers, and never the parent's", async () => {
+test("a child that reported nothing keeps all four labelled placeholders, never the parent's", async () => {
   const { server, useAppStore, render } = await setup();
   try {
     seed(useAppStore, {});
@@ -279,9 +279,38 @@ test("a child that reported no counters shows no numbers, and never the parent's
     const rows = html.match(/<div class="subagent-dock-row"[\s\S]*?<\/div>/g) ?? [];
     assert.equal(rows.length, 2);
     assert.match(rows[0], /subagent-dock-row-metrics/);
-    assert.doesNotMatch(rows[1], /subagent-dock-row-metrics/);
-    // One reported row, so one metrics line — nothing is invented per row.
-    assert.equal((html.match(/subagent-dock-row-metrics/g) ?? []).length, 1);
+    // A child that has reported nothing keeps the same four slots the reported
+    // child fills, so the two rows are the same height and the line never
+    // disappears from a row.
+    assert.match(rows[1], />Turns — · Tool calls — · Context — · Spent —</);
+    assert.match(rows[1], /title="[^"]*Turns — · Tool calls — · Context — · Spent —[^"]*"/);
+    assert.equal((html.match(/subagent-dock-row-metrics/g) ?? []).length, 2);
+    // Nothing is invented: the silent child never borrows its neighbour's
+    // figures, and the placeholders are dashes rather than zeros.
+    assert.doesNotMatch(rows[1], /41\.2K|8\.4K/);
+    assert.doesNotMatch(rows[1], /Turns 0|Tool calls 0|Context 0|Spent 0/);
+  } finally {
+    await server.close();
+  }
+});
+
+test("a child that reported zeros states those zeros", async () => {
+  const { server, useAppStore, render } = await setup();
+  try {
+    seed(useAppStore, {
+      messages: [
+        { id: "u1", role: "user", content: "go", createdAt: AT },
+        { id: "a1", role: "assistant", content: "Delegating.", createdAt: AT },
+        task("t1", "d1", "Review auth flow", "explorer", {
+          turns: 0,
+          toolCalls: 0,
+          contextTokens: 0,
+          usage: { totalTokens: 0 },
+        }),
+      ],
+    });
+    const html = render();
+    assert.match(html, />Turns 0 · Tool calls 0 · Context 0 · Spent 0</);
   } finally {
     await server.close();
   }
@@ -298,8 +327,39 @@ test("a child that reported turns without an occupancy keeps the labelled dash",
       ],
     });
     const html = render();
-    assert.match(html, />Turns 2 · Context —</);
-    assert.match(html, /title="[^"]*Turns 2 · Context —[^"]*"/);
+    // A counter the runtime never sent is a dash — not a fabricated zero —
+    // while the counters it did send are stated.
+    assert.match(html, />Turns 2 · Tool calls — · Context — · Spent —</);
+    assert.match(
+      html,
+      /title="[^"]*Turns 2 · Tool calls — · Context — · Spent —[^"]*"/,
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+test("a child that reported only context and spend states no counters", async () => {
+  const { server, useAppStore, render } = await setup();
+  try {
+    seed(useAppStore, {
+      messages: [
+        { id: "u1", role: "user", content: "go", createdAt: AT },
+        { id: "a1", role: "assistant", content: "Delegating.", createdAt: AT },
+        task("t1", "d1", "Review auth flow", "explorer", {
+          contextTokens: 9_000,
+          usage: { totalTokens: 1_200 },
+        }),
+      ],
+    });
+    const html = render();
+    // The figures it never sent are dashes; the ones it sent are stated. No
+    // counter is invented as 0 from an absent field.
+    assert.match(
+      html,
+      />Turns — · Tool calls — · Context 9K · Spent 1\.2K</,
+    );
+    assert.doesNotMatch(html, /Turns 0|Tool calls 0/);
   } finally {
     await server.close();
   }
@@ -333,7 +393,9 @@ test("a child whose handle has not landed lists as creating with its actions dis
       html,
       /disabled=""[^>]*class="[^"]*subagent-dock-row-main[^"]*"|class="[^"]*subagent-dock-row-main[^"]*"[^>]*disabled=""/,
     );
-    assert.doesNotMatch(html, /subagent-dock-row-metrics/);
+    // A child still spawning has reported nothing, and says so with the same
+    // four labelled placeholders every other row keeps.
+    assert.match(html, />Turns — · Tool calls — · Context — · Spent —</);
     assertNoNestedButtons(html);
   } finally {
     await server.close();
@@ -407,8 +469,12 @@ test("the whole row paints the hover and keyboard focus surface, not the inner b
     fileURLToPath(new URL("../src/styles/composer.css", import.meta.url)),
     "utf8",
   );
-  const rowFill =
-    /^background:\s*color-mix\(in oklab, var\(--ds-accent\) 18%, var\(--ds-tile-deep\)\);$/;
+  const rowFill = /^background:\s*var\(--ds-bg-hover\);$/;
+  // The resting row is the shared quiet tile, never an accent wash: a mounted
+  // row is not a selection, so its fill stays one step below the hover fill.
+  const resting = blocksFor(css, ".subagent-dock-row")[0] ?? "";
+  assert.match(resting, /background:\s*var\(--ds-tile\);/, `the resting row paints the quiet tile (got "${resting}")`);
+  assert.doesNotMatch(resting, /--ds-accent/, "the resting row must not be tinted by the accent");
   // Hovering the row's open action lights the row itself, so one fill covers the
   // symbol on the left, the whole body and the gap the stop control sits in.
   const hoverSelector = ".subagent-dock-row:has(.subagent-dock-row-main:hover:not(:disabled))";

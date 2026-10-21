@@ -219,6 +219,31 @@ test("single metrics region separates context from spend with unknown helper", a
     const unknownHtml = render("d9");
     assert.match(unknownHtml, /subagent-metrics-context">—/);
     assert.match(unknownHtml, /ui-help-icon/);
+    // The header never fabricates a counter. A Task result that reported only
+    // context and spend states no activity figure at all, exactly as it states
+    // no spend figure when there is none — never `0 turns · 0 calls`.
+    const metricOnly = taskMessage("t1", "call-1", "d10", "completed", {
+      contextTokens: 9000,
+      usage: opUsage("op-10", 1200),
+    });
+    delete metricOnly.toolResult.details.toolCalls;
+    delete metricOnly.toolResult.details.turns;
+    seed(useAppStore, { messages: [metricOnly], running: false });
+    const metricOnlyHtml = render("d10");
+    assert.doesNotMatch(metricOnlyHtml, /data-testid="subagent-metrics-activity"/);
+    assert.doesNotMatch(metricOnlyHtml, /0 turn|0 call|NaN|undefined/);
+    assert.match(metricOnlyHtml, /data-testid="subagent-metrics-context"/);
+    assert.match(metricOnlyHtml, /data-testid="subagent-metrics-spend"/);
+    // A reported zero is a report and is stated as one.
+    const zeroed = taskMessage("t1", "call-1", "d11", "completed", {
+      contextTokens: 0,
+      toolCalls: 0,
+      turns: 0,
+    });
+    seed(useAppStore, { messages: [zeroed], running: false });
+    const zeroedHtml = render("d11");
+    assert.match(zeroedHtml, /title="0 turns · 0 calls"/);
+    assert.doesNotMatch(zeroedHtml, /NaN|undefined/);
   } finally { await vite.close(); }
 });
 

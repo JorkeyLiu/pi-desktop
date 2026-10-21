@@ -8067,7 +8067,7 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   detection, structured outcomes). `node scripts/e2e-tool-cards.mjs` renders
   and drives the card and its sibling Stop control in a real renderer, and
   `node scripts/e2e-subagent-dock.mjs` covers the composer dock's metrics and
-  session-wide action against the built renderer stylesheet alone (no source
+  its session-wide action against the built renderer stylesheet alone (no source
   partial is appended to the page, so the crate's import order is the one the
   user runs); both passed before the current detail-copy corrections,
   whose revalidation is pending. Full multi-provider fan-out and the rendered
@@ -8189,6 +8189,24 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
     clamps to two lines with the whole value in its hover title, a log without
     a description falls back to the role, and clicking the card opens the
     work-panel tab labelled with that same title.
+  - A delegation card states the child session's totals — turns, tool calls,
+    context occupancy and cumulative spend — the same figures its own tab
+    header states, not the counters of the single invocation the card
+    represents: after a `Task(resume …)` continuation reported more work, both
+    cards of the chain read the chain's totals, the occupancy is the latest
+    segment's gauge rather than a sum, the totals move on both cards when the
+    running segment reports again, and a neighbouring single-run card keeps its
+    own figures.
+  - The card's figures line is never conditional. A run that reported zeros
+    states those zeros (`Turns 0 · Tool calls 0 · Context 0 · Spent 0`), a run
+    that has reported no figure keeps the four labelled placeholders
+    (`Turns — · Tool calls — · Context — · Spent —`), a mixed report dashes only
+    the slots it never sent, and every card holds the line — so cards keep one
+    line height and the composer dock row for the same child reads the same four
+    slots. The distinction is kept by the canonical reader, not only by the
+    presenter: a Task payload that carried context and spend without counters
+    states no counters on its card, a resume chain sums only the counters its
+    segments reported, and a chain whose segments reported zero reports zero.
   - The permission card's args preview uses the same blocks.
   - Host truncation markers stay visible, a `truncated` chip appears, a host
     `notice` renders as a neutral note under the block it qualifies, capped
@@ -8199,9 +8217,11 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 - **Milestone**: M5
 - **Status**: Unit-covered (`tool-presentation.test.mjs`,
   `tool-display.test.mjs`, `ansi-text.test.mjs`, `transcript-style.test.mjs`,
-  `subagent-task-title.test.mjs`); rendered Chromium coverage
-  (`scripts/e2e-tool-cards.mjs`, run after `pnpm build:js`); full UI journey
-  Draft
+  `subagent-task-title.test.mjs`, `subagent-ui-metrics.test.mjs` for the chain
+  `subagent-task-title.test.mjs`, `subagent-ui-metrics.test.mjs` for the chain
+  totals a resumed card shares with its tab header and for the four
+  always-present figure slots (a reported zero versus an unreported dash) on
+  both the card and the dock row);
 
 #### E2E-146: A turn that produces no visible text re-runs once
 
@@ -10006,7 +10026,9 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   pending and `in_progress` items. Observe the checklist in its own `TodoWrite`
   row inside the turn's process: it opens by default, lists the committed
   items, and scrolls inside its own body instead of growing the row without
-  bound. Collapse the row and let the turn keep streaming: the collapse must
+  bound. The expanded body is the checklist itself — its progress line heads
+  it, and no section heading or copy-only header row sits above that line.
+  Collapse the row and let the turn keep streaming: the collapse must
   survive later `TodoWrite` updates to that row.
   Write again in the same turn and confirm the earlier row still shows its own
   list, in its own order, with its own counts.
@@ -10031,8 +10053,10 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   it, taking no focus. A cancelled item is neither completed nor outstanding, so
   it leaves the ratio and is reported as its own count; a list with no
   outstanding item states that instead of showing an empty ratio and an invalid
-  progress range. A cleared list and a refused write each still produce a body,
-  so a row's `aria-controls` always names an element it renders; a refused write
+  progress range. The expanded body is the checklist itself: its progress line
+  heads it, with no generic section heading and no copy-only header row above
+  it. A cleared list and a refused write each still produce a body, so a row's
+  `aria-controls` always names an element it renders; a refused write
   does not mutate or emit and shows only its error. The Composer stack renders
   no checklist surface of its own, and no retired checklist component is mounted
   anywhere. Stale events are rejected.
@@ -10046,9 +10070,11 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   calls, and the transcript's own `ToolRow`, mounted in an isolated Electron
   renderer with the application stylesheet. Only the external model stream and
   the preload transport are fixtures; no live provider or user profile is used.
-  The scenario covers the default-open checklist, collapse surviving an update,
-  a second write leaving the first card intact, the mixed cancelled count, the
-  all-cancelled label, the cleared state and its disclosure target, truncation
+  The scenario covers the default-open checklist and the frameless body it
+  expands to — no section heading, no copy-only header row — collapse surviving
+  an update, a second write leaving the first card intact, the mixed cancelled
+  count, the all-cancelled label, the cleared state and its disclosure target,
+  truncation
   and single-active-item normalization as rendered, a refused write, a legacy
   row without a committed list, stale-event rejection through the production
   store, and host-restart durability. Renderer contracts are also covered by

@@ -148,3 +148,50 @@ test("a cleared checklist row still has a body for its disclosure", async (t) =>
   assert.match(html, new RegExp(`id="${controls}"`));
   assert.match(html, /Checklist cleared/);
 });
+
+/*
+ * The expanded row's body is the checklist itself. The card states its own
+ * progress and its own items, so the generic block frame above it could only
+ * render an empty header row holding a copy control over the whole list: the
+ * row keeps its disclosure, and the body starts at the progress line.
+ */
+test("an expanded checklist row renders the checklist without a frame header", async (t) => {
+  const ssr = await slotSsr(t);
+  const { ToolRow } = await ssr.load("/src/features/chat/transcript/ToolRow.tsx");
+  const todos = [
+    { content: "Read the row", status: "completed", priority: "medium" },
+    { content: "Unify the card", status: "in_progress", priority: "high" },
+  ];
+  const html = ssr.render(
+    createElement(ToolRow, {
+      message: message(
+        {
+          text: "Checklist updated: 1/2 completed; current: Unify the card",
+          revision: 10,
+          summary: { completed: 1, total: 2, inProgress: 1, cancelled: 0 },
+          warnings: [],
+          todos,
+        },
+        { todos },
+      ),
+    }),
+  );
+
+  // The row is the one payload that opens itself, and its disclosure still
+  // names the body it renders.
+  assert.match(html, /aria-expanded="true"/);
+  const controls = html.match(/aria-controls="([^"]+)"/)?.[1];
+  assert.ok(controls, "the open checklist row names the body it controls");
+  assert.match(html, new RegExp(`id="${controls}"`));
+  // That body is the checklist: no generic section head, no copy-only header
+  // row, and no leftover label above the progress line.
+  assert.doesNotMatch(html, /tool-row-section-head/);
+  assert.doesNotMatch(html, /tool-row-copy/);
+  assert.doesNotMatch(html, />Checklist</);
+  assert.match(html, /class="tool-todo"/);
+  assert.match(html, /1\/2 completed/);
+  assert.equal(html.match(/class="tool-todo-row/g)?.length, 2);
+  // Each row still carries its state glyph and its priority.
+  assert.match(html, /tool-todo-symbol/);
+  assert.match(html, /tool-todo-priority/);
+});

@@ -1383,7 +1383,11 @@ It does not render separate Details or Output tabs.
   components and styling as the main conversation. The tab header carries the
   outcome, the delivery owner, and one localized metrics group (occupancy, spend,
   turns/calls); the child's model and reasoning level are stated once, in the tab
-  composer's static model chip. Long paths, commands, and tool summaries in the
+  composer's static model chip. Every figure in that group is stated only as the
+  chain reported it: an unreported counter leaves the turns/calls figure out
+  rather than printing `0`, an unreported occupancy keeps its `—`, and an
+  unreported spend states no spend, while a reported zero is stated as zero.
+  Long paths, commands, and tool summaries in the
   live process wrap inside the dock instead of becoming one-line ellipses.
 - A delegate that settles without completing explains why, because the process
   alone does not: a `Failed`, `Timed out`, or `Aborted` capsule with no reason
@@ -2420,7 +2424,7 @@ twice.
 | Bash | `Command` (shell, highlighted) beside `Output` and `Errors` (error hue) as terminal panes (D226 follow-up, §9.10); each pane is labelled and copies its own bytes, and an empty channel is omitted rather than shown as an empty pane |
 | Glob | `Files` — clickable workspace paths; a pattern that matched nothing states `No files matched` instead of a heading over an empty list |
 | Grep | `Matches` — grouped by file with a `line` gutter and clickable path headings for `outputMode: content`; a clickable path list for `filesWithMatches`; `path` → hit count fields for `count`. An empty array in any of the three modes states `No matches` (or `No files matched`) as the answer: the payload's `count` and `truncated` are never printed in place of a body, and an empty-only list carries no heading above that sentence |
-| TodoWrite | the checklist the call committed — a progress line from the host's own counts plus one row per item with its state and priority; never the serialized `todos` argument. Rows and counts come from the committed list in the result rather than the call's argument, so truncation and single-active-item demotion are what the reader sees. A cancelled item is neither completed nor outstanding: it leaves the ratio and is reported as its own count beside it. A list with no outstanding item names its state instead of printing `0/0` — `All N items cancelled` when every item was dropped, and a cleared note when the write emptied the checklist — and neither renders a progress bar. A cleared row still has a body, because a row's `aria-controls` must name the element it renders. A refused write keeps its `Error` note and no rows: an uncommitted list is never shown as the session's checklist |
+| TodoWrite | the checklist the call committed — a progress line from the host's own counts plus one row per item with its state and priority; never the serialized `todos` argument. Rows and counts come from the committed list in the result rather than the call's argument, so truncation and single-active-item demotion are what the reader sees. A cancelled item is neither completed nor outstanding: it leaves the ratio and is reported as its own count beside it. A list with no outstanding item names its state instead of printing `0/0` — `All N items cancelled` when every item was dropped, and a cleared note when the write emptied the checklist — and neither renders a progress bar. A cleared row still has a body, because a row's `aria-controls` must name the element it renders. The checklist is the whole block: nothing heads it but its own progress line, so no section heading and no copy control are drawn above it. A refused write keeps its `Error` note and no rows: an uncommitted list is never shown as the session's checklist |
 | Skill | the loaded document as a card: the skill's name, the `location`/`references` it reported, and its body as Markdown. A failed call is an `Error` note instead |
 | ScheduledTaskList/Create/Update/Delete | one row per automation under the `Scheduled task` heading: title, cadence, its clock, the weekly days **named in the session language** (the schema numbers them from Monday = 0, so a bare index is never printed), and enabled/paused |
 | ToolSearch, EnterPlanMode/SubmitPlan, NewContext, BrowserPreview, GenerateImages | the names they activated or matched, each name set listed once and read in the session language (the legacy `addedToolNames` carrier is used only when the row reports no `activated` list), the mode the tool's own name states (`Plan`, `Goal`), or the prompts and written images the call carried |
@@ -2438,8 +2442,12 @@ twice.
   a run that printed nothing opens on an empty body, not on its arguments. A
   workspace mutation whose review card owns the change prints no arguments at
   all: `path`, `tag` and `ops` are how the change was requested.
-- Every block exposes a compact copy action that copies the full payload, not
-  the visible slice.
+- An ordinary labeled content block exposes a compact copy action that copies
+  the full payload, not the visible slice. A block owned by a dedicated card
+  takes the copy controls that card offers instead: the terminal panes copy
+  their own bytes and the document card copies its body. The checklist is the
+  block whose copy control the section frame has dropped — its progress line
+  heads it — so it carries none of its own.
 - A payload with no per-tool mapping never stringifies itself at the reader: an
   unknown nested value degrades to readable text instead of throwing, and the
   untouched payload stays one `Raw` disclosure away, bounded in size rather than
@@ -2448,9 +2456,11 @@ twice.
   never prints its command back as an argument.
 - A card that names itself is not wrapped in a second, vaguer section heading:
   the loaded document keeps its own title and body section, the checklist its
-  own progress line (the frame keeps only the copy control, with a localized
-  accessible name), and the raw payload its own summary. The section head is
-  drawn only where the block has no other name.
+  own progress line, and the raw payload its own summary. The checklist is the
+  one block that takes no frame row at all: a label there would head the state
+  the progress line already states, and a copy control there copied that same
+  list rather than a payload behind it. The section head is drawn only where
+  the block has no other name.
 
 ### 9.4 Layout
 
@@ -2728,19 +2738,34 @@ coexist as independent tabs. The tab renders the delegation as a conversation:
   instead of waiting for the handle — so the creation phase never reads as
   stalled. Once the result arrives the card transitions to the normal `running`
   presentation and continues from its real `startedAt`.
-- The card states the child's own figures under its title, in the same localized
-  label-and-value vocabulary the composer's dock rows use: turns, tool calls,
-  context occupancy, then cumulative spend, so one report cannot read two ways
-  (`Turns 1 · Tool calls 2 · Context 16.2K · Spent 30.3K`; 轮次 / 工具调用 /
-  上下文 / 累计消耗 in zh-CN). Every boundary is one centred `·`, every figure is
-  a label with its value formatted in the reader's locale, and the line carries
-  no `ctx` abbreviation and no `~` prefix. A figure the payload never carried is
-  omitted rather than printed as a zero, and unknown occupancy keeps the
-  panel's labelled dash with its helper instead of an invented number; an
-  estimate is marked as one. Provenance falls back per segment from the `Task`
-  summary to the lifecycle roster to the latest valid child assistant usage
-  (estimated); the latest segment decides, so a latest segment with no occupancy
-  reports unknown rather than reusing an old gauge.
+- The card states the child session's totals under its title, in the same
+  localized label-and-value vocabulary the composer's dock rows use: turns,
+  tool calls, context occupancy, then cumulative spend, so one report cannot
+  read two ways (`Turns 4 · Tool calls 6 · Context 16.2K · Spent 30.3K`;
+  轮次 / 工具调用 / 上下文 / 累计消耗 in zh-CN). Every boundary is one centred
+  `·`, every figure is a label with its value formatted in the reader's locale,
+  and the line carries no `ctx` abbreviation and no `~` prefix. A resume chain
+  is one child session, so these are the chain's totals rather than the share of
+  the invocation a card happens to represent: turns and tool calls accumulate
+  over the segments that reported them, spend is its cumulative spend
+  deduplicated by operation,
+  and occupancy is the latest segment's gauge — never a sum of the chain's
+  windows. The card reads them through the same conversation-wide chain
+  aggregation its own tab header and the dock row read, so the card, the tab it
+  opens and the dock cannot state the same child differently, and every card of
+  one chain states the same totals while other chains are untouched. A
+  single-run card states that run's figures exactly as before. The four slots
+  are never conditional: every card and every dock row for the same child holds
+  the same line, the card and the dock keep one line height from child to child,
+  and a chain that reported nothing states the four labelled placeholders
+  (`Turns — · Tool calls — · Context — · Spent —`) instead of nothing. A figure
+  the runtime reported is stated, including a reported zero; a figure it never
+  reported — or reported as something that is not a non-negative count — keeps
+  the labelled dash instead of an invented number, and an estimated occupancy is
+  marked as one. Per segment, provenance falls
+  back from the `Task` summary to the lifecycle roster to the latest valid child
+  assistant usage (estimated); the latest segment decides, so a latest segment
+  with no occupancy reports unknown rather than reusing an old gauge.
 - Outcome prefers the structured `Task` result (`completed`, `truncated`,
   `aborted`, `stopped`, `failed`) and falls back to transport state (`running`,
   `error`, `denied`, `success`).
@@ -3114,10 +3139,13 @@ reasoning-level control.
   tool calls, context occupancy, then cumulative spend, the same figures in the
   same order with the same centred `·` separators the transcript card uses
   (§9.9) — its status with its live duration, and its own per-id Stop control.
-  The row states no figure the child never reported: a counter that never
-  arrived is omitted, occupancy the child never reported keeps the labelled dash
-  the transcript tab uses, never an invented zero, and an estimated value is
-  marked as an estimate.
+  The row holds the same four slots the card holds — turns, tool calls, context
+  occupancy, cumulative spend — so a row never changes height or shape as its
+  child reports, and the card above for the same child reads the same line. A
+  figure the child reported is stated, including a reported zero; a figure it
+  never reported — or reported as something that is not a non-negative count —
+  keeps the labelled dash the transcript tab uses, never an invented zero, and an
+  estimated value is marked as an estimate.
 - The row body is itself the open action: the whole row is one native button, so a
   click anywhere on it — or Enter or Space — opens that child's chain tab in the
   work panel (§9.9). The per-child Stop control is a sibling of that button rather
