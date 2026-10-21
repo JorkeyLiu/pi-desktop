@@ -26,6 +26,7 @@ import { TranscriptSearchContext } from "../../../lib/transcript-search-context"
 import { disclosureKey, useAutomaticDisclosure } from "./disclosure";
 export { useAutomaticDisclosure } from "./disclosure";
 import { messageThinking as thinkingText } from "../../../lib/assistant-turns";
+import { thinkingPreview } from "../../../lib/thinking-preview";
 import { useReferencedImageDataUrl } from "../../../lib/use-referenced-image-data-url";
 import { useVerifiedChatText } from "../../../hooks/use-verified-chat-text";
 import { isHtmlFilePath } from "../../../lib/chat-links";
@@ -766,7 +767,9 @@ export const ThinkingRow = memo(function ThinkingRow({
     ) : null;
   }
   const text = thinkingText(message);
-  const summary = text.replace(/\s+/g, " ").trim();
+  // The opening the model wrote, recomputed from this render's message: no
+  // generated summary, no newest-line ticker, and nothing cached to go stale.
+  const preview = thinkingPreview(text);
   return (
     <div className={`tool-row thinking ${open ? "open" : ""}`}>
       <button
@@ -783,7 +786,13 @@ export const ThinkingRow = memo(function ThinkingRow({
         <span className={`tool-row-name ${streaming ? "running" : ""}`}>
           {t("chat.thinking", { defaultValue: "Thinking" })}
         </span>
-        <span className="tool-row-summary">{summary}</span>
+        {!open && preview ? (
+          <span
+            className={`tool-row-summary thinking-preview${preview.heading ? " is-heading" : ""}`}
+          >
+            {preview.heading ?? preview.body}
+          </span>
+        ) : null}
         <span className="tool-row-caret" aria-hidden>
           <IconChevronRight size={12} />
         </span>

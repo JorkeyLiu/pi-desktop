@@ -891,6 +891,17 @@ grouped with, and it folds like any other reasoning row. The move only changes
 where that leaf is read: the stored transcript order the model produced is
 unchanged.
 
+A collapsed reasoning row states the localized `Thinking` label and one line of
+the message's own opening: its leading Markdown heading, a line that is nothing
+but one bold span, or otherwise its opening paragraph, with the presentation
+removed and the words kept (emphasis, inline code, link labels, image alt text).
+That line is muted proportional body text, ellipsized on narrow widths, and it is
+not a generated summary. It never follows the newest line, so it stays in place
+while the rest of the reasoning streams, and it is recomputed from the message it
+is given rather than cached. Opening the row replaces the line with the full
+Markdown body so its first sentence is never read twice; reasoning with no
+visible text draws the label alone, and Compact keeps only its active indicator.
+
 Both modes open every whole-process disclosure by default, for the live turn and
 for history alike, and a settling turn never closes one. An explicit user choice
 remains authoritative: a process the reader collapsed stays collapsed and one the

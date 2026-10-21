@@ -97,6 +97,8 @@ const shared = load(new URL("../src/features/chat/transcript/shared.tsx", import
   "../../../lib/turn-process": { isThinkingActive: () => false, resolveThinkingDisplayMode: () => "none" },
   "../../../lib/transcript-search-context": { TranscriptSearchContext: React.createContext(null) },
   "../../../lib/assistant-turns": { messageThinking: () => "" },
+  // The collapsed reasoning line is presentation; this scenario has no reasoning.
+  "../../../lib/thinking-preview": { thinkingPreview: () => null },
   "../../../lib/use-referenced-image-data-url": { useReferencedImageDataUrl: () => undefined },
   "../../../lib/chat-links": { isHtmlFilePath: () => false },
   "../../../lib/context-usage": { calculateTokenRate: () => 0 },

@@ -2608,6 +2608,25 @@
   color: var(--ds-text-muted);
 }
 
+/*
+ * Reasoning is prose, not a command. Its collapsed row previews the opening of
+ * the model's own text beside the localized label: the body face and reading
+ * colour instead of a monospace tool summary, one ellipsized line. It takes the
+ * header's own label-to-summary gap like every other tool row, so the reasoning
+ * row lines up with the rows around it.
+ */
+.tool-row.thinking > .tool-row-header > .thinking-preview {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--ds-text-muted);
+}
+
+/* The opening heading keeps its own weight so it reads as the message's title. */
+.tool-row.thinking > .tool-row-header > .thinking-preview.is-heading {
+  font-weight: var(--font-weight-medium);
+  color: var(--ds-text-secondary);
+}
+
 .tool-row-status {
   display: inline-flex;
   flex: none;

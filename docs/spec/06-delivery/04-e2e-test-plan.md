@@ -4428,7 +4428,9 @@ window; opening a normal panel afterward must still work.
   deltas.
 - **Steps**: 1) Start a turn in both light and dark themes. 2) Observe a
   thinking-only phase. 3) Let the answer complete. 4) Toggle the disclosure,
-  test keyboard focus, enable reduced motion, and use Copy answer.
+  test keyboard focus, enable reduced motion, and use Copy answer. 5) At a
+  narrow and a wide transcript width, inspect the collapsed row's one line and
+  then open it.
 - **Expected**: The transcript opens during thinking-only streaming; the latest
   Thinking disclosure opens and updates without an empty answer bubble or
   duplicate Working indicator. If the user collapses or expands it, that choice
@@ -4437,12 +4439,21 @@ window; opening a normal panel afterward must still work.
   trigger, and a left rule instead of an inset card; collapsed content leaves
   focus traversal and reduced motion disables the running marker pulse and
   transitions. Final answer markdown renders separately; Copy answer contains
-  no thinking text.
+  no thinking text. The collapsed row shows the localized label plus one line of
+  the message's own opening with its Markdown presentation removed: its leading
+  heading, a line that is only one bold span, or otherwise its opening
+  paragraph, in muted proportional type, ellipsized when narrow, never a
+  generated summary and never the newest line, so it holds still while later
+  reasoning streams. Opening the row removes that line and shows the whole
+  Markdown body, so the first sentence is not read twice; reasoning with no
+  visible text draws the label alone.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md`,
   `04-ux/07-ui-design-system.md`, `04-ux/08-component-spec.md`, ADR 0018
 - **Acceptance**: C (chat and stream), Quality
 - **Milestone**: M5
-- **Status**: Unit-covered (`thinking-ui.test.mjs`, agent-runtime event tests); full streaming scenario Draft
+- **Status**: Unit-covered (`thinking-ui.test.mjs`,
+  `thinking-row-preview.test.mjs`, agent-runtime event tests) and rendered
+  (`pnpm test:e2e:thinking-row`); full streaming scenario Draft
 
 #### E2E-054: Stored thinking reloads losslessly
 
