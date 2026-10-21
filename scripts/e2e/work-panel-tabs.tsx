@@ -528,6 +528,13 @@ globalThis.workPanelTabsProbe = async () => {
   // drag` rectangle, which Electron resolves before the renderer is reached.
   // While a menu is up the band must stand down from dragging so the press
   // arrives and dismisses, and take dragging back once the menu is gone.
+  //
+  // Withholding that press is native behavior: this harness presses through
+  // `webContents.sendInputEvent`, which enters the renderer's input router below
+  // the native hit test and therefore always arrives, in a hidden window as well
+  // as a visible one. The computed region asserted below is what a native drag
+  // regression fails; the press then proves the renderer receives and acts on a
+  // window-level outside press, not that a real drag rectangle would forward it.
   const appRegionAt = (x: number, y: number) => {
     const element = document.elementFromPoint(x, y);
     let region = "none";

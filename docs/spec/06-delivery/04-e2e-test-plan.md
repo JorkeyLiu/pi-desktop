@@ -16292,14 +16292,30 @@ plugin-form fixtures in an isolated temporary directory at runtime.
 - **Specs linked**: `04-ux/08-component-spec.md` §5.2, §5.3, §5.4, §5.5
 - **Acceptance**: Quality
 - **Status**: Automated (`scripts/e2e-work-panel-tabs.mjs` via
-  `pnpm test:e2e:work-panel-tabs`, 16 checks). Tested source: the working tree
-  with the work-panel visibility decision on base `9e26cf424`; environment:
-  macOS arm64, Node 24.12.0, Electron 43.6.0, the probe's own temporary profile
-  and window. Result: 16 of 16 checks passed on 2026-10-21 (three green runs;
-  one earlier run hit the pre-existing tab-menu timing check "close-others
-  should be disabled with a single tab" before this scenario ran, and the
-  documented `13 checks` count was already stale — the suite held 15 on the
-  base). A shipped-build re-run is still outstanding.
+  `pnpm test:e2e:work-panel-tabs`, 16 checks). The runner opens its frameless
+  window hidden and never requests an always-on-top level or an activated
+  application focus, so a routine run stays off the desktop and out of the way
+  of typing. `node scripts/e2e-work-panel-tabs.mjs --interactive` shows the same
+  ordinary window — still no always-on-top level and no forced app focus — and
+  keeps it open after the probe for inspection. Tested source: the working tree
+  with the background window change on base `3ae7eed45`; environment: macOS
+  arm64, Node 24.12.0, Electron 43.6.0, the probe's own temporary profile and
+  window. Result: 16 of 16 checks passed on 2026-10-21 with the window hidden.
+  The native drag claim was controlled rather than assumed: deleting the
+  header's menu-open stand-down rule (`body:has(> .context-menu)
+  .work-panel-header { -webkit-app-region: no-drag }`) from the built
+  stylesheet failed the run at "the blank header band still belongs to the
+  native drag rectangle while a menu is open", with the window hidden and
+  identically with it visible. What that check proves, and what it does not: the
+  asserted `-webkit-app-region` value is the state Electron resolves into the
+  native drag rectangle, while the press that follows travels through
+  `webContents.sendInputEvent`, which enters the renderer's input router below
+  the native hit test and therefore arrives in a hidden window as well as a
+  visible one. Native hit-test withholding itself is not observable from this
+  harness; Windows native coverage remains in `scripts/e2e-work-panel-drag.mjs`.
+  Known pre-existing flake, not masked: the single-tab check "close-others
+  should be disabled with a single tab" failed in one of four earlier runs. A
+  shipped-build re-run is still outstanding.
 
 ### E2E-COMPOSER-model-chip-namespace
 
