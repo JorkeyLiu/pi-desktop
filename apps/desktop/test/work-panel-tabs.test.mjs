@@ -236,22 +236,21 @@ test("a host-chosen project file prefers the bundled file view", () => {
 
 test("empty work panel context has no visible or retained resource state", () => {
   assert.deepEqual(emptyWorkPanelContext(), {
-    open: false,
     tabs: [],
     activeTabId: null,
     fileRequest: null,
   });
+  assert.equal("open" in emptyWorkPanelContext(), false,
+    "panel visibility is shell state, not conversation state");
 });
 
-test("switching work panel contexts isolates session tabs and visible state", () => {
+test("switching work panel contexts isolates session tabs without deciding visibility", () => {
   const sessionA = {
-    open: true,
     tabs: [browserPluginTab(), fileWorkPanelTab("src/App.tsx")],
     activeTabId: "file:src/App.tsx",
     fileRequest: { path: "src/App.tsx", seq: 4 },
   };
   const sessionB = {
-    open: false,
     tabs: [browserPluginTab()],
     activeTabId: browserPluginTab().id,
     fileRequest: null,
@@ -265,6 +264,8 @@ test("switching work panel contexts isolates session tabs and visible state", ()
   );
   assert.deepEqual(toB.contexts["session-a"], sessionA);
   assert.deepEqual(toB.visible, sessionB);
+  assert.equal("open" in toB.visible, false,
+    "a switch must not carry a per-session open state");
 
   const backToA = switchWorkPanelContextState(
     toB.contexts,
@@ -279,7 +280,6 @@ test("switching work panel contexts isolates session tabs and visible state", ()
 
 test("switching to a session without context returns an isolated empty state", () => {
   const sessionA = {
-    open: true,
     tabs: [toolWorkPanelTab("review")],
     activeTabId: "review",
     fileRequest: null,
@@ -300,7 +300,6 @@ test("switching to a session without context returns an isolated empty state", (
 test("a newer retained artifact is not overwritten by a stale visible projection", () => {
   const staleVisible = emptyWorkPanelContext();
   const retained = {
-    open: true,
     tabs: [toolWorkPanelTab("review")],
     activeTabId: "review",
     fileRequest: null,
@@ -357,7 +356,7 @@ test("the sanitizer keeps subagent tabs across session switches", () => {
   const switched = switchWorkPanelContextState(
     {},
     undefined,
-    { ...state, open: true, fileRequest: null },
+    { ...state, fileRequest: null },
     "session-b",
   );
   assert.deepEqual(switched.visible.tabs, []);

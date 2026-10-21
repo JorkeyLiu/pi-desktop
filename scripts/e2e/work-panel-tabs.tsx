@@ -55,12 +55,50 @@ function seededTabs(): WorkPanelTab[] {
 }
 
 const invokes: Array<{ channel: string; payload: unknown }> = [];
+/** New Task creations this probe's bridge has answered. */
+let createdSessions = 0;
 
 function installBridge() {
   (window as unknown as Record<string, unknown>).piDesktop = {
     platform: "darwin",
     invoke: async (channel: string, payload: unknown) => {
       invokes.push({ channel, payload });
+      // A topic switch reads the durable session it selects, and New Task
+      // creates one. Answering those two keeps both a real store action instead
+      // of a state poke.
+      if (/\/session\/get$/.test(channel)) {
+        const id = (payload as { id?: string } | undefined)?.id;
+        const summary = useAppStore.getState().sessions.find((session) => session.id === id);
+        // A topic that holds history answers with one durable message, so the
+        // read is a real transcript rather than the "empty window" fallback.
+        return {
+          ok: true,
+          data: {
+            session: {
+              ...summary,
+              messages: [
+                { id: `${id}-m1`, role: "assistant", content: `${summary?.title} reply`, status: "complete" },
+              ],
+            },
+          },
+        };
+      }
+      if (/\/session\/create$/.test(channel)) {
+        createdSessions += 1;
+        return {
+          ok: true,
+          data: {
+            session: {
+              id: `session-created-${createdSessions}`,
+              title: "New topic",
+              mode: "agent",
+              providerId: "fixture-provider",
+              modelId: "fixture-model",
+              messageCount: 0,
+            },
+          },
+        };
+      }
       return { ok: true, data: [] };
     },
     on: () => () => undefined,
@@ -613,5 +651,127 @@ globalThis.workPanelTabsProbe = async () => {
   );
   check("band beside the strip, outside press, and action toolbar all dismiss");
   root.unmount();
+
+  // 16. Visibility is shell state. The dock below is gated exactly like the
+  // AppShell route (`presentedWorkPanelOpen && <WorkPanel/>`), so a topic
+  // switch, a New Task creation, a user close, and a return to a topic whose
+  // panel was open are observed through real store actions and real renders.
+  host.remove();
+  const gatedHost = document.createElement("div");
+  gatedHost.style.cssText = "position: fixed; inset: 0; display: flex; align-items: stretch;";
+  document.body.append(gatedHost);
+  const gatedRoot = createRoot(gatedHost);
+  const session = (id: string, title: string) => ({
+    id,
+    title,
+    mode: "agent",
+    providerId: "fixture-provider",
+    modelId: "fixture-model",
+    // Two recorded messages: New Task must create a topic, never hand back one
+    // of these merely because its live pane is empty.
+    messageCount: 2,
+  });
+  useAppStore.setState({
+    sessions: [session("session-a", "First topic"), session("session-b", "Second topic")],
+    activeSessionId: "session-a",
+    messages: [],
+    sessionHistory: {},
+    retainedSessionIds: [],
+    retainedTranscripts: {},
+    sessionMeta: {},
+    notifications: [],
+    sessionOutcomes: {},
+    runningSessions: {},
+    selectingSessionId: undefined,
+    navStack: [{ page: "chat", sessionId: "session-a" }],
+    navIndex: 0,
+    workspace: null,
+    activeProjectPath: undefined,
+    draftConfiguration: null,
+    workPanelOpen: true,
+    workPanelTabs: [toolWorkPanelTab("review")],
+    activeWorkPanelTabId: "review",
+    workPanelFileRequest: null,
+    workPanelContexts: {},
+    // The cards a selection or creation hydrates beside the panel are not this
+    // claim.
+    restorePendingPlan: async () => {},
+    restorePendingInteractive: async () => {},
+  } as never);
+  const GatedShell = () => {
+    const open = useAppStore((state) => state.workPanelOpen);
+    return open
+      ? (
+          <I18nextProvider i18n={i18n}>
+            <WorkPanel containerWidth={1800} sidebarCollapsed />
+          </I18nextProvider>
+        )
+      : null;
+  };
+  flushSync(() => gatedRoot.render(<GatedShell />));
+  await settle();
+  const gatedPanel = () => gatedHost.querySelector<HTMLElement>('[data-testid="work-panel"]');
+  const activeSession = () => useAppStore.getState().activeSessionId;
+  assert(gatedPanel(), "the seeded open panel did not render");
+
+  // Switching to a topic that never opened the panel keeps the dock on screen
+  // and shows that topic's own (empty) resource set.
+  await useAppStore.getState().selectSession("session-b");
+  await settle();
+  assert(activeSession() === "session-b", "the topic switch did not commit");
+  assert(gatedPanel(), "switching topic closed an open panel");
+  assert(tabIds().length === 0, `the new topic inherited the previous topic's tabs: ${tabIds()}`);
+
+  // New Task creates a further topic through the same action the user's New
+  // Task command runs; the dock stays on screen and takes the new topic's set.
+  await useAppStore.getState().newSession();
+  await settle();
+  assert(activeSession() === "session-created-1", `New Task did not create a topic: ${activeSession()}`);
+  assert(gatedPanel(), "New Task closed an open panel");
+  assert(tabIds().length === 0, `the created topic inherited tabs: ${tabIds()}`);
+
+  // The user closes it. Returning to the topic whose panel was open restores
+  // that topic's resources without putting the dock back on screen.
+  useAppStore.getState().collapseWorkPanel();
+  await settle();
+  assert(!gatedPanel(), "the user's close left the panel rendered");
+  await useAppStore.getState().selectSession("session-a");
+  await settle();
+  assert(activeSession() === "session-a", "returning to the first topic failed");
+  assert(!gatedPanel(), "returning to a topic whose panel was open re-opened a closed panel");
+  assert(
+    tabIds().join(",") === "review",
+    `the retained topic resources did not follow the selection: ${tabIds()}`,
+  );
+
+  // A New Task from the closed panel stays closed too. The created topic from
+  // above now holds a message, so this is a second, real creation.
+  useAppStore.setState((state) => ({
+    sessions: state.sessions.map((item) =>
+      item.id === "session-created-1" ? { ...item, messageCount: 1 } : item,
+    ),
+  }));
+  await useAppStore.getState().newSession();
+  await settle();
+  assert(activeSession() === "session-created-2", `New Task did not create a second topic: ${activeSession()}`);
+  assert(!gatedPanel(), "New Task opened a closed panel");
+  assert(tabIds().length === 0, `the second created topic inherited tabs: ${tabIds()}`);
+
+  // An explicit reveal shows the visible topic's resources only.
+  await useAppStore.getState().selectSession("session-a");
+  await settle();
+  useAppStore.getState().openWorkPanel();
+  await settle();
+  assert(gatedPanel(), "revealing the panel did not render it");
+  assert(
+    gatedHost.querySelector('[data-work-panel-tab-id="review"]'),
+    "the retained topic resource is missing from the revealed panel",
+  );
+  assert(
+    tabIds().join(",") === "review",
+    `revealing merged another topic's tabs: ${tabIds()}`,
+  );
+  check("visibility survives topic switches, New Task, and an explicit close");
+  gatedRoot.unmount();
   return { ok: true, checks };
 };

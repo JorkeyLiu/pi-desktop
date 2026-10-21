@@ -441,10 +441,9 @@ export function createSessionSlice({
             )
           ) {
             // Opening a conversation aligns the project without moving it in
-            // the sidebar: the retained-tab order is the user's own history.
+            // the sidebar: activation always keeps the retained-tab order.
             const workspace = await get().activateProject(projectPath, {
               navigationIntent: intent,
-              preserveProjectOrder: true,
             });
             if (!runtime.navigationIntentIsCurrent(intent)) return false;
             if (!workspace) throw new Error(i18n.t("errors.workspaceActivationFailed"));

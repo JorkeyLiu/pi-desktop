@@ -2216,9 +2216,12 @@ async fn handle_request(
             } else {
                 st.workspace.set(PathBuf::from(path))
             };
+            // Activating a project registers it without moving it: a path the
+            // host already stores keeps the ordering position it was registered
+            // with, and only a path new to the host takes the current time.
             let pid = st
                 .db
-                .ensure_project(&ws.path, true)
+                .ensure_project(&ws.path, false)
                 .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
             st.db
                 .kv_set("app", "currentProjectId", &json!(pid))
@@ -5934,6 +5937,81 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(workspace["workspace"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn workspace_set_reactivation_keeps_the_project_position() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let project_a = data_dir.path().join("project-a");
+        let project_b = data_dir.path().join("project-b");
+        fs::create_dir_all(&project_a).unwrap();
+        fs::create_dir_all(&project_b).unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let state = Arc::new(Mutex::new(app_state));
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        for path in [&project_a, &project_b] {
+            handle_request(
+                state.clone(),
+                "workspace.set",
+                json!({ "path": path }),
+                tx.clone(),
+            )
+            .await
+            .unwrap();
+        }
+        let canonical_a = crate::db::canonical_project_path(&project_a.to_string_lossy())
+            .expect("canonical path for project A");
+        let canonical_b = crate::db::canonical_project_path(&project_b.to_string_lossy())
+            .expect("canonical path for project B");
+
+        // Age project A so any position bump is distinguishable from the
+        // timestamp it was registered with.
+        {
+            let st = state.lock().await;
+            st.db
+                .conn()
+                .execute(
+                    "UPDATE projects SET last_opened_at = 1 WHERE path = ?1",
+                    rusqlite::params![canonical_a],
+                )
+                .unwrap();
+        }
+
+        // Reopening a registered project activates it without moving it.
+        let reopened = handle_request(
+            state.clone(),
+            "workspace.set",
+            json!({ "path": project_a }),
+            tx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reopened["workspace"]["path"], canonical_a.as_str());
+
+        let st = state.lock().await;
+        let projects = st.db.list_projects().unwrap();
+        let position = |path: &str| {
+            projects
+                .iter()
+                .find(|project| project.path == path)
+                .map(|project| project.last_opened_at)
+        };
+        assert_eq!(
+            position(&canonical_a),
+            Some(1),
+            "reopening a registered project must not rewrite its ordering position"
+        );
+        assert!(
+            position(&canonical_b).unwrap_or(0) > 1,
+            "project B keeps the position it was registered with"
+        );
+        assert_eq!(
+            projects[0].path, canonical_b,
+            "the project registered last keeps the newest position"
+        );
+        assert_eq!(projects[1].path, canonical_a);
     }
 
     #[tokio::test]

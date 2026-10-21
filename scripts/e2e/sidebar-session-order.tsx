@@ -700,22 +700,97 @@ async function probe() {
     },
   );
 
+  // Every way of reaching an existing project — its title, a topic row, or a
+  // restore of an archived record — must leave the project groups exactly where
+  // the user put them. Only a project the sidebar has never registered takes a
+  // new place, appended at the most recent position.
   orderFixture();
   await until(
     () => currentProjectPath() === PROJECT_B,
     "the order fixture resets to the other project",
   );
   await frame();
+  const titleExpandedBefore = (path: string): string | null =>
+    document
+      .querySelector<HTMLElement>(
+        `[data-sidebar-project-group="${path}"] [data-action="toggle-project-collapse"]`,
+      )
+      ?.getAttribute("aria-expanded") ?? null;
+  const collapsedBefore = titleExpandedBefore(PROJECT);
   projectTitleClick(PROJECT);
   await until(
     () => currentProjectPath() === PROJECT,
     "an explicit project open activates that project",
   );
   check(
-    "opening a project from its title still promotes its tab",
-    tabOrder() === `${PROJECT_B},${PROJECT}`,
+    "opening an existing project from its title keeps its tab where it was",
+    tabOrder() === `${PROJECT},${PROJECT_B}`,
     useAppStore.getState().openProjectPaths,
   );
+  check(
+    "opening an existing project from its title does not reorder the groups",
+    projectGroupKeys().join(",") === orderBaseline,
+    { groups: projectGroupKeys(), baseline: orderBaseline },
+  );
+  check(
+    "the project title still toggles the group it activates",
+    titleExpandedBefore(PROJECT) !== collapsedBefore,
+    { before: collapsedBefore, after: titleExpandedBefore(PROJECT) },
+  );
+
+  projectTitleClick(PROJECT_B);
+  await until(
+    () => currentProjectPath() === PROJECT_B,
+    "switching back through the other project title activates it",
+  );
+  check(
+    "switching between existing projects from their titles never reorders the groups",
+    tabOrder() === `${PROJECT},${PROJECT_B}` &&
+      projectGroupKeys().join(",") === orderBaseline,
+    { tabs: tabOrder(), groups: projectGroupKeys() },
+  );
+
+  // Restoring an archived project that the user already has is an activation,
+  // not a registration: it comes back where it was.
+  useAppStore.setState({
+    projectMeta: { [PROJECT]: { archived: true } },
+    sessionView: { sort: "created", archived: true },
+  });
+  await frame();
+  projectTitleClick(PROJECT);
+  await until(
+    () =>
+      currentProjectPath() === PROJECT &&
+      useAppStore.getState().projectMeta[PROJECT]?.archived !== true,
+    "an archived project opens and is restored",
+  );
+  check(
+    "restoring an existing archived project keeps every group where it was",
+    tabOrder() === `${PROJECT},${PROJECT_B}` &&
+      projectGroupKeys().join(",") === orderBaseline,
+    { tabs: tabOrder(), groups: projectGroupKeys() },
+  );
+
+  // A topic row is the other common way into a project; alternating between
+  // the two projects must not shift either of them.
+  orderFixture();
+  await until(
+    () => currentProjectPath() === PROJECT_B,
+    "the order fixture resets before the topic sequence",
+  );
+  for (const id of ["alpha", "b-one", "beta", "alpha"]) {
+    row(id).click();
+    await until(
+      () => useAppStore.getState().activeSessionId === id,
+      `the topic ${id} opens`,
+    );
+    check(
+      `opening the topic ${id} keeps the project groups where they were`,
+      projectGroupKeys().join(",") === orderBaseline &&
+        tabOrder() === `${PROJECT},${PROJECT_B}`,
+      { groups: projectGroupKeys(), tabs: tabOrder() },
+    );
+  }
   return { ok: checks.every((entry) => entry.ok), checks };
 }
 

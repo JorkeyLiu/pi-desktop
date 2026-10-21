@@ -97,13 +97,11 @@ export type NavigationOptions = {
 };
 
 /**
- * Project activation options. `preserveProjectOrder` exists for conversation
- * navigation: opening a conversation is not the explicit project open that
- * moves a retained tab, so it must leave the sidebar project order untouched.
+ * Project activation options. Activation never rewrites the retained-tab order,
+ * whichever route the user took into the project, so the only options are the
+ * owning navigation intent's.
  */
-export type ActivateProjectOptions = NavigationOptions & {
-  preserveProjectOrder?: boolean;
-};
+export type ActivateProjectOptions = NavigationOptions;
 
 export type RefreshSessionsOptions = {
   /** Restore archived project presentation state for newly imported sessions. */

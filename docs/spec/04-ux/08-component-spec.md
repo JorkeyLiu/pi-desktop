@@ -618,12 +618,15 @@ visually distinct from list content.
   Dragging a session row draws a 2px accent line on the row it will land
   against, inside its own list only. Pinned projects still precede unpinned
   projects within the project sort, and the default project order follows the
-  retained tabs the user opened rather than conversation activity. Selecting a
-  conversation keeps that order: opening a conversation in another project
-  activates it without moving any group, of which a project with no retained
-  tab is appended last. Only an explicit project open — the directory title,
-  the Projects index, or dropping a folder to add a project — promotes that
-  project's tab to the most recent position.
+  retained tabs the user registered rather than conversation activity. That
+  order is append-only: selecting a conversation, clicking a directory title,
+  opening a row in the Projects index, or restoring an archived project all
+  activate the project without moving any existing group, and only a project
+  the sidebar did not hold yet — a created, cloned, or dropped folder — is
+  appended and therefore renders at the most recent position. The same rule
+  governs the Projects index and the home project switcher: an existing project
+  keeps the ordering time it was registered with, so only a new project opens
+  at the top.
   Project rows have no reorder grip. Pressing the project title and moving
   8px starts a pointer reorder and selects the persisted `manual` project order without changing the session sort.
 - When a session hover card is revealed for the active project, the renderer
@@ -1166,11 +1169,11 @@ entirely inside the plugin's isolated page:
 
 | State | Behavior |
 |---|---|
-| Closed (default) | Not rendered; startup has no retained tabs. The viewport-fixed toggle or `Cmd/Ctrl + J` reveals the active session's panel context without creating a tab. Inline review cards remain available in the transcript because they are message-scoped and do not require the work panel. |
-| Open | Docked flex row right of the main pane; opened by an artifact, the viewport-fixed toggle, or `Cmd/Ctrl + J` at a committed preferred width of at least 244px (new-profile default 360px), capped by the live three-column budget. The toggle or `Cmd/Ctrl + J` again collapses it, retaining the session context. |
+| Closed (default) | Not rendered; startup has no retained tabs. The viewport-fixed toggle or `Cmd/Ctrl + J` reveals the panel without creating a tab. Visibility is shell state (D661), so a closed panel stays closed when the conversation, project, or visible content changes; the next reveal shows the visible conversation's retained resources. Inline review cards remain available in the transcript because they are message-scoped and do not require the work panel. |
+| Open | Docked flex row right of the main pane; opened by an artifact that targets the visible conversation, the viewport-fixed toggle, or `Cmd/Ctrl + J` at a committed preferred width of at least 244px (new-profile default 360px), capped by the live three-column budget. The toggle, `Cmd/Ctrl + J`, or the header collapse action again collapses it, retaining the visible conversation's resources. Switching, creating, or forking conversations and activating a project leave it open. |
 | Preview (maximize) | MainChat is unmounted and the panel fills the client area beside the sidebar. The mode is transient and restores the prior panel width and sidebar state when left. |
 | Multiple artifacts | The header keeps a horizontally scrollable tab strip. The fixed `+` action creates a new launcher tab; its buttons open Review and all in-scope plugin views without duplicating open resource tabs. |
-| Session switch | The destination session's retained open state, tabs, active tab, and Browser resource replace the previous session's panel context atomically; neither context is deleted |
+| Session switch | The destination session's tabs, active tab, file request, and Browser resource replace the previous session's panel content atomically; neither context is deleted, and the panel's open or closed state is left untouched (D661). |
 | Resizing | The inner left divider follows anchored pointer delta or keyboard input for the panel target; pointer changes are frame-coalesced and committed in the renderer. Escape, pointer cancellation, or lost capture restores the prior panel width. Native window edges resize only the fixed application window on every platform. |
 | No workspace | Each tab renders its own "open a project" empty state |
 | Open with no resource | `Cmd/Ctrl + J` reveals the panel without creating a tab, so the body renders the New launcher. Clicking `+` creates an explicit, closable New tab with the same launcher rows. Activating a row from that tab replaces it with or selects the singleton view. Closing the final tab leaves the panel open in the no-resource state. |
@@ -1308,15 +1311,15 @@ entirely inside the plugin's isolated page:
   is visible; a hidden page receives them when shown again. Queued captures
   stay on their original page and fail if that guest was closed. Other pages
   remain independent, and resizing never triggers an extra screenshot.
-- Persistence: all session contexts are renderer runtime state only. On app
-  startup, open state, tabs, active-tab selection, file requests, and Browser
-  resources reset; only the committed preferred `{width}` remains in
-  localStorage `pi.desktop.workPanel`. Opening and collapsing never request a
-  positive native reservation and never change native window bounds. The panel
-  flexes inside the existing client area, so MainChat reflows beside it while
-  retaining its 450px hard minimum; the expanded sidebar is the column that
-  yields, and closing the panel restores a sidebar the layout collapsed.
-  Background session artifacts never update the
+- Persistence: the panel's visibility and all session contexts are renderer
+  runtime state only. On app startup, open state, tabs, active-tab selection,
+  file requests, and Browser resources reset; only the committed preferred
+  `{width}` remains in localStorage `pi.desktop.workPanel`. Opening and
+  collapsing never request a positive native reservation and never change
+  native window bounds. The panel flexes inside the existing client area, so
+  MainChat reflows beside it while retaining its 450px hard minimum; the
+  expanded sidebar is the column that yields, and closing the panel restores a
+  sidebar the layout collapsed. Background session artifacts never update the
   visible panel or window geometry.
 
 ### 5.5 Accessibility

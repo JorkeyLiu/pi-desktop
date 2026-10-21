@@ -329,10 +329,14 @@ impl Database {
 
     // ---- projects ----------------------------------------------------------
 
-    /// Upsert a project row by path, returning its id. Also bumps
-    /// last_opened_at when `touch` is set. The path is canonicalized when it
-    /// exists on disk (matching `WorkspaceState::set`) so symlinked spellings
-    /// of the same directory share one row.
+    /// Upsert a project row by path, returning its id. A path the database has
+    /// not seen yet is stored with the current time as both its creation and its
+    /// ordering position; an existing row keeps its ordering position unless
+    /// `touch` is set. Workspace activation registers with `touch = false`, so
+    /// reopening a project never moves it in the lists ordered by
+    /// `last_opened_at`. The path is canonicalized when it exists on disk
+    /// (matching `WorkspaceState::set`) so symlinked spellings of the same
+    /// directory share one row.
     pub fn ensure_project(&self, path: &str, touch: bool) -> Result<i64> {
         if path.starts_with(super::REMOTE_PROJECT_PREFIX) {
             self.remote_workspace_for_path(path)?;

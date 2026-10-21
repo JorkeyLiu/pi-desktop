@@ -377,7 +377,9 @@ export function buildProjectIndex(args: {
 
   if (workspace?.path) {
     const group = groupForPath(workspace.path);
-    if (group) addGroup(group, Date.now());
+    // The active workspace keeps the index position it was registered with: an
+    // activation is not a registration, so it never rewrites `openedAt`.
+    if (group) addGroup(group);
     else {
       const key = normalizeProjectPath(workspace.path);
       if (key) {
@@ -386,7 +388,7 @@ export function buildProjectIndex(args: {
           path: workspace.path,
           name: workspace.name || existing?.name || workspace.path,
           branch: workspace.branch || existing?.branch,
-          openedAt: Math.max(existing?.openedAt ?? 0, Date.now()),
+          openedAt: existing?.openedAt ?? Date.now(),
           pinned: existing?.pinned,
           color: existing?.color ?? projectColor(workspace.path),
           groupId: existing?.groupId ?? `legacy:${key}`,

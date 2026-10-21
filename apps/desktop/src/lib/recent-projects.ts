@@ -40,24 +40,36 @@ export function loadRecentProjects(): RecentProject[] {
   }
 }
 
+/**
+ * Register a project the user reached, refreshing its workspace metadata.
+ *
+ * `openedAt` is the entry's registration time, not its last access: it is the
+ * only ordering input the Projects index and the home switcher have, so an
+ * existing project keeps the time it entered the list and only a project the
+ * user did not have yet is registered with the current time.
+ */
 export function rememberProject(input: {
   remote?: RemoteWorkspace;
   path: string;
   name: string;
   branch?: string | null;
 }): RecentProject[] {
-  const list = loadRecentProjects().filter((p) => p.path !== input.path);
-  const prev = loadRecentProjects().find((p) => p.path === input.path);
-  list.unshift({
+  const existing = loadRecentProjects();
+  const prev = existing.find((p) => p.path === input.path);
+  const record: RecentProject = {
     ...(input.remote ? { remote: input.remote } : {}),
     path: input.path,
     name: input.name,
     branch: input.branch || undefined,
-    openedAt: Date.now(),
+    openedAt: prev?.openedAt ?? Date.now(),
     pinned: prev?.pinned,
     color: prev?.color || projectColor(input.path),
-  });
-  const next = list.slice(0, MAX);
+  };
+  // An existing project is refreshed in place, so its list position cannot
+  // change. Only a newly registered project joins the list.
+  const next = prev
+    ? existing.map((project) => (project.path === input.path ? record : project))
+    : [record, ...existing].slice(0, MAX);
   localStorage.setItem(KEY, JSON.stringify(next));
   return next;
 }

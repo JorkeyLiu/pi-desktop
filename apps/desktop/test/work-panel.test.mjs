@@ -359,16 +359,17 @@ test("work panel starts closed with no tabs and persists width only", () => {
 });
 
 test("closing the final tab keeps the panel open for the New launcher", () => {
+  const closeStart = storeSource.indexOf("closeWorkPanelTab: (tabId) =>");
   const closeBlock = storeSource.slice(
-    storeSource.indexOf("closeWorkPanelTab: (tabId) =>"),
-    storeSource.indexOf(
-      "openWorkPanelTabForSession:",
-      storeSource.indexOf("closeWorkPanelTab: (tabId) =>"),
-    ),
+    closeStart,
+    storeSource.indexOf("closeWorkPanelTabs: (tabIds) =>", closeStart),
   );
+  assert.ok(closeBlock, "single-tab close action exists");
   assert.doesNotMatch(closeBlock, /closePanel/);
-  assert.match(closeBlock, /nextContext[\s\S]*open:\s*state\.workPanelOpen/);
-  assert.match(closeBlock, /workPanelOpen:\s*state\.workPanelOpen/);
+  // Closing a resource cannot decide visibility: the dock stays exactly as the
+  // user left it, so the New launcher is still there to choose another tool.
+  assert.doesNotMatch(closeBlock, /workPanelOpen/);
+  assert.match(closeBlock, /nextContext[\s\S]*tabs:\s*next\.tabs/);
   assert.match(panelSource, /panel\.new\.title/);
   assert.match(panelSource, /work-panel-launcher/);
 });
@@ -533,10 +534,16 @@ test("work panel context is retained by session instead of cleared on selection"
     /switchWorkPanelSession\([\s\S]*id/,
   );
   assert.doesNotMatch(selectBlock, /resetWorkPanelContext\(\)/);
+  // The switch follows the conversation's resources and never its visibility:
+  // `workPanelOpen` is shell state only the user (or a visible artifact) moves.
+  const switchBlock =
+    storeSource.match(/export function switchWorkPanelSession\([\s\S]*?\n\}/)?.[0] ?? "";
+  assert.ok(switchBlock, "session switch projection exists");
   assert.match(
-    storeSource,
-    /workPanelContexts:[\s\S]*workPanelOpen:[\s\S]*workPanelTabs:[\s\S]*activeWorkPanelTabId:[\s\S]*workPanelFileRequest:/,
+    switchBlock,
+    /workPanelContexts:[\s\S]*workPanelTabs:[\s\S]*activeWorkPanelTabId:[\s\S]*workPanelFileRequest:/,
   );
+  assert.doesNotMatch(switchBlock, /workPanelOpen|visible\.open/);
 });
 
 test("file preview request ids stay unique across session contexts", () => {

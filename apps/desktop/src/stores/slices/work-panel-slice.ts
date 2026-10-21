@@ -59,20 +59,28 @@ export function currentWorkPanelContext(state: AppState): WorkPanelContext {
     activeTabId: state.activeWorkPanelTabId,
   });
   return {
-    open: state.workPanelOpen,
     tabs: tabs.tabs,
     activeTabId: tabs.activeTabId,
     fileRequest: state.workPanelFileRequest,
   };
 }
 
+/**
+ * Follow the active conversation with its retained panel content.
+ *
+ * Visibility is intentionally not returned: `workPanelOpen` is shell state the
+ * user owns, so selecting, creating, forking into, or resetting a conversation
+ * changes which resources the panel shows and never whether the panel is on
+ * screen. A closed panel therefore stays closed when the destination's retained
+ * context used to be open, and an open panel survives the transitional
+ * no-conversation phases those transitions pass through.
+ */
 export function switchWorkPanelSession(
   state: AppState,
   nextSessionId?: string,
 ): Pick<
   AppState,
   | "workPanelContexts"
-  | "workPanelOpen"
   | "workPanelTabs"
   | "activeWorkPanelTabId"
   | "workPanelFileRequest"
@@ -85,7 +93,6 @@ export function switchWorkPanelSession(
   );
   return {
     workPanelContexts: switched.contexts,
-    workPanelOpen: switched.visible.open,
     workPanelTabs: switched.visible.tabs,
     activeWorkPanelTabId: switched.visible.activeTabId,
     workPanelFileRequest: switched.visible.fileRequest,
@@ -134,17 +141,10 @@ export function createWorkPanelSlice({
   },
 
   openWorkPanel: () => {
-    const state = get();
-    const sessionId = state.activeSessionId;
-    if (!sessionId) return;
-    const context = currentWorkPanelContext(state);
-    set({
-      workPanelOpen: true,
-      workPanelContexts: {
-        ...state.workPanelContexts,
-        [sessionId]: { ...context, open: true },
-      },
-    });
+    // Visibility is shell state, not conversation state: revealing the panel
+    // never rewrites the active conversation's retained resources.
+    if (!get().activeSessionId) return;
+    set({ workPanelOpen: true });
   },
 
   toggleWorkPanel: () => {
@@ -175,7 +175,6 @@ export function createWorkPanelSlice({
       );
       const fileRequest = nextFileRequest(tab) ?? context.fileRequest;
       const nextContext: WorkPanelContext = {
-        open: true,
         tabs: next.tabs,
         activeTabId: next.activeTabId,
         fileRequest,
@@ -222,7 +221,6 @@ export function createWorkPanelSlice({
       const activeTab = next.tabs.find((item) => item.id === next.activeTabId);
       const fileRequest = nextFileRequest(activeTab) ?? state.workPanelFileRequest;
       const nextContext: WorkPanelContext = {
-        open: true,
         tabs: next.tabs,
         activeTabId: next.activeTabId,
         fileRequest,
@@ -253,7 +251,6 @@ export function createWorkPanelSlice({
       const activeTab = next.tabs.find((tab) => tab.id === next.activeTabId);
       const fileRequest = nextFileRequest(activeTab) ?? state.workPanelFileRequest;
       const nextContext: WorkPanelContext = {
-        open: state.workPanelOpen,
         tabs: next.tabs,
         activeTabId: next.activeTabId,
         fileRequest,
@@ -283,7 +280,6 @@ export function createWorkPanelSlice({
       );
       if (next.tabs === state.workPanelTabs) return {};
       const nextContext: WorkPanelContext = {
-        open: state.workPanelOpen,
         tabs: next.tabs,
         activeTabId: next.activeTabId,
         fileRequest: state.workPanelFileRequest,
@@ -317,9 +313,6 @@ export function createWorkPanelSlice({
       const activeTab = next.tabs.find((tab) => tab.id === next.activeTabId);
       const fileRequest = nextFileRequest(activeTab) ?? state.workPanelFileRequest;
       const nextContext: WorkPanelContext = {
-        // Closing the final tab leaves the panel open so the user can choose
-        // another tool from the new-tab launcher instead of losing the dock.
-        open: state.workPanelOpen,
         tabs: next.tabs,
         activeTabId: next.activeTabId,
         fileRequest,
@@ -327,7 +320,6 @@ export function createWorkPanelSlice({
       return {
         workPanelTabs: next.tabs,
         activeWorkPanelTabId: next.activeTabId,
-        workPanelOpen: state.workPanelOpen,
         workPanelFileRequest: fileRequest,
         workPanelContexts: {
           ...state.workPanelContexts,
@@ -368,7 +360,6 @@ export function createWorkPanelSlice({
       const fileRequest =
         nextFileRequest(activeTab) ?? state.workPanelFileRequest;
       const nextContext: WorkPanelContext = {
-        open: state.workPanelOpen,
         tabs: next.tabs,
         activeTabId: next.activeTabId,
         fileRequest,
@@ -385,16 +376,11 @@ export function createWorkPanelSlice({
     });
   },
   collapseWorkPanel: () => {
-    const state = get();
-    const sessionId = state.activeSessionId;
-    if (!sessionId || !state.workPanelOpen) return;
-    set({
-      workPanelOpen: false,
-      workPanelContexts: {
-        ...state.workPanelContexts,
-        [sessionId]: { ...currentWorkPanelContext(state), open: false },
-      },
-    });
+    // The user closes the panel, not a conversation. No active conversation is
+    // not a reason to ignore the request: an open panel can outlive one during
+    // the transitional phases a select/new/fork/delete passes through.
+    if (!get().workPanelOpen) return;
+    set({ workPanelOpen: false });
   },
   resetWorkPanelContext: () => {
     set((state) => switchWorkPanelSession(state));

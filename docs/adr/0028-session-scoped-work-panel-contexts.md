@@ -2,7 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-07-27
-- Amended in part by: [ADR 0108](0108-remove-built-in-interactive-terminal.md)
+- Amended in part by: [ADR 0108](0108-remove-built-in-interactive-terminal.md),
+  [ADR 0330](0330-work-panel-visibility-is-shell-state.md) (a context keeps its
+  resources; whether the panel is on screen is shell state)
 
 ## Context
 

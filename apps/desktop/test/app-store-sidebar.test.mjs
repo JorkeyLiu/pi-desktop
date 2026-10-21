@@ -301,3 +301,31 @@ test("the tray menu mirrors the sidebar order it is given", async () => {
     "the tray must not downgrade a manual order",
   );
 });
+
+test("activation and resume register a project without moving an existing one", () => {
+  // One centralized rule: every route into a project retains its place, and
+  // only a path the sidebar did not hold yet is appended. The behavior itself
+  // is covered by the rendered sidebar E2E and project-open-order tests; this
+  // guards the store wiring that connects them.
+  const activationBlock =
+    projectSliceSource.match(/activateProject: async[\s\S]*?refreshProject:/)?.[0] ?? "";
+  assert.match(
+    activationBlock,
+    /const openProjectPaths = retainProjectPath\(\s*state\.openProjectPaths,\s*workspace\.path,\s*\)/,
+    "activation appends a new project and leaves a retained one where it is",
+  );
+  assert.doesNotMatch(
+    storeSource,
+    /promoteProjectPath|preserveProjectOrder/,
+    "no per-caller promotion branch may survive in the store",
+  );
+
+  const bootstrapBlock =
+    storeSource.match(/const persistedPaths = get\(\)\.openProjectPaths;[\s\S]*?const openProjects/)?.[0] ??
+    "";
+  assert.match(
+    bootstrapBlock,
+    /retainProjectPath\(persistedPaths, currentWorkspace\.path\)/,
+    "resuming a workspace keeps its retained-tab position",
+  );
+});

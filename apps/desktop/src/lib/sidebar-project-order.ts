@@ -12,9 +12,10 @@ export type ProjectGroupOrderEntry = {
 };
 
 /**
- * Rank retained tabs by visit recency: the path the user opened last has the
- * highest rank. Opening a project is an explicit user action, so it may move a
- * group; a message timestamp never can.
+ * Rank retained tabs by registration order: a project appended to the retained
+ * set most recently has the highest rank, so it renders first. The order is
+ * append-only — opening, selecting, or restoring an existing project leaves its
+ * rank untouched — and a message timestamp never orders a group at all.
  */
 export function projectVisitRanks(
   openProjectPaths: readonly string[],
@@ -59,9 +60,10 @@ function lastCreatedAt(sessions: ProjectGroupOrderEntry["sessions"]): number | n
 
 /**
  * Project-group order: archived last, pinned first, then the selected mode.
- * `recent` is the retained-tab visit order (falling back to the newest created
- * session for a project without an open tab), so creating or replying to a
- * conversation never reorders the projects themselves.
+ * `recent` is the append-only registration order of retained tabs (falling back
+ * to the newest created session for a project without an open tab), so neither
+ * opening an existing project nor creating or replying to a conversation
+ * reorders the projects themselves.
  */
 export function compareProjectGroups(
   a: ProjectGroupOrderEntry,

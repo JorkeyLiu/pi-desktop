@@ -207,7 +207,11 @@ type ToolBudgetHealth = {
 
 ### Workspace
 - `workspace.get`
-- `workspace.set`
+- `workspace.set({ path })` — switch the active workspace and register the
+  project. Registration never reorders: a path the host already stores keeps the
+  ordering position (`projects.last_opened_at`) it was registered with, and only
+  a path new to the host is registered with the current time. The active
+  workspace and its project metadata still update as before.
 - `workspace.clear`
 
 ### Review snapshots (ADR 0043)

@@ -700,8 +700,9 @@ export function Sidebar({
     [pinnedSessions],
   );
 
-  // Visit recency comes from the retained-tab order the user built by opening
-  // projects; it is the only input that may reorder groups in `recent`.
+  // Registration order comes from the retained tabs; it is the only input that
+  // may order groups in `recent`, and it is append-only so opening an existing
+  // project never moves it.
   const projectVisitRankMap = useMemo(
     () => projectVisitRanks(openProjectPaths),
     [openProjectPaths],

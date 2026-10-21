@@ -10817,26 +10817,34 @@ This test plan spec is accepted when:
   Projects → Recently opened. 11) With two projects retained, click a
   conversation that lives in the project whose tab is not the most recent.
   12) Pin a conversation in that same project, activate the other project, then
-  open the pinned row. 13) Click a project title that is not active.
+  open the pinned row. 13) Click the title of the inactive project, then the
+  title of the other one. 14) Archive one of the two projects, enable Show
+  archived, and open it from its title. 15) Alternate between conversation rows
+  of both projects.
 - **Expected**: Conversations list newest-created first and no row moves when
-  activity changes. Project groups keep the order the user opened them, and
-  activity across several projects never reorders a group. A new conversation
-  appears on top. The dragged order is persisted as Manual order, survives the
-  restart with the same rows in the same places, and the sort menu shows Manual
-  order as the current state. A later conversation appears above the ranked
-  rows without disturbing their relative order. A drop from another list
-  changes nothing, and pinning still moves the row into the global Pinned
+  activity changes. Project groups keep the order the user registered them in,
+  and activity across several projects never reorders a group. A new
+  conversation appears on top. The dragged order is persisted as Manual order,
+  survives the restart with the same rows in the same places, and the sort menu
+  shows Manual order as the current state. A later conversation appears above
+  the ranked rows without disturbing their relative order. A drop from another
+  list changes nothing, and pinning still moves the row into the global Pinned
   section. The sort menu shows a Sessions group and a Projects group with no
   restore-defaults entry; choosing a Projects mode reorders projects only and
   leaves the session order untouched, choosing a Sessions mode leaves the
   project order untouched, and the existing Recently opened project mode
-  returns to the visit order. Opening a conversation in another project
-  activates that project and its conversation without moving any project group:
-  the retained-tab order stays as it was, and a project without a tab is
-  appended last. A pinned conversation opened across projects behaves the same
-  way, while clicking a project title still promotes that project's tab.
-  `pnpm test:e2e:sidebar-session-order` covers this scenario with the real
-  Sidebar component.
+  returns to the retained-tab order. Reaching an existing project never moves
+  it: opening a conversation in another project, a pinned conversation across
+  projects, a project title, or a restored archived project all activate that
+  project and its conversation while the retained-tab order and every rendered
+  group stay exactly where they were. A project the sidebar did not hold yet is
+  the only one appended, and it renders at the most recent position. The same
+  rule holds in the Projects index and the home project switcher, where an
+  existing project keeps its registered ordering time and only a new project
+  appears at the top. `node scripts/e2e-sidebar-session-order.mjs`
+  (`pnpm test:e2e:sidebar-session-order`) covers this scenario with the real
+  Sidebar component, and `apps/desktop/test/project-open-order.test.mjs` covers
+  the Projects index and home switcher ordering inputs.
 - **Milestone**: M5
 - **Status**: Automated (`scripts/e2e-sidebar-session-order.mjs`)
 
@@ -11518,12 +11526,19 @@ This test plan spec is accepted when:
      second one.
   5) Close the view tab and confirm the panel remains open on the New launcher
      when it was the last tab; press `Cmd/Ctrl + J` again and confirm it hides.
-  6) Repeat step 1 in Chinese and in both light and dark themes, and at the
-     244px panel minimum, confirming the copy wraps rather than clipping.
+  6) Reveal the panel, select another conversation, and create one with New
+     Task; then close the panel, return to the first conversation, and create
+     another conversation with New Task. Reveal the panel again.
+  7) Repeat step 1 in Chinese and in both light and dark themes, and at the
+    244px panel minimum, confirming the copy wraps rather than clipping.
 - **Expected**: `Cmd/Ctrl + J` reveals the panel without creating a tab, and the
   New launcher lists the same Review/plugin-view entries as its `+`-created
   page; a row creates or selects that singleton view. Each `+` click creates a
   separate closable New tab. Closing the final tab leaves the panel open on New.
+  Panel visibility is shell state (D661): it stays revealed through the topic
+  switch and the New Task creation, and it stays hidden after the explicit
+  close when returning to the first conversation and when creating another one;
+  the later reveal opens on the visible conversation's own content.
   The no-tab empty body is not exposed as a `tabpanel`; explicit New tabs are
   labelled tabpanels. Their rows are buttons in a `role="group"` labelled
   Tools. Panel empty states share the app's empty-state
@@ -16259,18 +16274,32 @@ plugin-form fixtures in an isolated temporary directory at runtime.
   `Shift`+wheel; widen and narrow the panel; right-click a tab and reopen the
   same menu with `Shift`+`F10`; close with the row, middle-click, close others,
   close to the right, and close all; close an open `subagent` tab while that
-  child is still running.
+  child is still running. With the panel open and a resource tab in the visible
+  topic, select another topic and then create one with New Task; close the panel,
+  return to the first topic, create another topic with New Task, and reveal the
+  panel again.
 - **Expected**: The strip stays one row, tabs hold 72px–180px, the selected tab is
   revealed on open, on selection, and while the width animates, and a wheel
   gesture stops later automatic reveals. Hovering a tab reports its complete
   title or path. Actions in the fixed right lane never overlap a tab. One shared
   menu offers close, close others, close to the right, and close all, with no
-  all-tabs list. Closing a subagent tab never stops that child.
-- **Specs linked**: `04-ux/08-component-spec.md` §5.2, §5.4, §5.5
+  all-tabs list. Closing a subagent tab never stops that child. Panel visibility
+  is shell state (D661): the open panel stays on screen through the topic switch
+  and the New Task creation and shows each topic's own resource set, a closed
+  panel stays closed when returning to a topic whose panel was open and when
+  creating another topic, and the immediate reveal shows that visible topic's
+  retained tab only.
+- **Specs linked**: `04-ux/08-component-spec.md` §5.2, §5.3, §5.4, §5.5
 - **Acceptance**: Quality
 - **Status**: Automated (`scripts/e2e-work-panel-tabs.mjs` via
-  `pnpm test:e2e:work-panel-tabs`, 13 checks; passed before the final tab-strip
-  and card UI pass and must be re-run against the shipped build).
+  `pnpm test:e2e:work-panel-tabs`, 16 checks). Tested source: the working tree
+  with the work-panel visibility decision on base `9e26cf424`; environment:
+  macOS arm64, Node 24.12.0, Electron 43.6.0, the probe's own temporary profile
+  and window. Result: 16 of 16 checks passed on 2026-10-21 (three green runs;
+  one earlier run hit the pre-existing tab-menu timing check "close-others
+  should be disabled with a single tab" before this scenario ran, and the
+  documented `13 checks` count was already stale — the suite held 15 on the
+  base). A shipped-build re-run is still outstanding.
 
 ### E2E-COMPOSER-model-chip-namespace
 

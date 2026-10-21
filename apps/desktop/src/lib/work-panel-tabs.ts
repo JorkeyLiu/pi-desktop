@@ -25,8 +25,15 @@ export type WorkPanelTabsState = {
   activeTabId: string | null;
 };
 
+/**
+ * The resource state one conversation owns.
+ *
+ * Visibility is deliberately absent: whether the panel is on screen is shell
+ * UI state (`AppState.workPanelOpen`), so a session switch swaps this content
+ * without deciding open/closed. Only the user's toggle and an artifact that
+ * targets the visible conversation change visibility.
+ */
 export type WorkPanelContext = WorkPanelTabsState & {
-  open: boolean;
   fileRequest: {
     path: string;
     seq: number;
@@ -54,9 +61,15 @@ export function createWorkPanelFileRequest(
 let newWorkPanelTabSequence = 0;
 
 export function emptyWorkPanelContext(): WorkPanelContext {
-  return { open: false, tabs: [], activeTabId: null, fileRequest: null };
+  return { tabs: [], activeTabId: null, fileRequest: null };
 }
 
+/**
+ * Swap the visible conversation's panel *content* while retaining the previous
+ * conversation's. Visibility is not part of the answer: the destination always
+ * inherits whatever open state the shell already has, so a closed panel stays
+ * closed and an open panel stays open across select/new/fork/project changes.
+ */
 export function switchWorkPanelContextState(
   contexts: Record<string, WorkPanelContext>,
   currentSessionId: string | undefined,

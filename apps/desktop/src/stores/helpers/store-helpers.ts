@@ -142,19 +142,12 @@ export function decorateSessions(
   }));
 }
 
-export function promoteProjectPath(paths: string[], rawPath: string): string[] {
-  const key = normalizeProjectPath(rawPath);
-  if (!key) return paths;
-  const withoutPath = paths.filter(
-    (path) => normalizeProjectPath(path) !== key,
-  );
-  return [...withoutPath, rawPath];
-}
-
 /**
- * Record a project the user reached through a conversation: an already retained
- * path keeps its position and a new path is appended like any first open. The
- * sidebar order is a tab history, so conversation navigation never rewrites it.
+ * Record a project the user reached, whatever the route: a retained path keeps
+ * its position and a path the sidebar has never held is appended as the newest
+ * tab. The retained-tab order is the user's own registration history, so
+ * opening, selecting, or restoring an existing project never rewrites it — only
+ * a project that was not there yet takes a new place.
  */
 export function retainProjectPath(paths: string[], rawPath: string): string[] {
   const key = normalizeProjectPath(rawPath);

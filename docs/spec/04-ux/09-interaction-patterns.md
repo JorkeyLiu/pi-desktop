@@ -303,9 +303,13 @@ may be retained while exactly one workspace supplies the visible shell context.
   moving it to another project keeps the stop-first rule. A session with no
   rank, such as one created after a manual order was set, appears above the
   ranked rows in its own list.
-- `recent` project order follows the retained-tab order the user built by
-  opening projects, falling back to the newest created session for a project
-  without an open tab. Conversation activity never reorders project groups.
+- `recent` project order follows the retained-tab order the user registered,
+  falling back to the newest created session for a project without an open tab.
+  The order is append-only: activating an existing project — from its sidebar
+  title, a conversation row, the Projects index, the home switcher, a resume, or
+  a restore — leaves every existing group where it is, and only a project the
+  sidebar did not already hold (created, cloned, or dropped) is appended at the
+  most recent position. Conversation activity never reorders project groups.
 - Pressing a project title and moving 8px, or ArrowUp/ArrowDown on that focused
   title, switches project ordering to `manual` and persists a contiguous order
   per normalized path. Archived and pinned priority remains ahead of the manual
@@ -544,15 +548,27 @@ may be retained while exactly one workspace supplies the visible shell context.
   presentation boundary from structured fields; persisted rows never contain
   localized prose.
 
-### 1.8 Work panel entry and resources (D128, D142, D154, D173, D179, D207, D221)
+### 1.8 Work panel entry and resources (D128, D142, D154, D173, D179, D207, D221, D661)
 
 - The shell starts without a visible work panel. The viewport-fixed toggle and
-  `Cmd/Ctrl + J` both toggle the active session's panel: they reveal the
-  retained context without creating a resource tab, and collapse the visible
-  panel without deleting tabs, retaining tabs, active resource, and committed
-  width. They are a no-op without an active session or while Settings is the
-  active page. The panel's `+` trigger can then create a New launcher tab whose
+  `Cmd/Ctrl + J` both toggle one panel: they reveal it without creating a
+  resource tab, and collapse it without deleting the visible conversation's
+  tabs, active resource, or committed width. Revealing is a no-op without an
+  active conversation or while Settings is the active page; collapsing always
+  applies, because an open panel can outlive its conversation during a
+  transition. The panel's `+` trigger can then create a New launcher tab whose
   body offers Browser or an in-scope plugin view.
+- Panel visibility is shell state, not conversation state (D661 / ADR 0330).
+  Selecting another conversation, creating one, forking into one, activating a
+  project, and resetting the visible content each swap the panel's resources —
+  tabs, active tab, file request, Browser page — to the destination
+  conversation's retained set, and none of them opens or closes the dock. A
+  closed panel therefore stays closed when the destination's retained context
+  was open, and an open panel stays open through those transitions and the
+  transitional no-conversation phases they pass through. Only the toggle,
+  `Cmd/Ctrl + J`, or an artifact that targets the visible conversation reveals
+  the panel; only the toggle, `Cmd/Ctrl + J`, or the header collapse action
+  hides it.
 - An artifact trigger atomically creates or reuses its resource, activates it,
   and opens the panel. Background artifacts never open the visible panel.
 - File resources use normalized paths as identity. Browser and plugin views

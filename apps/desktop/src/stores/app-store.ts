@@ -91,7 +91,6 @@ import {
   sessionModeForPlanningState,
   openPlanArtifact,
   decorateSessions,
-  promoteProjectPath,
   retainProjectPath,
   removeProjectPath,
   upsertWorkspace,
@@ -201,7 +200,6 @@ export const useAppStore = create<AppState>((set, get) => {
     runtime: sessionRuntime,
     withoutRecordKey,
     withProjectDisplayName,
-    promoteProjectPath,
     retainProjectPath,
     removeProjectPath,
     upsertWorkspace,
@@ -331,9 +329,11 @@ export const useAppStore = create<AppState>((set, get) => {
       const persistedPaths = get().openProjectPaths;
       // Only explicitly retained tabs are restored. Historical sessions stay
       // available in Projects, but must not silently reopen a tab that was
-      // intentionally closed.
+      // intentionally closed. Resuming a workspace keeps its place in the
+      // retained-tab order; a workspace the user has not retained yet is
+      // appended as the newest tab.
       const openProjectPaths = currentWorkspace?.path
-        ? promoteProjectPath(persistedPaths, currentWorkspace.path)
+        ? retainProjectPath(persistedPaths, currentWorkspace.path)
         : persistedPaths;
       const openProjects = openProjectPaths.map((path) =>
         withProjectDisplayName(projectWorkspaceFromPath(path), get().projectMeta),

@@ -52,6 +52,7 @@ This log freezes previously open questions into concrete decisions.
 | D656 | Quarantine appends the host keeps refusing instead of stalling the outbox | **Amend ADR 0041 / D318 / D444 / D597: an append whose `session.appendMessage` or `session.recordUsage` call fails with an error the outbox cannot classify as a duplicate message id, a `PERMISSION_DENIED:` poison row, or a foreign-key orphan is retried on a bounded backoff (5s, doubling to a 60s cap) instead of ending the flush. The fifth consecutive failure on that head moves it into an application-owned dead-letter file, `session-message-outbox.dead-letter.json`, with its payload, session id, quarantine timestamp, and host error; only the newest 256 quarantined appends are kept, and the oldest is discarded with a warn. The flush then continues with the next entry, so one refused append can no longer hold the FIFO head, fill the 1024-entry cap, or fail every session's writes. Quarantined appends are never replayed automatically, and `session.delete` drops that session's quarantined appends too. No protocol version, storage schema, or queued-outbox format change.** | A `stream did not contain valid UTF-8` append stayed at the FIFO head for 14.8 hours while `session.persistence.outbox.is.full` fired 5990 times, so every session's appends failed until restart. Only three error classes had a drain, and every other error was treated as transient forever (#1560). |
 | D657 | Let the embedded Browser open local files outside the workspace | **Amend ADR 0170: an explicit absolute path or `file:` URL may load any existing regular local file, and a local-file page may navigate to other existing local files. Relative inputs remain workspace-rooted; HTTP(S) pages retain only the prior in-workspace file-link allowance. Missing files, directories, and remote file authorities remain blocked. `BrowserPreview` and the sidecar keep their workspace-rooted resolver. The public `pi.browser.navigate` API follows this policy under the high-risk `browser.cdp` permission. See ADR 0328, E2E-059, `04-ux/08-component-spec.md`, and `05-security/01-security.md`.** | Users need to inspect local HTML outside a project, while workspace-scoped agent file tools and remote-page navigation must retain their existing boundary (#1627). |
 | D659 | Reopen archived projects in the sidebar | **Amend D093 / D455: successful explicit project activation clears the normalized path's renderer-local archived flag and persists it, so Open from Project archive, reopening the same folder through Add project, and opening a project session reveal the project in the home sidebar. Selecting a row for inspection and ordinary session refreshes do not alter archive state. No host/project/session storage or protocol change. See ADR 0294, E2E-264, and issue #1653.** | Reopening a project changed the active workspace but left its path-keyed archived presentation flag set, hiding it from the sidebar after the user explicitly reopened it. |
+| D661 | Work-panel visibility is shell state | **Amend D142 / ADR 0028 and replace their per-conversation open flag: a conversation keeps one renderer-memory work-panel context holding only its ordered tabs, active tab, file request, and Browser resource. `workPanelOpen` is shell UI state beside `workPanelWidth`, starting closed and never persisted. Selecting, creating, forking into, activating a project, or resetting the visible content projects the destination's content and never opens or closes the dock, so a closed panel stays closed when the destination's retained context was open and an open panel survives those transitions and their transitional no-conversation phases. Only the viewport toggle, `Cmd/Ctrl + J`, the header collapse action, or an artifact targeting the visible conversation changes visibility; background artifacts keep updating retained content only. Collapsing now applies without an active conversation, while revealing keeps its documented no-op without one. Resources stay isolated per conversation: no global tab merge, no persisted visibility, no per-session open write, and no Plugin SDK / IPC / host protocol / storage change. See ADR 0330 and `04-ux/09-interaction-patterns.md` §1.8.** | Reading another topic silently overrode the user's open/closed choice in both directions: switching topic closed a panel the user was reading in, and returning to a topic whose panel had been open reopened one the user had closed. |
 
 ## B. Secondary implementation defaults
 
@@ -7745,3 +7746,31 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   the new copy in all nine locales. See `03-runtime/01-ipc-protocol.md`,
   `04-ux/08-component-spec.md` §5, `04-ux/09-interaction-patterns.md`, and
   E2E-057.
+
+## 2026-10-21 — Work-panel visibility is shell state (D661)
+
+- D661 amends D142 and ADR 0028 without touching their resource isolation: a
+  conversation's retained context still owns ordered tabs, the active tab, the
+  file request, and the Browser resource, and a background artifact still
+  updates only that retained content. What leaves the context is the open flag.
+  Whether the dock is on screen is renderer shell state beside the committed
+  width, so selection projects resources and leaves visibility alone.
+- The failure this replaces was symmetric and both directions were reported:
+  the panel closed when the user switched to or created a topic that had never
+  opened it, and returning to a topic whose panel had once been open reopened a
+  dock the user had closed. Visibility now has exactly one owner — the user's
+  toggle, the header collapse action, or an artifact that targets the
+  conversation already on screen.
+- The transitional no-conversation phases a select/new/fork/delete passes
+  through are not closes either. Collapsing therefore no longer requires an
+  active conversation: an open panel that outlived its conversation can still
+  be closed by the same toggle that opened it. Revealing keeps its documented
+  no-op without an active conversation.
+- Renderer-only. Tab sets stay per conversation, no tabs are merged globally,
+  and visibility is not persisted; startup is still closed with only the width
+  saved. No Plugin SDK, IPC, host protocol, or storage change. Covered by
+  `apps/desktop/test/work-panel-session-visibility.test.mjs` (real store
+  actions), `apps/desktop/test/work-panel-tabs.test.mjs`,
+  `apps/desktop/test/work-panel.test.mjs`, and the rendered
+  `scripts/e2e-work-panel-tabs.mjs` probe. See ADR 0330 and
+  `04-ux/09-interaction-patterns.md` §1.8.
