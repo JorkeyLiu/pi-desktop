@@ -521,6 +521,35 @@ test("a loaded reading anchor does not fetch or replace the existing reading ran
   assert.equal(r.view(), undefined);
 });
 
+test("a warm revisit keeps its loaded range instead of shrinking to a window around the anchor", async () => {
+  const live = ["m0", "m1", "m2", "m3", "m4", "m5"].map((id) => message(id));
+  const calls = [];
+  const r = reader(async (...args) => { calls.push(args); return page([message("m0"), message("m1"), message("m2")]); }, {
+    messages: live, selectingSessionId: "s",
+  });
+  // The warm switch shows the pane while its revalidation is still in flight, so
+  // the restore has to wait for the page the pane will actually keep.
+  const request = r.restoreTranscriptReading("s", { ...bookmark, messageId: "m2" }, new AbortController().signal);
+  r.set({ messages: live, selectingSessionId: undefined });
+  assert.equal(await request, true);
+  assert.deepEqual(calls, [], "a loaded anchor must not re-read a narrower range");
+  assert.equal(r.view(), undefined, "the loaded range stays the reading range");
+  assert.deepEqual(r.visible().map((row) => row.id), ["m0", "m1", "m2", "m3", "m4", "m5"]);
+});
+
+test("a restore that waited for the committed page still reads a range for an anchor outside it", async () => {
+  const calls = [];
+  const r = reader(async (...args) => { calls.push(args); return page([message("old")]); }, {
+    messages: [message("stale")], selectingSessionId: "s",
+  });
+  const request = r.restoreTranscriptReading("s", bookmark, new AbortController().signal);
+  r.set({ messages: [message("newest")], selectingSessionId: undefined });
+  assert.equal(await request, true);
+  assert.deepEqual(calls, [["s", { messageAround: "old", messageLimit: 60, contentLimit: 65536 }]]);
+  assert.equal(r.view().restored, true);
+  assert.deepEqual(r.visible().map((row) => row.id), ["old"]);
+});
+
 test("input cancellation prevents a delayed restoration from replacing the current view", async () => {
   const pending = deferred();
   const r = reader(() => pending.promise);
@@ -570,8 +599,11 @@ test("selection revalidation cannot remove a restored range, but an explicit rew
   const r = reader(async () => page([message("old")]), {
     messages: [message("stale-tail")], selectingSessionId: "s",
   });
-  assert.equal(await r.restoreTranscriptReading("s", bookmark, new AbortController().signal), true);
+  // The range is decided against the committed page, not the page the selection
+  // is about to replace: the bookmark is outside it, so a bounded read runs.
+  const request = r.restoreTranscriptReading("s", bookmark, new AbortController().signal);
   r.set({ messages: [message("tail")], selectingSessionId: undefined });
+  assert.equal(await request, true);
   assert.equal(r.view().restored, true);
   r.set({ messages: [message("tail", "edited")] });
   assert.equal(r.view(), undefined);

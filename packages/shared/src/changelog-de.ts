@@ -15,6 +15,7 @@ export const deEntries: ChangelogEntry[] = [
       "Die Textauswahl bleibt durchgehend erhalten, wenn sie über Popup-Overlays hinweg gezogen wird.",
       "Projektmenüs bleiben sichtbar, wenn sie über Zeilen am unteren Rand der Seitenleiste geöffnet werden.",
       "Windows hält die Installationssperre, während alte Sicherungen entfernt werden.",
+      "Beim Zurückwechseln zu einer Unterhaltung bleiben geladene Nachrichten und Leseposition erhalten; ein langer Verlauf landet beim ersten Öffnen zudem zuverlässiger an der richtigen Stelle.",
     ],
   },
   {

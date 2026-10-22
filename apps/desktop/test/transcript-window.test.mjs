@@ -207,10 +207,12 @@ test("the transcript bounds mounted history and escalates at the top", () => {
     /const \[windowSize, setWindowSize\] = useState\(savedReadingPosition\?\.windowSize \?\? TRANSCRIPT_WINDOW_MIN\)/,
   );
   // Reaching the top mounts more of what is loaded first, and only fetches an
-  // older page once the window already covers it.
+  // older page once the window already covers it. The trigger is the shared
+  // continuation rule, so a pane still establishing its first position cannot
+  // page history on mounting geometry alone.
   assert.match(
     transcript,
-    /isHistoryRevealPosition\(el, pinnedRef\.current && !gesturing\)/,
+    /shouldContinueEarlierHistory\(\{\n\s+geometry: el,\n\s+pinned: pinnedRef\.current && !gesturing,/,
   );
   const reachTop = transcript.match(
     /const reachTop = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[loadOlder, windowSize\]\);/,
@@ -272,11 +274,17 @@ test("a visible history boundary advances without waiting for a scroll event", (
   // stalls with loaded rows unmounted.
   assert.match(
     transcript,
-    /hasEarlierHistory,[\s\S]*?hydrationTick,[\s\S]*?loadingOlder,[\s\S]*?messages\.length,[\s\S]*?reachTop,[\s\S]*?sessionId,[\s\S]*?transcriptWindow\.hiddenAbove,/,
+    /hasEarlierHistory,[\s\S]*?hydrationTick,[\s\S]*?loadingOlder,[\s\S]*?messages\.length,[\s\S]*?paneVisible,[\s\S]*?positioned,[\s\S]*?reachTop,[\s\S]*?sessionId,[\s\S]*?transcriptWindow\.hiddenAbove,/,
   );
   // Escalation is bounded per run: one growth step or one page request, and the
-  // effect only re-runs when that step actually changed the projection.
-  assert.match(transcript, /!isHistoryRevealPosition\(root, pinnedRef\.current\)/);
+  // effect only re-runs when that step actually changed the projection. It also
+  // shares the continuation rule, so a pane whose first position has not settled
+  // is not paged from its own mounting geometry.
+  assert.match(transcript, /!shouldContinueEarlierHistory\(\{[\s\S]*?geometry: root,/);
+  assert.match(
+    transcript,
+    /shouldContinueEarlierHistory\(\{[\s\S]*?geometry: root,\n\s+pinned: pinnedRef\.current,\n\s+positioned: positionedRef\.current,\n\s+covered: coveredRef\.current,/,
+  );
   assert.match(transcript, /observer\.disconnect\(\)/);
 });
 

@@ -367,9 +367,13 @@ may be retained while exactly one workspace supplies the visible shell context.
   viewport offset, mounted-window budget, and explicit disclosure choices.
   Reading bookmarks outlive DOM eviction and project switches, but not a
   renderer/app restart; deleting the session releases them. If the bookmarked
-  message is outside the loaded page, read a bounded range around it using the
-  existing history API, without search focus or highlighting. Revalidation must
-  not replace that reading range with the latest page. Real scroll input, search
+  message is already in the committed page, restoration keeps that page: it
+  reads nothing and installs no shorter window, so a revisit never drops rows
+  the reader had already loaded. Only a bookmark outside the loaded page reads a
+  bounded range around it, using the existing history API, without search focus
+  or highlighting. That decision waits for the destination session's committed
+  page rather than racing the page it would replace. Revalidation must not
+  replace that reading range with the latest page. Real scroll input, search
   navigation, return-to-latest, and send/retry/regenerate take priority over
   restoration; obsolete reads cannot reclaim the viewport. A missing anchor
   falls back to latest, and read failures use the existing error notification.
@@ -383,11 +387,21 @@ may be retained while exactly one workspace supplies the visible shell context.
   the offset the user left, and a pane still pinned re-anchors to the bottom;
   activation no longer resets manual-scroll state for a revisit (ADR 0137).
   History continuation (D269) does not page earlier rows from a collapsed
-  scroller or from a pinned overflowing transcript whose `scrollTop` has been
-  reset to 0; a real gesture in the near-top band still continues history. An
-  empty first paint does not spend the first-commit hydration gate, so a later
-  long page is still bounded and re-bottomed in the layout phase, before the
-  browser paints it.
+  scroller, from a pinned overflowing transcript whose `scrollTop` has been
+  reset to 0, or from a pane that has not yet established its first position. A
+  real gesture in the near-top band still continues history, because the
+  reader's own scroll input is a position; every automatic trigger - the scroll
+  handler and the top-boundary observer alike - waits for the settled first
+  position. Until then the only continuation a first open may perform is the
+  initial fill of a newest page shorter than the reading viewport, and it
+  happens while the settle veil still covers the scroller. An empty first paint
+  does not spend the first-commit hydration gate, so a later long page is still
+  bounded and re-bottomed in the layout phase, before the browser paints it, and
+  its cover is entered in that same layout phase rather than one frame later.
+  The cover may wait for an in-flight initial fill so a page cannot land under a
+  lifted veil, but only within the settle cap measured from when the cover
+  started - never restarted frame by frame - so rows that already loaded are
+  revealed even when that read never settles.
 - Selecting a project-scoped conversation activates its project as part of the
   store-owned selection transaction. Selecting a Temporary conversation clears
   the visible workspace. Project-scoped new-session actions pass their target
@@ -755,7 +769,10 @@ may be retained while exactly one workspace supplies the visible shell context.
   opaque skeleton veil (D287). The veil is in the same commit as the bounded
   first paint, covers the scroller but not the composer, and lifts only once the
   scroller's `scrollHeight` and `clientHeight` have read the same for three
-  consecutive frames, or after a 600ms cap. Every sampled frame re-pins a pinned
+  consecutive frames, or after a 600ms cap that starts with the cover and never
+  restarts. While the pane is still establishing its first position the lift may
+  wait for an in-flight initial fill, always inside that same cap. Every sampled
+  frame re-pins a pinned
   transcript, so the frame the veil reveals is already at the newest turn. The
   minimap and the jump control mount after the veil lifts. Short transcripts
   never show the veil.

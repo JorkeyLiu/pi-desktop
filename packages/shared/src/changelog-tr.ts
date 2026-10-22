@@ -15,6 +15,7 @@ export const trEntries: ChangelogEntry[] = [
       "Metin seçimi açılır katmanların üzerinden sürüklerken kesintisiz kalır.",
       "Kenar çubuğunun altındaki satırlardan açılan proje menüleri görünür kalır.",
       "Windows eski yedekleri kaldırırken yükleme kilidini korur.",
+      "Bir konuşmaya geri döndüğünüzde yüklenmiş mesajlar ve okuma konumu korunur; uzun bir konuşma ilk açıldığında da doğru konuma daha güvenilir şekilde yerleşir.",
     ],
   },
   {

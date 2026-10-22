@@ -17,6 +17,7 @@ import { transcriptEntryMessages } from "../../../../lib/assistant-turns";
 import { getTranscriptProjection } from "../../../../lib/transcript-projection";
 import {
   createTranscriptSettleState,
+  mayHoldInitialCover,
   reduceTranscriptSettle,
   TRANSCRIPT_VEIL_FADE_MS,
 } from "../../../../lib/transcript-settle";
@@ -34,6 +35,7 @@ import {
   isScrollGestureInput,
   LATER_REVEAL_THRESHOLD_PX,
   reduceTranscriptScroll,
+  shouldContinueEarlierHistory,
   transcriptHasLayout,
   TRANSCRIPT_SCROLL_ROUNDING_TOLERANCE_PX,
   type ScrollInputType,
@@ -100,9 +102,20 @@ export function useTranscriptScroll({
   const lastLaidOutScrollTopRef = useRef(0);
   const lastScrollGestureAtRef = useRef(-Infinity);
   const wasRunningRef = useRef(isRunning);
+  /*
+    Automatic history continuation is not a reading gesture until this pane has
+    established its first position (see `shouldContinueEarlierHistory`). Refs
+    because the stable scroll handler and the boundary observer both read them
+    long after the render that produced them.
+  */
+  const [positioned, setPositioned] = useState(false);
+  const positionedRef = useRef(false);
+  const coveredRef = useRef(false);
+  const loadingOlderRef = useRef(false);
   const followFrameRef = useRef(0);
   const prependHeightRef = useRef<number | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  loadingOlderRef.current = loadingOlder;
   const [showJump, setShowJump] = useState(false);
 
   // Steady-state cap on mounted history rows (D261). Grows when the user
@@ -398,7 +411,14 @@ export function useTranscriptScroll({
     );
     if (
       paneVisibleRef.current &&
-      isHistoryRevealPosition(el, pinnedRef.current && !gesturing)
+      shouldContinueEarlierHistory({
+        geometry: el,
+        pinned: pinnedRef.current && !gesturing,
+        // A real gesture is the reader's own position even while the pane is
+        // still settling, so it authorizes continuation on its own.
+        positioned: positionedRef.current || gesturing,
+        covered: coveredRef.current,
+      })
     ) {
       reachTop();
     }
@@ -588,6 +608,8 @@ export function useTranscriptScroll({
     () => (hydrationBounded ? "covering" : "off"),
   );
   const veilCovering = veilPhase === "covering";
+  positionedRef.current = positioned;
+  coveredRef.current = veilCovering;
 
   const transcriptWindow = reduceTranscriptWindow({
     historyLength: allHistoryEntries.length,
@@ -653,10 +675,31 @@ export function useTranscriptScroll({
     const sample = () => {
       frame = 0;
       if (pinnedRef.current) scrollToBottom();
+      /*
+        An older page still in flight will add height above the viewport. While
+        the pane is still establishing its first position that fill is allowed
+        precisely because the veil hides it, so the veil waits for the read
+        instead of declaring the geometry stable one frame before the page lands
+        and moving the rows in front of the reader.
+
+        The wait is bounded by the same absolute deadline as every other path,
+        never restarted frame by frame: a read that hangs must not keep the veil
+        over content that has already loaded. Once the deadline passes the frame
+        folds its geometry, reports `timeout`, and the veil lifts.
+      */
+      const now = performance.now();
+      if (
+        positionedRef.current === false &&
+        loadingOlderRef.current &&
+        mayHoldInitialCover(state, now)
+      ) {
+        frame = requestAnimationFrame(sample);
+        return;
+      }
       const step = reduceTranscriptSettle(
         state,
         { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight },
-        performance.now(),
+        now,
       );
       state = step.state;
       if (step.settled) {
@@ -668,6 +711,22 @@ export function useTranscriptScroll({
     frame = requestAnimationFrame(sample);
     return () => cancelAnimationFrame(frame);
   }, [hydrationBounded, paneVisible, scrollToBottom, veilCovering]);
+
+  /*
+    A pane whose first paint is empty spends no hydration gate on it, so the long
+    page that lands from the revalidation is the one that needs the bounded first
+    commit. The veil was initialised from the *first* render's own gate, which
+    was false, so enter it here instead of leaving the expansion and any initial
+    fill unprotected.
+
+    This runs in the layout phase rather than a passive effect: a state update
+    from a layout effect is flushed before the browser paints, so the commit that
+    mounts that page is never presented uncovered. A passive effect would leave a
+    painted frame between the rows appearing and the veil covering them.
+  */
+  useLayoutEffect(() => {
+    if (hydrationBounded && veilPhase === "off") setVeilPhase("covering");
+  }, [hydrationBounded, veilPhase]);
 
   useEffect(() => {
     if (veilPhase !== "leaving") return;
@@ -723,6 +782,23 @@ export function useTranscriptScroll({
     );
   }, [cancelReadingPosition, releaseDisclosureAnchor, scrollToBottom]);
 
+  /*
+    The first position is established once the pane is on screen, its content has
+    arrived, the bounded expansion has committed, and the settle veil is gone.
+    Until then a near-top offset is the pane's own mounting geometry rather than
+    the reader's position, so automatic history continuation waits for it (see
+    `shouldContinueEarlierHistory`). An empty first paint keeps the gate armed:
+    the page that lands from its revalidation is the one that settles.
+  */
+  useLayoutEffect(() => {
+    if (positioned) return;
+    if (!paneVisible || hydrationBounded || veilCovering) return;
+    if (messages.length === 0) return;
+    const el = scrollRef.current;
+    if (!el || !transcriptHasLayout(el)) return;
+    setPositioned(true);
+  }, [hydrationBounded, messages.length, paneVisible, positioned, veilCovering]);
+
   // D269: history progression follows the visible top boundary, not only a
   // native scroll event. A tail page can collapse to less than one viewport,
   // and a fetched page can initially sit outside the mounted window; neither
@@ -746,7 +822,12 @@ export function useTranscriptScroll({
         if (
           scrollRef.current !== root ||
           readingPositionPendingRef.current ||
-          !isHistoryRevealPosition(root, pinnedRef.current)
+          !shouldContinueEarlierHistory({
+            geometry: root,
+            pinned: pinnedRef.current,
+            positioned: positionedRef.current,
+            covered: coveredRef.current,
+          })
         ) {
           return;
         }
@@ -789,6 +870,7 @@ export function useTranscriptScroll({
     loadingOlder,
     messages.length,
     paneVisible,
+    positioned,
     reachTop,
     sessionId,
     transcriptWindow.hiddenAbove,

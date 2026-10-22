@@ -73,6 +73,25 @@ export function reduceTranscriptSettle(
   return { state: next, settled: false, reason: null };
 }
 
+/**
+ * Whether a frame may be skipped without folding geometry into the state.
+ *
+ * An older page still in flight adds height above the viewport, so declaring the
+ * geometry stable one frame before it lands would move the rows in front of the
+ * reader. While the pane is still establishing its first position the veil may
+ * therefore wait for that fill - but the wait is bounded by the same absolute
+ * deadline as every other path: it is measured from `startedAt`, and a skipped
+ * frame never restarts the clock. A read that never settles cannot keep the veil
+ * over content that has already loaded; once the deadline passes, the next
+ * folded sample reports `timeout` and the veil lifts.
+ */
+export function mayHoldInitialCover(
+  state: TranscriptSettleState,
+  now: number,
+): boolean {
+  return now - state.startedAt < TRANSCRIPT_SETTLE_MAX_MS;
+}
+
 /** Skeleton rows painted on the veil: role and line widths, top to bottom. */
 export const TRANSCRIPT_SKELETON_ROWS: ReadonlyArray<{
   role: "user" | "assistant";

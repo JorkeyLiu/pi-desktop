@@ -15,6 +15,7 @@ export const enEntries: ChangelogEntry[] = [
       "Text selection stays continuous when it crosses popup overlays.",
       "Project menus stay visible when opened from rows near the bottom of the sidebar.",
       "Windows keeps the installer lock while it removes old backups.",
+      "Switching back to a conversation keeps its loaded messages and reading position; a long transcript also settles in the right place more reliably when it first loads.",
     ],
   },
   {

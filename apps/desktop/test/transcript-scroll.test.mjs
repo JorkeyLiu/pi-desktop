@@ -9,6 +9,7 @@ import {
   LATER_REVEAL_THRESHOLD_PX,
   isRecentScrollGesture,
   reduceTranscriptScroll,
+  shouldContinueEarlierHistory,
   transcriptHasLayout,
 } from "../src/lib/transcript-scroll.ts";
 
@@ -221,4 +222,51 @@ test("the near-bottom band is the only automatic later-page trigger", () => {
   assert.equal(isLaterRevealPosition(at(0, 400, 500)), true);
   // A scroller without layout reports no position at all.
   assert.equal(isLaterRevealPosition(at(0, 0, 0)), false);
+});
+
+test("a cold pane does not continue earlier history before its first position exists", () => {
+  // The bounded first commit is expanded, the veil lifts, and a pinned pane is
+  // re-bottomed across several layout passes. Through all of it an underfilled
+  // commit reports a near-top offset, so the offset alone cannot authorize a
+  // page read for a reader who never left the newest turn.
+  const underfilled = { scrollTop: 0, scrollHeight: 400, clientHeight: 800 };
+  assert.equal(
+    shouldContinueEarlierHistory({
+      geometry: underfilled, pinned: true, positioned: false, covered: false,
+    }),
+    false,
+  );
+  // The same geometry once the pane has finished establishing its position.
+  assert.equal(
+    shouldContinueEarlierHistory({
+      geometry: underfilled, pinned: true, positioned: true, covered: false,
+    }),
+    true,
+  );
+});
+
+test("history continuation still fills an underfilled pane while the veil covers it", () => {
+  const underfilled = { scrollTop: 0, scrollHeight: 400, clientHeight: 800 };
+  assert.equal(
+    shouldContinueEarlierHistory({
+      geometry: underfilled, pinned: true, positioned: false, covered: true,
+    }),
+    true,
+  );
+  // Covering never widens the reveal test itself.
+  assert.equal(
+    shouldContinueEarlierHistory({
+      geometry: { scrollTop: 400, scrollHeight: 2_000, clientHeight: 800 },
+      pinned: false, positioned: false, covered: true,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldContinueEarlierHistory({
+      geometry: { scrollTop: 0, scrollHeight: 2_000, clientHeight: 800 },
+      pinned: true, positioned: true, covered: false,
+    }),
+    false,
+    "a pinned overflowing pane still ignores a stale zero offset",
+  );
 });

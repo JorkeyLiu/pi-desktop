@@ -15,6 +15,7 @@ export const ptBREntries: ChangelogEntry[] = [
       "A seleção de texto permanece contínua ao atravessar sobreposições de pop-up.",
       "Os menus de projeto permanecem visíveis quando abertos nas linhas próximas ao fim da barra lateral.",
       "O Windows mantém o bloqueio do instalador enquanto remove backups antigos.",
+      "Ao voltar a uma conversa, as mensagens carregadas e a posição de leitura são mantidas; uma conversa longa também se posiciona de forma mais confiável no lugar certo ao abrir.",
     ],
   },
   {

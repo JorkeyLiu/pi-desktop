@@ -74,16 +74,24 @@ Three visible costs followed:
 7. **DOM retention is per pane; reading retention is per session.** A pane
    still pinned re-anchors to the bottom. Runtime bookmarks retain a message id,
    viewport offset, window budget, and explicit disclosure choices independently
-   of pane eviction or project switches. A revisit restores that message, using
-   the existing bounded history read when necessary without search focus.
+   of pane eviction or project switches. A revisit restores that message: when the
+   anchor is still inside the pane's committed page the page is kept as loaded,
+   and only an anchor outside it uses the existing bounded history read, without
+   search focus. Either way the decision is taken against the committed page, not
+   against a page still being read.
    First visits still settle at the newest turn. Bookmarks hold no message
    bodies or DOM and are released on session deletion or renderer/app restart.
    Real input, explicit navigation, and a new turn cancel automatic restoration.
 8. The **first commit is per pane and local**. Because the component instance
    belongs to one session, "the first commit of this pane" is plain mount state;
-   the cross-session hydration spacer, its rAF expansion, and its re-anchor are
-   deleted. ADR 0130's trailing window, two-stage escalation, and prepend anchor
-   are unchanged inside a pane.
+   what is gone is the cross-session variant - a reset keyed to a session switch
+   that re-ran hydration for the newly visible session inside one shared
+   transcript. A pane still bounds its own first commit: the newest
+   `TRANSCRIPT_INITIAL_MOUNT` entries mount first with a spacer that only
+   reserves enough height to make the bottom reachable, the mounted window
+   expands on the next frame, and the exact bottom is re-pinned in the layout
+   phase that expansion commits in. ADR 0130's trailing window, two-stage
+   escalation, and prepend anchor are unchanged inside a pane.
 9. The **composer is mounted once** for the whole chat surface rather than once
    per branch — it already carries a per-session draft cache. It stays
    non-interactive while the visible pane is not yet the store-active session, so

@@ -5974,6 +5974,57 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   message with no manual control and returning to latest);
   live UI scenario Draft.
 
+#### E2E-071j: A warm revisit and a cold open preserve what the reader was reading
+
+- **Preconditions**: A session with several hundred messages, and a renderer
+  whose pagination contract is unchanged (100-row pages, `messageBefore`
+  cursors). The session has been opened once so its newest page is committed.
+- **Steps**: 1) Open the session, scroll back into the middle of the loaded
+  range, and switch to another session. 2) Switch back and confirm the later
+  body is still mounted and the same message is still anchored at the same
+  offset. 3) Cold-open a long session that settles at its newest turn, watching
+  the first paint through the settled layout. 4) Confirm no older page was read
+  before the reader scrolled, and that no visible row moved between the first
+  visible frame and the settled one. 5) Scroll back with real wheel input and
+  confirm older pages still load with ordinary page-size reads and backwards
+  cursors. 6) Open a session the sidebar still reports as empty while its read
+  returns history, so the pane paints empty first, and watch the commit that
+  presents the long page: the cover must already be on screen in that commit.
+  7) Repeat with the initial fill's read never settling, and confirm the loaded
+  rows still appear within the settle cap.
+- **Expected**: A bookmark that is still inside the pane's committed page
+  restores with no history read and no shorter window, so the rows already
+  loaded stay loaded. Only an anchor outside the committed page reads a bounded
+  range, and that decision is taken against the committed page rather than a
+  page still being read. A cold open settles at the newest turn without paging
+  history the reader did not ask for, and without vertical movement between the
+  first visible frame and the settled layout. The only automatic continuation a
+  first open may perform is the initial fill of a newest page shorter than the
+  reading viewport, applied while the settle veil covers the scroller. A real
+  gesture still continues history under the ordinary page size. A pane whose
+  first paint is empty spends no hydration gate, so the long page its own read
+  lands afterwards is covered in the layout phase - before the browser paints
+  those rows - and is bounded and re-bottomed from there. A cover that waits for
+  an in-flight initial fill holds for at most the same settle cap, counted from
+  when the cover started and never restarted frame by frame, so loaded rows are
+  revealed even if that read never settles.
+- **Specs linked**: `04-ux/08-component-spec.md` §1.6 / §3.5,
+  `04-ux/09-interaction-patterns.md` (session isolation), ADR 0130, ADR 0137,
+  `08-meta/decisions-log.md` (D261, D269, D287)
+- **Acceptance**: C (switch sessions), Quality
+- **Milestone**: M5
+- **Status**: Renderer regression automated, isolated React/Electron with a
+  fixture IPC boundary and a temporary profile:
+  `node scripts/e2e-transcript-warm-restore.mjs` (warm revisit keeps all loaded
+  rows and its anchor, and records the history reads it issued) and
+  `node scripts/e2e-transcript-cold-open.mjs` (four first-open shapes, an empty
+  first paint that revalidates into a long page, that same path with a history
+  read that never settles, the underfilled newest page, and genuine scroll-back
+  pagination; per-frame veil, scroll offset, and visible-row sampling).
+  Unit-covered for the continuation rule in `transcript-scroll.test.mjs`, for
+  the restore decision in `transcript-reading.test.mjs`, and for the bounded
+  cover in `transcript-settle.test.mjs`; live UI scenario Draft.
+
 #### E2E-071h: Reopening a session while its response is streaming
 
 - **Preconditions**: Session A has a completed transcript and is producing a

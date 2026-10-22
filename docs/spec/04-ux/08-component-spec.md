@@ -118,8 +118,12 @@ Outer frame that positions Topbar, Sidebar, MainChat, and WorkPanel. Owns resize
   `content-visibility: hidden` — never `display: none`, which would destroy the
   layout box and its scroll offset — and are `aria-hidden` and non-interactive.
   Eviction releases the DOM, not the renderer-lifetime reading bookmark. On
-  return, restore the bookmarked message and its viewport offset, loading a
-  bounded historical range when necessary without search focus/highlighting.
+  return, restore the bookmarked message and its viewport offset. A bookmark
+  that is still inside the committed page keeps that page untouched: no read,
+  no shorter window, so the rows the reader had loaded stay loaded. Only a
+  bookmark outside the committed page reads a bounded historical range around
+  it, without search focus/highlighting, and that decision waits for the
+  destination session's committed page instead of racing it.
   Explicit disclosure choices and the mounted-window budget survive eviction;
   bookmarks do not persist across renderer/app restarts.
 - A pane renders the store's live `messages` while its session is the active one
@@ -853,7 +857,13 @@ reading surface of the workstation.
   and the pane keeps it across later switches. When the first commit is bounded,
   an opaque skeleton veil covers the scroller from that same commit until the
   scroller geometry has held still for consecutive frames (600ms cap), then
-  fades out; the composer stays visible and usable above it (D287).
+  fades out; the composer stays visible and usable above it (D287). A pane whose
+  first paint is empty enters that cover in the layout phase of the commit that
+  mounts the long page its own read lands, so no frame presents those rows
+  uncovered. While the pane is still establishing its first position the cover
+  may wait for an in-flight initial fill, but never past the same 600ms cap,
+  measured from when the cover started and not restarted per frame: rows that
+  already loaded are revealed even if that read never settles.
 - The transcript's bottom reserve is **height-aware**, not a fixed gap. The
   docked composer measures its real rendered height (it grows with multi-line
   drafts) and publishes it as the `--composer-dock-height` custom property on
@@ -2270,6 +2280,18 @@ Renderer: `apps/desktop/src/components/Markdown.tsx` + `apps/desktop/src/lib/shi
   whole history, discard it, and rebuild it. The bounded commit also raises the
   settle veil (D287): late row heights (Markdown, code blocks,
   `content-visibility` placeholders) are measured under it rather than painted.
+  The veil is raised for a bounded first commit even when the pane's own first
+  paint was empty, because the page that lands from that pane's revalidation is
+  the one that needs the bounded commit; and it stays up while an initial
+  older-page fill is still in flight, so the fill lands behind it instead of
+  moving rows the reader can see.
+- **First position, then continuation**: a pane's first frames are mounting
+  geometry, not a reading position. Automatic history continuation therefore
+  waits until the pane is visible, its content has arrived, the bounded
+  expansion has committed, and the veil is gone; a reader's own scroll gesture
+  bypasses that wait. This is the same rule the scroll handler and the top
+  boundary observer share, so neither can page older history for a reader who
+  never left the newest turn.
 - **Bounded mounted history**: the mounted history is a trailing window over the
   loaded history, not all of it. Reaching the top escalates in two stages —
   mount more of what is already loaded, and fetch an older page only once the
@@ -2291,11 +2313,18 @@ Renderer: `apps/desktop/src/components/Markdown.tsx` + `apps/desktop/src/lib/shi
   single tool-heavy turn has fewer than two markers and often does not overflow.
 - **History advances on boundary visibility** (D269): the top loading row is
   observed inside the scroller with the same near-top threshold the scroll handler
-  uses. An underfilled tail page, a page whose fetched rows all land outside the
+  uses, and through the same continuation rule, so the two triggers cannot drift.
+  An underfilled tail page, a page whose fetched rows all land outside the
   mounted window, and a window transition can leave `scrollTop` untouched, so a
-  scroll-only trigger could never fire again. A collapsed scroller and a pinned
-  overflowing transcript whose `scrollTop` has been reset to 0 are not treated as
-  "at the top", so opening or revealing a session cannot page back to the start.
+  scroll-only trigger could never fire again. A collapsed scroller, a pinned
+  overflowing transcript whose `scrollTop` has been reset to 0, and a pane that
+  has not yet established its first position are not treated as "at the top", so
+  opening or revealing a session cannot page back to the start. The rule is the
+  first position or the settle veil: before the pane has settled, the only
+  continuation allowed is the initial fill of a newest page shorter than the
+  reading viewport, measured and applied while the veil still covers the
+  scroller. A reader's own scroll gesture is a position on its own and continues
+  history immediately.
 - **Minimap hover cost**: dash magnification is applied by writing a custom
   property per dash, and dash centers are measured in a separate read-only pass.
   Reading a dash's geometry inside the same loop that writes to it forces one

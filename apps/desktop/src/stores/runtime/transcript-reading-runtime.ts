@@ -1,6 +1,7 @@
 import type { SessionDetail } from "@pi-desktop/shared";
 import type { SessionHistoryReadOptions } from "../../lib/api";
 import { isRemoteSession } from "../../lib/remote-session-safety";
+import type { TranscriptReadingPosition } from "../../lib/transcript-reading-position";
 import {
   EMPTY_TRANSCRIPT,
   extendTranscriptView,
@@ -76,52 +77,114 @@ export function createTranscriptReadingRuntime({ get, set }: StoreAccess, read: 
       get().showToast(error instanceof Error ? error.message : String(error), { variant: "error" });
   }
 
+  /**
+   * Publish the reading range for a bookmark the loaded window cannot show.
+   *
+   * An anchor the loaded range already holds needs no read at all: the range is
+   * the reading range, and replacing it with a narrower window around the anchor
+   * discards the rows above it and the newest turn below it.
+   */
+  async function restoreRange(
+    sessionId: string,
+    position: TranscriptReadingPosition,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    if (signal.aborted || get().activeSessionId !== sessionId || !position.messageId) return false;
+    const previous = get().transcriptViews[sessionId];
+    const range = currentView(sessionId);
+    if (range.messages.some((message) => message.id === position.messageId)) return true;
+    // A user navigation already in flight always wins over automatic restore.
+    if (range.focus || range.loading) return false;
+    const pending: TranscriptView = { ...range, restored: true, loading: "target" };
+    const rollback = () => {
+      if (get().transcriptViews[sessionId] !== pending) return;
+      if (previous) publish(sessionId, previous);
+      else returnToLatestTranscript(sessionId);
+    };
+    publish(sessionId, pending);
+    signal.addEventListener("abort", rollback, { once: true });
+    try {
+      const { session } = await read(sessionId, {
+        messageAround: position.messageId,
+        messageLimit: TRANSCRIPT_SEARCH_PAGE_SIZE,
+        contentLimit: TRANSCRIPT_CONTENT_LIMIT,
+      });
+      if (signal.aborted || get().transcriptViews[sessionId] !== pending) return false;
+      if (get().activeSessionId !== sessionId) {
+        rollback();
+        return false;
+      }
+      const message = session?.messages.find((row) => row.id === position.messageId);
+      if (!session || !message || (message.parentToolCallId && !session.navigationParent)) {
+        rollback();
+        return false;
+      }
+      publish(sessionId, { ...transcriptViewFromSession(session), restored: true });
+      return true;
+    } catch (error) {
+      if (!signal.aborted && get().transcriptViews[sessionId] === pending) {
+        rollback();
+        if (get().activeSessionId === sessionId)
+          get().showToast(error instanceof Error ? error.message : String(error), { variant: "error" });
+      }
+      return false;
+    } finally {
+      signal.removeEventListener("abort", rollback);
+    }
+  }
+
+  /**
+   * Hold a restore until the session selection in flight has committed.
+   *
+   * Only the visible pane restores a reading position, so at most one request
+   * waits at a time; a newer request supersedes an older one, which resolves
+   * `false` rather than hanging.
+   */
+  let awaitedRestore:
+    | {
+        sessionId: string;
+        position: TranscriptReadingPosition;
+        signal: AbortSignal;
+        resolve: (found: boolean) => void;
+      }
+    | undefined;
+  function awaitSelection(
+    sessionId: string,
+    position: TranscriptReadingPosition,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    awaitedRestore?.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      const pending = { sessionId, position, signal, resolve };
+      awaitedRestore = pending;
+      signal.addEventListener(
+        "abort",
+        () => {
+          if (awaitedRestore === pending) awaitedRestore = undefined;
+          resolve(false);
+        },
+        { once: true },
+      );
+    });
+  }
+
   const actions: ReadingActions = {
     returnToLatestTranscript,
     restoreTranscriptReading: async (sessionId, position, signal) => {
       if (signal.aborted || get().activeSessionId !== sessionId || !position.messageId) return false;
-      const previous = get().transcriptViews[sessionId];
-      const range = currentView(sessionId);
-      if (get().selectingSessionId !== sessionId &&
-        range.messages.some((message) => message.id === position.messageId)) return true;
-      // A user navigation already in flight always wins over automatic restore.
-      if (range.focus || range.loading) return false;
-      const pending: TranscriptView = { ...range, restored: true, loading: "target" };
-      const rollback = () => {
-        if (get().transcriptViews[sessionId] !== pending) return;
-        if (previous) publish(sessionId, previous);
-        else returnToLatestTranscript(sessionId);
-      };
-      publish(sessionId, pending);
-      signal.addEventListener("abort", rollback, { once: true });
-      try {
-        const { session } = await read(sessionId, {
-          messageAround: position.messageId,
-          messageLimit: TRANSCRIPT_SEARCH_PAGE_SIZE,
-          contentLimit: TRANSCRIPT_CONTENT_LIMIT,
-        });
-        if (signal.aborted || get().transcriptViews[sessionId] !== pending) return false;
-        if (get().activeSessionId !== sessionId) {
-          rollback();
-          return false;
-        }
-        const message = session?.messages.find((row) => row.id === position.messageId);
-        if (!session || !message || (message.parentToolCallId && !session.navigationParent)) {
-          rollback();
-          return false;
-        }
-        publish(sessionId, { ...transcriptViewFromSession(session), restored: true });
-        return true;
-      } catch (error) {
-        if (!signal.aborted && get().transcriptViews[sessionId] === pending) {
-          rollback();
-          if (get().activeSessionId === sessionId)
-            get().showToast(error instanceof Error ? error.message : String(error), { variant: "error" });
-        }
-        return false;
-      } finally {
-        signal.removeEventListener("abort", rollback);
-      }
+      /*
+        A session selection in flight is about to publish the page this pane will
+        keep. Deciding against the range it is about to replace is wrong either
+        way: keeping it can lose the anchor when the committed page no longer
+        holds it, and reading a bounded window around the anchor shrinks away the
+        rows above and below it — which is what hid the newest turn of a warm
+        revisit behind a short early range until the reader jumped to the bottom.
+        Wait for the committed page instead; `reconcile` resumes this the moment
+        the selection settles.
+      */
+      if (get().selectingSessionId === sessionId)
+        return await awaitSelection(sessionId, position, signal);
+      return await restoreRange(sessionId, position, signal);
     },
     navigateTranscript: async (input) => {
       const { sessionId } = input;
@@ -225,6 +288,22 @@ export function createTranscriptReadingRuntime({ get, set }: StoreAccess, read: 
    * and a finished turn that overlapped a restored range.
    */
   function reconcile(state: AppState, previous: AppState) {
+    /*
+      A committed selection is the point at which the page this pane keeps stops
+      moving, so a restore that waited for it decides now - against the range the
+      reader can actually stay in, not the one the selection was replacing.
+    */
+    const settledSessionId = previous.selectingSessionId;
+    if (
+      settledSessionId !== undefined &&
+      state.selectingSessionId !== settledSessionId &&
+      awaitedRestore?.sessionId === settledSessionId
+    ) {
+      const { sessionId, position, signal, resolve } = awaitedRestore;
+      awaitedRestore = undefined;
+      void restoreRange(sessionId, position, signal).then(resolve);
+    }
+
     for (const [id, view] of Object.entries(state.transcriptViews)) {
       const evicted = !state.retainedSessionIds.includes(id);
       const started =

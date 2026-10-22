@@ -7,6 +7,7 @@ import {
   TRANSCRIPT_SETTLE_STABLE_FRAMES,
   TRANSCRIPT_SKELETON_ROWS,
   createTranscriptSettleState,
+  mayHoldInitialCover,
   reduceTranscriptSettle,
 } from "../src/lib/transcript-settle.ts";
 
@@ -72,6 +73,48 @@ test("settle always lifts at the time cap even while the geometry keeps moving",
 
   const early = run(growing.slice(0, frames - 2));
   assert.equal(early.settled, false, "the cap is a ceiling, not the normal path");
+});
+
+/*
+  The veil may wait for an in-flight initial fill, but only inside the same
+  absolute deadline every other path obeys. A skipped frame keeps the state it
+  was given: the clock is never restarted, so a read that hangs cannot keep the
+  cover over content that has already loaded.
+*/
+test("an in-flight initial fill cannot hold the veil past the cover deadline", () => {
+  const started = 1_000;
+  const state = createTranscriptSettleState(started);
+  assert.equal(mayHoldInitialCover(state, started), true);
+  assert.equal(
+    mayHoldInitialCover(state, started + TRANSCRIPT_SETTLE_MAX_MS - 1),
+    true,
+    "the hold is allowed until the deadline",
+  );
+
+  // Frame-by-frame skipping cannot extend the wait: at most one cap worth of
+  // frames may be skipped, counted from when the cover started.
+  let skipped = 0;
+  for (let frame = 0; frame < 600; frame++) {
+    const now = started + frame * 16;
+    if (!mayHoldInitialCover(state, now)) break;
+    skipped++;
+    assert.equal(state.startedAt, started, "a skipped frame must not restart the clock");
+  }
+  const allowed = Math.ceil(TRANSCRIPT_SETTLE_MAX_MS / 16);
+  assert.equal(skipped, allowed);
+
+  // The first frame past the deadline folds its geometry and reports the cap, so
+  // the loaded rows are revealed even though the read never settled.
+  const expired = started + allowed * 16;
+  assert.ok(expired >= started + TRANSCRIPT_SETTLE_MAX_MS);
+  assert.equal(mayHoldInitialCover(state, expired), false);
+  const step = reduceTranscriptSettle(
+    state,
+    { scrollHeight: 9_000, clientHeight: 600 },
+    expired,
+  );
+  assert.equal(step.settled, true);
+  assert.equal(step.reason, "timeout");
 });
 
 test("the skeleton reads as a conversation tail", () => {
@@ -146,4 +189,46 @@ test("pinned follow re-pins inside the resize observer, on the border box", () =
   // border box sees that change. The scroller's own box covers window resizes.
   assert.match(transcript, /ro\.observe\(content, \{ box: "border-box" \}\)/);
   assert.match(transcript, /ro\.observe\(scroller, \{ box: "border-box" \}\)/);
+});
+
+test("a hanging initial fill is bounded by the cover deadline", () => {
+  // The hold exists so a still-in-flight older page cannot land under a lifted
+  // veil, but it is measured from the cover's own start: one clock read per frame
+  // feeds both the hold and the fold, and a skipped frame never rebuilds the
+  // state (which is what used to restart the cap every frame).
+  assert.match(
+    transcript,
+    /const now = performance\.now\(\);\s*if \(\s*positionedRef\.current === false &&\s*loadingOlderRef\.current &&\s*mayHoldInitialCover\(state, now\)/,
+  );
+  const hold =
+    transcript.match(
+      /if \(\s*positionedRef\.current === false &&[\s\S]{0,240}?\n      \}/,
+    )?.[0] ?? "";
+  assert.ok(hold, "the initial-fill hold must be guarded by the cover deadline");
+  assert.match(hold, /mayHoldInitialCover\(state, now\)/);
+  assert.doesNotMatch(
+    hold,
+    /createTranscriptSettleState/,
+    "a held frame must not restart the settle clock",
+  );
+  assert.match(
+    transcript,
+    /reduceTranscriptSettle\(\s*state,\s*\{ scrollHeight: el\.scrollHeight, clientHeight: el\.clientHeight \},\s*now,\s*\);/,
+  );
+});
+
+test("a long page that lands after an empty first paint is covered before it paints", () => {
+  // A pane whose first paint is empty only reaches the bounded gate when the
+  // revalidation lands the long page, in a later commit than the pane itself. The
+  // cover is entered in the layout phase, so the update it triggers is flushed
+  // before the browser paints that commit; as a passive effect the rows would be
+  // presented once without it.
+  assert.match(
+    transcript,
+    /useLayoutEffect\(\(\) => \{\s*if \(hydrationBounded && veilPhase === "off"\) setVeilPhase\("covering"\);\s*\}, \[hydrationBounded, veilPhase\]\);/,
+  );
+  assert.doesNotMatch(
+    transcript,
+    /useEffect\(\(\) => \{\s*if \(hydrationBounded && veilPhase === "off"\) setVeilPhase\("covering"\);/,
+  );
 });

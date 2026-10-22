@@ -79,6 +79,35 @@ export function isLaterRevealPosition(
   return distance <= LATER_REVEAL_THRESHOLD_PX;
 }
 
+/**
+ * Whether automatic history continuation may act on this offset.
+ *
+ * A pane's first frames are not a reading position. The bounded first commit is
+ * expanded, the settle veil lifts, and a still-pinned transcript is re-bottomed
+ * across several layout passes; an underfilled commit reports a near-top offset
+ * through all of it, because its top boundary genuinely is in view.
+ * `isHistoryRevealPosition` cannot tell that mounting geometry from a reader who
+ * scrolled up, so continuation fetched an older page for someone who never left
+ * the newest turn - and the page landed while the rows were still moving, which
+ * is the jump.
+ *
+ * Continuation therefore needs the offset to mean what it says: the pane has
+ * finished establishing its first position, or it is still behind the settle
+ * veil, where an initial fill is measured and only shown once the geometry has
+ * held still. Covering never widens the reveal test itself.
+ */
+export function shouldContinueEarlierHistory(input: {
+  geometry: TranscriptScrollerGeometry;
+  pinned: boolean;
+  /** The pane has established its first position and its rows are presented. */
+  positioned: boolean;
+  /** The settle veil still covers the transcript. */
+  covered: boolean;
+}): boolean {
+  if (!input.positioned && !input.covered) return false;
+  return isHistoryRevealPosition(input.geometry, input.pinned);
+}
+
 export type TranscriptScrollInput = {
   previousScrollTop: number;
   scrollTop: number;

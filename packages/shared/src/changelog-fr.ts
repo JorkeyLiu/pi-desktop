@@ -15,6 +15,7 @@ export const frEntries: ChangelogEntry[] = [
       "La sélection de texte reste continue lorsqu’elle traverse les fenêtres superposées.",
       "Les menus de projet restent visibles lorsqu’ils sont ouverts depuis les lignes en bas de la barre latérale.",
       "Windows conserve le verrou d’installation pendant la suppression des anciennes sauvegardes.",
+      "Le retour à une conversation conserve les messages chargés et la position de lecture ; un long fil se place aussi plus fiablement au bon endroit à la première ouverture.",
     ],
   },
   {

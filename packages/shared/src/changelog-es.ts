@@ -15,6 +15,7 @@ export const esEntries: ChangelogEntry[] = [
       "La selección de texto se mantiene continua al atravesar superposiciones emergentes.",
       "Los menús de proyecto siguen visibles al abrirlos desde filas cerca de la parte inferior de la barra lateral.",
       "Windows mantiene el bloqueo del instalador mientras elimina copias de seguridad antiguas.",
+      "Al volver a una conversación se conservan los mensajes cargados y la posición de lectura; además, un historial largo se sitúa de forma más fiable en el punto correcto al abrirse.",
     ],
   },
   {
