@@ -5,6 +5,7 @@ export const deEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
+      "Beim Hochscrollen in einer langen Unterhaltung bleibt die Leseposition stehen: ältere Seiten und neu eingeblendete Historie verschieben die gelesenen Nachrichten nicht mehr.",
       "Konfigurieren Sie benutzerdefinierte Endpunkte ohne API-Schlüssel; in diesem Modus werden keine Anmeldedaten gesendet.",
       "Öffnen Sie lokale Dateien außerhalb eines Projektordners im integrierten Browser; Webseiten bleiben auf Projektdateien beschränkt.",
       "Die Kontextübersicht trennt Wartezeit beim Anbieter, gestreamte Modellantworten und Ausführung der obersten Tools und zeigt Gesamtdauer sowie Anteil.",

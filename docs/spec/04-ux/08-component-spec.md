@@ -1642,6 +1642,17 @@ storage but compose into one assistant turn until the next user message.
   cancels pending follow work, and shows the "scroll to bottom" floating button;
   stream or resize updates cannot pull the viewport back down; send / retry /
   regenerate re-pins and jumps to bottom
+- Jump to latest: the floating button offers the navigation that is actually
+  left, not the follow flag. It is hidden once the viewport sits at the bottom of
+  the newest range, including when the offset arrived there without a downward
+  gesture (content shrinking below the reader, a grown viewport, a restored
+  bookmark or a landed follow scroll), and it returns as soon as the reader is
+  above that bottom again. A bounded range with later pages loaded, and a
+  historical reading window (search target or restored bookmark), keep it: their
+  bottom is not the live tail. Pressing it re-pins follow and remembers the
+  arrival, so a hidden pane, a reveal or a session switch cannot restore the
+  released position and resurrect the button. Follow mode itself is unchanged:
+  only a real upward gesture releases it, and geometry alone never re-pins it.
 - Hover message: its action row appears — Copy and the row's other per-turn
   actions.
 - Assistant fragments emitted before and after tool calls compose into one
@@ -2267,11 +2278,15 @@ Renderer: `apps/desktop/src/components/Markdown.tsx` + `apps/desktop/src/lib/shi
 - **Links**: plain click previews in the work panel; modified click keeps
   `target="_blank"` so main routes through `shell.openExternal` after the
   http(s)/mailto allowlist (D330); in-window navigation stays blocked.
-- **Long transcript behavior**: `.thread-scroll` sets `overflow-anchor: none`
-  (pinned-follow owns the scroll position), `.message-row` and
-  `.tool-activity-group` use `content-visibility: auto` with an intrinsic size so
-  far-offscreen rows skip layout and paint, and offscreen Mermaid diagrams defer
-  loading and layout until they approach the viewport.
+- **Long transcript behavior**: `.thread-scroll` keeps native scroll anchoring
+  (`overflow-anchor: auto`): the row the reader is looking at is held while an
+  older page or a grown mounted window adds height above it (ADR 0331), with one
+  bounded fragment hold for the two states the platform does not cover. The
+  scroller's furniture (history status, later boundary, first-commit spacer,
+  runtime status lane, retry row) is excluded from anchor candidacy so the rows
+  behind it cannot move with it. `.message-row` and `.tool-activity-group` carry
+  their real height (no `content-visibility` estimate), and offscreen Mermaid
+  diagrams defer loading and layout until they approach the viewport.
 - **Bounded first commit**: activating a session whose history exceeds the
   initial mount budget mounts only the newest entries in that commit, with a
   spacer holding the remaining scroll height, and expands to the steady-state
@@ -2279,7 +2294,7 @@ Renderer: `apps/desktop/src/components/Markdown.tsx` + `apps/desktop/src/lib/shi
   being painted; deciding it from an effect instead makes the switch mount the
   whole history, discard it, and rebuild it. The bounded commit also raises the
   settle veil (D287): late row heights (Markdown, code blocks,
-  `content-visibility` placeholders) are measured under it rather than painted.
+  code blocks, images) are measured under it rather than painted.
   The veil is raised for a bounded first commit even when the pane's own first
   paint was empty, because the page that lands from that pane's revalidation is
   the one that needs the bounded commit; and it stays up while an initial
@@ -2295,13 +2310,33 @@ Renderer: `apps/desktop/src/components/Markdown.tsx` + `apps/desktop/src/lib/shi
 - **Bounded mounted history**: the mounted history is a trailing window over the
   loaded history, not all of it. Reaching the top escalates in two stages —
   mount more of what is already loaded, and fetch an older page only once the
-  window covers all of it. Both stages add height above the reading position, so
-  both take the same pre-paint scroll anchor. The window resets per session, and
+  window covers all of it. Both stages add height above the reading position and
+  both are anchored, so the continuation those commits trigger only advances while
+  the pane still owes the viewport content, and a reader resting at the top is not
+  handed page after page.
+  A mounted history row is keyed by its turn's last fragment, so a page boundary
+  that cuts inside a turn does not re-key (and remount) the row being read. The
+  window resets per session, and
   the spacer stays scoped to the first commit: a permanent spacer under the
   steady-state window would make the user scroll a blank viewport to reach the
   growth trigger. `content-visibility` alone does not bound this cost — it skips
   layout and paint for offscreen rows while retaining their React trees, Markdown
   ASTs, and highlighting tokens.
+- **Upward-reading hold (ADR 0331)**: native anchoring holds the reading row for a
+  grown mounted window and for a page prepended above the viewport. Two states it
+  cannot hold - `scrollTop === 0`, where the platform performs no adjustment, and
+  a page whose boundary cuts inside an assistant turn, where it anchors on a box
+  other than the fragment in view - are covered by one hold: the visible fragment
+  (a `data-message-id`, not the outer turn box) and its viewport offset, recorded
+  before the commit that asks for the height and applied once in that commit's
+  layout phase. The write is measured against the layout the browser already
+  produced, so the two never compensate twice, and it is not a per-frame loop.
+  While a page is in flight the hold follows the reader's own scroll events; it is
+  dropped when the pane hides, when a turn re-bottoms the transcript, and on
+  search navigation. Every upward commit holds the row within 1 px, asserted per
+  frame by `scripts/e2e-upward-anchor.mjs`. The history status row also keeps a
+  constant height (its label stays mounted and is hidden), because a furniture row
+  that resizes above the reader moves every row below it on each page.
 - **Minimap describes mounted rows**: the minimap resolves a click by finding the
   marker's `data-minimap-id` node inside the scroller, so its message markers are
   built from the mounted entries. Built from every loaded message while the window

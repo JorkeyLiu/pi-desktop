@@ -139,7 +139,9 @@ test("manual upward scrolling cancels pending transcript follow work", () => {
     /if \(transition\.releasedFollow\) cancelFollowScroll\(\)/,
   );
   assert.match(transcript, /pinnedRef\.current = transition\.pinned/);
-  assert.match(transcript, /setShowJump\(transition\.showJump\)/);
+  // The follow flag is recorded as what it is; the control's visibility is
+  // derived from it (`shouldOfferLatestNavigation`), not copied from it.
+  assert.match(transcript, /setFollowReleased\(!transition\.pinned\)/);
 });
 
 test("send re-pins before paint instead of flashing the old transcript position", () => {
@@ -192,7 +194,7 @@ test("session activation pins a first visit and honors a runtime reading bookmar
   assert.ok(activationEffect);
   assert.match(activationEffect, /cancelFollowScroll\(\)/);
   assert.match(activationEffect, /pinnedRef\.current = savedReadingPosition\?\.pinned \?\? true/);
-  assert.match(activationEffect, /setShowJump\(!pinnedRef\.current\)/);
+  assert.match(activationEffect, /setFollowReleased\(!pinnedRef\.current\)/);
   assert.match(activationEffect, /if \(pinnedRef\.current\) scrollToBottom\(\)/);
   assert.doesNotMatch(activationEffect, /smooth/);
 });
@@ -202,9 +204,11 @@ test("a revealed pane restores its own scroll position in the layout phase", () 
   // scroller can be clamped while its content grows off screen, and a passive
   // effect would leave one visible frame at the wrong offset (ADR 0137).
   const revealEffect = transcript.match(
-    /useLayoutEffect\(\(\) => \{([\s\S]*?)\n  \}, \[cancelFollowScroll, paneVisible, releaseDisclosureAnchor, scrollToBottom\]\);/,
+    /useLayoutEffect\(\(\) => \{\n    const el = scrollRef\.current;\n    const becameHidden = ([\s\S]*?)\n  \}, \[\n    cancelFollowScroll,\n    paneVisible,\n    releaseDisclosureAnchor,\n    releasePrependAnchor,\n    scrollToBottom,\n  \]\);/,
   )?.[1];
   assert.ok(revealEffect, "the reveal must restore position in a layout effect");
+  assert.match(revealEffect, /if \(becameHidden\) \{\s*releaseDisclosureAnchor\(\);\s*cancelFollowScroll\(\);[\s\S]*?releasePrependAnchor\(\);/);
+  assert.doesNotMatch(revealEffect, /prependAnchorRef\.current = null/);
   assert.match(revealEffect, /retainedScrollTopRef\.current = lastLaidOutScrollTopRef\.current/);
   assert.match(revealEffect, /if \(pinnedRef\.current\) \{\s*scrollToBottom\(\);/);
   assert.match(revealEffect, /el\.scrollTop = retained/);

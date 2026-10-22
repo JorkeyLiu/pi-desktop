@@ -79,6 +79,23 @@ export function isLaterRevealPosition(
   return distance <= LATER_REVEAL_THRESHOLD_PX;
 }
 
+
+/**
+ * Whether the scroller sits at the bottom of the range it has loaded.
+ *
+ * This is geometry, not follow mode: a released scroller can be clamped onto the
+ * bottom by content that shrank below it, by a grown viewport, or by a restored
+ * offset, and none of those arrive as a downward gesture. The sub-pixel slack is
+ * the same rounding disagreement `TRANSCRIPT_SCROLL_ROUNDING_TOLERANCE_PX`
+ * covers. A box without layout is not at any position.
+ */
+export function isTranscriptBottom(geometry: TranscriptScrollerGeometry): boolean {
+  if (!transcriptHasLayout(geometry)) return false;
+  const distance =
+    geometry.scrollHeight - geometry.scrollTop - geometry.clientHeight;
+  return distance <= TRANSCRIPT_SCROLL_ROUNDING_TOLERANCE_PX;
+}
+
 /**
  * Whether automatic history continuation may act on this offset.
  *
@@ -156,6 +173,41 @@ export function reduceTranscriptScroll({
     pinned,
     showJump: !pinned,
   };
+}
+
+/**
+ * Whether the floating "jump to latest" control has a navigation left to offer.
+ *
+ * The control is not a copy of the follow flag. Follow is released by any real
+ * upward gesture, and the reducer keeps it released through every later
+ * non-gesture event - a clamp, a grown viewport, a restored offset. Rendered
+ * from that flag alone the control stayed up after the reader had already been
+ * carried back to the newest bottom, where it can only scroll nowhere.
+ *
+ * So the question is what the control would do:
+ *
+ * * A bounded range with later pages loaded but not in view still has the newest
+ *   turn below the viewport, and a historical reading window (`focus` or
+ *   `restored`) holds a frozen range whose bottom is not the live tail. Both
+ *   offer the return.
+ * * Otherwise the range in view ends at the newest message. There, released
+ *   follow matters only while the reader is above the bottom; at the bottom
+ *   itself nothing is owed.
+ *
+ * Follow mode is deliberately not re-pinned here: this decides visibility only.
+ */
+export function shouldOfferLatestNavigation(input: {
+  /** Follow was released: the reader owns the viewport. */
+  followReleased: boolean;
+  /** The scroller sits at the bottom of the range it has loaded. */
+  atRangeBottom: boolean;
+  /** Later pages are loaded but not mounted below the viewport. */
+  hasMoreAfter: boolean;
+  /** A search target or a restored bookmark holds a historical range. */
+  historical: boolean;
+}): boolean {
+  if (input.historical || input.hasMoreAfter) return true;
+  return input.followReleased && !input.atRangeBottom;
 }
 
 /**

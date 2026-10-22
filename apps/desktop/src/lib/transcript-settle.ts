@@ -2,11 +2,11 @@
  * Settle detection for a freshly mounted long transcript (D287).
  *
  * The bounded first commit, the expansion to the mounted window, and the row
- * heights that only resolve once Markdown, code blocks, and `content-visibility`
- * placeholders have laid out all land in different frames. Each one moves the
- * scroller's bottom, and a pinned transcript visibly chases it. Instead of
- * showing that chase, the pane keeps an opaque skeleton veil over the scroller
- * until the geometry has stopped changing, then fades the veil out.
+ * heights that only resolve once Markdown and code blocks have laid out all
+ * land in different frames. Each one moves the scroller's bottom, and a
+ * pinned transcript visibly chases it. Instead of showing that chase, the pane
+ * keeps an opaque skeleton veil over the scroller until the geometry has
+ * stopped changing, then fades the veil out.
  *
  * "Stopped changing" is measured, not guessed: the scroller's `scrollHeight`
  * and `clientHeight` have to read the same for several consecutive frames. A

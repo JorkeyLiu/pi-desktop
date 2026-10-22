@@ -75,3 +75,33 @@ export function growTranscriptWindow(
   if (current >= length) return current;
   return Math.min(length, current + TRANSCRIPT_WINDOW_STEP);
 }
+
+/** What one reach at the top of the mounted window asks for. */
+export type TopReachPlan =
+  | { readonly kind: "grow"; readonly windowSize: number }
+  | { readonly kind: "page" };
+
+/**
+ * What a reach at the top asks for: mount more of what is already loaded, fetch
+ * an older page, or nothing at all (`null`).
+ *
+ * `null` is not a degenerate step on the way to a page. A window that already
+ * mounts every loaded row, on a pane that can dispatch no older page, has no
+ * commit coming - so the caller must not arm a reading-position hold for one.
+ * Such a hold never resolves (the read that would settle it never starts) and
+ * keeps re-reading the reading line on every later scroll and every later
+ * commit, for the rest of the session.
+ */
+export function planTopReach(input: {
+  /** Current steady-state budget, as passed to `growTranscriptWindow`. */
+  windowSize: number;
+  /** Loaded history rows, excluding the tail entry. */
+  historyLength: number;
+  /** This pane can dispatch an older page right now. */
+  canLoadOlder: boolean;
+}): TopReachPlan | null {
+  const grown = growTranscriptWindow(input.windowSize, input.historyLength);
+  if (grown !== input.windowSize) return { kind: "grow", windowSize: grown };
+  if (!input.canLoadOlder) return null;
+  return { kind: "page" };
+}

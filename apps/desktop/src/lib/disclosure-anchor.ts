@@ -1,12 +1,11 @@
 /**
  * Reading position held across one manual disclosure (#324).
  *
- * The transcript turns native scroll anchoring off (`.thread-scroll` sets
- * `overflow-anchor: none`), so the browser does not keep a row in place when
- * the content around it changes height, and pinned follow cannot either: it
- * re-bottoms on every content resize, which is exactly what dragged a clicked
- * tool/thinking/activity title out of view. A manual disclosure therefore hands
- * the owning scroller the title it was toggled from, and that scroller restores
+ * Pinned follow re-bottoms on every content resize, which is exactly what
+ * dragged a clicked tool/thinking/activity title out of view, and native scroll
+ * anchoring holds whichever row the browser judged to be the reader's place -
+ * not the title they just toggled. A manual disclosure therefore hands the
+ * owning scroller the title it was toggled from, and that scroller restores
  * this anchor from its own ResizeObserver for as many frames as the height
  * keeps changing (an activity group animates its `grid-template-rows`).
  *

@@ -8,9 +8,15 @@
   display: flex;
   gap: 12px;
   padding: 12px 0;
-  /* Skip layout/paint for far-offscreen rows in long transcripts. */
-  content-visibility: auto;
-  contain-intrinsic-size: auto 140px;
+  /* Real layout, no viewport skipping. `content-visibility: auto` stood an
+     unmeasured row in with its `contain-intrinsic-size` estimate, so the
+     scroller's height was wrong until the row was actually measured: scrolling
+     up re-measured rows and the content moved by the estimate error. Native
+     scroll anchoring and the mounted-history window both need real heights -
+     the window bounds a long transcript, not skipped layout.
+     Containment is kept explicitly: it is the containing block and the clip the
+     row chrome was laid out against. */
+  contain: layout style paint;
   /* Paint containment clips descendants to the padding box, which squared off
      the deliberate bleed of the disclosure row chrome: the activity header
      pulls its hover fill 3px past the column edge and a run row's head 4px, so
@@ -1563,9 +1569,9 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Compact in-flow editor. Outer composer shadow clips: the row uses
-   content-visibility (paint containment) and has no horizontal padding, and
-   the transcript scroller clips overflow. Separate from the pane with the
+/* Compact in-flow editor. Outer composer shadow clips: the row keeps paint
+   containment and has no horizontal padding, and the transcript scroller clips
+   overflow. Separate from the pane with the
    same 8% mix as a user bubble (`--ds-tile-deep`); focus uses an inset ring
    so it stays inside the plate. The textarea is unboxed; actions sit in a
    28px footer. */
@@ -1971,9 +1977,10 @@
   width: 100%;
   min-width: 0;
   margin: 7px 0;
-  /* Skip layout/paint for collapsed groups far offscreen (D247). */
-  content-visibility: auto;
-  contain-intrinsic-size: auto 40px;
+  /* Real layout, no viewport skipping: a collapsed group is the shortest row in
+     the transcript, so an intrinsic estimate of its height is exactly the kind
+     of guess that moves the content above the reader when it resolves. */
+  contain: layout style paint;
   /* Clips the same disclosure chrome as .message-row — at the column's left
      edge, and at its right for a run row's head — so it relaxes its clip by
      the same amount; with either one left tight the fill is squared off. */
@@ -3549,11 +3556,6 @@
   to {
     transform: rotate(360deg);
   }
-}
-
-/* Search navigation uses the original message tree and its rendered text. */
-.message-row.transcript-search-target {
-  content-visibility: visible;
 }
 
 ::highlight(transcript-search) {

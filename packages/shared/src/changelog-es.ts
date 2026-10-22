@@ -5,6 +5,7 @@ export const esEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
+      "Al desplazarte hacia arriba en una conversación larga se mantiene tu posición: las páginas antiguas y el historial recién montado ya no desplazan los mensajes que estás leyendo.",
       "Configura endpoints personalizados sin una clave API; en ese modo las solicitudes no envían credenciales.",
       "Abre archivos locales fuera de una carpeta de proyecto en el navegador integrado; las páginas web siguen limitadas a los archivos del proyecto.",
       "Consulta por separado la espera del proveedor, la respuesta transmitida del modelo y el tiempo de las herramientas principales, con totales y porcentajes.",

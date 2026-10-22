@@ -129,11 +129,20 @@ globalThis.transcriptColdOpenProbe = async () => {
   const initial = useAppStore.getState();
   const bridge = window.piDesktop;
   const reads: Array<{
+    /** The session the read was issued for: the counter is per pane, not global. */
+    session: string;
     before?: number; around?: string; limit?: number; covered: boolean;
     rows?: number; scrollTop?: number; scrollHeight?: number; clientHeight?: number;
     active?: string; historyStart?: number; historyHasMore?: boolean;
     at?: number;
   }> = [];
+  /**
+   * Older-page reads belonging to one pane. A read issued by the pane before it
+   * can still resolve while another pane is being observed, so a counter over
+   * every read in the run attributes a previous pane's request to the wrong one.
+   */
+  const pageReads = (sessionId: string) => reads.filter(
+    (read) => read.session === sessionId && read.before !== undefined);
   // Sessions whose older-page read never settles (see `cold-slow-fill`).
   const hangingOlder = new Set<string>();
   const unexpected: string[] = [];
@@ -189,6 +198,7 @@ globalThis.transcriptColdOpenProbe = async () => {
           ? readState.sessionHistory[readState.activeSessionId]
           : undefined;
         reads.push({
+          session: input.id,
           before: input.messageBefore, around: input.messageAround, limit, covered: veilCovered(),
           rows: readScroller?.querySelectorAll("[data-message-id]").length,
           scrollTop: readScroller?.scrollTop,
@@ -313,7 +323,7 @@ globalThis.transcriptColdOpenProbe = async () => {
     for (const sessionId of ["cold-long", "cold-compact", "cold-tools", "cold-collapsed"]) {
       reads.length = 0;
       const samples = await observe(sessionId);
-      const olderReads = reads.filter((read) => read.before !== undefined);
+      const olderReads = pageReads(sessionId);
       const uncovered = samples.filter((sample) => !sample.covered && Number.isFinite(sample.top));
       // A visible row must not move while the reader can see it.
       let maxShift = 0;
@@ -371,11 +381,11 @@ globalThis.transcriptColdOpenProbe = async () => {
       if (sample.covered && sample.rows > 0) break;
       if (sample.rows > 0) uncoveredPopulatedFrames++;
     }
-    const olderReadsHere = reads.filter((read) => read.before !== undefined);
+    const olderReadsHere = pageReads("cold-empty-first");
     const revalidatedScroller = scroller()!;
     const revalidatedReport = {
       sessionId: "cold-empty-first",
-      totalReads: reads.length,
+      totalReads: reads.filter((read) => read.session === "cold-empty-first").length,
       olderReads: olderReadsHere.length,
       olderReadCovered: olderReadsHere.map((read) => read.covered),
       frames: revalidatedSamples.length,
@@ -385,7 +395,7 @@ globalThis.transcriptColdOpenProbe = async () => {
       firstPresentedCovered: presented[0]?.covered ?? null,
       firstPresentedRows: presented[0]?.rows ?? 0,
       // The initial-fill read this fixture makes (pre-existing, see below).
-      readDetails: reads,
+      readDetails: reads.filter((read) => read.session === "cold-empty-first"),
       atBottom: atBottom(),
       finalRows: revalidatedScroller.querySelectorAll("[data-message-id]").length,
     };
@@ -437,8 +447,10 @@ globalThis.transcriptColdOpenProbe = async () => {
       firstCovered && lifted ? Math.round(lifted.at - firstCovered.at) : null;
     const slowFillReport = {
       sessionId: "cold-slow-fill",
-      totalReads: reads.length,
-      olderReads: reads.filter((read) => read.before !== undefined).length,
+      totalReads: reads.filter((read) => read.session === "cold-slow-fill").length,
+      // This pane's own in-flight initial fill. A read the previous pane issued
+      // can still be in flight here, so the count is per session.
+      olderReads: pageReads("cold-slow-fill").length,
       frames: slowFillSamples.length,
       coverMs,
       elapsedMs: Math.round(elapsed),
@@ -477,10 +489,10 @@ globalThis.transcriptColdOpenProbe = async () => {
     const tallScroller = scroller()!;
     const underfillReport = {
       sessionId: "cold-underfill",
-      totalReads: reads.length,
-      olderReads: reads.filter((read) => read.before !== undefined).length,
-      olderCursors: reads.filter((read) => read.before !== undefined).map((read) => read.before),
-      olderReadCovered: reads.filter((read) => read.before !== undefined).map((read) => read.covered),
+      totalReads: reads.filter((read) => read.session === "cold-underfill").length,
+      olderReads: pageReads("cold-underfill").length,
+      olderCursors: pageReads("cold-underfill").map((read) => read.before),
+      olderReadCovered: pageReads("cold-underfill").map((read) => read.covered),
       // Frames whose whole content fitted the tall reading viewport.
       underfilledFrames: underfillSamples.filter((sample) =>
         sample.clientHeight > 0 && sample.scrollHeight <= sample.clientHeight + 1).length,
@@ -510,18 +522,18 @@ globalThis.transcriptColdOpenProbe = async () => {
     // Two-stage escalation (D261/ADR 0130): reaching the top mounts more of the
     // loaded window first and only then fetches a page, so a reader walking back
     // takes several gestures. Each step is a real wheel + scroll here.
-    for (let step = 0; step < 8 && reads.every((read) => read.before === undefined); step++) {
+    for (let step = 0; step < 8 && pageReads("cold-long").length === 0; step++) {
       paging.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -800 }));
       paging.scrollTop = 0;
       paging.dispatchEvent(new Event("scroll", { bubbles: true }));
       await frame();
       await frame();
     }
-    await until(() => reads.some((read) => read.before !== undefined), "a reader gesture pages older history");
+    await until(() => pageReads("cold-long").length > 0, "a reader gesture pages older history");
     await until(() => paging.querySelector(".transcript-history-loading")?.getAttribute("aria-hidden") !== "false",
       "the older page lands");
     for (let i = 0; i < 6; i++) await frame();
-    const olderReads = reads.filter((read) => read.before !== undefined);
+    const olderReads = pageReads("cold-long");
     const pagingReport = {
       olderReads: olderReads.length,
       cursors: olderReads.map((read) => read.before),

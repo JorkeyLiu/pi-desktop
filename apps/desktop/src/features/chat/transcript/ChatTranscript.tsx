@@ -283,6 +283,14 @@ function TranscriptBody({
         aria-live="polite"
       >
         <div className="thread-content" ref={contentRef}>
+          {/*
+            The label is always mounted and only hidden while no read is in
+            flight. Mounting and unmounting it changed the height of this
+            furniture row by its own line box, and every row below it moved by
+            that difference on each page - a 5.4 px jump under the reader that
+            no anchor can hold, because the row that changed is above them and
+            is not itself the reading position (ADR 0331).
+          */}
           <div
             ref={historyBoundaryRef}
             className="transcript-history-loading"
@@ -290,7 +298,9 @@ function TranscriptBody({
             aria-live="polite"
             aria-hidden={!loadingOlder}
           >
-            {loadingOlder ? t("chat.loadingEarlierMessages") : null}
+            <span className="transcript-history-loading-label">
+              {t("chat.loadingEarlierMessages")}
+            </span>
           </div>
           {hydrationBounded ? (
             // One viewport of slack, not a per-entry estimate. The spacer exists
@@ -385,7 +395,10 @@ function TranscriptBody({
       {navigationLoading ? (
         <div className="transcript-navigation-loading" role="status">{t("chat.loadingSession")}</div>
       ) : null}
-      {(showJump || readingWindow) && !veilCovering ? (
+      {/* `showJump` is the navigation the control would still perform: a
+        * historical window or a bounded range keeps it, and the newest bottom
+        * of the live range has nothing left to offer. */}
+      {showJump && !veilCovering ? (
         <TooltipButton
           className="jump-latest-btn"
           ariaLabel={t("chat.scrollToBottom")}

@@ -6,10 +6,12 @@ import {
   TRANSCRIPT_SCROLL_GESTURE_WINDOW_MS,
   isHistoryRevealPosition,
   isLaterRevealPosition,
-  LATER_REVEAL_THRESHOLD_PX,
   isRecentScrollGesture,
+  isTranscriptBottom,
+  LATER_REVEAL_THRESHOLD_PX,
   reduceTranscriptScroll,
   shouldContinueEarlierHistory,
+  shouldOfferLatestNavigation,
   transcriptHasLayout,
 } from "../src/lib/transcript-scroll.ts";
 
@@ -269,4 +271,100 @@ test("history continuation still fills an underfilled pane while the veil covers
     false,
     "a pinned overflowing pane still ignores a stale zero offset",
   );
+});
+
+/*
+  The floating jump control is a navigation affordance, not a copy of the follow
+  flag. A transcript that has arrived at the bottom of the newest range has
+  nowhere to go, so the control is not shown there - including when follow was
+  released and the arrival was a layout clamp rather than a downward gesture.
+*/
+
+test("an unpinned transcript that arrives at the newest bottom stops offering latest", () => {
+  const transition = reduceTranscriptScroll({
+    previousScrollTop: 620,
+    scrollTop: 600,
+    scrollHeight: 1_100,
+    clientHeight: 500,
+    wasPinned: false,
+  });
+
+  // Content below the reader shrank and clamped the offset to the new end: the
+  // reducer keeps follow released and the old gate kept the button up.
+  assert.equal(transition.distanceFromBottom, 0);
+  assert.equal(transition.pinned, false);
+  assert.equal(transition.showJump, true);
+  assert.equal(
+    shouldOfferLatestNavigation({
+      followReleased: true,
+      atRangeBottom: isTranscriptBottom({
+        scrollTop: 600, scrollHeight: 1_100, clientHeight: 500,
+      }),
+      hasMoreAfter: false,
+      historical: false,
+    }),
+    false,
+  );
+});
+
+test("an unpinned transcript above the bottom still offers latest", () => {
+  assert.equal(
+    shouldOfferLatestNavigation({
+      followReleased: true,
+      atRangeBottom: isTranscriptBottom({
+        scrollTop: 400, scrollHeight: 1_100, clientHeight: 500,
+      }),
+      hasMoreAfter: false,
+      historical: false,
+    }),
+    true,
+  );
+});
+
+test("a followed transcript never offers latest, even above the bottom", () => {
+  // Streaming grows the content below the viewport before follow re-bottoms it;
+  // that frame is not a navigation the reader owns.
+  assert.equal(
+    shouldOfferLatestNavigation({
+      followReleased: false,
+      atRangeBottom: false,
+      hasMoreAfter: false,
+      historical: false,
+    }),
+    false,
+  );
+});
+
+test("a bounded range or an explicit reading window still offers latest", () => {
+  // Later pages are loaded but not in view: the newest turn is not on screen.
+  assert.equal(
+    shouldOfferLatestNavigation({
+      followReleased: true,
+      atRangeBottom: true,
+      hasMoreAfter: true,
+      historical: false,
+    }),
+    true,
+  );
+  // A search target or a restored bookmark holds a frozen range: its bottom is
+  // not the live tail, so returning to the live conversation stays available.
+  assert.equal(
+    shouldOfferLatestNavigation({
+      followReleased: true,
+      atRangeBottom: true,
+      hasMoreAfter: false,
+      historical: true,
+    }),
+    true,
+  );
+});
+
+test("a scroller without a layout box is never at its bottom", () => {
+  assert.equal(isTranscriptBottom({ scrollTop: 0, scrollHeight: 0, clientHeight: 0 }), false);
+  assert.equal(isTranscriptBottom({ scrollTop: 0, scrollHeight: 900, clientHeight: 0 }), false);
+});
+
+test("a fractional device pixel ratio at the bottom is the bottom", () => {
+  // Asked for 841, reported 840.909: sub-pixel slack, not a reading position.
+  assert.equal(isTranscriptBottom({ scrollTop: 840.909, scrollHeight: 1_341, clientHeight: 500 }), true);
 });

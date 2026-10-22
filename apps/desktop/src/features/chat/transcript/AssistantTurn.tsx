@@ -158,9 +158,28 @@ export function TranscriptEntryView({
   return <MessageRow message={entry.message} isRunning={isRunning} />;
 }
 
+/**
+ * Key for one mounted history row.
+ *
+ * A row has to keep its DOM node when an older page lands, or the reader's
+ * place, focus, and text selection are dropped for content that did not change.
+ * An assistant turn's `id` is its *first* fragment, and a page boundary can cut
+ * inside a turn: prepending the older fragments puts them in front of that id
+ * and re-keys the row. The key is therefore the turn's *last* fragment, which
+ * only changes when the turn itself grows at its end - that is the streaming
+ * tail, which renders as `TranscriptTail` outside this list.
+ */
+function assistantTurnKey(entry: AssistantTurnEntry): string {
+  const lastPart = entry.parts[entry.parts.length - 1];
+  const lastMessage = lastPart?.kind === "message"
+    ? lastPart.message
+    : lastPart?.items[lastPart.items.length - 1]?.message;
+  return `turn:${lastMessage?.id ?? entry.id}`;
+}
+
 function transcriptEntryKey(entry: TranscriptEntry): string {
   if (entry.kind === "compaction") return entry.mark.id;
-  if (entry.kind === "assistant-turn") return entry.id;
+  if (entry.kind === "assistant-turn") return assistantTurnKey(entry);
   return entry.message.id;
 }
 

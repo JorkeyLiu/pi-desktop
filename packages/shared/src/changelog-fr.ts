@@ -5,6 +5,7 @@ export const frEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
+      "En remontant une longue conversation, votre position de lecture est conservée : les pages plus anciennes et l'historique nouvellement monté ne déplacent plus les messages que vous lisez.",
       "Configurez des points de terminaison personnalisés sans clé API ; dans ce mode, les requêtes n’envoient aucune donnée d’authentification.",
       "Ouvrez des fichiers locaux situés hors d’un dossier de projet dans le navigateur intégré ; les pages Web restent limitées aux fichiers du projet.",
       "Consultez séparément l’attente du fournisseur, la réponse du modèle en continu et le temps des outils principaux, avec les totaux et les pourcentages.",

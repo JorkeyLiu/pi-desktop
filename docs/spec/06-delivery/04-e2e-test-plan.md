@@ -6021,7 +6021,36 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   first paint that revalidates into a long page, that same path with a history
   read that never settles, the underfilled newest page, and genuine scroll-back
   pagination; per-frame veil, scroll offset, and visible-row sampling).
+  Reading upward is its own regression: `node scripts/e2e-upward-anchor.mjs`
+  drives the production pane against a 1000-message fixture (variable prose,
+  fenced code, grouped tool runs, one page boundary that cuts inside an
+  assistant turn) and reports, per frame, how far the reading row moved minus
+  the reader's own scroll (`unwantedShift`). It asserts that this stays within
+  1 px through a grown mounted window, an older page that lands with the reader
+  stopped, an older page that lands while the reader keeps scrolling (180 ms
+  read), a push at the exact `scrollTop === 0`, and an 18 712 px merge that grows
+  the row being read - all with real row heights (0.47-0.5 px measured). It also
+  asserts that a wheel step changes no scroll height and moves no content beyond
+  the scroll; that cold open still lands on the newest turn, latest-follow still
+  re-pins, paging stays at 100 raw messages, the mounted window stays bounded,
+  and a pane resting at the exact top is not handed another page by itself. The
+  merge case puts the boundary fragment on the reading line and requires the same
+  DOM node (`sameNode`), a genuinely grown row, and a held fragment. The
+  streaming tail keeps its node, an open disclosure and keyboard focus while
+  fragments are appended. Cold-open behaviour stays covered by
+  `node scripts/e2e-transcript-cold-open.mjs`, including the empty first paint
+  that revalidates into history and the same path with an older read that never
+  settles; its read counters are per session, so a request a previous pane left
+  in flight is never attributed to the pane under observation.
+  The jump-to-latest control has its own scenario:
+  `node scripts/e2e-latest-arrow.mjs` drives the production pane and asserts
+  where the button is after a first visit, after a real upward gesture, after a
+  clamp onto the newest bottom (content below the reader shrinking), after
+  restoring that height, after pressing it, after hiding, revealing and
+  switching the pane in the clamped state, and in a bounded search range whose
+  later page is not loaded.
   Unit-covered for the continuation rule in `transcript-scroll.test.mjs`, for
+  the hold's residual arithmetic in `transcript-prepend-anchor.test.mjs`, for
   the restore decision in `transcript-reading.test.mjs`, and for the bounded
   cover in `transcript-settle.test.mjs`; live UI scenario Draft.
 

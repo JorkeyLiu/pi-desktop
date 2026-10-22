@@ -66,8 +66,6 @@ export function installTranscriptSearchFocus({
     `[data-message-id="${CSS.escape(target.messageId)}"]`,
   );
   if (!message) return;
-  const row = message.closest<HTMLElement>(".message-row") ?? message;
-  row.classList.add("transcript-search-target");
   const fresh = position.current.requestId !== target.requestId;
   if (fresh)
     position.current = { requestId: target.requestId, alignUntil: performance.now() + 1500 };
@@ -126,7 +124,6 @@ export function installTranscriptSearchFocus({
     resize.disconnect();
     for (const event of GESTURES) scroller.removeEventListener(event, gesture);
     mutation.disconnect();
-    row.classList.remove("transcript-search-target");
     unpaint();
   };
 }

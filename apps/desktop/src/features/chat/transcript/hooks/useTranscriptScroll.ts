@@ -22,7 +22,7 @@ import {
   TRANSCRIPT_VEIL_FADE_MS,
 } from "../../../../lib/transcript-settle";
 import {
-  growTranscriptWindow,
+  planTopReach,
   reduceTranscriptWindow,
   TRANSCRIPT_INITIAL_MOUNT,
   TRANSCRIPT_WINDOW_MIN,
@@ -33,13 +33,23 @@ import {
   isLaterRevealPosition,
   isRecentScrollGesture,
   isScrollGestureInput,
+  isTranscriptBottom,
   LATER_REVEAL_THRESHOLD_PX,
   reduceTranscriptScroll,
   shouldContinueEarlierHistory,
+  shouldOfferLatestNavigation,
   transcriptHasLayout,
   TRANSCRIPT_SCROLL_ROUNDING_TOLERANCE_PX,
   type ScrollInputType,
 } from "../../../../lib/transcript-scroll";
+import {
+  captureVisibleFragment,
+  isPrependAnchorPending,
+  PREPEND_ANCHOR_TOLERANCE_PX,
+  remeasureVisibleFragment,
+  resolvePrependAnchor,
+  type VisibleFragmentAnchor,
+} from "../../../../lib/transcript-prepend-anchor";
 import { readScrollInputContext } from "../../../../lib/scroll-input";
 import { useDisclosureAnchor } from "../../../../hooks/use-disclosure-anchor";
 import type { TranscriptSearchTarget } from "../../../../lib/transcript-reading";
@@ -113,10 +123,43 @@ export function useTranscriptScroll({
   const coveredRef = useRef(false);
   const loadingOlderRef = useRef(false);
   const followFrameRef = useRef(0);
-  const prependHeightRef = useRef<number | null>(null);
+  /**
+   * The reader's visible fragment, held across one upward-history commit
+   * (ADR 0331). Captured before the commit that adds height above the reading
+   * position, applied once after it; see `capturePrependAnchor` below.
+   */
+  const prependAnchorRef = useRef<VisibleFragmentAnchor | null>(null);
+  /** The read that armed that hold has completed (see `loadOlder`). */
+  const prependAnchorSettledRef = useRef(false);
+  /**
+   * Drop the hold and the read it was armed for, together. The two refs are one
+   * state: a hold left behind without its settle flag (or the reverse) would
+   * keep a stale correction armed for a commit that already happened.
+   */
+  const releasePrependAnchor = useCallback(() => {
+    prependAnchorRef.current = null;
+    prependAnchorSettledRef.current = false;
+  }, []);
   const [loadingOlder, setLoadingOlder] = useState(false);
   loadingOlderRef.current = loadingOlder;
-  const [showJump, setShowJump] = useState(false);
+  /*
+    Follow released is the reader's own state; the button is not. What is left
+    to navigate is decided by `shouldOfferLatestNavigation` from this flag, the
+    measured bottom, the loaded range, and a historical window - a released
+    scroller that a clamp placed on the newest bottom has nothing to offer.
+  */
+  const [followReleased, setFollowReleased] = useState(false);
+  /**
+   * Measured after every commit and every native scroll event: the scroller is
+   * at the bottom of the range it has loaded. Refs cannot express this, and the
+   * follow flag cannot stand in for it - a clamp, a grown viewport, or a
+   * restored offset arrives without a downward gesture.
+   *
+   * Assumed until measured: a pane that has not been laid out yet has nothing
+   * below the viewport to navigate to, and the first measurement (in the layout
+   * phase of its first commit) settles it before the reader can see it.
+   */
+  const [atRangeBottom, setAtRangeBottom] = useState(true);
 
   // Steady-state cap on mounted history rows (D261). Grows when the user
   // reaches the top of the window; reset per session below.
@@ -151,7 +194,7 @@ export function useTranscriptScroll({
   }, []);
   const readingPositionMissing = useCallback(() => {
     pinnedRef.current = true;
-    setShowJump(false);
+    setFollowReleased(false);
     scrollToBottom();
   }, [scrollToBottom]);
   const {
@@ -174,7 +217,7 @@ export function useTranscriptScroll({
     cancelReadingPosition();
     cancelFollowScroll();
     pinnedRef.current = false;
-    setShowJump(true);
+    setFollowReleased(true);
   }, [cancelFollowScroll, cancelReadingPosition]);
 
   // A manual disclosure (a tool, thinking or activity title; #324) hands this
@@ -196,6 +239,77 @@ export function useTranscriptScroll({
     recordScrollPosition,
   );
 
+  /**
+   * The cold-open initial fill has been asked for by this pane. One per pane,
+   * never reset: it covers a pane that presents nothing, and every later page is
+   * a reader reach.
+   */
+  const initialFillRequestedRef = useRef(false);
+  /** This pane has presented at least one row, so its geometry means something. */
+  const presentedRef = useRef(false);
+  const reachTopRef = useRef<((readerOwnsViewport?: boolean) => void) | null>(null);
+  const loadOlderRef = useRef<() => void>(() => {});
+  /**
+   * The one continuation gate for every trigger that is not a scroll event: a
+   * reader gesture at the boundary, the boundary's visibility transition, and the
+   * pane's own content commits. It re-reads the geometry gates from refs and calls
+   * the current trigger through a ref, so its identity is stable: the observer
+   * must not be rebuilt when a page lands, because a new IntersectionObserver
+   * reports the boundary's current visibility as its first record - which would
+   * turn every landed page into a fresh reach and page the whole conversation in.
+   */
+  const continueEarlierHistory = useCallback((readerOwnsViewport = false) => {
+    const el = scrollRef.current;
+    if (!el || !transcriptHasLayout(el)) return;
+    // Only a pane that has presented a row has a reading position to continue
+    // from; the cold-open fill of an unpresented pane is `requestInitialFill`.
+    if (!presentedRef.current) return;
+    if (
+      !shouldContinueEarlierHistory({
+        geometry: el,
+        pinned: pinnedRef.current,
+        positioned: positionedRef.current,
+        covered: coveredRef.current,
+      })
+    ) {
+      return;
+    }
+    reachTopRef.current?.(readerOwnsViewport);
+  }, []);
+
+  /**
+   * The cold-open initial fill: one older page, asked for by a pane that presents
+   * no row yet while the settle veil covers it (D287). Such a pane has no
+   * geometry of its own to judge - an empty scroller never overflows and never
+   * fills the viewport - so this is not a continuation decision: it is the one
+   * page the pane may pull before it has anything to read, and its rows land
+   * behind the veil that is already up. Asked once per pane; after it, every page
+   * is a reader reach through `continueEarlierHistory`.
+   */
+  const requestInitialFill = useCallback(() => {
+    if (initialFillRequestedRef.current) return;
+    initialFillRequestedRef.current = true;
+    loadOlderRef.current();
+  }, []);
+
+  /**
+   * One queued continuation, never more. The commit that calls this has already
+   * been laid out; running in a frame keeps the page it asks for from landing
+   * inside the same task as the commit that justified it, and a second commit
+   * before that frame must not queue a second request - the gate reads live
+   * geometry when the frame runs.
+   */
+  const continueFrameRef = useRef(0);
+  const scheduleContinueEarlierHistory = useCallback(() => {
+    if (continueFrameRef.current) return;
+    continueFrameRef.current = requestAnimationFrame(() => {
+      continueFrameRef.current = 0;
+      if (readingPositionPendingRef.current) return;
+      continueEarlierHistory();
+    });
+  }, [continueEarlierHistory]);
+  useEffect(() => () => cancelAnimationFrame(continueFrameRef.current), []);
+
   // A user scroll-up gesture always emits input before its scroll events;
   // programmatic follow scrolling and layout clamps (composer collapse on
   // send, indicator mount/unmount) never do. Track the last real input so
@@ -216,8 +330,19 @@ export function useTranscriptScroll({
       lastScrollGestureAtRef.current = performance.now();
       // Real input takes the viewport back from a held disclosure position.
       releaseDisclosureAnchor();
+      /*
+        A gesture at the top boundary is a reach even when the scroller cannot
+        move. At the very top the browser has no offset left to produce, so it
+        emits no scroll event: a reader pushing for older history would
+        otherwise stall on the page already in view. The gesture also owns the
+        viewport for the hold taken before the resulting commit, even though
+        the follow state is only released by the scroll event that follows.
+      */
+      if (event.type === "wheel" || event.type === "touchmove") {
+        continueEarlierHistory(true);
+      }
     },
-    [cancelReadingPosition, releaseDisclosureAnchor],
+    [cancelReadingPosition, continueEarlierHistory, releaseDisclosureAnchor],
   );
 
   useEffect(() => {
@@ -243,7 +368,7 @@ export function useTranscriptScroll({
     releaseDisclosureAnchor();
     cancelFollowScroll();
     pinnedRef.current = savedReadingPosition?.pinned ?? true;
-    setShowJump(!pinnedRef.current);
+    setFollowReleased(!pinnedRef.current);
     if (pinnedRef.current) scrollToBottom();
   }, [cancelFollowScroll, releaseDisclosureAnchor, savedReadingPosition, scrollToBottom]);
 
@@ -266,6 +391,9 @@ export function useTranscriptScroll({
     if (becameHidden) {
       releaseDisclosureAnchor();
       cancelFollowScroll();
+      // A hold belongs to the layout this pane was reading; a hidden scroller
+      // has none, and the reveal below owns the position instead.
+      releasePrependAnchor();
       // Do not read `el.scrollTop` here: the hide CSS has already skipped
       // rendering, so the box reports 0. Restore the last laid-out offset.
       retainedScrollTopRef.current = lastLaidOutScrollTopRef.current;
@@ -281,13 +409,40 @@ export function useTranscriptScroll({
     el.scrollTop = retained;
     lastScrollTopRef.current = retained;
     lastLaidOutScrollTopRef.current = retained;
-  }, [cancelFollowScroll, paneVisible, releaseDisclosureAnchor, scrollToBottom]);
+  }, [
+    cancelFollowScroll,
+    paneVisible,
+    releaseDisclosureAnchor,
+    releasePrependAnchor,
+    scrollToBottom,
+  ]);
 
   // A hidden pane must not chase its stream: its scroller has no visible
   // viewport, and the measurements a follow scroll depends on are unreliable
   // while it is out of view. It re-anchors when it is revealed instead.
   const paneVisibleRef = useRef(paneVisible);
   paneVisibleRef.current = paneVisible;
+  /**
+   * Record whether the scroller sits at the bottom of what it has loaded.
+   *
+   * Called once per native scroll event and once per commit (below), which is
+   * every way the geometry can change without the follow flag changing with it:
+   * a clamp after content below shrank, a grown viewport, a restored offset, a
+   * follow scroll that landed. It writes state only when the answer changes, so
+   * a scroll event that stays at the bottom does not re-render.
+   */
+  const measureRangeBottom = useCallback(() => {
+    // A pane that presents no row has no reading position to navigate from, and
+    // an empty first paint must stay empty until its covered commit: measuring
+    // there would write state inside that commit for nothing.
+    if (!presentedRef.current) return;
+    const el = scrollRef.current;
+    // A box without layout (a hidden pane, `content-visibility`) reports no
+    // position at all: keep the last answer instead of replacing it with noise.
+    if (!el || !transcriptHasLayout(el)) return;
+    const next = isTranscriptBottom(el);
+    setAtRangeBottom((current) => (current === next ? current : next));
+  }, []);
   const scheduleFollowScroll = useCallback(() => {
     if (!paneVisibleRef.current) return;
     // A held disclosure position wins over a queued follow frame: re-asserting
@@ -313,27 +468,75 @@ export function useTranscriptScroll({
   // restored first: its height can keep changing for several frames, and
   // re-pinning on any one of them is what dragged that title out of view.
   const followScrollNow = useCallback(() => {
+    // The observed geometry is also the answer the jump control's visibility
+    // reads: content growing or shrinking below the viewport, or the scroller
+    // itself resizing, can leave the reader at (or off) the newest bottom
+    // without a scroll event of its own.
+    measureRangeBottom();
     if (paneVisibleRef.current && restoreDisclosureAnchor()) return;
     if (!paneVisibleRef.current || !pinnedRef.current) return;
     cancelFollowScroll();
     scrollToBottom();
-  }, [cancelFollowScroll, restoreDisclosureAnchor, scrollToBottom]);
+  }, [cancelFollowScroll, measureRangeBottom, restoreDisclosureAnchor, scrollToBottom]);
 
   useEffect(() => cancelFollowScroll, [cancelFollowScroll]);
 
-  const loadOlder = useCallback(() => {
-    const el = scrollRef.current;
-    // Paging is a reading gesture, so a hidden pane never initiates one.
+  /**
+   * Reading position held across one upward-history commit (ADR 0331).
+   *
+   * Native scroll anchoring holds the visible row for an ordinary prepend, but
+   * it performs no adjustment at all at `scrollTop === 0`, and inside a turn a
+   * page boundary cuts it anchors on a node other than the fragment in view.
+   * One hold covers both: the fragment at the reading line plus its viewport
+   * offset, captured before the commit that adds height above and applied once
+   * after it. The correction is measured against the layout the browser already
+   * produced, so native anchoring and this hold never compensate twice, and a
+   * single write in one layout phase is not a correction loop.
+   *
+   * `readerOwnsViewport` marks the paths where the reader's own input (a wheel
+   * at the boundary, explicit navigation) took the scroller to the band: the
+   * follow state is only updated later in `handleScroll`, so `pinnedRef` alone
+   * would read a first upward reach as "still pinned" and skip the hold.
+   */
+  const capturePrependAnchor = useCallback((readerOwnsViewport = false) => {
     if (!paneVisibleRef.current) return;
-    if (!el || !hasMoreBefore || loadingOlder || !onLoadOlder) {
-      return;
+    if (pinnedRef.current && !readerOwnsViewport) return;
+    if (readingPositionPendingRef.current) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const anchor = captureVisibleFragment(el);
+    if (anchor) {
+      prependAnchorRef.current = anchor;
+      prependAnchorSettledRef.current = false;
     }
-    // Prepending rows changes scrollHeight. Capture the old height so the
-    // user's viewport stays anchored to the same message after the page lands.
-    prependHeightRef.current = el.scrollHeight;
+  }, [readingPositionPendingRef]);
+
+  /**
+   * Whether a reach at the top can dispatch an older page right now: a visible
+   * pane, loaded history still behind it, no read already in flight, and a
+   * reader to request one. `reachTop` asks this *before* it arms a hold, so a
+   * pane with nothing left to fetch takes no hold at all.
+   */
+  const canLoadOlder = useCallback(
+    (): boolean =>
+      paneVisibleRef.current &&
+      hasMoreBefore &&
+      !loadingOlder &&
+      onLoadOlder !== undefined,
+    [hasMoreBefore, loadingOlder, onLoadOlder],
+  );
+
+  const loadOlder = useCallback(() => {
+    if (!canLoadOlder() || !onLoadOlder) return;
     setLoadingOlder(true);
-    void onLoadOlder().finally(() => setLoadingOlder(false));
-  }, [hasMoreBefore, loadingOlder, onLoadOlder]);
+    void onLoadOlder().finally(() => {
+      setLoadingOlder(false);
+      // The commit this hold waits for lands with the page it asked for. Once
+      // the read is done, a hold that still finds nothing above it has no
+      // commit coming and must not measure every later one.
+      prependAnchorSettledRef.current = true;
+    });
+  }, [canLoadOlder, onLoadOlder]);
 
   /**
    * Reading forward is not a control (D269): approaching the bottom of the
@@ -351,40 +554,35 @@ export function useTranscriptScroll({
   /**
    * Reaching the top escalates in two stages (D261): mount more of what is
    * already loaded, and only fetch an older page once the window covers all of
-   * it. Both stages anchor the viewport the same way, because both change
-   * scrollHeight above the rows the user is reading.
+   * it. Both stages add height above the reading position. Native scroll
+   * anchoring holds the reader's row for most of it; the two states it cannot
+   * hold (the exact top, and a page that cuts inside a turn) are covered by the
+   * one hold taken here, before the commit either stage asks for.
+   *
+   * A reach that asks for neither stage - the window already mounts every
+   * loaded row and no older page can be dispatched - takes no hold: the commit
+   * that would resolve it never happens, so an armed hold would keep re-reading
+   * the reading line on every later scroll and every later commit instead of
+   * settling.
    */
-  const reachTop = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const grown = growTranscriptWindow(windowSize, historyLengthRef.current);
-    if (grown !== windowSize) {
-      // Mounting rows above the viewport changes scrollHeight exactly the way a
-      // fetched page does, so it takes the same anchor.
-      prependHeightRef.current = el.scrollHeight;
-      setWindowSize(grown);
+  const reachTop = useCallback((readerOwnsViewport = false) => {
+    const plan = planTopReach({
+      windowSize,
+      historyLength: historyLengthRef.current,
+      canLoadOlder: canLoadOlder(),
+    });
+    if (!plan) return;
+    // Taken before the commit the plan asks for, and only for one that will
+    // actually happen.
+    capturePrependAnchor(readerOwnsViewport);
+    if (plan.kind === "grow") {
+      setWindowSize(plan.windowSize);
       return;
     }
     loadOlder();
-  }, [loadOlder, windowSize]);
-
-  // Anchors the viewport whenever rows appear above it — a fetched older page
-  // (`messages.length`) or a grown mounted window (`windowSize`, D261). Both add
-  // height above the reading position, so both are corrected here before paint.
-  useLayoutEffect(() => {
-    const previousHeight = prependHeightRef.current;
-    if (previousHeight === null) return;
-    const el = scrollRef.current;
-    prependHeightRef.current = null;
-    if (!el) return;
-    const delta = el.scrollHeight - previousHeight;
-    if (delta <= 0) return;
-    el.scrollTop += delta;
-    lastScrollTopRef.current = el.scrollTop;
-    if (transcriptHasLayout(el)) lastLaidOutScrollTopRef.current = el.scrollTop;
-  }, [messages.length, windowSize]);
-
-
+  }, [canLoadOlder, capturePrependAnchor, loadOlder, windowSize]);
+  reachTopRef.current = reachTop;
+  loadOlderRef.current = loadOlder;
 
   // Follow the stream only while the user is pinned to the bottom; a manual
   // scroll up pauses following and surfaces the jump-to-latest pill.
@@ -394,9 +592,21 @@ export function useTranscriptScroll({
     if (paneVisibleRef.current && transcriptHasLayout(el)) {
       lastLaidOutScrollTopRef.current = el.scrollTop;
     }
+    measureRangeBottom();
     if (readingPositionPendingRef.current) {
       lastScrollTopRef.current = el.scrollTop;
       return;
+    }
+    /*
+      The page this pane asked for lands in a commit that can be several frames
+      away: entries arrive through a deferred projection. The reader may keep
+      scrolling until then, so the hold taken at request time is re-read on
+      every scroll event that follows - the commit is answered with where the
+      reader is, not with where they were when the page was requested.
+    */
+    if (prependAnchorRef.current) {
+      const held = captureVisibleFragment(el);
+      if (held) prependAnchorRef.current = held;
     }
     // A real gesture is never stale noise: the reader's own input took the
     // scroller to the near-top band, and this event is the last one that
@@ -420,14 +630,14 @@ export function useTranscriptScroll({
         covered: coveredRef.current,
       })
     ) {
-      reachTop();
+      reachTop(gesturing);
     }
     // The bottom boundary continues the same way: the reader never has to press
     // anything to see what comes next.
     if (paneVisibleRef.current && isLaterRevealPosition(el)) loadLater();
     if (readingWindow) {
       lastScrollTopRef.current = el.scrollTop;
-      setShowJump(true);
+      setFollowReleased(true);
       rememberReadingPosition();
       return;
     }
@@ -455,21 +665,21 @@ export function useTranscriptScroll({
     if (transition.releasedFollow) cancelFollowScroll();
     if (gesturing && transition.releasedFollow) {
       pinnedRef.current = false;
-      setShowJump(true);
+      setFollowReleased(true);
     } else if (transition.releasedFollow) {
       // Programmatic / layout noise: re-baseline the observed position and
       // keep the follow state unchanged instead of treating it as a user
       // gesture. A pinned transcript re-asserts the bottom; an unpinned one
       // stays unpinned.
       pinnedRef.current = wasPinned;
-      setShowJump(!wasPinned);
+      setFollowReleased(!wasPinned);
       scheduleFollowScroll();
     } else {
       pinnedRef.current = transition.pinned;
-      setShowJump(transition.showJump);
+      setFollowReleased(!transition.pinned);
     }
     rememberReadingPosition();
-  }, [cancelFollowScroll, loadLater, reachTop, readingPositionPendingRef, readingWindow, rememberReadingPosition, scheduleFollowScroll]);
+  }, [cancelFollowScroll, loadLater, measureRangeBottom, reachTop, readingPositionPendingRef, readingWindow, rememberReadingPosition, scheduleFollowScroll]);
 
   // Send / retry / regenerate always re-pins follow mode so the new prompt and
   // its stream stay in view, even if the user had scrolled up through history.
@@ -483,8 +693,11 @@ export function useTranscriptScroll({
     cancelReadingPosition();
     releaseDisclosureAnchor();
     cancelFollowScroll();
+    // A turn start re-bottoms the transcript: the reader's held position is not
+    // the position this pane is about to show.
+    releasePrependAnchor();
     pinnedRef.current = true;
-    setShowJump(false);
+    setFollowReleased(false);
     scrollToBottom();
     rememberReadingPosition();
     scheduleFollowScroll();
@@ -494,6 +707,7 @@ export function useTranscriptScroll({
     isRunning,
     paneVisible,
     releaseDisclosureAnchor,
+    releasePrependAnchor,
     rememberReadingPosition,
     scheduleFollowScroll,
     scrollToBottom,
@@ -627,14 +841,17 @@ export function useTranscriptScroll({
     [allHistoryEntries, transcriptWindow.bounded, transcriptWindow.mounted],
   );
 
-  const releaseSearchFollow = useCallback((fresh: boolean) => {
+  presentedRef.current = historyEntries.length > 0 || Boolean(tailEntry);
+
+  const releaseSearchFollow = useCallback(() => {
     cancelReadingPosition();
-    if (fresh) prependHeightRef.current = null;
     releaseDisclosureAnchor();
     cancelFollowScroll();
+    // Search navigation asks for a row somewhere else: it drops the hold.
+    releasePrependAnchor();
     pinnedRef.current = false;
-    setShowJump(true);
-  }, [cancelFollowScroll, cancelReadingPosition, releaseDisclosureAnchor]);
+    setFollowReleased(true);
+  }, [cancelFollowScroll, cancelReadingPosition, releaseDisclosureAnchor, releasePrependAnchor]);
   useTranscriptSearchFocus({
     target: searchTarget,
     source: searchTarget
@@ -659,6 +876,54 @@ export function useTranscriptScroll({
     cancelFollowScroll();
     scrollToBottom();
   }, [cancelFollowScroll, hydrationBounded, hydrationTick, scrollToBottom]);
+
+  /*
+    The one write of the upward hold (ADR 0331). It runs in the layout phase of
+    the commit that actually changed the mounted history - not on the request
+    that asked for it, and not on a deferred render that mounted nothing - so it
+    reads the layout the browser has already produced, native anchoring
+    included, and covers only the residual: no double compensation, no
+    geometry loop, one write per hold.
+  */
+  useLayoutEffect(() => {
+    const held = prependAnchorRef.current;
+    if (!held) return;
+    const el = scrollRef.current;
+    if (!el || !paneVisible) return;
+    // A pinned transcript is re-bottomed by follow, and a pending restore owns
+    // the position outright; neither is a reader holding a row in place.
+    if (pinnedRef.current || readingPositionPendingRef.current) return;
+    const current = remeasureVisibleFragment(el, held.messageId);
+    if (!current) {
+      // The row is no longer mounted; there is nothing to hold on to.
+      prependAnchorRef.current = null;
+      return;
+    }
+    const resolution = resolvePrependAnchor(held, current, el);
+    if (
+      isPrependAnchorPending({
+        gainedAbove: resolution.gainedAbove,
+        readSettled: prependAnchorSettledRef.current,
+      })
+    ) {
+      // Nothing landed above the held fragment yet: this is not the commit the
+      // hold was taken for, so keep it and follow the reader's reading line.
+      prependAnchorRef.current = { ...held, offset: current.offset };
+      return;
+    }
+    if (resolution.gainedAbove < PREPEND_ANCHOR_TOLERANCE_PX) {
+      // The read that armed it is done and nothing came above: no commit is
+      // coming for this hold.
+      prependAnchorRef.current = null;
+      prependAnchorSettledRef.current = false;
+      return;
+    }
+    prependAnchorRef.current = null;
+    if (resolution.target === null) return;
+    el.scrollTop = resolution.target;
+    recordScrollPosition(el.scrollTop);
+  }, [historyEntries, paneVisible]);
+
 
   // Sample the scroller once per frame from the expansion commit onward and
   // lift the veil once the geometry has stopped moving. The bounded commit
@@ -756,7 +1021,8 @@ export function useTranscriptScroll({
     const el = scrollRef.current;
     if (!el) return;
     if (isHistoryRevealPosition(el)) {
-      reachTop();
+      // Explicit navigation: the reader owns the viewport from here.
+      reachTop(true);
       return;
     }
     releaseDisclosureAnchor();
@@ -773,14 +1039,29 @@ export function useTranscriptScroll({
   const jumpToLatest = useCallback(() => {
     cancelReadingPosition();
     releaseDisclosureAnchor();
+    releasePrependAnchor();
     pinnedRef.current = true;
-    setShowJump(false);
+    setFollowReleased(false);
     scrollToBottom(
       window.matchMedia("(prefers-reduced-motion: reduce)").matches
         ? "auto"
         : "smooth",
     );
-  }, [cancelReadingPosition, releaseDisclosureAnchor, scrollToBottom]);
+    /*
+      Persist the arrival, not just the state. Pressed while the scroller is
+      already at the bottom, `scrollToBottom` writes nothing, no scroll event
+      follows, and the remembered position would still say "released" - which is
+      what a hidden pane or a session switch restores. The bookmark is written
+      here so no later reveal can resurrect the control.
+    */
+    rememberReadingPosition();
+  }, [
+    cancelReadingPosition,
+    releaseDisclosureAnchor,
+    releasePrependAnchor,
+    rememberReadingPosition,
+    scrollToBottom,
+  ]);
 
   /*
     The first position is established once the pane is on screen, its content has
@@ -799,13 +1080,18 @@ export function useTranscriptScroll({
     setPositioned(true);
   }, [hydrationBounded, messages.length, paneVisible, positioned, veilCovering]);
 
-  // D269: history progression follows the visible top boundary, not only a
-  // native scroll event. A tail page can collapse to less than one viewport,
-  // and a fetched page can initially sit outside the mounted window; neither
-  // case changes scrollTop, so the old scroll-only trigger could strand both
-  // the earlier transcript and the minimap. Re-observing after each window/page
-  // transition keeps advancing until the boundary leaves the near-top band or
-  // no earlier history remains.
+  /*
+    D269: history progression follows the visible top boundary, not only a
+    native scroll event. A tail page can collapse to less than one viewport, and
+    a fetched page can initially sit outside the mounted window; neither case
+    changes scrollTop, so a scroll-only trigger strands both the earlier
+    transcript and the minimap.
+
+    The boundary's own visibility transitions are one owner (below); the pane's
+    content obligations are another. They are separate effects because the
+    observer must keep its identity: it is rebuilt only when what it observes
+    changes, never when a page lands.
+  */
   useEffect(() => {
     const root = scrollRef.current;
     const boundary = historyBoundaryRef.current;
@@ -815,36 +1101,11 @@ export function useTranscriptScroll({
     // looking at. The pane re-evaluates when it is revealed, because
     // `paneVisible` is a dependency of this effect.
     if (!paneVisible) return;
-    let frame = 0;
-    const advanceIfHistoryBoundaryVisible = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        if (
-          scrollRef.current !== root ||
-          readingPositionPendingRef.current ||
-          !shouldContinueEarlierHistory({
-            geometry: root,
-            pinned: pinnedRef.current,
-            positioned: positionedRef.current,
-            covered: coveredRef.current,
-          })
-        ) {
-          return;
-        }
-        reachTop();
-      });
-    };
-
-    // Covers an underfilled tail immediately, including environments without
-    // IntersectionObserver; the observer then owns subsequent visibility changes.
-    advanceIfHistoryBoundaryVisible();
-    if (typeof IntersectionObserver === "undefined") {
-      return () => cancelAnimationFrame(frame);
-    }
+    if (typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver(
       (records) => {
         if (records.some((record) => record.isIntersecting)) {
-          advanceIfHistoryBoundaryVisible();
+          scheduleContinueEarlierHistory();
         }
       },
       {
@@ -853,10 +1114,38 @@ export function useTranscriptScroll({
       },
     );
     observer.observe(boundary);
-    return () => {
-      cancelAnimationFrame(frame);
-      observer.disconnect();
-    };
+    return () => observer.disconnect();
+  }, [hasEarlierHistory, paneVisible, scheduleContinueEarlierHistory, sessionId]);
+
+  /*
+    The pane's own content change is not a reader reach. Anchoring holds the row
+    the reader is looking at, so a landed page or a mounted window leaves the
+    boundary exactly where it was: advancing on that change would page the
+    conversation in by itself, one page per commit, for a reader resting at the
+    top. A content-driven run therefore continues only while the pane still owes
+    what it is showing:
+
+    * it holds loaded rows it has not mounted, or a transcript that does not fill
+      the viewport - the case this trigger exists for.
+
+    A pane that still presents nothing is not a continuation at all: it asks for
+    its one cold-open fill (`requestInitialFill`) behind the veil, and nothing
+    else. Anything else waits for the reader to reach the boundary again (a
+    scroll, or a gesture at the top where the browser has no offset left to
+    move).
+  */
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || !hasEarlierHistory || !paneVisible) return;
+    if (!presentedRef.current) {
+      if (coveredRef.current) requestInitialFill();
+      return;
+    }
+    const owesViewportContent =
+      transcriptWindow.hiddenAbove > 0 ||
+      root.scrollHeight <= root.clientHeight + HISTORY_REVEAL_THRESHOLD_PX;
+    if (!owesViewportContent) return;
+    scheduleContinueEarlierHistory();
     // `hiddenAbove` is a dependency because an IntersectionObserver does not
     // re-notify while the boundary stays continuously visible: growing the
     // window changes neither `messages.length` nor the intersection state, so
@@ -871,10 +1160,12 @@ export function useTranscriptScroll({
     messages.length,
     paneVisible,
     positioned,
-    reachTop,
+    requestInitialFill,
+    scheduleContinueEarlierHistory,
     sessionId,
     transcriptWindow.hiddenAbove,
   ]);
+
 
   // The same boundary rule at the bottom (D269): a scroll event is not the only
   // way to reach the end of a window. A page that lands short of a viewport, a
@@ -934,7 +1225,18 @@ export function useTranscriptScroll({
     historyBoundaryRef,
     laterBoundaryRef,
     loadingOlder,
-    showJump,
+    /*
+      What the control would still do, not what follow was. A released scroller
+      that a clamp placed on the newest bottom has nowhere to navigate, so it
+      renders nothing there; a bounded range or a historical window keeps the
+      return.
+    */
+    showJump: shouldOfferLatestNavigation({
+      followReleased,
+      atRangeBottom,
+      hasMoreAfter,
+      historical: readingWindow,
+    }),
     historyEntries,
     tailEntry,
     minimapMessages,

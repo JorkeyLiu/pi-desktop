@@ -214,8 +214,15 @@
   /* Keep the content axis stable when the scrollbar appears, but do not reserve
    * a second empty gutter on the left of the conversation. */
   scrollbar-gutter: stable;
-  /* Pinned-follow drives the scroll position; native anchoring fights it. */
-  overflow-anchor: none;
+  /* Reading upward is anchored by the browser. An older page or a grown
+   * mounted window adds height above the row the reader is looking at, and
+   * native anchoring holds that row where it was through the commit and
+   * through every later height change, without a scripted correction. Pinned
+   * follow still owns the bottom: it re-bottoms from the observed layout, and
+   * the box it anchors to sits at the end of the content, so there is no
+   * height above it to compensate. The furniture inside the scroller is
+   * excluded from anchor candidacy below. */
+  overflow-anchor: auto;
   /* Hide the transcript across the Composer reserve instead of covering it with
    * an opaque dock band (issue #728, revised by D624). The gradient resolves
    * against this scrollport's own box, so it stays anchored to the pane while
@@ -381,6 +388,23 @@
   }
 }
 
+/*
+ * Everything in the scroller except the rows themselves is furniture: the
+ * history status row, the later boundary, the first-commit spacer, the runtime
+ * status lane, and the retry control. Scroll anchoring must never choose one of
+ * them as the row to hold, because a box that is itself the thing being
+ * inserted or resized above the reading position cannot represent the reader's
+ * place: the rows behind it would move with it. Excluding them leaves the
+ * mounted rows as the only candidates.
+ */
+.transcript-history-loading,
+.transcript-later-boundary,
+.transcript-hydration-spacer,
+.transcript-runtime-status,
+.transcript-load-later {
+  overflow-anchor: none;
+}
+
 .transcript-history-loading {
   min-height: 26px;
   box-sizing: border-box;
@@ -388,6 +412,15 @@
   font-size: var(--text-sm);
   text-align: center;
   padding: 2px 0 12px;
+}
+/*
+ * The label keeps its line box whether or not a read is in flight: this row sits
+ * above the rows the reader is reading, so a height that changes with the label
+ * moves the whole transcript by the difference on every page (ADR 0331).
+ * `aria-hidden` already tells assistive technology whether it applies.
+ */
+.transcript-history-loading[aria-hidden="true"] .transcript-history-loading-label {
+  visibility: hidden;
 }
 
 /* The bottom boundary of the reading window. It carries no control: reaching

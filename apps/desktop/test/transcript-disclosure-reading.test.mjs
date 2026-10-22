@@ -81,9 +81,12 @@ test("the transcript scroller provides its own anchor notifier", () => {
 test("the transcript restores the held title inside its resize observer", () => {
   // The height of an animated activity group keeps changing for several frames,
   // so the correction has to run from the observer, before follow.
+  // The same observer also answers where the scroller sits (the jump control
+  // reads it); that measurement writes no position, so the held title is still
+  // restored before any follow.
   assert.match(
     transcript,
-    /const followScrollNow = useCallback\(\(\) => \{\s*if \(paneVisibleRef\.current && restoreDisclosureAnchor\(\)\) return;\s*if \(!paneVisibleRef\.current \|\| !pinnedRef\.current\) return;\s*cancelFollowScroll\(\);\s*scrollToBottom\(\);/,
+    /const followScrollNow = useCallback\(\(\) => \{[\s\S]{0,400}?if \(paneVisibleRef\.current && restoreDisclosureAnchor\(\)\) return;\s*if \(!paneVisibleRef\.current \|\| !pinnedRef\.current\) return;\s*cancelFollowScroll\(\);\s*scrollToBottom\(\);/,
   );
   assert.match(transcript, /new ResizeObserver\(followScrollNow\)/);
   assert.match(transcript, /ro\.observe\(content, \{ box: "border-box" \}\)/);
@@ -95,7 +98,7 @@ test("holding a disclosure leaves follow without a delayed grab-back", () => {
   // on real input or an explicit re-pin, never by taking the bottom back later.
   assert.match(
     transcript,
-    /const releaseFollow = useCallback\(\(\) => \{\s*cancelReadingPosition\(\);\s*cancelFollowScroll\(\);\s*pinnedRef\.current = false;\s*setShowJump\(true\);/,
+    /const releaseFollow = useCallback\(\(\) => \{\s*cancelReadingPosition\(\);\s*cancelFollowScroll\(\);\s*pinnedRef\.current = false;\s*setFollowReleased\(true\);/,
   );
   assert.match(
     transcript,
@@ -117,11 +120,11 @@ test("real input, a new turn and every navigation drop the held position", () =>
   );
   assert.match(
     transcript,
-    /releaseDisclosureAnchor\(\);\s*cancelFollowScroll\(\);\s*pinnedRef\.current = true;\s*setShowJump\(false\);\s*scrollToBottom\(\);/,
+    /releaseDisclosureAnchor\(\);\s*cancelFollowScroll\(\);[\s\S]{0,240}?releasePrependAnchor\(\);\s*pinnedRef\.current = true;\s*setFollowReleased\(false\);\s*scrollToBottom\(\);/,
   );
   assert.match(
     transcript,
-    /const jumpToLatest = useCallback\(\(\) => \{\s*cancelReadingPosition\(\);\s*releaseDisclosureAnchor\(\);\s*pinnedRef\.current = true;/,
+    /const jumpToLatest = useCallback\(\(\) => \{\s*cancelReadingPosition\(\);\s*releaseDisclosureAnchor\(\);\s*releasePrependAnchor\(\);\s*pinnedRef\.current = true;/,
   );
   assert.match(
     transcript,

@@ -158,7 +158,9 @@ test("a long transcript mounts under the settle veil and lifts it from measured 
   assert.match(transcript, /TRANSCRIPT_SKELETON_ROWS\.map/);
   assert.match(transcript, /data-transcript-settling=\{veilCovering \? "true" : undefined\}/);
   assert.match(transcript, /\{paneVisible && !veilCovering \? \(\s*<ConversationMinimap/);
-  assert.match(transcript, /\{\(showJump \|\| readingWindow\) && !veilCovering \? \(/);
+  // The control renders on the navigation it would still perform, which already
+  // folds a historical window in; `readingWindow` alone no longer renders it.
+  assert.match(transcript, /\{showJump && !veilCovering \? \(/);
   // Stylesheet: opaque cover, fade on leave, no z-index so the composer stays on
   // top, reduced motion honoured.
   const veil = shell.match(/\.transcript-settle-veil \{[\s\S]*?\n\}/)?.[0] ?? "";
