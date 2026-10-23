@@ -59,12 +59,12 @@ test("the fallback only fires for a still-untitled session the owning host can t
   // backend router forwards it to the owning `pi-host` — so the gate must not
   // exclude remote ids: doing so left every remote task unnamed.
   assert.doesNotMatch(queueSlice, /!isRemoteSession\(/);
-  assert.doesNotMatch(
+  assert.match(
     queueSlice,
-    /isDefaultSessionTitle\(current\?\.title\)[\s\S]{0,200}source !== "remote"/,
+    /isDefaultSessionTitle\(current\?\.title\)[\s\S]{0,200}source !== "pi-native"/,
   );
-  assert.match(queueSlice, /api\s+\.deriveSessionTitle\(sessionId, nextTitle\)/);
-  assert.match(queueSlice, /if \(!isDefaultSessionTitle\(nextTitle\)\)/);
+  assert.match(queueSlice, /\bapi\.deriveSessionTitle\(sessionId, nextTitle\)/);
+  assert.match(queueSlice, /if \(wasUntitled && current\?\.source !== "pi-native"/);
 });
 
 test("the fallback travels the existing ipc bridge into host-core", () => {

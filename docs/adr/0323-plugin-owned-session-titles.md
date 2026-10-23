@@ -1,9 +1,10 @@
 # ADR 0323: Make Session Title Generation a Standalone Plugin
 
-- Status: Accepted
+- Status: Superseded in part by ADR 0332
 - Date: 2026-10-08
 - Supersedes: ADR 0186
 - Amended: 2026-10-08 (D654 restores the deterministic first-prompt fallback)
+- Superseded in part: 2026-10-18 by ADR 0332; plugin title-generation compatibility remains supported.
 
 ## Context
 

@@ -435,6 +435,8 @@ export function validateSettingsWrite(settings: AppSettings): AppSettings {
     });
   }
   const value = settings as AppSettings & {
+    fastModelProviderId?: unknown;
+    fastModelId?: unknown;
     defaultCommandShell?: unknown;
     largePasteThreshold?: unknown;
     fontScale?: unknown;
@@ -447,6 +449,24 @@ export function validateSettingsWrite(settings: AppSettings): AppSettings {
     networkProxy?: unknown;
     networkPolicy?: unknown;
   };
+  for (const key of ["fastModelProviderId", "fastModelId"] as const) {
+    const candidate = value[key];
+    if (
+      Object.prototype.hasOwnProperty.call(value, key) &&
+      candidate !== undefined &&
+      candidate !== null &&
+      (typeof candidate !== "string" || candidate.trim().length === 0 || candidate.length > 256)
+    ) {
+      throw Object.assign(new Error(`${key} is invalid`), { errorCode: "INVALID_PARAMS" });
+    }
+  }
+  const fastModelFields = [value.fastModelProviderId, value.fastModelId];
+  const clearedFastModel = fastModelFields[0] === null && fastModelFields[1] === null;
+  const unsetFastModel = fastModelFields[0] === undefined && fastModelFields[1] === undefined;
+  const configuredFastModel = fastModelFields.every((field) => typeof field === "string" && field.trim().length > 0);
+  if (!clearedFastModel && !unsetFastModel && !configuredFastModel) {
+    throw Object.assign(new Error("fast model binding is incomplete"), { errorCode: "INVALID_PARAMS" });
+  }
   if (
     Object.prototype.hasOwnProperty.call(value, "defaultCommandShell") &&
     !isCommandShellId(value.defaultCommandShell)
@@ -677,6 +697,8 @@ export const api = {
     })),
   getSessionCollaboration: (sessionId: string) =>
     invoke<SessionCollaborationSummary>(IPC.invoke.sessionCollaboration, { sessionId }),
+  generateSessionTitle: (input: { sessionId: string; prompt: string; fallbackTitle: string }) =>
+    invoke<{ updated: boolean }>(IPC.invoke.sessionTitleGenerate, input),
   deleteSession: (id: string) => invoke(IPC.invoke.sessionDelete, id),
   getSessionScratchPath: (sessionId: string) =>
     invoke<{ path: string }>(IPC.invoke.sessionGetScratchPath, { sessionId }),

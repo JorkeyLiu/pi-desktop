@@ -18,6 +18,7 @@ export const enEntries: ChangelogEntry[] = [
       "Project menus stay visible when opened from rows near the bottom of the sidebar.",
       "Windows keeps the installer lock while it removes old backups.",
       "Switching back to a conversation keeps its loaded messages and reading position; a long transcript also settles in the right place more reliably when it first loads.",
+      "New local sessions get an immediate first-prompt title, with optional asynchronous refinement using a globally configured fast model.",
     ],
   },
   {

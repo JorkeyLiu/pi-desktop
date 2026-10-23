@@ -3056,36 +3056,37 @@ validation still needed.
 
 - **Preconditions**: A project-scoped session and a path-less session exist;
   at least one session has transcript history and one still has the default
-  title. The standalone Session Titles plugin is enabled with
-  `session.autoTitle`, `agent.complete`, and `models.list`, a deterministic test
-  model, a custom prompt template, and thinking set to off.
+  title. A deterministic local test provider is configured, and the global fast
+  model can be selected or cleared in Settings → Models.
 - **Steps**: 1) Open a Sidebar session overflow menu or right-click a session
   row and choose Rename. 2) Enter a title with surrounding whitespace and
   save. 3) Verify the title in the Sidebar, topbar, Project archive, and
   Search. 4) Restart the app and verify the title again. 5) Try an empty and
-  an over-80-Unicode-code-point title. 6) Open **Session Titles: Configure**,
-  set the prompt to return a fixed test title, choose the deterministic test
-  model, and save. 7) Send the first prompt in the default-title session. 8)
-  Confirm the Sidebar and topbar immediately show the normalized
-  48-character prompt fallback, then wait for `session:turnEnded` and the
-  plugin completion, which replaces that fallback with the deterministic test
-  title. 9) Manually rename that session and complete another turn. 10) Send
-  the first prompt in another default-title session with the plugin disabled.
+  an over-80-Unicode-code-point title. 6) Clear the fast-model selection and
+  send the first prompt in a default-title local session. 7) Confirm its
+  normalized 48-character fallback appears immediately. 8) Select a
+  deterministic test fast model and send the first prompt in another
+  default-title local session. 9) Confirm the generated title can arrive before
+  the first assistant response. 10) Manually rename that session while title
+  generation is pending; send a later prompt in another titled session.
 - **Expected**: The saved title is trimmed, displayed across every current
   session-summary surface, and persists after restart. The session stays in
   the same project or Temporary group, its transcript/message count and
   recent-activity ordering do not change, and historical notification title
   snapshots are unchanged. Empty and overlong values are rejected. Sending the
   first prompt immediately persists the normalized 48-character prompt fallback
-  as a still-replaceable automatic title. With the plugin enabled, that fallback
-  is replaced by the deterministic test title after the completed turn; after a
-  manual rename, a later plugin completion cannot replace it. A session without
-  the plugin keeps its prompt fallback, and a second prompt never changes it.
+  as a still-replaceable title. With a configured fast model, a concise title
+  replaces it asynchronously without waiting for the assistant response; with
+  no fast model or a failed/unusable completion, the fallback remains. A manual
+  rename made during generation wins the host compare-and-set, and later prompts
+  do not trigger renaming. Remote and Pi-native sessions do not use local
+  credentials for title generation and retain existing behavior. An installed
+  Session Titles plugin retains its existing permission/API compatibility.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md`,
   `03-runtime/04-data-storage.md`, `03-runtime/06-host-rpc-protocol.md`,
-  `03-runtime/02-agent-runtime.md`, `07-plugins/03-plugin-api.md`,
-  `07-plugins/13-plugin-permissions-matrix.md`, `04-ux/01-ui-ia.md`,
-  `04-ux/08-component-spec.md`, ADR 0143, ADR 0323
+  `03-runtime/02-agent-runtime.md`, `03-runtime/13-model-catalog-and-selection.md`,
+  `07-plugins/03-plugin-api.md`, `07-plugins/13-plugin-permissions-matrix.md`,
+  ADR 0143, ADR 0323, ADR 0332
 - **Acceptance**: F (session metadata persistence), Quality (localized task
   management)
 - **Milestone**: M2
@@ -10418,26 +10419,28 @@ This test plan spec is accepted when:
 - Composer omits the 本地 workspace label and shows Agent/Plan/Goal plus the
   active model ID; both locales expose the Plan and Goal approval copy.
 
-### US-UI-06 Session title plugin
-- Create a new task and send a first prompt such as "同步代码".
-- The core keeps the localized default title while the prompt is sent and after
-  completion. When the Session Titles plugin is enabled and authorized, it may
-  generate a title after the first completed turn using its configured prompt,
-  model, and thinking level. Without the plugin, the title remains the default.
-- Rename the session manually and complete another turn. The plugin must not
-  replace the user-defined title.
+### US-UI-06 First-message session titles
+- Sending the first prompt in an ordinary local session immediately shows a
+  normalized 48-character fallback title.
+- If a global fast model is configured, a concise generated title may replace
+  it before the first assistant response. If no model is configured or
+  generation fails, the fallback remains. Manual rename wins races; later
+  prompts do not rename the session.
+- Remote and Pi-native sessions retain their existing title behavior. The
+  optional Session Titles plugin remains compatible under existing permissions.
 
 ### US-UI-08 Shortcut-only destination history
 - Navigate Settings → Project archive → a project session → Plugins.
 - Expect no back/forward buttons in the expanded sidebar or main titlebar.
 - Press `Cmd/Ctrl+[` and `Cmd/Ctrl+]`; expect them to traverse that history.
 
-### US-UI-09 Default session title persistence
-- Open an older session that showed "New task"/"New chat" and has a first user
-  message.
-- Without the title plugin, its scoped sidebar row keeps the default title;
-  with the plugin, the title changes only after the first turn completes and the
-  plugin is authorized.
+### US-UI-09 First-message title persistence
+- Open an older default-title local session with an existing first user message.
+- Its existing title remains unchanged until a new first message is sent; new
+  first messages immediately persist the prompt fallback and may receive an
+  asynchronous generated title when the optional global fast model is set.
+- Without that setting, the fallback remains. Manual titles are preserved, and
+  remote and Pi-native behavior remains unchanged.
 
 ### US-UI-11 Empty draft reuse
 - Click New task twice.

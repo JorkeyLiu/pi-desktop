@@ -21,6 +21,7 @@ import { registerJevIpc } from "./jev-ipc";
 import { registerProviderIpc } from "./provider-ipc";
 import { registerScheduledIpc } from "./scheduled-ipc";
 import { registerSessionIpc } from "./session-ipc";
+import { registerFastModelTitleIpc } from "./fast-model-title-ipc";
 import { registerSettingsIpc } from "./settings-ipc";
 import { registerStorageIpc } from "../storage/ipc";
 import { registerConfigSyncIpc } from "./config-sync-ipc";
@@ -267,6 +268,13 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     enrichSession,
     acquireSessionOperation,
     stripWinLongPrefix,
+  });
+  registerFastModelTitleIpc({
+    registrar,
+    getHost,
+    getSettings: async () => (await getHost()?.call<{ settings?: import("@pi-desktop/shared").AppSettings }>("settings.get"))?.settings ?? null,
+    complete: dependencies.completeFastModelTitle,
+    logger,
   });
   registerSettingsIpc({
     registrar,

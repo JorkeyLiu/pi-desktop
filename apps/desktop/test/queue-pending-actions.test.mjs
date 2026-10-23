@@ -23,6 +23,7 @@ test("sending the first prompt derives a replaceable title instead of renaming",
       invoked.push([channel, ...args]);
       if (channel === IPC.invoke.agentPrompt) return { ok: true, data: { turnId: "turn-1" } };
       if (channel === IPC.invoke.sessionDeriveTitle) return { ok: true, data: { updated: true } };
+      if (channel === IPC.invoke.sessionTitleGenerate) return { ok: true, data: { updated: true } };
       throw new Error(`Unexpected IPC: ${channel}`);
     } } };
     let state = {
@@ -73,6 +74,7 @@ test("sending the first prompt derives a replaceable title instead of renaming",
       invoked.filter(([channel]) => channel === IPC.invoke.sessionDeriveTitle),
       [[IPC.invoke.sessionDeriveTitle, "session-a", "Summarize the first turn"]],
     );
+    assert.equal(invoked.some(([channel]) => channel.endsWith("titleGenerate")), true);
     assert.equal(invoked.some(([channel]) => channel === IPC.invoke.sessionRename), false);
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(refreshed, 1);

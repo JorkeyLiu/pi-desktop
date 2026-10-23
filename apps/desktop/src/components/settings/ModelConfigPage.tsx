@@ -16,6 +16,7 @@ import {
   type ProviderPublic,
 } from "@pi-desktop/shared";
 import { useAppStore } from "../../stores/app-store";
+import { FastModelRow } from "./FastModelRow";
 import { api } from "../../lib/api";
 import { Button } from "../ui";
 import {
@@ -542,18 +543,19 @@ export function ModelConfigPage() {
         statusRevision={jevStatusRevision}
       />
 
-      {imageGenerationCandidates.length > 0 ? (
-        <section className="settings-card-block">
-          <div className="settings-panel model-default-panel">
+      <section className="settings-card-block">
+        <div className="settings-panel model-default-panel">
+          <FastModelRow settings={settings} providers={providers} />
+          {imageGenerationCandidates.length > 0 ? (
             <ImageGenerationModelRow
               settings={settings}
               providers={providers}
               busy={changingImageModel}
               onChange={setImageGenerationDefault}
             />
-          </div>
-        </section>
-      ) : null}
+          ) : null}
+        </div>
+      </section>
 
       {setupFor !== null ? (
         <ProviderSetupDialog

@@ -368,7 +368,7 @@ Each ADR includes:
 | 0320 | [Host-owned OAuth lifecycle for plugin providers](0320-plugin-oauth-provider-callbacks.md) | Accepted for implementation (D647; amends ADR 0259) |
 | 0321 | [Pin an acceptable address for mixed direct DNS answers](0321-skill-market-direct-dns-pinning.md) | Accepted (D648; amends ADR 0272) |
 | 0322 | [Plugin providers appear in Add Service](0322-plugin-providers-in-add-service.md) | Accepted for implementation (D650; amends ADR 0259) |
-| 0323 | [Make Session Title Generation a Standalone Plugin](0323-plugin-owned-session-titles.md) | Accepted (D652, amended by D654; supersedes ADR 0186) |
+| 0323 | [Make Session Title Generation a Standalone Plugin](0323-plugin-owned-session-titles.md) | Superseded in part by ADR 0332; plugin compatibility retained |
 | 0324 | [Make Composer Prompt Enhancement an Optional Plugin](0324-plugin-owned-composer-prompt-enhancement.md) | Accepted (D653; supersedes ADR 0121) |
 | 0325 | [Smooth Windows main-window corner compositing](0325-windows-window-corner-compositing.md) | Proposed (implementation candidate; Windows E2E pending) |
 | 0326 | [Verified SSH Host installation and daily startup](0326-verified-ssh-host-installation.md) | Accepted for experimental implementation (amends ADR 0292; Linux SSH qualification and publication pending) |
@@ -377,6 +377,7 @@ Each ADR includes:
 | 0329 | [Isolate parallel sessions of one project in git worktrees](0329-session-worktree-isolation.md) | Accepted (Windows E2E pending) |
 | 0330 | [Work-panel visibility is shell state](0330-work-panel-visibility-is-shell-state.md) | Accepted (D661; amends ADR 0028) |
 | 0331 | [Browser-anchored upward history](0331-browser-anchored-upward-history.md) | Accepted (one bounded visible-fragment hold; amends ADR 0130) |
+| 0332 | [Built-in First-Message Session Titles](0332-builtin-first-message-session-titles.md) | Accepted; supersedes ADR 0323 in part |
 | plugin-fetch-redirect-policy | [Host-enforced plugin fetch redirect policy](plugin-fetch-redirect-policy.md) | Accepted (implementation candidate for #1475) |
 
 | local-agent-remote-workspace-tools | [Local Agent and model requests for remote workspaces](local-agent-remote-workspace-tools.md) | Accepted for implementation |

@@ -26,10 +26,7 @@ import {
   pluginSessionContextFromSession,
 } from "../plugin-agent-complete";
 import type { LegacyPromptEnhancementSettings } from "../plugin-prompt-enhancement-migration";
-import {
-  completeOneShot,
-  type RuntimeProviderConfig,
-} from "@pi-desktop/agent-runtime";
+import { createOneShotCompletionService } from "./one-shot-completion-service";
 import { createFsConsentService } from "../plugin-fs-consent";
 import { pluginWorkspaceInfo, projectFolderPaths } from "../workspace-roots";
 import { createDesktopConsentService } from "../plugin-desktop-consent";
@@ -50,13 +47,12 @@ import { PluginPanelHost } from "../plugin-panel-host";
 import { PluginViewHost } from "../plugin-view-host";
 import { BrowserPane } from "../browser-view";
 import { BrowserHost, BROWSER_PLUGIN_ID } from "../browser-host";
-import { OAUTH_AUTH_KIND, type VendorOAuth } from "../oauth";
 import type { ClipboardHistory } from "../clipboard-history";
-import type { TurnEndedPayload } from "../runtime/session-coordination";
 import type { HostProcess } from "../host-process";
+import { OAUTH_AUTH_KIND, type VendorOAuth } from "../oauth";
 import type { Logger } from "../logger";
+import type { TurnEndedPayload } from "../runtime/session-coordination";
 import type { PluginAppearance } from "../../shared/plugin-panel-chrome";
-
 export type PluginServicesDependencies = {
   dataDir: string;
   logger: Logger;
@@ -201,6 +197,11 @@ export function createPluginServices({
    */
   const pluginSockets = new PluginWebSocketRegistry({
     onEvent: (pluginId, event) => plugins.deliverSocketEvent(pluginId, event),
+  });
+  const completeOneShotForInternalCall = createOneShotCompletionService({
+    getHost,
+    resolveAgentRuntimeLaunch,
+    vendorOAuth,
   });
   const plugins: PluginRuntime = new PluginRuntime({
     pluginShortcuts,
@@ -390,23 +391,10 @@ export function createPluginServices({
         });
       }
       const thinkingLevel = asPluginThinkingLevel(input.thinkingLevel);
-      const settings = await getHost()!.call<any>("settings.get");
       const launchSessionId = input.sessionId || `plugin-complete:${crypto.randomUUID()}`;
       const session = input.sessionId
         ? (await getHost()!.call<{ session?: any }>("session.get", { id: input.sessionId })).session
         : {};
-      const launch = await resolveAgentRuntimeLaunch(launchSessionId, session ?? {}, settings, {
-        mode: "agent",
-        providerId: parsed.providerId,
-        modelId: parsed.modelId,
-        thinkingLevel,
-      });
-      const runtimeProvider = {
-        ...launch.sidecarParams.provider,
-        ...(launch.sidecarParams.provider.authKind === OAUTH_AUTH_KIND
-          ? { resolveAuth: () => vendorOAuth.resolveAuth(launch.providerId) }
-          : {}),
-      } as RuntimeProviderConfig;
       const sessionContext = input.includeSessionContext
         ? pluginSessionContextFromSession(
             String(input.sessionId ?? ""),
@@ -422,23 +410,20 @@ export function createPluginServices({
         includeSessionContext: input.includeSessionContext,
         sessionContext,
       });
-      const result = await completeOneShot(
-        runtimeProvider,
+      const result = await completeOneShotForInternalCall({
+        sessionId: launchSessionId,
+        providerId: parsed.providerId,
+        modelId: parsed.modelId,
+        thinkingLevel,
         context,
-        launch.sidecarParams.thinkingLevel,
-        {
-          signal: input.signal,
-          sessionId: launchSessionId,
-          // Spec 07-plugins/03-plugin-api.md: empty model output answers the
-          // plugin with INVALID_ARGUMENT, not the runtime's internal code.
-          emptyErrorCode: "INVALID_ARGUMENT",
-          emptyErrorMessage: "The model returned no text.",
-        },
-      );
+        signal: input.signal,
+        emptyErrorCode: "INVALID_ARGUMENT",
+        emptyErrorMessage: "The model returned no text.",
+      });
       return {
         text: result.text,
-        modelKey: `${launch.providerId}/${launch.modelId}`,
-        thinkingLevel: launch.sidecarParams.thinkingLevel,
+        modelKey: result.modelKey,
+        thinkingLevel: result.thinkingLevel,
         usage: result.usage,
       };
     },

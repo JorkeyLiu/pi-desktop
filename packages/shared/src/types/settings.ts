@@ -42,8 +42,12 @@ export type AppSettings = {
   imageGeneration?: import("../image-generation.js").ImageGenerationBinding | null;
   /** All models marked for image generation; absent falls back to imageGeneration. */
   imageGenerationModels?: import("../image-generation.js").ImageGenerationBinding[] | null;
+  /** Optional default binding for the primary conversation model. */
   defaultProviderId?: string;
   defaultModelId?: string;
+  /** Shared model binding for short background helper requests; null clears both fields. */
+  fastModelProviderId?: string | null;
+  fastModelId?: string | null;
   /** Per-install update behavior; absent uses the package's safe default. */
   updatePreference?: UpdatePreference;
   /** Last manually announced release; kept local to avoid repeating notices. */

@@ -24,6 +24,7 @@ import {
   type CloseBehavior,
   type KeybindingOverrides,
   type PlanExecutionFinishStatus,
+  type SessionThinkingLevel,
 } from "@pi-desktop/shared";
 import { AgentExtensionBridge } from "./agent-extensions";
 import {
@@ -72,6 +73,7 @@ import { createSessionCoordination } from "./runtime/session-coordination";
 import { createScheduledRuntime } from "./runtime/scheduled";
 import { createDesktopServices } from "./services/desktop-services";
 import { createPluginServices } from "./services/plugin-services";
+import { createOneShotCompletionService } from "./services/one-shot-completion-service";
 import { wirePluginThemeRuntimeServices } from "./plugin-theme-services";
 import { createSessionCollaborationService } from "./services/session-collaboration";
 import {
@@ -301,6 +303,14 @@ const vendorOAuth = new VendorOAuth({
 });
 
 let sessionLaunchRuntime: ReturnType<typeof createSessionLaunchRuntime> | null = null;
+const completeFastModelTitle = createOneShotCompletionService({
+  getHost,
+  resolveAgentRuntimeLaunch: (sessionId, session, settings, overrides: { mode: "agent"; providerId: string; modelId: string; thinkingLevel?: SessionThinkingLevel }) => {
+    if (!sessionLaunchRuntime) return Promise.reject(new Error("session launch runtime is not initialized"));
+    return sessionLaunchRuntime.resolveAgentRuntimeLaunch(sessionId, session, settings, overrides);
+  },
+  vendorOAuth,
+});
 const pluginServices = createPluginServices({
   dataDir,
   logger,
@@ -857,6 +867,7 @@ function registerIpc() {
     ipcMain,
     getMainWindow,
     getHost,
+    completeFastModelTitle,
     getSidecar,
     getAgentHostBridge: () => mainState.agentHostBridge,
     getBackendRouter: () => startupState.backendRouter,

@@ -102,26 +102,27 @@ finalization. A steering failure must not terminate the active run.
 
 ### 4.1 Session title generation
 
-The core keeps new sessions readable without any model call. Sending the first
-prompt into a session whose stored title is still a recognized placeholder asks
-the host for a deterministic fallback title through `session/deriveTitle`. The
-renderer collapses whitespace and caps its request at 48 characters; host-core
-accepts it only while the stored title is still a placeholder with the `default`
-source, so the fallback never replaces a manual rename or an earlier automatic
-title, and the write does not change `updated_at`.
+When the first prompt is sent in an ordinary local session whose title is still
+a recognized placeholder, the renderer immediately requests the deterministic,
+whitespace-collapsed 48-character fallback through `session/deriveTitle`. With
+an explicitly configured global fast model, Electron main independently starts
+a one-shot completion from only the bounded first prompt; this does not wait for
+the first assistant response. A missing fast model, failed request, or unusable
+result leaves the fallback in place. The optional `fastModelProviderId` and
+`fastModelId` settings are independent of the active session model, and there is
+no implicit fallback to that model. Only the first prompt triggers this flow.
 
-That fallback keeps the source `default`: the derived text is not a user choice,
-so the session stays eligible for automatic replacement. An optional standalone
-plugin may subscribe to `session:turnEnded`; with the dedicated
-`session.autoTitle` permission it can read only the first user prompt and first
-assistant reply for a session whose title is still default, then use
-`agent.complete` with its configured prompt, model, and thinking level.
+Host-core accepts the fallback only while the stored title is a recognized
+placeholder with `default` source. Generated titles are written by
+compare-and-set against the expected title and source, so manual renames and
+another generated title win races. Neither write changes `updated_at`. The
+feature does not invoke local credentials for remote or Pi-native sessions;
+those session types retain their existing title behavior.
 
-The plugin writes through a host compare-and-set that succeeds only while the
-exact title it read is still current. Manual renames and another generated
-title therefore win concurrent updates. Host-core owns the title source in
-schema v23; this state survives renderer restart and does not expose a general
-transcript-read API. The core runs no title completion of its own.
+The standalone Session Titles plugin remains compatible and may continue using
+its existing `session.autoTitle` permission and title APIs. This feature adds no
+plugin permissions and does not broaden plugin transcript access. Host-core
+continues to own title source and persistence in schema v23.
 
 ## 5. Prompt flow
 

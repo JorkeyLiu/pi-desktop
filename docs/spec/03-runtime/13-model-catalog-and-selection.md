@@ -111,6 +111,15 @@ selection, or one whose provider or model is gone. A default the user can
 still run stays where it is until they repoint it. No storage schema or IPC
 contract changes are required.
 
+### Shared quick model
+
+Settings → Models includes an optional global quick model binding for short
+background helper requests, including first-message session-title generation.
+It stores `fastModelProviderId` and `fastModelId` in app settings, offers only
+enabled and configured chat models, and can be cleared. Older settings without
+this binding remain valid and mean no quick model is configured. Title
+generation must not silently fall back to the active conversation model.
+
 ### Discovery precedence
 
 `providers.listModels` resolves in this order, and the order is load-bearing:

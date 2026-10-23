@@ -430,39 +430,26 @@ export function createQueueSlice({
         );
         runtime.insertOptimisticUserMessage(startedIn, optimisticMessage);
         const current = get().sessions.find((session) => session.id === sessionId);
-        // Keeps the session readable without any plugin: the owning host derives
-        // a short title from this prompt but leaves it replaceable, so an
-        // installed title plugin can still upgrade it after the first turn. A
-        // remote session derives on its own host: the backend router forwards
-        // this same call to the owning `pi-host`, whose `session/deriveTitle`
-        // refuses the write once the session was renamed, so a remote session
-        // must not be excluded here. A native Pi session owns its title outside
-        // this host, so it keeps whatever that surface shows.
-        if (
-          isDefaultSessionTitle(current?.title) &&
-          current?.source !== "pi-native"
-        ) {
-          const nextTitle = promptFallbackSessionTitle(content, untitledTaskTitle());
-          if (!isDefaultSessionTitle(nextTitle)) {
-            api
-              .deriveSessionTitle(sessionId, nextTitle)
-              .then(() => get().refreshSessions())
-              .catch(() => {
-                // Non-fatal title fallback.
-              });
-          }
+        const nextTitle = promptFallbackSessionTitle(content, untitledTaskTitle());
+        const wasUntitled = isDefaultSessionTitle(current?.title);
+        if (wasUntitled && current?.source !== "pi-native" && !isDefaultSessionTitle(nextTitle)) {
+          void api.deriveSessionTitle(sessionId, nextTitle)
+            .then(() => {
+              if (current?.source === "remote") return;
+              return api.generateSessionTitle({ sessionId, prompt: content, fallbackTitle: nextTitle });
+            })
+            .then(() => get().refreshSessions())
+            .catch(() => undefined);
+        }
+        if (get().pendingPlans[sessionId]?.status === "pending") {
+          runtime.retractOptimisticUserMessage(startedIn, optimisticMessage);
+          set((state) => ({
+            isRunning: state.activeSessionId === startedIn ? false : state.isRunning,
+            runningSessions: { ...state.runningSessions, [startedIn]: false },
+          }));
+          return false;
         }
         try {
-          if (get().pendingPlans[sessionId]?.status === "pending") {
-            runtime.submittedComposerDrafts.delete(startedIn);
-            runtime.retractOptimisticUserMessage(startedIn, optimisticMessage);
-            set((state) => ({
-              isRunning:
-                state.activeSessionId === startedIn ? false : state.isRunning,
-              runningSessions: { ...state.runningSessions, [startedIn]: false },
-            }));
-            return false;
-          }
           const submissionRecord = runtime.submittedComposerDrafts.get(startedIn);
           if (submissionRecord?.abortResolution && (await submissionRecord.abortResolution)) {
             runtime.submittedComposerDrafts.delete(startedIn);
