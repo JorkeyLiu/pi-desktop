@@ -21,7 +21,10 @@ import {
 import {
   projectWorkspaceFromPath,
   saveSidebarPreferences,
+  loadLastSelectedSession,
+  clearLastSelectedSession,
 } from "../lib/sidebar-preferences";
+import { restorableSessionId } from "../lib/workspace-restoration";
 import {
   WORK_PANEL_DEFAULT_WIDTH,
   WORK_PANEL_MIN_WIDTH,
@@ -413,26 +416,39 @@ export const useAppStore = create<AppState>((set, get) => {
       // restored after a renderer reload.
       const livePlanSessionId = activePendingPlans[0]?.sessionId;
       if (livePlanSessionId) {
-        await get().selectSession(livePlanSessionId);
+        // The plan keeps launch priority, but showing it is not a user choice:
+        // it must not replace the remembered ordinary session selection.
+        await get().selectSession(livePlanSessionId, { rememberSelection: false });
       } else {
-        // App startup keeps the home composer unpersisted. Explicit New Task
-        // actions use the durable empty-session slot below, but launch itself
-        // must not create a history row merely because the app was opened.
-        set((s) => {
-          const stack = s.navStack.slice(0, s.navIndex + 1);
-          const nextStack = [...stack, { page: "chat" as const }].slice(-50);
-          return {
-            ...switchWorkPanelSession(s, undefined),
-            ...clearSessionPanes(),
-            activeSessionId: undefined,
-            draftConfiguration: null,
-            messages: [],
-            page: "chat" as const,
-            navStack: nextStack,
-            navIndex: nextStack.length - 1,
-            isRunning: false,
-          };
-        });
+        const restoredSessionId = restorableSessionId(
+          loadLastSelectedSession(),
+          hydratedSessions,
+          currentWorkspace?.path,
+          get().sessionMeta,
+        );
+        if (restoredSessionId) {
+          await get().selectSession(restoredSessionId);
+        } else {
+          clearLastSelectedSession();
+          // App startup keeps the home composer unpersisted. Explicit New Task
+          // actions use the durable empty-session slot below, but launch itself
+          // must not create a history row merely because the app was opened.
+          set((s) => {
+            const stack = s.navStack.slice(0, s.navIndex + 1);
+            const nextStack = [...stack, { page: "chat" as const }].slice(-50);
+            return {
+              ...switchWorkPanelSession(s, undefined),
+              ...clearSessionPanes(),
+              activeSessionId: undefined,
+              draftConfiguration: null,
+              messages: [],
+              page: "chat" as const,
+              navStack: nextStack,
+              navIndex: nextStack.length - 1,
+              isRunning: false,
+            };
+          });
+        }
       }
     } catch (e) {
       // A superseded attempt reports nothing: its failure belongs to a wait the

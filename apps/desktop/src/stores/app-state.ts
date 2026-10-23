@@ -216,7 +216,12 @@ export type AppState = {
   returnToLatestTranscript: (sessionId: string) => void;
   selectSession: (
     id: string,
-    opts?: { record?: boolean } & NavigationOptions,
+    /**
+     * `record` is the user's own navigation. `rememberSelection` defaults to it:
+     * a session shown on the user's behalf, such as a restored pending Plan at
+     * launch, must not replace the session the user last chose.
+     */
+    opts?: { record?: boolean; rememberSelection?: boolean } & NavigationOptions,
   ) => Promise<void>;
   newSession: (options?: {
     projectPath?: string | null;

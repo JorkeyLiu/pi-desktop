@@ -6,6 +6,7 @@ export const esEntries: ChangelogEntry[] = [
     "date": "2026-10-13",
     "highlights": [
       "La aplicación recuerda si la barra lateral está expandida o contraída y restaura ese estado al reiniciarse.",
+      "Al reiniciar se reabren el último proyecto y la última conversación que estabas leyendo, con su historial; un proyecto que borras explícitamente no vuelve.",
       "Al desplazarte hacia arriba en una conversación larga se mantiene tu posición: las páginas antiguas y el historial recién montado ya no desplazan los mensajes que estás leyendo.",
       "Configura endpoints personalizados sin una clave API; en ese modo las solicitudes no envían credenciales.",
       "Abre archivos locales fuera de una carpeta de proyecto en el navegador integrado; las páginas web siguen limitadas a los archivos del proyecto.",

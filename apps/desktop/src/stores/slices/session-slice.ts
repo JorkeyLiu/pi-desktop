@@ -33,6 +33,7 @@ import {
   sessionIsArchived,
   sessionIsPinned,
   type SessionMeta,
+  saveLastSelectedSession,
 } from "../../lib/sidebar-preferences";
 import { api } from "../../lib/api";
 import { isRemoteSession, safeSessionSummary, sessionAllows } from "../../lib/remote-session-safety";
@@ -403,6 +404,7 @@ export function createSessionSlice({
           },
       ) => {
         const record = opts?.record !== false;
+        if (record && opts?.rememberSelection !== false) saveLastSelectedSession(id);
         const commit = (state: AppState) => ({
           ...(state.activeSessionId === id ? {} : switchWorkPanelSession(state, id)),
           ...retainSessionPane(state, id, messages),

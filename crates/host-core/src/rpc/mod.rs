@@ -1852,14 +1852,17 @@ async fn handle_request(
                     .or_else(|| pid.as_str().and_then(|s| s.parse::<i64>().ok()));
                 if let Some(pid) = pid {
                     if let Ok(Some(path)) = st.db.project_path(pid) {
-                        if !path.is_empty() {
-                            if path.starts_with(crate::db::REMOTE_PROJECT_PREFIX) {
-                                if let Ok(Some(group)) = st.db.project_group_for_path(&path) {
-                                    st.workspace.set_remote(&group);
-                                }
+                        let path = path.trim();
+                        if path.starts_with(crate::db::REMOTE_PROJECT_PREFIX) {
+                            if let Ok(Some(group)) = st.db.project_group_for_path(path) {
+                                st.workspace.set_remote(&group);
                             } else {
-                                st.workspace.set(PathBuf::from(path));
+                                let _ = st.db.kv_delete("app", "currentProjectId");
                             }
+                        } else if Path::new(path).is_dir() {
+                            st.workspace.set(PathBuf::from(path));
+                        } else {
+                            let _ = st.db.kv_delete("app", "currentProjectId");
                         }
                     }
                 }
@@ -5955,6 +5958,69 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(workspace["workspace"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn handshake_restores_available_project_and_clears_missing_project() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let project_path = data_dir.path().join("workspace");
+        fs::create_dir_all(&project_path).unwrap();
+        let path = project_path.to_string_lossy().to_string();
+        let project_id = {
+            let app_state = AppState::open(data_dir.path()).unwrap();
+            app_state.db.ensure_project(&path, false).unwrap()
+        };
+        let storable_project_path = crate::db::canonical_project_path(&path).unwrap();
+        let state = Arc::new(Mutex::new(AppState::open(data_dir.path()).unwrap()));
+        {
+            let app = state.lock().await;
+            app.db
+                .kv_set("app", "currentProjectId", &json!(project_id))
+                .unwrap();
+        }
+        let (tx, _rx) = mpsc::unbounded_channel();
+        handle_request(
+            state.clone(),
+            "app.handshake",
+            json!({ "protocolVersion": crate::state::PROTOCOL_VERSION }),
+            tx.clone(),
+        )
+        .await
+        .unwrap();
+        let workspace = handle_request(state.clone(), "workspace.get", json!({}), tx.clone())
+            .await
+            .unwrap();
+        assert_eq!(workspace["workspace"]["path"], storable_project_path);
+
+        fs::remove_dir_all(&project_path).unwrap();
+        let missing_state = Arc::new(Mutex::new(AppState::open(data_dir.path()).unwrap()));
+        {
+            let app = missing_state.lock().await;
+            app.db
+                .kv_set("app", "currentProjectId", &json!(project_id))
+                .unwrap();
+        }
+        handle_request(
+            missing_state.clone(),
+            "app.handshake",
+            json!({ "protocolVersion": crate::state::PROTOCOL_VERSION }),
+            tx.clone(),
+        )
+        .await
+        .unwrap();
+        let workspace = handle_request(missing_state.clone(), "workspace.get", json!({}), tx)
+            .await
+            .unwrap();
+        assert_eq!(workspace["workspace"], Value::Null);
+        assert_eq!(
+            missing_state
+                .lock()
+                .await
+                .db
+                .kv_get("app", "currentProjectId")
+                .unwrap(),
+            None
+        );
     }
 
     #[tokio::test]

@@ -3,6 +3,10 @@ import i18n from "i18next";
 import type { ProjectWorkspace } from "@pi-desktop/shared";
 import { api } from "../../lib/api";
 import {
+  clearLastSelectedSession,
+  loadLastSelectedSession,
+} from "../../lib/sidebar-preferences";
+import {
   rememberProject,
   removeRecentProject,
   renameRecentProject,
@@ -452,6 +456,7 @@ export function createProjectSlice({
             }),
       });
       persistCurrentSidebar(get);
+      if (!preserveConversation) clearLastSelectedSession();
       const onboarding = await api.getOnboarding();
       if (!runtime.navigationIntentIsCurrent(intent)) return;
       set({ onboarding });
@@ -620,6 +625,9 @@ export function createProjectSlice({
       await api.deleteSession(id);
       void api.pluginViewClose("pi.browser", "browser", { sessionId: id })
         .catch((error) => get().showToast(String(error), { variant: "error" }));
+      // Deleting the remembered session must not leave launch restoring a row
+      // that no longer exists; deleting any other session keeps the preference.
+      if (loadLastSelectedSession() === id) clearLastSelectedSession();
       clearLocalSessionState({ get, set, runtime, withoutRecordKey }, id);
       persistCurrentSidebar(get);
       await get().refreshSessions();

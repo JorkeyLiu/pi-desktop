@@ -6,6 +6,7 @@ export const ptBREntries: ChangelogEntry[] = [
     "date": "2026-10-13",
     "highlights": [
       "O aplicativo lembra se a barra lateral está expandida ou recolhida e restaura esse estado ao reiniciar.",
+      "Ao reiniciar, o último projeto e a última conversa que você estava lendo reabrem com o histórico; um projeto limpo explicitamente não volta.",
       "Ao ler para cima em uma conversa longa, sua posição é mantida: páginas mais antigas e o histórico recém-montado não deslocam mais as mensagens que você está lendo.",
       "Configure endpoints personalizados sem chave de API; nesse modo, as solicitações não enviam informações de autenticação.",
       "Abra arquivos locais fora da pasta do projeto no navegador integrado; páginas da Web continuam limitadas aos arquivos do projeto.",

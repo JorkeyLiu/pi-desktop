@@ -6,6 +6,7 @@ export const frEntries: ChangelogEntry[] = [
     "date": "2026-10-13",
     "highlights": [
       "L’application mémorise si la barre latérale est développée ou réduite et restaure cet état au redémarrage.",
+      "Un redémarrage rouvre le dernier projet et la dernière conversation que vous lisiez, avec son historique ; un projet effacé explicitement ne revient pas.",
       "En remontant une longue conversation, votre position de lecture est conservée : les pages plus anciennes et l'historique nouvellement monté ne déplacent plus les messages que vous lisez.",
       "Configurez des points de terminaison personnalisés sans clé API ; dans ce mode, les requêtes n’envoient aucune donnée d’authentification.",
       "Ouvrez des fichiers locaux situés hors d’un dossier de projet dans le navigateur intégré ; les pages Web restent limitées aux fichiers du projet.",

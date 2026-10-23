@@ -8,6 +8,15 @@
 
 ## 1. Goals
 
+### E2E-UX-workspace-session-and-sidebar-survive-relaunch
+
+- **Preconditions:** Built desktop app with disposable Electron profile/data directories and a temporary project; no provider or network needed.
+- **Steps:** Create the temporary project from an isolated directory, an ordinary session, and one transcript message only through public IPC (`projectSet`, `sessionCreate`, `sessionReplaceMessages`), and prove them through `sessionList` and `sessionGet` before asserting on the renderer. Select the session by clicking its rendered sidebar row, toggle the sidebar expanded or collapsed through its control, quit, and relaunch with the same profile/data. Then clear the project through the renderer's clear-project action and relaunch.
+- **Expected:** The available project, the existing selected session, its transcript, and the manual sidebar choice return, and the app stays idle: no prompt is replayed and no agent execution resumes. The explicitly cleared project and its visible selection do not return, while the session row and its transcript stay durable. A pathless ordinary session is restored when the host restores no workspace, and a pending Plan keeps launch priority without replacing the remembered session. Missing, stale, or archived selections fall back to the available workspace or the empty home.
+- **Coverage:** `pnpm test:e2e:sidebar-relaunch` drives a built Electron app with isolated profile/data and checks the rendered workspace path, active session/transcript, sidebar state, and startup idle state across three process runs, including the explicit project clear. Session deletion is covered by component tests instead of a second UI run. `workspace-restoration.test.mjs` covers the restore decision (missing, deleted, cross-project, pathless-without-workspace, archived) and pending-plan priority; `sidebar-preferences.test.mjs` covers remembered selection persistence and clearing.
+- **Evidence boundary:** The explicit-clear relaunch runs against a development build whose `projectGet` seeds a workspace when none is set, so it proves the cleared project is not resurrected and no selected session is restored; a packaged build starting with a null workspace is not covered by this scenario.
+- **Status:** Automated in `pnpm test:e2e:sidebar-relaunch`, which fails at a named prerequisite stage when the fixture did not persist.
+
 ### E2E-UX-sidebar-choice-survives-relaunch
 
 - **Preconditions:** Built desktop app with disposable Electron profile/data directory; no provider or network needed.

@@ -6,6 +6,7 @@ export const trEntries: ChangelogEntry[] = [
     "date": "2026-10-13",
     "highlights": [
       "Uygulama, kenar çubuğunun açık veya kapalı olduğunu hatırlar ve yeniden başlatıldığında bu durumu geri yükler.",
+      "Yeniden başlatma, en son okuduğunuz projeyi ve sohbeti dökümüyle birlikte açar; açıkça temizlediğiniz bir proje geri gelmez.",
       "Uzun bir sohbette yukarı okurken konumunuz korunur: daha eski sayfalar ve yeni bağlanan geçmiş, okuduğunuz mesajları artık kaydırmaz.",
       "Özel uç noktaları API anahtarı olmadan yapılandırın; bu modda isteklerle kimlik doğrulama bilgisi gönderilmez.",
       "Yerleşik tarayıcıda proje klasörünün dışındaki yerel dosyaları açın; web sayfaları proje dosyalarıyla sınırlı kalır.",

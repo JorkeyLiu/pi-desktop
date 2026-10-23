@@ -3464,6 +3464,14 @@ reasoning-level control.
   selected, the configuration applies directly to that session. A new task
   appears in the sidebar from the `session.create` summary before it carries
   input, and a running turn or pending approval still gates those controls.
+- App launch restores the last selected available project, then the last
+  selected existing ordinary session that belongs to it, loading that
+  transcript without replaying prompts or resuming agent execution. A pending
+  Plan keeps startup priority without replacing the remembered session, and a
+  session without a project path is restored when the host restored no
+  workspace. Explicitly clearing the project, or closing or deleting the
+  remembered session, clears that preference; missing projects and stale or
+  archived selections fall back to the available workspace or the empty home.
 - While the home composer has no active session, its Thinking trigger resolves
   capabilities from the exact model selected in the model menu (using the
   cached catalog record), not from that provider's default model. Selecting a

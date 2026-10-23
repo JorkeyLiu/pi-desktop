@@ -49,6 +49,26 @@ export type SidebarPreferences = {
 
 export const SIDEBAR_PREFERENCES_KEY = "pi.desktop.sidebarPreferences";
 export const SIDEBAR_COLLAPSED_KEY = "pi.desktop.sidebarCollapsed";
+export const LAST_SELECTED_SESSION_KEY = "pi.desktop.lastSelectedSessionId";
+export function loadLastSelectedSession(): string | undefined {
+  const value = read(LAST_SELECTED_SESSION_KEY);
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+export function saveLastSelectedSession(sessionId: string): void {
+  write(LAST_SELECTED_SESSION_KEY, sessionId);
+}
+
+export function clearLastSelectedSession(): void {
+  const store = storage();
+  if (!store) return;
+  try {
+    store.removeItem(LAST_SELECTED_SESSION_KEY);
+  } catch {
+    // Preferences are best effort and must never block the app.
+  }
+}
+
 export const SIDEBAR_WIDTH_KEY = "pi.desktop.sidebarWidth";
 export const SIDEBAR_WIDTH_MIN = 240;
 export const SIDEBAR_WIDTH_DEFAULT = 275;

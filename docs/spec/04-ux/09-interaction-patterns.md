@@ -1114,6 +1114,16 @@ applies to that session once it is projected. The startup-only home composer
 may still materialize a session when pasted input arrives before selection.
 Running turns and pending approvals continue to gate the controls.
 
+At launch the host restores the last selected available project, and the
+renderer reopens the last selected existing ordinary session that belongs to
+it, reading its existing transcript without replaying prompts or resuming agent
+execution. A session without a project path is restored when no workspace was
+restored. A pending Plan keeps startup priority without replacing the
+remembered session. Explicitly clearing the project, or closing or deleting the
+remembered session, clears that selection so it is not resurrected; missing
+projects and stale or archived selections fall back to the available workspace
+or empty home.
+
 ## 6. Toast vs inline error
 
 ### 6.1 Toast notifications (use for)
