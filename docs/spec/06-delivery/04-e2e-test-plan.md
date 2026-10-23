@@ -8,6 +8,14 @@
 
 ## 1. Goals
 
+### E2E-UX-sidebar-choice-survives-relaunch
+
+- **Preconditions:** Built desktop app with disposable Electron profile/data directory; no provider or network needed.
+- **Steps:** Collapse the sidebar through its UI control, quit and relaunch with the same profile, then confirm collapsed. Expand, quit and relaunch, then confirm expanded. Trigger a temporary work-panel layout collapse and restoration, and inspect the stored manual choice.
+- **Expected:** Manual expanded/collapsed choice survives app restart; missing or invalid storage defaults expanded. Width and per-project folding remain independent, and temporary layout collapse does not overwrite the manual choice.
+- **Specs linked:** `04-ux/08-component-spec.md` §1.3 and §3.
+- **Coverage:** `pnpm test:e2e:sidebar-relaunch` drives the built Electron app through the real sidebar controls and quits/relaunches with one disposable profile. `apps/desktop/test/sidebar-preferences.test.mjs` covers default, valid boolean, invalid value, and unavailable storage; `sidebar-collapse-animation.test.mjs` verifies manual writes are separate from automatic collapse/restore.
+- **Status:** Documented.
 ### E2E-QUEUE-send-now-wakes-subagents
 
 - **Preconditions:** Working checkout with built workspace packages,

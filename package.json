@@ -61,6 +61,7 @@
     "test:e2e:settings-inline-import": "node --test apps/desktop/test/settings-inline-import-user-path.test.mjs",
     "test:e2e:config-sync": "node scripts/e2e-config-sync-multidevice.mjs",
     "test:e2e:layout": "node scripts/e2e-three-column-layout.mjs",
+    "test:e2e:sidebar-relaunch": "node scripts/e2e-sidebar-relaunch.mjs",
     "test:e2e:sidebar-menu": "node scripts/e2e-three-column-layout.mjs --sidebar-only",
     "test:e2e:window-controls": "node scripts/e2e-window-controls.mjs",
     "test:e2e:window-resize-native": "node scripts/e2e-window-controls.mjs --native-edge-drag",

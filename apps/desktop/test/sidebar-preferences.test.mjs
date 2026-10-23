@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   clampSidebarWidth,
+  loadSidebarCollapsed,
   loadSidebarPreferences,
   loadSidebarWidth,
   projectIsArchived,
   projectIsCollapsed,
   projectIsPinned,
   normalizeProjectName,
+  saveSidebarCollapsed,
   saveSidebarPreferences,
   saveSidebarWidth,
   SIDEBAR_WIDTH_DEFAULT,
@@ -421,6 +423,37 @@ test("clamps and persists the expanded sidebar width", () => {
     assert.equal(loadSidebarWidth(), SIDEBAR_WIDTH_MIN);
   } finally {
     globalThis.localStorage = previousStorage;
+  }
+});
+
+test("manual sidebar collapsed preference defaults expanded and persists booleans", () => {
+  const values = new Map();
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value),
+    },
+  });
+  try {
+    assert.equal(loadSidebarCollapsed(), false);
+    saveSidebarCollapsed(true);
+    assert.equal(loadSidebarCollapsed(), true);
+    saveSidebarCollapsed(false);
+    assert.equal(loadSidebarCollapsed(), false);
+    values.set("pi.desktop.sidebarCollapsed", JSON.stringify("yes"));
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get() {
+        throw new Error("storage unavailable");
+      },
+    });
+    assert.equal(loadSidebarCollapsed(), false);
+    assert.doesNotThrow(() => saveSidebarCollapsed(true));
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "localStorage", previous);
+    else delete globalThis.localStorage;
   }
 });
 

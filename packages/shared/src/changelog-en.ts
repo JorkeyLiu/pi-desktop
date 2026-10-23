@@ -5,6 +5,7 @@ export const enEntries: ChangelogEntry[] = [
     version: "0.20.1",
     date: "2026-10-13",
     highlights: [
+      "Remember whether the app sidebar is expanded or collapsed across relaunches.",
       "Reading upward through a long conversation holds your place: an older page or newly mounted history no longer shifts the messages you are reading.",
       "Configure custom endpoints without an API key; requests omit authentication in that mode.",
       "Open local files outside a project folder in the built-in browser, while web pages remain scoped to project files.",

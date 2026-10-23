@@ -48,10 +48,19 @@ export type SidebarPreferences = {
 };
 
 export const SIDEBAR_PREFERENCES_KEY = "pi.desktop.sidebarPreferences";
+export const SIDEBAR_COLLAPSED_KEY = "pi.desktop.sidebarCollapsed";
 export const SIDEBAR_WIDTH_KEY = "pi.desktop.sidebarWidth";
 export const SIDEBAR_WIDTH_MIN = 240;
 export const SIDEBAR_WIDTH_DEFAULT = 275;
 export const SIDEBAR_WIDTH_MAX = 520;
+
+export function loadSidebarCollapsed(): boolean {
+  return read(SIDEBAR_COLLAPSED_KEY) === true;
+}
+
+export function saveSidebarCollapsed(value: boolean): void {
+  write(SIDEBAR_COLLAPSED_KEY, value);
+}
 
 export function clampSidebarWidth(value: number, max = SIDEBAR_WIDTH_MAX): number {
   if (!Number.isFinite(value)) return SIDEBAR_WIDTH_DEFAULT;

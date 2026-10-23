@@ -45,6 +45,7 @@ Outer frame that positions Topbar, Sidebar, MainChat, and WorkPanel. Owns resize
 | Narrow (<640px) | Sidebar auto-collapses to icon rail |
 | Work panel open in a fixed client area | Work panel keeps its committed width while MainChat keeps its 450px hard floor; the expanded sidebar yields first when the budget is exhausted |
 | Preview (maximize) | MainChat is unmounted and the work panel fills the client area beside the sidebar; a window-level chrome row keeps shell actions and native window controls available |
+| Persistence | Manual expanded/collapsed choice is saved in renderer localStorage and restored on relaunch. Temporary responsive/work-panel collapse never replaces the manual choice; missing or invalid preference defaults expanded. |
 | Fullscreen | Topbar remains; sidebar toggle and artifact-driven panel stay available |
 
 ### 1.4 Interactions
