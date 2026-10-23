@@ -5,6 +5,7 @@ import {
   formatToolDuration,
   getToolAction,
   getToolDisplayName,
+  getToolIdentityKey,
   getToolSummary,
   getToolSummaryKey,
   getToolSummaryValue,
@@ -25,6 +26,53 @@ test("maps built-in tools to concise Codex-style actions", () => {
   assert.equal(getToolAction("fork"), "fork");
   assert.equal(getToolAction("functions.fork_agent"), "fork");
 });
+test("built-in identities are stable, localized action names and unknown tools retain their names", () => {
+  for (const [name, key] of [
+    ["Read", "chat.toolIdentityRead"],
+    ["read_file", "chat.toolIdentityRead"],
+    ["ReadFile", "chat.toolIdentityRead"],
+    ["FileRead", "chat.toolIdentityRead"],
+    ["functions.ReadFile", "chat.toolIdentityRead"],
+    ["ListFiles", "chat.toolIdentityList"],
+    ["Shell", "chat.toolIdentityRun"],
+    ["ExecCommand", "chat.toolIdentityRun"],
+    ["Write", "chat.toolIdentityWrite"],
+    ["Edit", "chat.toolIdentityEdit"],
+    ["apply_patch", "chat.toolIdentityEdit"],
+    ["Grep", "chat.toolIdentitySearch"],
+    ["Bash", "chat.toolIdentityRun"],
+    ["functions.exec_command", "chat.toolIdentityRun"],
+    ["Task", "chat.toolIdentityTask"],
+    ["TaskWait", "chat.toolIdentityTaskWait"],
+    ["TaskList", "chat.toolIdentityTaskList"],
+    ["TaskStop", "chat.toolIdentityTaskStop"],
+    ["TodoWrite", "chat.toolIdentityTodo"],
+    ["Skill", "chat.toolIdentitySkill"],
+    ["ToolSearch", "chat.toolIdentityToolSearch"],
+    ["EnterPlanMode", "chat.toolIdentityMode"],
+    ["NewContext", "chat.toolIdentityContext"],
+    ["BrowserPreview", "chat.toolIdentityBrowser"],
+    ["GenerateImages", "chat.toolIdentityImage"],
+    ["ScheduledTaskCreate", "chat.toolIdentitySchedule"],
+  ]) {
+    assert.equal(getToolIdentityKey(name), key, name);
+  }
+  for (const name of [
+    "plugin_issue_tracker_create",
+    "plugin_tasks_list",
+    "plugin_read_file",
+    "some_custom_read_file",
+    "mcp__weather__forecast",
+    "mcp__weather__read_file",
+  ]) {
+    assert.equal(getToolIdentityKey(name), null, name);
+  }
+  // Action/icon classification keeps its existing suffix behavior; identity
+  // localization deliberately requires an exact built-in alias.
+  assert.equal(getToolAction("plugin_tasks_list"), "list");
+  assert.equal(getToolAction("mcp__weather__read_file"), "read");
+});
+
 
 test("delegation is its own action, matched exactly", () => {
   assert.equal(getToolAction("Task"), "delegate");

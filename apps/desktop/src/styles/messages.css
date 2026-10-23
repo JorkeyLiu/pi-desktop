@@ -2397,19 +2397,13 @@
 }
 
 
-.tool-row-caret.is-toggle {
+.tool-row-caret {
   display: inline-flex;
-  width: 20px;
-  height: 20px;
-  align-items: center;
-  justify-content: center;
-  margin-left: 0;
-  border-radius: var(--radius-xs);
-}
-
-.tool-row-caret.is-toggle:hover {
-  background: var(--ds-bg-hover);
-  color: var(--ds-text-primary);
+  flex: none;
+  margin-left: 2px;
+  color: var(--ds-text-muted);
+  opacity: 0.65;
+  transition: transform var(--motion-duration-fast) var(--motion-ease-out);
 }
 
 /* Right-hand lifecycle cluster: a delegate control row states how many
@@ -2512,15 +2506,11 @@
 
 .tool-row:hover .tool-row-caret,
 .tool-row-header:focus-visible .tool-row-caret,
-/* A run row's caret is a sibling of its header, not a child of it. */
-.tool-row-header:focus-visible ~ .tool-row-caret,
 .tool-row.open .tool-row-caret {
   opacity: 1;
 }
 
-.tool-row.open > .tool-row-header > .tool-row-caret,
-.tool-row.open > .tool-row-head > .tool-row-header > .tool-row-caret,
-.tool-row.open > .tool-row-head > .tool-row-caret {
+.tool-row.open .tool-row-caret {
   transform: rotate(90deg);
 }
 

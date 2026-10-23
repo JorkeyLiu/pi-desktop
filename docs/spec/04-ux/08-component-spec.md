@@ -810,11 +810,14 @@ reading surface of the workstation.
 - Background: bg-primary
 - Max content width: 760px default, user-resizable (D439); assistant rows follow the band. User plates stay `min(82%, 600px)`.
 - Each process, activity group, delegation card, and single tool row spans the
-  conversation band. Its activity header is a full-width row with an
-  ellipsizing label and trailing caret, never a content-sized chip, so it
-  follows the dragged width instead of its own text. Content inside a
-  delegation card and its dock process is width-aware and wraps long task,
-  path, command, and answer text.
+  conversation band. A tool row uses one full-width disclosure header button
+  with an ellipsizing identity, trailing decorative caret inside that button,
+  and `aria-expanded`/`aria-controls` state; it does not render a second caret
+  control or a separate caret row. Recognized built-in tools keep a stable
+  localized action identity (Read, Write, Edit, Run, and so on) in every
+  lifecycle state; provider, MCP, and plugin tools keep their formatted names.
+  Content inside a delegation card and its dock process is width-aware and wraps
+  long task, path, command, and answer text.
 - The transcript keeps one stable scrollbar gutter on the trailing edge. It
   never reserves a matching left gutter, so the minimap and first message do
   not leave a decorative blank strip beside the session.

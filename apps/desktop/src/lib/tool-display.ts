@@ -166,6 +166,38 @@ const EXACT_TOOL_ACTIONS: Record<string, ToolAction> = {
   scheduledtaskdelete: "schedule",
 };
 
+const ACTION_ALIASES: Partial<Record<ToolAction, readonly string[]>> = {
+  fetch: ["websearch", "searchquery", "fetch", "http", "browser"],
+  read: ["read", "readfile", "fileread"],
+  list: ["glob", "list", "listfiles", "findfiles"],
+  search: ["grep", "rg", "search", "searchfiles"],
+  write: ["write", "writefile", "createfile"],
+  edit: ["edit", "editfile", "applypatch", "patch"],
+  fork: ["fork", "forkagent", "forktask", "forksession"],
+  run: ["bash", "shell", "exec", "execcommand", "runcommand", "terminal"],
+};
+
+function normalizedToolName(toolName?: string): string {
+  return (toolName || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function exactBuiltinAction(toolName?: string): ToolAction | null {
+  const rawName = toolName || "";
+  const name = rawName.toLowerCase().startsWith("functions.")
+    ? rawName.slice("functions.".length)
+    : rawName;
+  if (name.includes(".")) return null;
+  const normalized = normalizedToolName(name);
+  if (isDelegationStartTool(name) || delegationLifecycleKind(name)) return "delegate";
+  const exact = EXACT_TOOL_ACTIONS[bareToolName(name)];
+  if (exact) return exact;
+  if (bareToolName(name) === "todowrite") return "todo";
+  for (const [action, aliases] of Object.entries(ACTION_ALIASES) as [ToolAction, readonly string[]][]) {
+    if (aliases.includes(normalized)) return action;
+  }
+  return null;
+}
+
 export function getToolAction(toolName?: string): ToolAction {
   const normalized = (toolName || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   const matches = (aliases: string[]) =>
@@ -194,6 +226,58 @@ export function getToolAction(toolName?: string): ToolAction {
     return "run";
   }
   return "use";
+}
+export type ToolIdentityKey =
+  | "chat.toolIdentityRead"
+  | "chat.toolIdentityList"
+  | "chat.toolIdentitySearch"
+  | "chat.toolIdentityWrite"
+  | "chat.toolIdentityEdit"
+  | "chat.toolIdentityRun"
+  | "chat.toolIdentityFetch"
+  | "chat.toolIdentityFork"
+  | "chat.toolIdentityTask"
+  | "chat.toolIdentityTaskWait"
+  | "chat.toolIdentityTaskList"
+  | "chat.toolIdentityTaskStop"
+  | "chat.toolIdentityTodo"
+  | "chat.toolIdentitySkill"
+  | "chat.toolIdentityToolSearch"
+  | "chat.toolIdentityMode"
+  | "chat.toolIdentityContext"
+  | "chat.toolIdentityBrowser"
+  | "chat.toolIdentityImage"
+  | "chat.toolIdentitySchedule";
+
+const TOOL_IDENTITY_KEYS: Record<ToolAction, ToolIdentityKey | null> = {
+  read: "chat.toolIdentityRead",
+  list: "chat.toolIdentityList",
+  search: "chat.toolIdentitySearch",
+  write: "chat.toolIdentityWrite",
+  edit: "chat.toolIdentityEdit",
+  run: "chat.toolIdentityRun",
+  fetch: "chat.toolIdentityFetch",
+  fork: "chat.toolIdentityFork",
+  delegate: "chat.toolIdentityTask",
+  todo: "chat.toolIdentityTodo",
+  use: null,
+  skill: "chat.toolIdentitySkill",
+  toolSearch: "chat.toolIdentityToolSearch",
+  mode: "chat.toolIdentityMode",
+  context: "chat.toolIdentityContext",
+  browser: "chat.toolIdentityBrowser",
+  image: "chat.toolIdentityImage",
+  schedule: "chat.toolIdentitySchedule",
+};
+
+/** Stable localized identity for recognized built-ins; unknown tools stay named by their provider. */
+export function getToolIdentityKey(toolName?: string): ToolIdentityKey | null {
+  const lifecycle = delegationLifecycleKind(toolName);
+  if (lifecycle === "wait") return "chat.toolIdentityTaskWait";
+  if (lifecycle === "list") return "chat.toolIdentityTaskList";
+  if (lifecycle === "stop") return "chat.toolIdentityTaskStop";
+  const action = exactBuiltinAction(toolName);
+  return action ? TOOL_IDENTITY_KEYS[action] : null;
 }
 
 export function getToolDisplayName(toolName?: string) {

@@ -50,13 +50,6 @@ try {
   });
 
   const renderer = join(root, "apps/desktop/out/renderer");
-  const currentSourceCss = await Promise.all([
-    readFile(join(root, "apps/desktop/src/styles/messages.css"), "utf8"),
-    readFile(join(root, "apps/desktop/src/styles/work-panel.css"), "utf8"),
-  ]);
-  const sourceStyleTags = currentSourceCss
-    .map((source) => `<style>${source}</style>`)
-    .join("");
   const appHtml = await readFile(join(renderer, "index.html"), "utf8");
   const css = [...appHtml.matchAll(/href="([^" ]+\.css)"/g)].map((match) => match[1]);
   assert(css.length, "Build the app with pnpm build:js before running this check");
@@ -101,7 +94,7 @@ try {
     join(temp, "index.html"),
     `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:"><title>Tool cards</title>${css
       .map((path) => `<link rel="stylesheet" href="${path}">`)
-      .join("")}${sourceStyleTags}<script src="renderer.js"></script>`,
+      .join("")}<script src="renderer.js"></script>`,
   );
   await writeFile(
     join(temp, "main.cjs"),

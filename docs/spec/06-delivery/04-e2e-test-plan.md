@@ -11709,12 +11709,17 @@ This test plan spec is accepted when:
      code is returned; confirm the row reads `Failed`. Pending and running rows
      keep their lifecycle states while output streams.
   2c) Inspect a `Read`, a `Bash`, and a plugin or MCP tool row in each of the
-     running, success, error, and denied states. Confirm the icon and the name
-     are the tool's own identity in every state — the name the call used, never
-     a progress or past-tense label, and for an unknown tool its formatted raw
-     name rather than a generic "Using". Confirm the call's state changes only
-     the right-hand status.
-  2d) Trigger `TaskWait`, `TaskList`, and `TaskStop` on a live delegation.
+     running, success, error, and denied states. Confirm built-in identities
+     are localized, stable action names in every state, and unknown tools keep
+     their formatted raw names rather than a generic label. Confirm the icon
+     remains tied to the action and lifecycle changes only the right-hand status.
+  2d) At English and Chinese locales, inspect consecutive collapsed tool rows
+     at wide and narrow widths. Confirm each expandable row has one header
+     button with one decorative caret inside it, no sibling control or extra
+     caret line, and a compact row height. Click, press Enter, and press Space
+     on the header; confirm `aria-expanded` tracks the body and expanded output
+     still exposes its existing copy controls.
+  2e) Trigger `TaskWait`, `TaskList`, and `TaskStop` on a live delegation.
      Confirm each row keeps its own fixed name, and that the number of subagents
      it reports on and its wait outcome (`Results arrived`, `Wait timed out ·
      still working`, `Interrupted`, `Stopped subagents`) are stated on the right.

@@ -346,7 +346,10 @@ globalThis.toolCardsProbe = async () => {
   const i18n = createInstance();
   await i18n.init({
     lng: "en",
-    resources: { en: { translation: catalogs.en } },
+    resources: {
+      en: { translation: catalogs.en },
+      "zh-CN": { translation: catalogs["zh-CN"] },
+    },
     interpolation: { escapeValue: false },
   });
 
@@ -354,10 +357,14 @@ globalThis.toolCardsProbe = async () => {
   stage.id = "stage";
   stage.style.cssText = "display:flex;gap:16px;align-items:flex-start;padding:12px";
   const narrow = document.createElement("div");
-  narrow.style.width = "340px";
+  narrow.style.width = "320px";
+  const chinese = document.createElement("div");
+  chinese.lang = "zh-CN";
+  chinese.style.width = "620px";
+  chinese.style.flex = "none";
   const wide = document.createElement("div");
   wide.style.width = "900px";
-  stage.append(narrow, wide);
+  stage.append(narrow, chinese, wide);
   document.body.append(stage);
 
   const roots: Array<{ unmount: () => void }> = [];
@@ -378,6 +385,33 @@ globalThis.toolCardsProbe = async () => {
     return host;
   };
 
+  const keyboardActivate = async (header: HTMLElement, key: "Enter" | " ") => {
+    header.focus();
+    const event = new KeyboardEvent("keydown", { key, bubbles: true });
+    Object.defineProperty(event, "key", { value: key });
+    header.dispatchEvent(event);
+    header.click();
+    await settle();
+  };
+
+  const checkDisclosure = (host: HTMLElement, label: string) => {
+    const row = host.querySelector<HTMLElement>(".tool-row")!;
+    const header = host.querySelector<HTMLButtonElement>(".tool-row-header")!;
+    const caret = header.querySelector<HTMLElement>(".tool-row-caret");
+    const rowBox = row.getBoundingClientRect();
+    const headerBox = header.getBoundingClientRect();
+    check(`${label} has one compact disclosure control`,
+      host.querySelectorAll(".tool-row-header").length === 1 &&
+      host.querySelectorAll(".tool-row-caret").length === 1 &&
+      host.querySelectorAll(".tool-row button").length === 1 &&
+      caret !== null && header.contains(caret) &&
+      header.getAttribute("aria-expanded") === "false" &&
+      !host.querySelector(".tool-row-body") &&
+      headerBox.height <= 32 && rowBox.height <= 38,
+      { rowHeight: rowBox.height, headerHeight: headerBox.height, controls: host.querySelectorAll(".tool-row button").length },
+    );
+    return header;
+  };
   const open = async (host: HTMLElement) => {
     const header = host.querySelector<HTMLElement>(".tool-row-header");
     if (!header) throw new Error("no tool row header rendered");
@@ -389,6 +423,12 @@ globalThis.toolCardsProbe = async () => {
     // ── 1. The terminal: one column at every width, output under the command ──
     const narrowBash = mount(narrow, <ToolRow message={bash("bash-narrow")} />);
     const wideBash = mount(wide, <ToolRow message={bash("bash-wide")} />);
+    const narrowHeader = checkDisclosure(narrowBash, "narrow run row");
+    const wideHeader = checkDisclosure(wideBash, "wide run row");
+    await keyboardActivate(narrowHeader, "Enter");
+    check("Enter opens the disclosure and mounts output", narrowHeader.getAttribute("aria-expanded") === "true" && Boolean(narrowBash.querySelector(".tool-row-body")));
+    await keyboardActivate(narrowHeader, " ");
+    check("Space closes the disclosure and unmounts output", narrowHeader.getAttribute("aria-expanded") === "false" && !narrowBash.querySelector(".tool-row-body"));
     await open(narrowBash);
     await open(wideBash);
 
@@ -558,12 +598,30 @@ globalThis.toolCardsProbe = async () => {
     // instead of a generic "Using".
     const identityCases = [
       ["Read", "Read", "read"],
+      ["read_file", "Read", "read"],
       ["Write", "Write", "write"],
       ["Edit", "Edit", "edit"],
-      ["Grep", "Grep", "search"],
-      ["Bash", "Bash", "run"],
+      ["apply_patch", "Edit", "edit"],
+      ["Grep", "Search", "search"],
+      ["Bash", "Run", "run"],
+      ["functions.exec_command", "Run", "run"],
       ["Task", "Task", "delegate"],
+      ["TaskWait", "Task wait", "delegate"],
+      ["TaskList", "Task list", "delegate"],
+      ["TaskStop", "Task stop", "delegate"],
+      ["Skill", "Skill", "skill"],
+      ["ToolSearch", "Tool search", "toolSearch"],
+      ["EnterPlanMode", "Mode", "mode"],
+      ["NewContext", "New context", "context"],
+      ["BrowserPreview", "Browser preview", "browser"],
+      ["GenerateImages", "Generate images", "image"],
+      ["ScheduledTaskCreate", "Scheduled task", "schedule"],
+      ["TodoWrite", "Todo", "todo"],
       ["plugin_issue_tracker_create", "Issue Tracker Create", "use"],
+      ["plugin_tasks_list", "Tasks List", "list"],
+      ["plugin_read_file", "Read File", "read"],
+      ["some_custom_read_file", "Some Custom Read File", "read"],
+      ["mcp__weather__read_file", "Mcp Weather Read File", "read"],
       ["mcp__srv__do_thing", "Mcp Srv Do Thing", "use"],
     ] as const;
     const lifecycle = ["running", "success", "error", "denied"] as const;
@@ -573,27 +631,59 @@ globalThis.toolCardsProbe = async () => {
         const host = mount(wide, <ToolRow message={message(`identity-${toolName}-${toolStatus}`, "", {
           toolName,
           toolStatus,
-          toolArgs: toolName === "Bash" ? { command: "true" } : {},
+          toolArgs: toolName === "Bash" || toolName === "functions.exec_command" ? { command: "true" } : {},
         })} />);
         const label = host.querySelector<HTMLElement>(".tool-row-name");
         const icon = host.querySelector<HTMLElement>(".tool-row-icon svg");
         const rightStatus = host.querySelector<HTMLElement>(".tool-row-state, .tool-spinner");
         seen.push({ name: label?.textContent ?? "", icon: icon?.outerHTML ?? "", status: rightStatus?.className ?? "" });
-        // A live row shows its liveness on the right; a failed or denied row
-        // names it there; a settled run row states its completion; a settled
-        // non-run row adds nothing.
         const right =
           toolStatus === "running"
             ? Boolean(rightStatus)
-            : toolStatus === "error" || toolStatus === "denied"
-              ? Boolean(host.querySelector(".tool-row-state.is-error, .tool-row-state.is-denied"))
-              : toolName === "Bash"
-                ? Boolean(host.querySelector(".tool-row-state.is-done"))
-                : rightStatus === null;
+            : expectedIcon === "delegate" && toolName !== "Task"
+              ? toolStatus === "error" || toolStatus === "denied"
+                ? Boolean(host.querySelector(".tool-row-state.is-error, .tool-row-state.is-denied"))
+                : Boolean(host.querySelector(".tool-row-state.is-done"))
+              : toolStatus === "error" || toolStatus === "denied"
+                ? Boolean(host.querySelector(".tool-row-state.is-error, .tool-row-state.is-denied"))
+                : expectedIcon === "run"
+                  ? Boolean(host.querySelector(".tool-row-state.is-done"))
+                  : rightStatus === null;
         check(`${toolName} identity ${toolStatus}`, label?.textContent === expectedName && !!icon && icon.getAttribute("data-icon") === expectedIcon && right, seen.at(-1));
       }
       check(`${toolName} identity and icon stable across lifecycle`, seen.every((entry) => entry.name === seen[0].name && entry.icon === seen[0].icon) && new Set(seen.map((entry) => entry.status)).size > 1, seen);
     }
+
+    await i18n.changeLanguage("zh-CN");
+    const chineseCases = [
+      ["Read", "读取"], ["Edit", "编辑"], ["Grep", "搜索"],
+      ["Bash", "运行"], ["functions.exec_command", "运行"],
+      ["TaskWait", "等待任务"], ["TaskList", "任务列表"], ["TaskStop", "停止任务"],
+      ["plugin_issue_tracker_create", "Issue Tracker Create"],
+      ["mcp__srv__do_thing", "Mcp Srv Do Thing"],
+      ["plugin_tasks_list", "Tasks List"],
+      ["plugin_read_file", "Read File"],
+      ["some_custom_read_file", "Some Custom Read File"],
+      ["mcp__weather__read_file", "Mcp Weather Read File"],
+    ] as const;
+    for (const [toolName, expectedName] of chineseCases) {
+      const host = mount(chinese, <ToolRow message={message(`zh-${toolName}`, "", {
+        toolName,
+        toolStatus: "success",
+        toolArgs: toolName === "Bash" || toolName === "functions.exec_command" ? { command: "true" } : {},
+      })} />);
+      check(`zh-CN ${toolName} identity`, host.querySelector(".tool-row-name")?.textContent === expectedName,
+        host.querySelector(".tool-row-name")?.textContent);
+    }
+    const chineseBash = mount(chinese, <ToolRow message={bash("zh-bash")} />);
+    const chineseHeader = checkDisclosure(chineseBash, "Chinese run row");
+    const chineseRowBox = chineseBash.querySelector<HTMLElement>(".tool-row")!.getBoundingClientRect();
+    const chineseHeaderBox = chineseHeader.getBoundingClientRect();
+    check("Chinese collapsed row has no extra caret line", chineseRowBox.height <= 38 && chineseHeaderBox.height <= 32,
+      { rowHeight: chineseRowBox.height, headerHeight: chineseHeaderBox.height });
+    await open(chineseBash);
+    check("Chinese disclosure click reveals output", chineseHeader.getAttribute("aria-expanded") === "true" && Boolean(chineseBash.querySelector(".tool-row-body")));
+    await i18n.changeLanguage("en");
 
     // A provider-hosted search round is named by what the provider did, and the
     // label does not move: the same globe and the same kind name render while it
@@ -769,9 +859,9 @@ globalThis.toolCardsProbe = async () => {
     // subagents — the backend-owned wait outcome and the roster it reports on —
     // is stated on the right, never as the row's name.
     const lifecycleCases = [
-      ["TaskWait", "Task Wait"],
-      ["TaskList", "Task List"],
-      ["TaskStop", "Task Stop"],
+      ["TaskWait", "Task wait"],
+      ["TaskList", "Task list"],
+      ["TaskStop", "Task stop"],
     ] as const;
     for (const [toolName, expectedName] of lifecycleCases) {
       const host = mount(wide, <ToolRow message={message(`lifecycle-${toolName}`, "", {
@@ -1303,7 +1393,7 @@ globalThis.toolCardsProbe = async () => {
     const waitRow = cardsHost.querySelector<HTMLElement>('[data-message-id="task-wait"]')!;
     check(
       "a lifecycle row states its name on the left and its wait on the right",
-      waitRow.querySelector<HTMLElement>(".tool-row-name")?.textContent === "Task Wait" &&
+      waitRow.querySelector<HTMLElement>(".tool-row-name")?.textContent === "Task wait" &&
         Boolean(waitRow.querySelector(".tool-row-lifecycle .tool-row-agent.is-count")) &&
         waitRow.querySelector<HTMLElement>(".tool-row-lifecycle .tool-row-state")?.textContent ===
           "Results arrived",

@@ -24,6 +24,7 @@ import { disclosureKey } from "./disclosure";
 import {
   getToolAction,
   getToolDisplayName,
+  getToolIdentityKey,
   getToolSummary,
   getToolSummaryKey,
   isToolPathSummary,
@@ -231,7 +232,6 @@ function HostToolRow({
     onUserInteraction?.();
     collapseDisclosure();
   }, [collapseDisclosure, onUserInteraction]);
-  const rawName = getToolDisplayName(message.toolName) || t("chat.tool");
   const argSummary = getToolSummary(message.toolName, message.toolArgs);
   // A path stays whole in `title`, in the copy menu and in its preview target;
   // only what the row prints omits its middle.
@@ -259,6 +259,18 @@ function HostToolRow({
   // results; a `wakeup` wait is an interim progress checkpoint on
   // still-running delegates, never a result.
   const lifecycle = action === "delegate" ? lifecycleKindOf(message) : null;
+  const bareName = (message.toolName ?? "").split(/[._-]/).at(-1)?.toLowerCase();
+  const identityKey =
+    bareName === "taskwait"
+      ? "chat.toolIdentityTaskWait"
+      : bareName === "tasklist"
+        ? "chat.toolIdentityTaskList"
+        : bareName === "taskstop"
+          ? "chat.toolIdentityTaskStop"
+          : getToolIdentityKey(message.toolName);
+  const rawName = identityKey
+    ? t(identityKey)
+    : getToolDisplayName(message.toolName) || t("chat.tool");
   const roster = lifecycle ? delegationRoster(message) : [];
   const rosterSummary = lifecycle ? delegationRosterSummary(roster) : "";
   const rosterOutcome = lifecycle ? delegationRosterOutcome(roster) : null;
@@ -408,6 +420,7 @@ function HostToolRow({
       } status-${run === "failed" ? "error" : status || "success"}`}
       role="region"
       data-message-id={message.id}
+      data-tool-name={message.toolName ?? ""}
       aria-label={`${t("chat.toolCall")}: ${rawName}${agentName ? `, ${agentName}` : ""}${statusLabel ? `, ${statusLabel}` : ""}`}
     >
         <div className={`tool-row-head${runHead ? " is-run" : ""}`}>
@@ -465,15 +478,12 @@ function HostToolRow({
             ) : (
               statusBadge
             )}
-            {runHead || !caret ? null : (
-              <span className="tool-row-caret" aria-hidden>{caret}</span>
-            )}
+            {caret ? (
+              <span className="tool-row-caret" aria-hidden="true">
+                {caret}
+              </span>
+            ) : null}
           </button>
-          {runHead && caret ? (
-            <button className="tool-row-caret is-toggle" aria-hidden="true" tabIndex={-1} onClick={toggleRow}>
-              {caret}
-            </button>
-          ) : null}
         </div>
       {summaryIsPath && summary ? (
         // Outside the header button on purpose: it describes the row without

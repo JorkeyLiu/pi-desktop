@@ -50,6 +50,25 @@ test("every shipped catalog matches English keys and interpolation variables", (
   }
 });
 
+test("tool row identity labels are present and localized in every shipped catalog", () => {
+  const keys = [
+    "chat.toolIdentityRead", "chat.toolIdentityList", "chat.toolIdentitySearch",
+    "chat.toolIdentityWrite", "chat.toolIdentityEdit", "chat.toolIdentityRun",
+    "chat.toolIdentityFetch", "chat.toolIdentityFork", "chat.toolIdentityTask",
+    "chat.toolIdentityTaskWait", "chat.toolIdentityTaskList", "chat.toolIdentityTaskStop",
+    "chat.toolIdentityTodo", "chat.toolIdentitySkill", "chat.toolIdentityToolSearch",
+    "chat.toolIdentityMode", "chat.toolIdentityContext", "chat.toolIdentityBrowser",
+    "chat.toolIdentityImage", "chat.toolIdentitySchedule",
+  ];
+  for (const [id, catalog] of Object.entries(catalogs)) {
+    const flat = flattenCatalog(catalog);
+    for (const key of keys) {
+      assert.ok(flat[key]?.trim(), `${id}: ${key}`);
+      if (id !== "en") assert.notEqual(flat[key], english[key], `${id}: ${key}`);
+    }
+  }
+});
+
 test("Live Voice preparation and call recovery copy is localized in every shipped catalog", () => {
   const keys = [
     "prepareCall", "details", "workOptions", "allowWork", "noWorkSession",

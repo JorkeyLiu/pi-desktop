@@ -34,29 +34,27 @@ test("a run row keeps its disclosure header outside subagent task cards", () => 
   assert.match(transcript, /className=\{`tool-row-head\$\{runHead \? " is-run" : ""\}`\}/);
 });
 
-test("collapsed rows have no copy control; expanded terminal panes copy command and output", () => {
+test("collapsed rows have no copy control and all expandable rows use one header disclosure", () => {
   assert.doesNotMatch(transcript, /ToolCommandCopy|tool-row-head-copy/);
-  assert.match(transcript, /className="tool-row-caret is-toggle"/);
-  assert.match(transcript, /aria-hidden="true" tabIndex=\{-1\}/);
+  assert.match(transcript, /aria-expanded=\{open\}/);
+  assert.match(transcript, /aria-controls=\{hasDetails \? detailsId : undefined\}/);
+  assert.match(transcript, /<span className="tool-row-caret" aria-hidden="true"> \{caret\} <\/span>/);
+  assert.doesNotMatch(transcript, /tool-row-caret is-toggle|tabIndex=\{-1\}/);
   assert.match(details, /<ToolTerminal block=\{block\} streaming=\{streaming\} \/>/);
   assert.match(terminal, /BlockHead label=\{t\("chat\.toolBlockCommand"\)\} copy=\{block\.command\}/);
   assert.match(terminal, /<BlockHead label=\{label\} copy=\{text\} \/>/);
 });
 
-test("the left identity is the tool's own name, never a lifecycle label", () => {
-  // The name is the tool's own identity, with the localized generic word only
-  // when the call has no name at all.
-  assert.match(transcript, /const rawName = getToolDisplayName\(message\.toolName\) \|\| t\("chat\.tool"\);/);
+test("the left identity is localized and independent of lifecycle; unknown names stay formatted", () => {
+  assert.match(transcript, /const identityKey =/);
+  assert.match(transcript, /: getToolIdentityKey\(message\.toolName\);/);
+  assert.match(transcript, /const rawName = identityKey \? t\(identityKey\) : getToolDisplayName\(message\.toolName\) \|\| t\("chat\.tool"\);/);
   assert.match(transcript, /<span className="tool-row-name" title=\{waitTitle\}> \{rawName\} <\/span>/);
-  // The icon names the action, so the pair reads the same whatever the call's
-  // status is.
-  assert.match(transcript, /<ToolActionIcon action=\{action\} \/>/);
-  // Identity must not be selected by status: no action/progress label table
-  // reaches the name, and the name never takes a status-derived class.
   assert.doesNotMatch(transcript, /TOOL_ACTION_KEYS|TOOL_RUNNING_KEYS/);
   assert.doesNotMatch(transcript, /className=\{`tool-row-name/);
   assert.doesNotMatch(transcript, /className="tool-row-name [^"]*"/);
 });
+
 
 test("lifecycle reaches the row only through its right-hand status", () => {
   // A live row spins; a settled row names its state with a toned dot. Both sit
@@ -94,9 +92,11 @@ test("run state keeps its toned dot and reduced-motion behavior", () => {
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\) \{\s*\.tool-row-state\.is-running \.tool-row-state-dot \{\s*animation: none;/);
 });
 
-test("the disclosure chevron stays out of the tab order", () => {
-  assert.match(transcript, /className="tool-row-caret is-toggle"/);
-  assert.match(transcript, /aria-hidden="true" tabIndex=\{-1\}/);
+test("the disclosure chevron is decorative content inside the header", () => {
+  assert.match(transcript, /className="tool-row-caret" aria-hidden="true"/);
+  assert.doesNotMatch(transcript, /tool-row-caret is-toggle|tabIndex=\{-1\}/);
+  assert.match(styles, /\.tool-row-header:focus-visible \.tool-row-caret/);
+  assert.match(styles, /\.tool-row\.open \.tool-row-caret \{\s*transform: rotate\(90deg\);/);
   assert.match(styles, /\.tool-row-header:hover \{\s*background: var\(--ds-bg-hover\)/);
 });
 
