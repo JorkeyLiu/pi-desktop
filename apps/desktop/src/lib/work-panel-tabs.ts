@@ -57,6 +57,20 @@ export function createWorkPanelFileRequest(
     ...(tab.column != null ? { column: tab.column } : {}),
   };
 }
+/**
+ * One monotonic sequence for file-view requests.
+ *
+ * The counter lives here rather than inside a store slice because both the
+ * slice and restart restoration build requests, and the rendering file view
+ * consumes a request exactly once per sequence value. A restored request must
+ * therefore be newer than anything this renderer already handled.
+ */
+let workPanelFileRequestSeq = 0;
+
+export function nextWorkPanelFileRequestSeq(): number {
+  workPanelFileRequestSeq += 1;
+  return workPanelFileRequestSeq;
+}
 
 let newWorkPanelTabSequence = 0;
 

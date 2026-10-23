@@ -2,14 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   clampSidebarWidth,
-  loadSidebarCollapsed,
   loadSidebarPreferences,
   loadSidebarWidth,
   projectIsArchived,
   projectIsCollapsed,
   projectIsPinned,
   normalizeProjectName,
-  saveSidebarCollapsed,
   saveSidebarPreferences,
   saveSidebarWidth,
   SIDEBAR_WIDTH_DEFAULT,
@@ -19,10 +17,6 @@ import {
   sortSessions,
   filterSwitcherProjects,
   listSwitcherProjects,
-  loadLastSelectedSession,
-  saveLastSelectedSession,
-  clearLastSelectedSession,
-  LAST_SELECTED_SESSION_KEY,
 } from "../src/lib/sidebar-preferences.ts";
 import { loadRecentProjects, renameRecentProject } from "../src/lib/recent-projects.ts";
 import {
@@ -430,60 +424,6 @@ test("clamps and persists the expanded sidebar width", () => {
   }
 });
 
-test("manual sidebar collapsed preference defaults expanded and persists booleans", () => {
-  const values = new Map();
-  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
-  Object.defineProperty(globalThis, "localStorage", {
-    configurable: true,
-    value: {
-      getItem: (key) => values.get(key) ?? null,
-      setItem: (key, value) => values.set(key, value),
-    },
-  });
-  try {
-    assert.equal(loadSidebarCollapsed(), false);
-    saveSidebarCollapsed(true);
-    assert.equal(loadSidebarCollapsed(), true);
-    saveSidebarCollapsed(false);
-    assert.equal(loadSidebarCollapsed(), false);
-    values.set("pi.desktop.sidebarCollapsed", JSON.stringify("yes"));
-    Object.defineProperty(globalThis, "localStorage", {
-      configurable: true,
-      get() {
-        throw new Error("storage unavailable");
-      },
-    });
-    assert.equal(loadSidebarCollapsed(), false);
-    assert.doesNotThrow(() => saveSidebarCollapsed(true));
-  } finally {
-    if (previous) Object.defineProperty(globalThis, "localStorage", previous);
-    else delete globalThis.localStorage;
-  }
-});
-
-test("last selected ordinary session preference persists and clears", () => {
-  const values = new Map();
-  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
-  Object.defineProperty(globalThis, "localStorage", {
-    configurable: true,
-    value: {
-      getItem: (key) => values.get(key) ?? null,
-      setItem: (key, value) => values.set(key, value),
-      removeItem: (key) => values.delete(key),
-    },
-  });
-  try {
-    assert.equal(loadLastSelectedSession(), undefined);
-    saveLastSelectedSession("session-1");
-    assert.equal(loadLastSelectedSession(), "session-1");
-    assert.equal(values.get(LAST_SELECTED_SESSION_KEY), JSON.stringify("session-1"));
-    clearLastSelectedSession();
-    assert.equal(loadLastSelectedSession(), undefined);
-  } finally {
-    if (previous) Object.defineProperty(globalThis, "localStorage", previous);
-    else delete globalThis.localStorage;
-  }
-});
 test("manual title metadata survives a renderer restart", () => {
   const values = new Map();
   const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");

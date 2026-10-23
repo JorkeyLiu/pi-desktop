@@ -5,7 +5,7 @@ export const deEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
-      "Die Anwendung merkt sich, ob die Seitenleiste ausgeklappt oder eingeklappt ist, und stellt diesen Zustand nach einem Neustart wieder her.",
+      "Ein Neustart öffnet das Arbeitsfenster so, wie Sie es verlassen haben: geöffnet oder eingeklappt, in derselben Breite, mit den Tabs jeder Unterhaltung in ihrer Reihenfolge, dem ausgewählten Tab und der zuletzt gezeigten Dateivorschau oder Browserseite.",
       "Ein Neustart öffnet das zuletzt gelesene Projekt und die Unterhaltung samt Verlauf erneut; ein ausdrücklich geleertes Projekt kommt nicht zurück.",
       "Beim Hochscrollen in einer langen Unterhaltung bleibt die Leseposition stehen: ältere Seiten und neu eingeblendete Historie verschieben die gelesenen Nachrichten nicht mehr.",
       "Konfigurieren Sie benutzerdefinierte Endpunkte ohne API-Schlüssel; in diesem Modus werden keine Anmeldedaten gesendet.",

@@ -5,7 +5,7 @@ export const ptBREntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
-      "O aplicativo lembra se a barra lateral está expandida ou recolhida e restaura esse estado ao reiniciar.",
+      "Ao reiniciar, o painel de trabalho volta como você o deixou: aberto ou recolhido, com a mesma largura, as abas de cada conversa na mesma ordem, a aba selecionada e a prévia do arquivo ou a página do navegador que ele mostrava.",
       "Ao reiniciar, o último projeto e a última conversa que você estava lendo reabrem com o histórico; um projeto limpo explicitamente não volta.",
       "Ao ler para cima em uma conversa longa, sua posição é mantida: páginas mais antigas e o histórico recém-montado não deslocam mais as mensagens que você está lendo.",
       "Configure endpoints personalizados sem chave de API; nesse modo, as solicitações não enviam informações de autenticação.",

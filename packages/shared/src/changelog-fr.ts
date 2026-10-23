@@ -5,7 +5,7 @@ export const frEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
-      "L’application mémorise si la barre latérale est développée ou réduite et restaure cet état au redémarrage.",
+      "Un redémarrage rouvre le panneau de travail tel que vous l'avez laissé : ouvert ou replié, à la même largeur, avec les onglets de chaque conversation dans leur ordre, l'onglet sélectionné et l'aperçu de fichier ou la page du navigateur qu'il affichait.",
       "Un redémarrage rouvre le dernier projet et la dernière conversation que vous lisiez, avec son historique ; un projet effacé explicitement ne revient pas.",
       "En remontant une longue conversation, votre position de lecture est conservée : les pages plus anciennes et l'historique nouvellement monté ne déplacent plus les messages que vous lisez.",
       "Configurez des points de terminaison personnalisés sans clé API ; dans ce mode, les requêtes n’envoient aucune donnée d’authentification.",

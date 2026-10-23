@@ -1,13 +1,20 @@
 #!/usr/bin/env node
 /**
- * Desktop E2E: a project, its session, the persisted transcript and the manual
- * sidebar preference survive a renderer reload and Electron relaunches.
+ * Desktop E2E: a project, its session and the persisted transcript survive a
+ * renderer reload and Electron relaunches.
  *
  * Every fixture prerequisite is proven over the public IPC surface before the
  * renderer is asserted on: a fixture that never persisted must fail as a
  * prerequisite, never as a renderer row/timing symptom. The session is then
  * selected by clicking its rendered sidebar row, and the explicit clear uses
  * the renderer action the sidebar and Projects page call.
+ *
+ * The right panel is driven the way a user drives it: a transcript file
+ * reference opens the host file tab, a transcript link to a loopback page opens
+ * the browser tab, the strip's own buttons add and close a tab, and the shell
+ * toggle collapses the dock. Restarts then prove the collapsed/expanded state,
+ * ordered tabs, active tab, the real page load, and the file preview that only
+ * a fresh read can produce. The page fixture is served from loopback only.
  *
  * The run records its own source/build identity and refuses to assert on
  * artifacts older than the renderer, Electron or host source it would test.
@@ -23,11 +30,13 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  writeFileSync,
   readdirSync,
   realpathSync,
   rmSync,
   statSync,
 } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -38,8 +47,12 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const appDir = join(root, "apps/desktop");
 const electronBin = join(appDir, "node_modules/.bin/electron");
 const hostBinary = process.env.PI_DESKTOP_HOST_BIN || join(root, "target/debug/pi-desktop-host-core");
-const SIDEBAR_COLLAPSED_KEY = "pi.desktop.sidebarCollapsed";
 const MARKER_ID = "restart-marker";
+const PANEL_REF_ID = "panel-ref";
+/** Fixtures the right-panel phase opens through real transcript references. */
+const FIXTURE_FILE = "notes.md";
+const FIXTURE_PAGE = "panel-fixture.html";
+const PAGE_TITLE = "Right panel fixture";
 
 let stage = "init";
 
@@ -256,6 +269,154 @@ async function pollUntil(cdp, read, label, timeoutMs, diagnostics) {
   }
   throw new Error(`${label} not observed within ${timeoutMs}ms; observed=${JSON.stringify(observed)}`);
 }
+/*
+ * Right-panel stage helpers.
+ *
+ * The dock is only ever driven through the affordances a user has: transcript
+ * references and links, the strip's own buttons and the shell toggle. Nothing
+ * here writes panel state, so what the restarts assert is what the app itself
+ * persisted.
+ */
+function writeProjectFixtures(projectDir, notesMarker) {
+  writeFileSync(
+    join(projectDir, FIXTURE_FILE),
+    ["# Right panel notes", "second line", notesMarker, "fourth line"].join("\n"),
+  );
+}
+
+/** Loopback-only page the transcript link opens in the work-panel browser. */
+async function startFixtureServer() {
+  const pageMarker = `panel fixture page ${Date.now()}`;
+  const server = createHttpServer((request, response) => {
+    if (request.url !== `/${FIXTURE_PAGE}`) {
+      response.writeHead(404, { "content-type": "text/plain" });
+      response.end("not found");
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    });
+    response.end(
+      `<!doctype html><meta charset="utf-8"><title>${PAGE_TITLE}</title><body><h1 id="fixture">${pageMarker}</h1>`,
+    );
+  });
+  await new Promise((resolve, reject) => server.listen(0, "127.0.0.1", resolve).once("error", reject));
+  const { port } = server.address();
+  return {
+    url: `http://127.0.0.1:${port}/${FIXTURE_PAGE}`,
+    pageMarker,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  };
+}
+
+/** What the dock shows plus what it stored, read in the renderer. */
+function panelStateExpression(sessionId) {
+  return `(() => {
+    const sessionId = ${JSON.stringify(sessionId)};
+    const tabs = [...document.querySelectorAll("[data-work-panel-tab-id]")].map((node) => ({
+      id: node.getAttribute("data-work-panel-tab-id"),
+      label: node.querySelector(".work-panel-tab-label")?.textContent ?? null,
+      active: node.classList.contains("active"),
+    }));
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem("pi.desktop.workPanel") ?? "null"); } catch {}
+    const stored = saved?.sessions?.[sessionId] ?? null;
+    return {
+      open: !!document.querySelector(".work-panel:not([data-exiting='true'])"),
+      togglePressed: document.querySelector(".app-work-panel-toggle")?.getAttribute("aria-pressed") ?? null,
+      tabs,
+      viewer: document.querySelector(".file-viewer")?.innerText ?? null,
+      savedOpen: saved?.open ?? null,
+      savedWidth: saved?.width ?? null,
+      savedVersion: saved?.version ?? null,
+      stored: stored
+        ? {
+            activeTabId: stored.activeTabId ?? null,
+            tabs: (stored.tabs ?? []).map((tab) => ({
+              id: tab.id,
+              kind: tab.kind,
+              resource: tab.resource ?? null,
+              location: tab.location ?? null,
+              line: tab.line ?? null,
+            })),
+          }
+        : null,
+    };
+  })()`;
+}
+
+/** Click what an expression names, after proving the point is hit-testable. */
+async function clickControl(cdp, expression, label) {
+  /*
+   * The tab strip scrolls the active tab into view on its own, so a point
+   * measured once can land on a neighbour (the strip's close control) when that
+   * scroll settles. Scroll only when the control is outside the viewport, and
+   * click only after two consecutive reads agree on its position.
+   */
+  const read = () =>
+    cdp.evaluate(`(() => {
+      const element = ${expression};
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return null;
+      const visible =
+        rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight;
+      if (!visible) {
+        element.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+        return null;
+      }
+      const x = Math.round(rect.x + rect.width / 2);
+      const y = Math.round(rect.y + rect.height / 2);
+      const hit = document.elementFromPoint(x, y);
+      return {
+        x,
+        y,
+        inside: !!hit && (hit === element || element.contains(hit)),
+      };
+    })()`);
+  let point = await pollUntil(cdp, read, label, 20_000, `no clickable element for ${label}`);
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    await delay(80);
+    const next = await read();
+    if (next && next.x === point.x && next.y === point.y) {
+      point = next;
+      break;
+    }
+    point = next ?? point;
+  }
+  assert.equal(point.inside, true, `${label} is obscured at its click point: ${JSON.stringify(point)}`);
+  await cdp.clickAt(point.x, point.y);
+}
+
+/** The native guest the work-panel browser attached for this URL. */
+async function openGuest(port, url, label) {
+  const target = await waitFor(async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+    const targets = await response.json();
+    return targets.find((item) => item.url === url) ?? null;
+  }, `${label} guest target`, 25_000);
+  const guest = await Cdp.connect(target.webSocketDebuggerUrl);
+  await guest.send("Runtime.enable");
+  return { guest, target };
+}
+
+/** Prove the native page really rendered the loopback fixture content. */
+async function assertGuestPage(port, url, expected, label) {
+  const { guest, target } = await openGuest(port, url, label);
+  try {
+    const page = await waitFor(async () => {
+      const state = await guest.evaluate(
+        "({ title: document.title, text: document.body ? document.body.innerText : '' })",
+      );
+      return state && state.text.includes(expected) ? state : null;
+    }, `${label} guest content`, 25_000);
+    return { type: target.type, title: page.title };
+  } finally {
+    guest.close();
+  }
+}
+
 
 function rendererDiagnostics(marker) {
   return `(() => {
@@ -271,7 +432,6 @@ function rendererDiagnostics(marker) {
       currentWorkspace: document.querySelector("[data-current-workspace='true']")?.getAttribute("data-sidebar-project-group") ?? null,
       markerVisible: (document.querySelector(".main-pane")?.innerText ?? "").includes(${JSON.stringify(marker)}),
       running: !!document.querySelector(".stop-btn"),
-      savedCollapsed: localStorage.getItem(${JSON.stringify(SIDEBAR_COLLAPSED_KEY)}),
     };
   })()`;
 }
@@ -364,10 +524,16 @@ async function main() {
   const marker = `restored transcript ${Date.now()}`;
   const sessionTitle = `Restart session ${Date.now()}`;
   const createdAt = new Date().toISOString();
+  const notesMarker = `right panel notes ${Date.now()}`;
+  writeProjectFixtures(projectDir, notesMarker);
   let child;
   let cdp;
+  let fixtures;
   try {
     stage = "launch";
+    fixtures = await startFixtureServer();
+    const referenceContent =
+      `Panel references: [open notes](${FIXTURE_FILE}:3) and [open page](${fixtures.url}).`;
     child = launch(port, profileDir, dataDir);
     cdp = await openWindow(port);
 
@@ -394,6 +560,11 @@ async function main() {
               id: ${JSON.stringify(MARKER_ID)},
               role: "user",
               content: ${JSON.stringify(marker)},
+              createdAt: ${JSON.stringify(createdAt)},
+            }, {
+              id: ${JSON.stringify(PANEL_REF_ID)},
+              role: "assistant",
+              content: ${JSON.stringify(referenceContent)},
               createdAt: ${JSON.stringify(createdAt)},
             }],
           }))
@@ -461,6 +632,14 @@ async function main() {
     assert.equal(persisted.role, "user", `prerequisite failed [sessionGet]: marker role ${JSON.stringify(persisted.role)}`);
     assert.equal(persisted.content, marker, `prerequisite failed [sessionGet]: marker content ${JSON.stringify(persisted.content)}`);
     assert.equal(persisted.createdAt, createdAt, `prerequisite failed [sessionGet]: marker createdAt ${JSON.stringify(persisted.createdAt)}`);
+    const reference = (seed.messages ?? []).find((item) => item.id === PANEL_REF_ID);
+    assert.ok(reference, `prerequisite failed [sessionGet]: panel reference message missing from ${JSON.stringify(seed.messages)}`);
+    assert.equal(reference.role, "assistant", `prerequisite failed [sessionGet]: panel reference role ${JSON.stringify(reference.role)}`);
+    assert.equal(
+      reference.content,
+      referenceContent,
+      `prerequisite failed [sessionGet]: panel reference content ${JSON.stringify(reference.content)}`,
+    );
 
     console.log(`SAFE FACTS ${JSON.stringify({ tempProjectDir: projectDir, canonicalProject, sessionId, listedSessionCount: seed.listing?.length ?? 0 })}`);
     console.log("PASS fixture project, session and transcript persisted through the public IPC surface");
@@ -521,7 +700,139 @@ async function main() {
     assert.equal(selected.running, false, "restored session must not resume a turn");
     console.log("PASS renderer reload hydration plus real sidebar row click renders the persisted transcript while idle");
 
-    stage = "manual-sidebar-collapse";
+    stage = "right-panel-open-from-transcript";
+    // Everything below is a user affordance: transcript anchors, the strip's
+    // own buttons and the shell toggle. No panel state is injected.
+    const panelExpression = panelStateExpression(sessionId);
+    const freshPanel = await cdp.evaluate(panelExpression);
+    assert.equal(freshPanel.open, false, `work panel starts closed: ${JSON.stringify(freshPanel)}`);
+    assert.equal(freshPanel.tabs.length, 0, `work panel starts without tabs: ${JSON.stringify(freshPanel)}`);
+
+    await clickControl(
+      cdp,
+      '[...document.querySelectorAll(".main-pane a")].find((anchor) => anchor.textContent.trim() === "open notes")',
+      "transcript file reference",
+    );
+    const filePanel = await pollUntil(
+      cdp,
+      () => cdp.evaluate(`(() => {
+        const state = ${panelExpression};
+        return state.open
+          && state.stored?.activeTabId === "file:${FIXTURE_FILE}"
+          && state.viewer?.includes(${JSON.stringify(notesMarker)})
+          ? state
+          : null;
+      })()`),
+      "host file tab opened from a transcript reference",
+      25_000,
+      panelExpression,
+    );
+    assert.deepEqual(
+      filePanel.tabs.map((tab) => tab.id),
+      [`file:${FIXTURE_FILE}`],
+      `work panel strip after the file reference: ${JSON.stringify(filePanel)}`,
+    );
+    assert.equal(filePanel.tabs[0].active, true, `file tab is not the active tab: ${JSON.stringify(filePanel)}`);
+    assert.equal(filePanel.savedVersion, 2, `panel preference version not stored: ${JSON.stringify(filePanel)}`);
+    assert.equal(filePanel.savedOpen, true, `opening a file tab did not store the open panel: ${JSON.stringify(filePanel)}`);
+    assert.deepEqual(
+      filePanel.stored,
+      {
+        activeTabId: `file:${FIXTURE_FILE}`,
+        tabs: [{ id: `file:${FIXTURE_FILE}`, kind: "file", resource: FIXTURE_FILE, location: null, line: 3 }],
+      },
+      `stored file tab: ${JSON.stringify(filePanel.stored)}`,
+    );
+    assert.ok(filePanel.viewer.includes(notesMarker), `file preview did not render the fixture: ${JSON.stringify(filePanel.viewer)}`);
+
+    await clickControl(
+      cdp,
+      '[...document.querySelectorAll(".main-pane a")].find((anchor) => anchor.textContent.trim() === "open page")',
+      "transcript loopback link",
+    );
+    const browserPanel = await pollUntil(
+      cdp,
+      () => cdp.evaluate(`(() => {
+        const state = ${panelExpression};
+        const browser = state.stored?.tabs?.[1];
+        return state.open
+          && browser
+          && browser.resource === "pi.browser/browser"
+          && browser.location === ${JSON.stringify(fixtures.url)}
+          ? state
+          : null;
+      })()`),
+      "browser tab opened from the transcript loopback link",
+      25_000,
+      panelExpression,
+    );
+    const browserTabId = browserPanel.stored.tabs[1].id;
+    assert.equal(browserPanel.tabs.length, 2, `work panel strip after the link: ${JSON.stringify(browserPanel)}`);
+    assert.equal(browserPanel.tabs[0].id, `file:${FIXTURE_FILE}`, `first tab is not the file tab: ${JSON.stringify(browserPanel)}`);
+    assert.equal(browserPanel.tabs[1].id, browserTabId, `browser tab missing from the strip: ${JSON.stringify(browserPanel)}`);
+    assert.equal(browserPanel.tabs[1].active, true, `browser tab is not the active tab: ${JSON.stringify(browserPanel)}`);
+    assert.equal(browserPanel.stored.activeTabId, browserTabId, `stored active tab is not the browser: ${JSON.stringify(browserPanel)}`);
+    const guest = await assertGuestPage(port, fixtures.url, fixtures.pageMarker, "work-panel browser tab");
+
+    await clickControl(cdp, 'document.querySelector(".work-panel-new-tab")', "work panel new tab button");
+    const newTabPanel = await pollUntil(
+      cdp,
+      () => cdp.evaluate(`(() => {
+        const state = ${panelExpression};
+        return state.tabs.length === 3 && state.tabs[2]?.id.startsWith("new:") ? state : null;
+      })()`),
+      "work panel new tab",
+      20_000,
+      panelExpression,
+    );
+    await clickControl(
+      cdp,
+      `document.querySelector(${JSON.stringify(`[data-work-panel-tab-id="${newTabPanel.tabs[2].id}"] .work-panel-tab-close`)})`,
+      "work panel new tab close",
+    );
+    const closedPanel = await pollUntil(
+      cdp,
+      () => cdp.evaluate(`(() => {
+        const state = ${panelExpression};
+        return state.tabs.length === 2 && state.stored?.tabs?.length === 2 ? state : null;
+      })()`),
+      "explicit tab close",
+      20_000,
+      panelExpression,
+    );
+    assert.deepEqual(
+      closedPanel.tabs.map((tab) => tab.id),
+      [`file:${FIXTURE_FILE}`, browserTabId],
+      `strip after the explicit close: ${JSON.stringify(closedPanel)}`,
+    );
+    assert.equal(closedPanel.stored.activeTabId, browserTabId, `closed tab kept selection: ${JSON.stringify(closedPanel)}`);
+
+    await clickControl(cdp, 'document.querySelector(".app-work-panel-toggle")', "work panel toggle");
+    const collapsedPanel = await pollUntil(
+      cdp,
+      () => cdp.evaluate(`(() => {
+        const state = ${panelExpression};
+        return !state.open && state.savedOpen === false && state.togglePressed === "false" ? state : null;
+      })()`),
+      "collapsed work panel",
+      20_000,
+      panelExpression,
+    );
+    assert.equal(collapsedPanel.togglePressed, "false", `toggle still reports an open panel: ${JSON.stringify(collapsedPanel)}`);
+    assert.deepEqual(
+      collapsedPanel.stored.tabs.map((tab) => tab.id),
+      [`file:${FIXTURE_FILE}`, browserTabId],
+      `collapsed panel lost its tabs: ${JSON.stringify(collapsedPanel)}`,
+    );
+    console.log(`PANEL EVIDENCE first-launch ${JSON.stringify({
+      fileTab: filePanel.stored.tabs[0],
+      browserTab: browserPanel.stored.tabs[1],
+      guest,
+      width: collapsedPanel.savedWidth,
+    })}`);
+    console.log("PASS transcript reference and loopback link open ordered file/browser tabs, an explicit tab close is stored, and the toggle collapses the panel");
+
+    stage = "sidebar-toggle";
     const collapseTarget = await cdp.evaluate(`(() => {
       const button = document.querySelector('.sidebar [data-nav="toggle-sidebar"]');
       if (!button) return null;
@@ -532,34 +843,74 @@ async function main() {
     })()`);
     assert.ok(collapseTarget, `sidebar collapse control is not visible: ${JSON.stringify(collapseTarget)}`);
     await cdp.clickAt(collapseTarget.x, collapseTarget.y);
-    await waitFor(
-      () => cdp.evaluate(`!document.querySelector(".sidebar") && localStorage.getItem(${JSON.stringify(SIDEBAR_COLLAPSED_KEY)}) === "true"`),
-      "manual sidebar collapse persisted",
-    );
-    console.log(`SELECTION EVIDENCE before-quit ${JSON.stringify(await cdp.evaluate(`({
-      collapsed: localStorage.getItem(${JSON.stringify(SIDEBAR_COLLAPSED_KEY)}),
-      selected: localStorage.getItem("pi.desktop.lastSelectedSessionId"),
-    })`))}`);
+    await waitFor(() => cdp.evaluate(`!document.querySelector(".sidebar")`), "manual sidebar collapse");
 
-    stage = "restart-1-collapsed";
+    const expandTarget = await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('[data-nav="toggle-sidebar"], .ct-lead .ct-icon-btn')]
+        .find((candidate) => {
+          const rect = candidate.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0
+            && candidate.disabled !== true
+            && candidate.getAttribute("aria-disabled") !== "true";
+        });
+      if (!button) return null;
+      const rect = button.getBoundingClientRect();
+      return { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
+    })()`);
+    assert.ok(expandTarget, `sidebar expand control is not visible: ${JSON.stringify(expandTarget)}`);
+    await cdp.clickAt(expandTarget.x, expandTarget.y);
+    await waitFor(() => cdp.evaluate(`!!document.querySelector(".sidebar")`), "manual sidebar expansion");
+    const toggledView = await pollUntil(
+      cdp,
+      () => cdp.evaluate(`(() => {
+        const active = document.querySelector("[data-sidebar-session-row].active");
+        const main = document.querySelector(".main-pane");
+        const state = {
+          activeId: active?.getAttribute("data-sidebar-session-row") ?? null,
+          markerVisible: !!main && main.innerText.includes(${JSON.stringify(marker)}),
+          running: !!document.querySelector(".stop-btn"),
+        };
+        return state.activeId === ${JSON.stringify(sessionId)} && state.markerVisible ? state : null;
+      })()`),
+      "restored active session after a sidebar toggle",
+      15_000,
+      rendererDiagnostics(marker),
+    );
+    assert.equal(toggledView.running, false, "restored session must not resume a turn after a sidebar toggle");
+    console.log("PASS sidebar toggle collapses and re-expands without touching the restored session");
+
+    stage = "restart-1";
     await quit(cdp, child);
     cdp = null;
     child = launch(port, profileDir, dataDir);
     cdp = await openWindow(port);
-    await waitFor(
-      () => cdp.evaluate(`!document.querySelector(".sidebar") && localStorage.getItem(${JSON.stringify(SIDEBAR_COLLAPSED_KEY)}) === "true"`),
-      "collapsed sidebar after restart",
-    );
-    const collapsedState = await cdp.evaluate(`({
+    await waitFor(() => cdp.evaluate(`!!document.querySelector(".sidebar")`), "expanded sidebar after restart");
+    const restartState = await cdp.evaluate(`({
       sidebar: !!document.querySelector(".sidebar"),
-      saved: localStorage.getItem(${JSON.stringify(SIDEBAR_COLLAPSED_KEY)}),
       selected: localStorage.getItem("pi.desktop.lastSelectedSessionId"),
       rowCount: document.querySelectorAll("[data-sidebar-session-row]").length,
       running: !!document.querySelector(".stop-btn"),
     })`);
-    assert.equal(collapsedState.sidebar, false, `collapsed sidebar mounted after restart: ${JSON.stringify(collapsedState)}`);
-    assert.equal(collapsedState.saved, "true", `collapsed preference lost after restart: ${JSON.stringify(collapsedState)}`);
-    assert.equal(collapsedState.running, false, `restored session auto-executed after restart: ${JSON.stringify(collapsedState)}`);
+    assert.equal(restartState.sidebar, true, `sidebar should start expanded after restart: ${JSON.stringify(restartState)}`);
+    assert.equal(restartState.running, false, `restored session auto-executed after restart: ${JSON.stringify(restartState)}`);
+
+    const restoredView = await pollUntil(
+      cdp,
+      () => cdp.evaluate(`(() => {
+        const active = document.querySelector("[data-sidebar-session-row].active");
+        const main = document.querySelector(".main-pane");
+        const state = {
+          activeId: active?.getAttribute("data-sidebar-session-row") ?? null,
+          markerVisible: !!main && main.innerText.includes(${JSON.stringify(marker)}),
+          running: !!document.querySelector(".stop-btn"),
+        };
+        return state.activeId === ${JSON.stringify(sessionId)} && state.markerVisible ? state : null;
+      })()`),
+      "restored active session after restart",
+      15_000,
+      rendererDiagnostics(marker),
+    );
+    assert.equal(restoredView.running, false, "restored session must not resume a turn after restart");
 
     const durable = await cdp.evaluate(`(async () => {
       const api = window.piDesktop;
@@ -591,59 +942,70 @@ async function main() {
     assert.equal(durable.marker, true, `persisted transcript marker missing after restart: ${JSON.stringify(durable)}`);
     assert.equal(durable.listed, true, `session missing from sessionList after restart: ${JSON.stringify(durable)}`);
     assert.equal(durable.running, false, `restored session auto-executed after restart: ${JSON.stringify(durable)}`);
-    console.log(`SELECTION EVIDENCE after-restart ${JSON.stringify({ selected: durable.selected, listedSessions: durable.listedSessions, collapsedState })}`);
-    console.log("PASS project, session, transcript and collapsed sidebar survive restart without auto-execution");
+    console.log(`SELECTION EVIDENCE after-restart ${JSON.stringify({ selected: durable.selected, listedSessions: durable.listedSessions, restartState })}`);
+    console.log("PASS project, session, transcript and expanded sidebar survive restart without auto-execution");
 
-    stage = "restart-1-manual-expand";
-    const expandProbe = await cdp.evaluate(`(() => {
-      const candidates = [...document.querySelectorAll('[data-nav="toggle-sidebar"], .ct-lead .ct-icon-btn')]
-        .map((button) => {
-          const rect = button.getBoundingClientRect();
-          return {
-            slot: button.getAttribute("data-nav") ? "data-nav" : "ct-lead",
-            width: Math.round(rect.width),
-            height: Math.round(rect.height),
-            disabled: button.disabled === true || button.getAttribute("aria-disabled") === "true",
-            x: Math.round(rect.x + rect.width / 2),
-            y: Math.round(rect.y + rect.height / 2),
-          };
-        });
-      const target = candidates.find((candidate) => !candidate.disabled && candidate.width > 0 && candidate.height > 0);
-      return { target: target ?? null, candidates };
-    })()`);
-    assert.ok(expandProbe.target, `sidebar expand control is not visible: ${JSON.stringify(expandProbe.candidates)}`);
-    await cdp.clickAt(expandProbe.target.x, expandProbe.target.y);
-    await waitFor(
-      () => cdp.evaluate(`!!document.querySelector(".sidebar") && localStorage.getItem(${JSON.stringify(SIDEBAR_COLLAPSED_KEY)}) === "false"`),
-      "manual sidebar expansion persisted",
+    stage = "right-panel-closed-restart";
+    const closedRestart = await cdp.evaluate(panelExpression);
+    assert.equal(closedRestart.open, false, `collapsed panel reopened after restart: ${JSON.stringify(closedRestart)}`);
+    assert.equal(closedRestart.savedOpen, false, `collapsed state was not stored: ${JSON.stringify(closedRestart)}`);
+    assert.deepEqual(
+      closedRestart.stored?.tabs?.map((tab) => tab.id),
+      [`file:${FIXTURE_FILE}`, browserTabId],
+      `collapsed panel lost its tabs across the restart: ${JSON.stringify(closedRestart)}`,
     );
 
-    const expandedView = await pollUntil(
+    await clickControl(cdp, 'document.querySelector(".app-work-panel-toggle")', "work panel toggle after restart");
+    const reopened = await pollUntil(
       cdp,
       () => cdp.evaluate(`(() => {
-        const active = document.querySelector("[data-sidebar-session-row].active");
-        const main = document.querySelector(".main-pane");
-        const state = {
-          activeId: active?.getAttribute("data-sidebar-session-row") ?? null,
-          markerVisible: !!main && main.innerText.includes(${JSON.stringify(marker)}),
-          running: !!document.querySelector(".stop-btn"),
-        };
-        return state.activeId === ${JSON.stringify(sessionId)} && state.markerVisible ? state : null;
+        const state = ${panelExpression};
+        return state.open && state.tabs.length === 2 ? state : null;
       })()`),
-      "restored active session after sidebar expansion",
-      15_000,
-      rendererDiagnostics(marker),
+      "reopened work panel",
+      25_000,
+      panelExpression,
     );
-    assert.equal(expandedView.running, false, "restored session must not resume a turn after expansion");
-    console.log("PASS selected session and transcript render after manual sidebar expansion");
+    assert.deepEqual(
+      reopened.tabs.map((tab) => tab.id),
+      [`file:${FIXTURE_FILE}`, browserTabId],
+      `reopened strip order: ${JSON.stringify(reopened)}`,
+    );
+    assert.equal(reopened.tabs[1].active, true, `reopened panel did not select the last active tab: ${JSON.stringify(reopened)}`);
+    const reopenedGuest = await assertGuestPage(port, fixtures.url, fixtures.pageMarker, "reopened browser tab");
+    // A tab is activated through its label: the tab's own close control sits at
+    // the right edge, so a center-of-button click is not the user's target.
+    await clickControl(
+      cdp,
+      `document.querySelector(${JSON.stringify(`[data-work-panel-tab-id="file:${FIXTURE_FILE}"] .work-panel-tab-label`)})`,
+      "file tab label",
+    );
+    const reopenedFile = await pollUntil(
+      cdp,
+      () => cdp.evaluate(`(() => {
+        const state = ${panelExpression};
+        return state.stored?.activeTabId === "file:${FIXTURE_FILE}"
+          && state.viewer?.includes(${JSON.stringify(notesMarker)})
+          ? state
+          : null;
+      })()`),
+      "file preview after reopening the panel",
+      25_000,
+      panelExpression,
+    );
+    console.log(`PANEL EVIDENCE reopened-after-collapse ${JSON.stringify({
+      tabs: reopenedFile.stored.tabs.map((tab) => tab.id),
+      guest: reopenedGuest,
+    })}`);
+    console.log("PASS a collapsed panel stays closed across restart with its tabs retained, and reopening shows both tabs and reloads the page");
 
-    stage = "restart-2-expanded";
+    stage = "restart-2";
     await quit(cdp, child);
     cdp = null;
     child = launch(port, profileDir, dataDir);
     cdp = await openWindow(port);
     await waitFor(() => cdp.evaluate(`!!document.querySelector(".sidebar")`), "expanded sidebar after restart");
-    const restoredView = await pollUntil(
+    const secondView = await pollUntil(
       cdp,
       () => cdp.evaluate(`(() => {
         const active = document.querySelector("[data-sidebar-session-row].active");
@@ -660,15 +1022,67 @@ async function main() {
       rendererDiagnostics(marker),
     );
     const layout = await cdp.evaluate(`({
-      saved: localStorage.getItem(${JSON.stringify(SIDEBAR_COLLAPSED_KEY)}),
       currentWorkspace: document.querySelector("[data-current-workspace='true']")?.getAttribute("data-sidebar-project-group") ?? null,
       running: !!document.querySelector(".stop-btn"),
     })`);
-    assert.equal(restoredView.running, false, "restored session must not resume a turn");
-    assert.equal(layout.saved, "false", `expanded preference lost after restart: ${JSON.stringify(layout)}`);
+    assert.equal(secondView.running, false, "restored session must not resume a turn");
     assert.equal(normalizePath(layout.currentWorkspace), canonicalProject, `active project lost after expanded restart: ${JSON.stringify(layout)}`);
     assert.equal(layout.running, false, `restored session auto-executed after expanded restart: ${JSON.stringify(layout)}`);
-    console.log("PASS project, session, transcript and expanded sidebar survive Electron relaunch");
+    console.log("PASS project, session and transcript survive a second Electron relaunch");
+
+    stage = "right-panel-open-restart";
+    // The file tab was active when this process quit, so a restored preview can
+    // only come from a fresh file request the renderer actually read.
+    const restoredPanel = await pollUntil(
+      cdp,
+      () => cdp.evaluate(`(() => {
+        const state = ${panelExpression};
+        return state.open
+          && state.stored?.activeTabId === "file:${FIXTURE_FILE}"
+          && state.viewer?.includes(${JSON.stringify(notesMarker)})
+          ? state
+          : null;
+      })()`),
+      "restored open panel with the active file tab preview",
+      25_000,
+      panelExpression,
+    );
+    assert.deepEqual(
+      restoredPanel.tabs.map((tab) => tab.id),
+      [`file:${FIXTURE_FILE}`, browserTabId],
+      `restored strip order: ${JSON.stringify(restoredPanel)}`,
+    );
+    assert.equal(restoredPanel.savedOpen, true, `expanded panel was stored closed: ${JSON.stringify(restoredPanel)}`);
+    assert.equal(restoredPanel.tabs[0].active, true, `restored active tab is not the file tab: ${JSON.stringify(restoredPanel)}`);
+    assert.equal(
+      restoredPanel.stored.tabs[1].location,
+      fixtures.url,
+      `restored browser tab lost its URL: ${JSON.stringify(restoredPanel.stored.tabs[1])}`,
+    );
+
+    await clickControl(
+      cdp,
+      `document.querySelector(${JSON.stringify(`[data-work-panel-tab-id="${browserTabId}"] .work-panel-tab-label`)})`,
+      "browser tab label",
+    );
+    const restoredBrowser = await pollUntil(
+      cdp,
+      () => cdp.evaluate(`(() => {
+        const state = ${panelExpression};
+        return state.stored?.activeTabId === ${JSON.stringify(browserTabId)} ? state : null;
+      })()`),
+      "browser tab selected after restart",
+      25_000,
+      panelExpression,
+    );
+    const restoredGuest = await assertGuestPage(port, fixtures.url, fixtures.pageMarker, "restored browser tab");
+    console.log(`PANEL EVIDENCE open-after-restart ${JSON.stringify({
+      tabs: restoredBrowser.stored.tabs.map((tab) => tab.id),
+      activeTabId: restoredBrowser.stored.activeTabId,
+      viewer: restoredPanel.viewer ? restoredPanel.viewer.slice(0, 120) : null,
+      guest: restoredGuest,
+    })}`);
+    console.log("PASS an expanded panel restores open with its active file tab freshly previewed and its browser URL loaded");
 
     stage = "explicit-project-clear";
     // The sidebar and Projects page clear through this renderer action, which
@@ -733,14 +1147,12 @@ async function main() {
       activeId: document.querySelector("[data-sidebar-session-row].active")?.getAttribute("data-sidebar-session-row") ?? null,
       markerVisible: (document.querySelector(".main-pane")?.innerText ?? "").includes(${JSON.stringify(marker)}),
       currentWorkspace: document.querySelector("[data-current-workspace='true']")?.getAttribute("data-sidebar-project-group") ?? null,
-      saved: localStorage.getItem(${JSON.stringify(SIDEBAR_COLLAPSED_KEY)}),
       selected: localStorage.getItem("pi.desktop.lastSelectedSessionId"),
       running: !!document.querySelector(".stop-btn"),
     })`);
     assert.equal(clearedView.activeId, null, `explicit project clear was resurrected: ${JSON.stringify(clearedView)}`);
     assert.equal(clearedView.markerVisible, false, `cleared transcript was resurrected: ${JSON.stringify(clearedView)}`);
     assert.notEqual(normalizePath(clearedView.currentWorkspace), canonicalProject, `cleared project became active again: ${JSON.stringify(clearedView)}`);
-    assert.equal(clearedView.saved, "false", `sidebar preference changed by project clear: ${JSON.stringify(clearedView)}`);
     assert.equal(clearedView.selected, null, `cleared session selection was restored: ${JSON.stringify(clearedView)}`);
     assert.equal(clearedView.running, false, `cleared state auto-executed: ${JSON.stringify(clearedView)}`);
 
@@ -761,6 +1173,7 @@ async function main() {
     rmSync(profileDir, { recursive: true, force: true });
     rmSync(dataDir, { recursive: true, force: true });
     rmSync(projectDir, { recursive: true, force: true });
+    if (fixtures) await fixtures.close().catch(() => {});
   }
 }
 

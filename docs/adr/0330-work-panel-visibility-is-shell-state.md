@@ -4,6 +4,8 @@
 - Date: 2026-10-21
 - Amends: [ADR 0028](0028-session-scoped-work-panel-contexts.md) (session contexts
   keep their resources, not their visibility)
+- Superseded in part by: D662 (one shell-level open flag is persisted with the
+  width and tab contexts; see the amendment below)
 - Related: D142, D661, ADR 0068 (no launcher on reveal), ADR 0195 (viewport-fixed
   toggle), `docs/spec/04-ux/09-interaction-patterns.md` §1.8
 
@@ -23,8 +25,10 @@ on screen is a property of the window, not of the topic being read.
 
 ## Decision
 
-1. `workPanelOpen` is shell UI state beside `workPanelWidth`. It starts closed
-   on every launch and is never persisted.
+1. `workPanelOpen` is shell UI state beside `workPanelWidth`. A fresh profile
+   starts closed, and a later launch resumes the user's last choice from the
+   same renderer preference that holds the width. *(Amended by D662; this record
+   originally left the flag unpersisted so every launch started closed.)*
 2. A conversation's work-panel context holds only its resources: ordered tabs,
    active tab, pending file request, and Browser resource. It has no visibility
    field.
@@ -41,9 +45,10 @@ on screen is a property of the window, not of the topic being read.
    during the transitional no-conversation phase a select/new/fork/delete
    passes through. Revealing keeps its documented no-op without an active
    conversation.
-6. Resources stay isolated per conversation: no global tab set is merged, no
-   visibility is persisted, and no per-session open flag is written. Renderer
-   only: no Plugin SDK, IPC, host protocol, or storage change.
+6. Resources stay isolated per conversation: no global tab set is merged and no
+   per-session open flag exists. *(Amended by D662: one shell-level open flag is
+   persisted beside the width; no per-conversation visibility field is written.)*
+   Renderer only: no Plugin SDK, IPC, host protocol, or storage change.
 
 ## Consequences
 
@@ -64,3 +69,16 @@ on screen is a property of the window, not of the topic being read.
 - Reveal the destination's retained open state on switch: that is the behavior
   this record replaces; it cannot honor a close, which has no owner after the
   conversation changes.
+
+## Amendment (2026-10-22): the shell flag is persisted
+
+D662 supersedes the startup-closed and never-persisted clauses of decisions 1
+and 6. Visibility is still shell state with no conversation owner: selection,
+creation, forking, project activation, and content reset still never change it,
+and only an explicit toggle, `Cmd/Ctrl + J`, the header collapse action, or an
+artifact targeting the visible conversation does. The difference is durability.
+The versioned renderer preference that stores each conversation's tabs and the
+committed width also stores one open flag, so a launch resumes a dock the user
+left open and a dock the user closed stays closed; a fresh profile still starts
+closed. No per-session open flag, host storage, schema, IPC, or Plugin SDK change
+was introduced.

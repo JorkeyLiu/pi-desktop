@@ -2,10 +2,16 @@ import { loadRecentModels } from "../../lib/recent-models";
 import type { AppState, AppStateData } from "../app-state";
 import { projectWorkspaceFromPath } from "../../lib/sidebar-preferences";
 import { loadSidebarPreferences } from "../../lib/sidebar-preferences";
-import { loadWorkPanelWidth } from "./work-panel-slice";
+import { loadWorkPanelSnapshot } from "../../lib/work-panel-persistence";
 
 export const initialSidebarPreferences = loadSidebarPreferences();
-export const initialWorkPanelWidth = loadWorkPanelWidth();
+/**
+ * The durable right-panel preference. Contexts load before the host snapshot
+ * arrives; the validated projection onto existing sessions, and the panel's
+ * open flag, are applied once startup restores a conversation.
+ */
+export const initialWorkPanelSnapshot = loadWorkPanelSnapshot();
+
 
 function withProjectDisplayName(
   workspace: NonNullable<AppState["workspace"]>,
@@ -47,8 +53,8 @@ export function createInitialState(): AppStateData {
     workPanelOpen: false,
     workPanelTabs: [],
     activeWorkPanelTabId: null,
-    workPanelContexts: {},
-    workPanelWidth: initialWorkPanelWidth,
+    workPanelContexts: initialWorkPanelSnapshot.contexts,
+    workPanelWidth: initialWorkPanelSnapshot.width,
     workPanelFileRequest: null,
     projectSort: initialSidebarPreferences.projectSort,
     messages: [],

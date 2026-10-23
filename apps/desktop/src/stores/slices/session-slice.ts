@@ -33,8 +33,8 @@ import {
   sessionIsArchived,
   sessionIsPinned,
   type SessionMeta,
-  saveLastSelectedSession,
 } from "../../lib/sidebar-preferences";
+import { saveLastSelectedSession } from "../../lib/workspace-preferences";
 import { api } from "../../lib/api";
 import { isRemoteSession, safeSessionSummary, sessionAllows } from "../../lib/remote-session-safety";
 import { createRefreshCoordinator } from "../../lib/refresh-coordinator";

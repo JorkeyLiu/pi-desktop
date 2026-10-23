@@ -21,9 +21,11 @@ import {
 import {
   projectWorkspaceFromPath,
   saveSidebarPreferences,
+} from "../lib/sidebar-preferences";
+import {
   loadLastSelectedSession,
   clearLastSelectedSession,
-} from "../lib/sidebar-preferences";
+} from "../lib/workspace-preferences";
 import { restorableSessionId } from "../lib/workspace-restoration";
 import {
   WORK_PANEL_DEFAULT_WIDTH,
@@ -41,12 +43,18 @@ import {
 import type { StoreAccess } from "./slices/types";
 import {
   createWorkPanelSlice,
+  restoreWorkPanelState,
   switchWorkPanelSession,
 } from "./slices/work-panel-slice";
 import {
   createInitialState,
   initialSidebarPreferences,
+  initialWorkPanelSnapshot,
 } from "./slices/initial-state";
+import {
+  saveWorkPanelSnapshot,
+  workPanelSnapshotChanged,
+} from "../lib/work-panel-persistence";
 import { createSessionSlice } from "./slices/session-slice";
 import { createQueueSlice } from "./slices/queue-slice";
 import { createTranscriptSlice } from "./slices/transcript-slice";
@@ -450,6 +458,28 @@ export const useAppStore = create<AppState>((set, get) => {
           });
         }
       }
+      // The startup conversation is now known, so the remembered right panel
+      // can be projected onto it: ordered tabs and the active tab per session,
+      // the open flag only while a supported session is actually restored, and
+      // a fresh file request for the active file tab. Nothing here resumes a
+      // runtime, a delegation, or a plugin view.
+      if (generation === bootstrapGeneration) {
+        const restoredState = get();
+        const knownSessionIds = new Set(
+          hydratedSessions.map((session) => session.id),
+        );
+        if (restoredState.activeSessionId) {
+          knownSessionIds.add(restoredState.activeSessionId);
+        }
+        set(
+          restoreWorkPanelState(
+            restoredState,
+            knownSessionIds,
+            initialWorkPanelSnapshot.open,
+          ),
+        );
+      }
+
     } catch (e) {
       // A superseded attempt reports nothing: its failure belongs to a wait the
       // user already left behind.
@@ -479,6 +509,12 @@ export const useAppStore = create<AppState>((set, get) => {
 useAppStore.subscribe((state, previous) => {
   transcriptReading.reconcile(state, previous);
   sessionRuntime.syncTranscriptProjection(state, previous);
+  // The durable right-panel preference follows every mutation that matters:
+  // reveal/collapse, width commits, tab open/close/reorder/activate, a browser
+  // tab's reported URL and title, session switches, and deletion pruning.
+  if (workPanelSnapshotChanged(previous, state)) {
+    saveWorkPanelSnapshot(state);
+  }
 });
 
 export async function materializeDraftSession(

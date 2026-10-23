@@ -41,11 +41,10 @@ Outer frame that positions Topbar, Sidebar, MainChat, and WorkPanel. Owns resize
 
 | State | Behavior |
 |---|---|
-| Default | Sidebar expanded, work panel hidden |
-| Narrow (<640px) | Sidebar auto-collapses to icon rail |
+| Launch | Sidebar expanded and work panel in the state the user left it (see §5.4); an explicit sidebar collapse is a per-session UI state, not a remembered preference, so every launch starts expanded while sidebar width and project grouping persist |
+| Default (fresh profile) | Sidebar expanded, work panel hidden |
 | Work panel open in a fixed client area | Work panel keeps its committed width while MainChat keeps its 450px hard floor; the expanded sidebar yields first when the budget is exhausted |
 | Preview (maximize) | MainChat is unmounted and the work panel fills the client area beside the sidebar; a window-level chrome row keeps shell actions and native window controls available |
-| Persistence | Manual expanded/collapsed choice is saved in renderer localStorage and restored on relaunch. Temporary responsive/work-panel collapse never replaces the manual choice; missing or invalid preference defaults expanded. |
 | Fullscreen | Topbar remains; sidebar toggle and artifact-driven panel stay available |
 
 ### 1.4 Interactions
@@ -1336,11 +1335,31 @@ entirely inside the plugin's isolated page:
   is visible; a hidden page receives them when shown again. Queued captures
   stay on their original page and fail if that guest was closed. Other pages
   remain independent, and resizing never triggers an extra screenshot.
-- Persistence: the panel's visibility and all session contexts are renderer
-  runtime state only. On app startup, open state, tabs, active-tab selection,
-  file requests, and Browser resources reset; only the committed preferred
-  `{width}` remains in localStorage `pi.desktop.workPanel`. Opening and
-  collapsing never request a positive native reservation and never change
+- Persistence: the panel keeps one versioned renderer preference per profile,
+  `{version: 2, width, open, sessions}` in localStorage `pi.desktop.workPanel`.
+  It stores the committed preferred width, whether the panel was open, and —
+  per conversation — the ordered tabs that can be rebuilt plus the active tab
+  id. Writes stay bounded to 60 conversations with 40 tabs each, and the
+  conversation on screen is written first, so the bound never drops it while the
+  remaining slots fill from other conversations. Runtime handles stay out of it:
+  a file tab's request, file contents, a Browser tab's live page and DOM, and any
+  delegation or plugin execution are never stored. A legacy `{width}` record, an
+  unknown version, unreadable JSON, or unavailable storage degrades to the stored
+  width (or the default) with the panel closed and no tabs.
+- Restore: the preference is read at startup and projected once the store has
+  selected its conversation. A context survives only for a session the host
+  still lists, so a deleted session, a remote-prefixed session, and an empty
+  context are dropped instead of shown; unknown tab kinds and unusable
+  resources are discarded, and an active id whose tab did not survive selects
+  the first surviving tab. The panel reopens only while such a session is
+  visible, so an empty home never shows a standalone dock. The active file tab
+  receives a fresh request, which is what makes the file view read the file
+  again; a Browser tab keeps the page it last reported and its native view
+  loads that page when the tab is shown; Review, plugin, subagent, and empty
+  New launcher tabs reopen as the tabs they were. No turn, tool call,
+  delegation, plugin view, or agent execution resumes, and the transcript is
+  whatever durable storage already held.
+- Opening and collapsing never request a positive native reservation and never change
   native window bounds. The panel flexes inside the existing client area, so
   MainChat reflows beside it while retaining its 450px hard minimum; the
   expanded sidebar is the column that yields, and closing the panel restores a

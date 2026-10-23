@@ -5,7 +5,7 @@ import { api } from "../../lib/api";
 import {
   clearLastSelectedSession,
   loadLastSelectedSession,
-} from "../../lib/sidebar-preferences";
+} from "../../lib/workspace-preferences";
 import {
   rememberProject,
   removeRecentProject,

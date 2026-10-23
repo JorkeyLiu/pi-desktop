@@ -15,18 +15,6 @@ const topbarSource = await readFile(
 );
 const globalStyles = await loadStyles();
 
-test("only manual sidebar choices persist; temporary layout collapse leaves preference untouched", () => {
-  const manualCollapse = appSource.match(/const handleSidebarResizeCollapse = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[\]\);/)?.[1] ?? "";
-  const manualToggle = appSource.match(/const toggleSidebar = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[reopenSidebar\]\);/)?.[1] ?? "";
-  const autoCollapse = appSource.match(/const autoCollapseSidebar = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[\]\);/)?.[1] ?? "";
-  assert.match(manualCollapse, /saveSidebarCollapsed\(true\)/);
-  assert.match(manualToggle, /saveSidebarCollapsed\(true\)/);
-  assert.doesNotMatch(autoCollapse, /saveSidebarCollapsed/);
-  const autoRestore = appSource.match(/if \(autoCollapsedSidebarRef\.current\) \{([\s\S]*?)\n        \}/)?.[1] ?? "";
-  assert.match(autoRestore, /setSidebarCollapsed\(false\)/);
-  assert.doesNotMatch(autoRestore, /saveSidebarCollapsed/);
-});
-
 test("the sidebar forwards collapse-animation props to the aside element", () => {
   assert.match(sidebarSource, /cx\("sidebar", "sidebar-surface", className\)/);
   assert.match(sidebarSource, /onAnimationEnd=\{onAnimationEnd\}/);
@@ -311,7 +299,7 @@ test("the sidebar toggle never captures a stale collapsed state", () => {
   // functional-update form must not come back.
   assert.match(appSource, /const toggleSidebar = useCallback\(\(\) => \{/);
   assert.match(appSource, /if \(sidebarCollapsedRef\.current\) reopenSidebar\(\);/);
-  assert.match(appSource, /else\s*\{\s*setSidebarCollapsed\(true\);/);
+  assert.match(appSource, /else setSidebarCollapsed\(true\);/);
   assert.doesNotMatch(
     appSource,
     /setSidebarCollapsed\(\(collapsed\) => !collapsed\)/,

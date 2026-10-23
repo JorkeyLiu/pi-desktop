@@ -125,15 +125,18 @@ destination, chat as the home surface, tools and permissions inline.
   sidebar yields immediately, and moving it right gives space back. A manual
   sidebar reopen spends work-panel width first and otherwise targets a 460px
   MainChat width. The sole
-  panel-level control is the viewport-fixed toggle; each session retains its own runtime
-  open state, tab set, active tab, and Browser resource in renderer memory.
+  panel-level control is the viewport-fixed toggle; each session retains its own
+  open state, tab set, active tab, and Browser resource in renderer memory, and
+  that retained state is restored on relaunch.
   Selecting another session swaps the visible panel context without deleting
   either session's state; selecting a workspace without an active conversation
   hides the panel rather than reinterpreting relative resources. Background
   artifacts update only their originating session's retained panel context and
-  never open, activate, or resize the visible panel. Startup is closed with no
-  retained session contexts, and only the preferred panel width persists across
-  launches.
+  never open, activate, or resize the visible panel. A relaunch reopens the
+  panel where the user left it — open or collapsed, at its committed width,
+  with each still-existing session's ordered tabs and active tab, the file it
+  was previewing, and the page its Browser tab reported — and resumes no turn,
+  tool, delegation, or plugin view.
   The work panel remains a fixed-width in-flow column beside MainChat inside
   the existing client area (ADR 0033 / ADR 0151). MainChat keeps a hard 450px
   minimum; the work panel's effective maximum is the remaining client width

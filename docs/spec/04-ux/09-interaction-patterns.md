@@ -562,9 +562,9 @@ may be retained while exactly one workspace supplies the visible shell context.
   presentation boundary from structured fields; persisted rows never contain
   localized prose.
 
-### 1.8 Work panel entry and resources (D128, D142, D154, D173, D179, D207, D221, D661)
+### 1.8 Work panel entry and resources (D128, D142, D154, D173, D179, D207, D221, D661, D662)
 
-- The shell starts without a visible work panel. The viewport-fixed toggle and
+- A fresh profile starts without a visible work panel; every later launch starts in the state the user left it (D662, below). The viewport-fixed toggle and
   `Cmd/Ctrl + J` both toggle one panel: they reveal it without creating a
   resource tab, and collapse it without deleting the visible conversation's
   tabs, active resource, or committed width. Revealing is a no-op without an
@@ -657,9 +657,31 @@ may be retained while exactly one workspace supplies the visible shell context.
   switching back restores it; selecting a workspace without an active
   conversation hides the panel. Session/workspace identity remains attached to
   every relative resource, preventing cross-context reinterpretation.
-- Relaunch discards every session context, including Browser resources; only
-  the committed preferred panel width persists. Native window state is stored
-  independently from normal bounds, including when the app closes while
+- Relaunch restores the dock instead of discarding it (D662). One versioned
+  renderer preference per profile records the committed width, whether the
+  panel was open, and each conversation's ordered tabs with its active tab, so
+  the panel reopens where it was left: open or collapsed, at the same width,
+  with the tabs in their order and the selected tab active.
+- Restoration is projected onto the sessions the host still lists. A deleted
+  session, a remote-prefixed session, and a context with no restorable tab are
+  dropped rather than shown, and the panel reopens only while such a session is
+  visible, so an empty home never shows a standalone dock. Unknown tab kinds
+  and unusable resources are discarded, and an active tab that did not survive
+  selects the first surviving one. A legacy width-only record, an unknown
+  record version, unreadable JSON, and unavailable storage all fall back to the
+  width alone, with the panel closed and no tabs.
+- What returns is the tab, not the work. The active file tab receives a fresh
+  request, which is what makes the file view read the file again; a Browser tab
+  is restored with the page it last reported and its native view loads that
+  page when the tab is shown; Review, plugin, subagent, and empty `New` launcher
+  tabs reopen as the tabs they were, and plugin and subagent tabs use their
+  existing load or unavailable states. No turn, tool call, delegation, plugin
+  view, or agent execution resumes, no file body, page DOM, or task state is
+  restored, and the transcript stays exactly as durable storage left it.
+- The sidebar's collapse is not persisted: every launch starts expanded, and
+  the preference that remembered the choice is removed. Sidebar width, project
+  grouping, and the selected conversation still persist. Native window state is
+  stored independently from normal bounds, including when the app closes while
   maximized or before a pending bounds-save debounce completes. Panel width
   remains fixed rather than being responsively clamped.
 

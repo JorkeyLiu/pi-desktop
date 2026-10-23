@@ -5,7 +5,7 @@ export const trEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
-      "Uygulama, kenar çubuğunun açık veya kapalı olduğunu hatırlar ve yeniden başlatıldığında bu durumu geri yükler.",
+      "Yeniden başlatma, çalışma panelini bıraktığınız gibi geri getirir: açık veya daraltılmış, aynı genişlikte, her sohbetin sekmeleri sırasıyla, seçili sekme ve en son gösterilen dosya önizlemesi ya da tarayıcı sayfasıyla.",
       "Yeniden başlatma, en son okuduğunuz projeyi ve sohbeti dökümüyle birlikte açar; açıkça temizlediğiniz bir proje geri gelmez.",
       "Uzun bir sohbette yukarı okurken konumunuz korunur: daha eski sayfalar ve yeni bağlanan geçmiş, okuduğunuz mesajları artık kaydırmaz.",
       "Özel uç noktaları API anahtarı olmadan yapılandırın; bu modda isteklerle kimlik doğrulama bilgisi gönderilmez.",

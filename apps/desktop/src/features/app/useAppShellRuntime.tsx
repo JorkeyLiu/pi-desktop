@@ -19,9 +19,7 @@ import { subscribeRemoteInteractions } from "../../lib/remote-interactions";
 import { playNotificationChime } from "../../lib/notification-sound";
 import {
   clampSidebarWidth,
-  loadSidebarCollapsed,
   loadSidebarWidth,
-  saveSidebarCollapsed,
   saveSidebarWidth,
 } from "../../lib/sidebar-preferences";
 import { sidebarWidthBudget } from "../../lib/sidebar-resize";
@@ -69,8 +67,9 @@ export function useAppShellRuntime() {
   const plugins = useAppStore((s) => s.plugins);
   const projectPath = useAppStore((s) => s.workspace?.path ?? null);
   const workPanelVisible = workPanelOpen;
+
   const [searchOpen, setSearchOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(loadSidebarCollapsed);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => loadSidebarWidth());
   const { sidebarEntering, sidebarExiting, handleSidebarAnimationEnd } = useSidebarTransition(
     sidebarCollapsed,
@@ -132,7 +131,6 @@ export function useAppShellRuntime() {
   const handleSidebarResizeCollapse = useCallback(() => {
     autoCollapsedSidebarRef.current = false;
     setSidebarCollapsed(true);
-    saveSidebarCollapsed(true);
   }, []);
   // Reopening prefers the right column: the work panel gives up width first so
   // MainChat keeps the width it already had, and only a would-be breach of the
@@ -157,7 +155,6 @@ export function useAppShellRuntime() {
     autoCollapsedSidebarRef.current = false;
     setSidebarWidth(preferredWidth);
     setSidebarCollapsed(false);
-    saveSidebarCollapsed(false);
   }, []);
   useTraySessions({ setSearchOpen, reopenSidebar });
 
@@ -167,10 +164,7 @@ export function useAppShellRuntime() {
   const toggleSidebar = useCallback(() => {
     autoCollapsedSidebarRef.current = false;
     if (sidebarCollapsedRef.current) reopenSidebar();
-    else {
-      setSidebarCollapsed(true);
-      saveSidebarCollapsed(true);
-    }
+    else setSidebarCollapsed(true);
   }, [reopenSidebar]);
 
   // The layout, not the user, yields the sidebar when the panel would push

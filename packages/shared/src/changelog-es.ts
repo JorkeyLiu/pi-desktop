@@ -5,7 +5,7 @@ export const esEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
-      "La aplicación recuerda si la barra lateral está expandida o contraída y restaura ese estado al reiniciarse.",
+      "Al reiniciar, el panel de trabajo vuelve tal como lo dejaste: abierto o contraído, con el mismo ancho, las pestañas de cada conversación en su orden, la pestaña seleccionada y la vista previa del archivo o la página del navegador que mostraba.",
       "Al reiniciar se reabren el último proyecto y la última conversación que estabas leyendo, con su historial; un proyecto que borras explícitamente no vuelve.",
       "Al desplazarte hacia arriba en una conversación larga se mantiene tu posición: las páginas antiguas y el historial recién montado ya no desplazan los mensajes que estás leyendo.",
       "Configura endpoints personalizados sin una clave API; en ese modo las solicitudes no envían credenciales.",

@@ -27,6 +27,10 @@ const panelSource = await readFile(
 );
 const transcriptSource = await readTranscriptSource();
 const storeSource = await readStoreSource();
+const tabsSource = await readFile(
+  new URL("../src/lib/work-panel-tabs.ts", import.meta.url),
+  "utf8",
+);
 const globalStyles = await loadStyles();
 test("only the visible tab viewport excludes native window dragging", () => {
   assert.match(panelSource, /className="work-panel-tab-strip-wrap"/);
@@ -347,15 +351,16 @@ test("work panel tabs support pointer and keyboard reordering", () => {
   assert.match(globalStyles, /\.work-panel-tab\.is-drop-before::before/);
 });
 
-test("work panel starts closed with no tabs and persists width only", () => {
+test("startup stays closed until a conversation restores its saved panel", () => {
   assert.match(storeSource, /workPanelOpen:\s*false/);
   assert.match(storeSource, /workPanelTabs:\s*\[\]/);
   assert.match(storeSource, /activeWorkPanelTabId:\s*null/);
-  assert.match(storeSource, /JSON\.stringify\(\{ width \}\)/);
-  assert.match(storeSource, /const committedWidth = Math\.round\(width\)/);
-  const persistenceBlock =
-    storeSource.match(/function saveWorkPanelWidth[\s\S]*?\n\}/)?.[0] ?? "";
-  assert.doesNotMatch(persistenceBlock, /workPanelContexts|tabs|open/);
+  // The durable preference (width + per-session tabs) lives in one validated
+  // renderer module; slices stay free of storage access.
+  assert.match(storeSource, /workPanelContexts:\s*initialWorkPanelSnapshot\.contexts/);
+  assert.match(storeSource, /workPanelWidth:\s*initialWorkPanelSnapshot\.width/);
+  assert.match(storeSource, /restoreWorkPanelState\(/);
+  assert.doesNotMatch(storeSource, /localStorage\./);
 });
 
 test("closing the final tab keeps the panel open for the New launcher", () => {
@@ -547,10 +552,17 @@ test("work panel context is retained by session instead of cleared on selection"
 });
 
 test("file preview request ids stay unique across session contexts", () => {
-  assert.match(storeSource, /let workPanelFileRequestSeq = 0/);
+  // One module-scoped counter serves both live mutations and restart
+  // restoration, so a restored request is newer than anything this renderer
+  // already handled and the file view opens it.
+  assert.match(tabsSource, /let workPanelFileRequestSeq = 0/);
+  assert.match(
+    tabsSource,
+    /export function nextWorkPanelFileRequestSeq\(\): number \{/,
+  );
   assert.match(
     storeSource,
-    /const nextFileRequest = \(tab\?: WorkPanelTab\)[\s\S]*?createWorkPanelFileRequest\(tab, \+\+workPanelFileRequestSeq\)/,
+    /const nextFileRequest = \(tab\?: WorkPanelTab\)[\s\S]*?createWorkPanelFileRequest\(\s*tab,\s*nextWorkPanelFileRequestSeq\(\),?\s*\)/,
   );
   assert.ok(
     storeSource.match(/nextFileRequest\((?:tab|activeTab)\)/g)?.length === 5,

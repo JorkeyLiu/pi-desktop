@@ -5,7 +5,7 @@ export const enEntries: ChangelogEntry[] = [
     version: "0.20.1",
     date: "2026-10-13",
     highlights: [
-      "Remember whether the app sidebar is expanded or collapsed across relaunches.",
+      "Relaunching reopens the work panel the way you left it: open or collapsed, at the same width, with each conversation's tabs in order, the selected tab, and the file preview or browser page it was showing.",
       "Relaunching reopens the project and conversation you were last reading, with its transcript; a project you clear explicitly stays cleared.",
       "Reading upward through a long conversation holds your place: an older page or newly mounted history no longer shifts the messages you are reading.",
       "Configure custom endpoints without an API key; requests omit authentication in that mode.",

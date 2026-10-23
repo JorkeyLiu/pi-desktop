@@ -10,6 +10,7 @@ import {
   emptyWorkPanelContext,
   fileWorkPanelTab,
   newWorkPanelTab,
+  nextWorkPanelFileRequestSeq,
   openWorkPanelTabState,
   reorderWorkPanelTabsState,
   replaceWorkPanelTabState,
@@ -19,39 +20,10 @@ import {
   type WorkPanelContext,
   type WorkPanelTab,
 } from "../../lib/work-panel-tabs";
-import {
-  WORK_PANEL_COMPACT_MIN_WIDTH,
-  WORK_PANEL_DEFAULT_WIDTH,
-} from "../../lib/work-panel-resize";
+import { WORK_PANEL_COMPACT_MIN_WIDTH } from "../../lib/work-panel-resize";
+import { restoreWorkPanelTabs } from "../../lib/work-panel-persistence";
 import type { AppState } from "../app-state";
 import type { StoreAccess } from "./types";
-
-const WORK_PANEL_STORAGE_KEY = "pi.desktop.workPanel";
-
-export function loadWorkPanelWidth(): number {
-  try {
-    const raw = localStorage.getItem(WORK_PANEL_STORAGE_KEY);
-    if (!raw) return WORK_PANEL_DEFAULT_WIDTH;
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const width = Number(parsed.width);
-    return Number.isFinite(width)
-      ? Math.max(
-          WORK_PANEL_COMPACT_MIN_WIDTH,
-          Math.round(width),
-        )
-      : WORK_PANEL_DEFAULT_WIDTH;
-  } catch {
-    return WORK_PANEL_DEFAULT_WIDTH;
-  }
-}
-
-function saveWorkPanelWidth(width: number): void {
-  try {
-    localStorage.setItem(WORK_PANEL_STORAGE_KEY, JSON.stringify({ width }));
-  } catch {
-    // best-effort persistence
-  }
-}
 
 export function currentWorkPanelContext(state: AppState): WorkPanelContext {
   const tabs = sanitizeWorkPanelTabsState({
@@ -99,6 +71,69 @@ export function switchWorkPanelSession(
   };
 }
 
+/**
+ * One conversation's durable resource state, validated for rendering.
+ *
+ * The same sanitizer the live panel uses repairs the active id and drops
+ * unknown kinds, so a record written by an older version can never hand a
+ * component a tab it cannot render.
+ */
+function restoredContext(context: WorkPanelContext): WorkPanelContext {
+  const tabs = restoreWorkPanelTabs(context.tabs, context.activeTabId);
+  return { tabs: tabs.tabs, activeTabId: tabs.activeTabId, fileRequest: null };
+}
+
+/**
+ * Project the persisted panel preference onto the sessions that still exist.
+ *
+ * This runs once, after the host snapshot has selected the startup
+ * conversation. The panel opens only while that conversation is a supported
+ * existing session, so an empty home never shows a standalone dock. Contexts
+ * for deleted, remote, or empty sessions are dropped instead of carried
+ * forward, and the restored active file tab receives a fresh request sequence
+ * so the file view reloads instead of treating the request as already handled.
+ */
+export function restoreWorkPanelState(
+  state: AppState,
+  sessionIds: ReadonlySet<string>,
+  persistedOpen: boolean,
+): Pick<
+  AppState,
+  | "workPanelContexts"
+  | "workPanelTabs"
+  | "activeWorkPanelTabId"
+  | "workPanelFileRequest"
+  | "workPanelOpen"
+> {
+  const contexts: Record<string, WorkPanelContext> = {};
+  for (const [sessionId, context] of Object.entries(state.workPanelContexts)) {
+    if (!sessionIds.has(sessionId) || sessionId.startsWith("remote:")) continue;
+    const restored = restoredContext(context);
+    if (restored.tabs.length) contexts[sessionId] = restored;
+  }
+  const visibleId = state.activeSessionId;
+  const visible = visibleId
+    ? contexts[visibleId] ?? emptyWorkPanelContext()
+    : emptyWorkPanelContext();
+  const activeTab = visible.tabs.find((tab) => tab.id === visible.activeTabId);
+  const fileRequest =
+    activeTab && activeTab.kind === "file" && activeTab.resource
+      ? createWorkPanelFileRequest(activeTab, nextWorkPanelFileRequestSeq())
+      : null;
+  if (visibleId && visible.tabs.length) {
+    contexts[visibleId] = { ...visible, fileRequest };
+  }
+  return {
+    workPanelContexts: contexts,
+    workPanelTabs: visible.tabs,
+    activeWorkPanelTabId: visible.activeTabId,
+    workPanelFileRequest: fileRequest,
+    workPanelOpen:
+      state.workPanelOpen ||
+      (persistedOpen && Boolean(visibleId && contexts[visibleId])),
+  };
+}
+
 export type WorkPanelSliceDependencies = StoreAccess & {
   isSessionSelectionPending: (sessionId: string) => boolean;
 };
@@ -127,11 +162,11 @@ export function createWorkPanelSlice({
   | "openUrlInWorkPanel"
   | "updateBrowserWorkPanelTab"
 > {
-  let workPanelFileRequestSeq = 0;
   const nextFileRequest = (tab?: WorkPanelTab): WorkPanelContext["fileRequest"] => {
     if (!tab || tab.kind !== "file" || !tab.resource) return null;
-    return createWorkPanelFileRequest(tab, ++workPanelFileRequestSeq);
+    return createWorkPanelFileRequest(tab, nextWorkPanelFileRequestSeq());
   };
+
 
   return {
   openSubagentTab: (delegationId, title) => {
@@ -387,13 +422,14 @@ export function createWorkPanelSlice({
   },
   setWorkPanelWidth: (width) => {
     const committedWidth = Math.round(width);
+    // Width is one field of the same durable panel preference the store
+    // subscriber writes; the committed value is what persists.
     set({
       workPanelWidth: Math.max(
         WORK_PANEL_COMPACT_MIN_WIDTH,
         committedWidth,
       ),
     });
-    saveWorkPanelWidth(get().workPanelWidth);
   },
 
   openFileInWorkPanel: (path, mimeType, position) => {
