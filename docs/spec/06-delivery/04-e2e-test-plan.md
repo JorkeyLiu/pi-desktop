@@ -1810,6 +1810,30 @@ validation still needed.
   regression in `renderer-stream-safety.test.mjs`, and math delimiter rendering
   in `latex-math.test.mjs`; full UI observation remains Draft)
 
+#### E2E-009a: Streaming Markdown tail presentation
+
+- **Preconditions**: Use the production Markdown component with a deterministic
+  source sequence; no provider, network, or persistent profile is needed.
+- **Steps**: Render an active tail containing incomplete emphasis, then render
+  the same bytes after completion. Include fenced/inline code, indented code at
+  the top level and nested in a list item and a blockquote, a raw `<pre>` body,
+  math, links, images, and ambiguous table/setext prefixes in the sequence.
+- **Expected**: Safe unmatched trailing emphasis/strikethrough is readable while
+  streaming. Incomplete inline code stays literal, an unmatched display-math
+  opener renders its bytes instead of entering the math renderer, and code —
+  including indented and unclosed fenced blocks nested in a list item or
+  blockquote — and raw `<pre>` text keep exactly the characters the finished
+  message renders, so selecting and copying a block invents nothing, while a
+  loose list item's own paragraph still formats early. Incomplete links display
+  label text without an actionable destination, and incomplete images remain
+  absent. Ambiguous block syntax may still reflow. Completion renders the
+  original bytes; generated presentation markers do not change source offsets,
+  copying, searching, link behavior, or image loading, and finished spans keep
+  their own anchors no matter what the tail repaired before them.
+- **Coverage**: `apps/desktop/test/markdown-stream-presentation.test.mjs` renders
+  the production component for active and completed states and checks source
+  offsets, protected syntax, and ambiguity cases.
+
 #### E2E-010: Abort generation
 
 - **Preconditions**: A session can produce both a deliberately delayed first

@@ -11,7 +11,7 @@ export type SourcePositionProps = {
 };
 
 /** Attach parser-owned offsets after sanitization, relative to the full message. */
-export function rehypeSourcePositions({ offset }: { offset: number }) {
+export function rehypeSourcePositions({ offset, sourceOffsets }: { offset: number; sourceOffsets?: number[] }) {
   return (tree: SourceNode) => {
     const pending = [tree];
     while (pending.length) {
@@ -22,8 +22,8 @@ export function rehypeSourcePositions({ offset }: { offset: number }) {
       if (node.type !== "element" || start === undefined || end === undefined) continue;
       node.properties = {
         ...node.properties,
-        "data-source-start": offset + start,
-        "data-source-end": offset + end,
+        "data-source-start": offset + (sourceOffsets?.[start] ?? start),
+        "data-source-end": offset + (sourceOffsets?.[end] ?? end),
       };
     }
   };

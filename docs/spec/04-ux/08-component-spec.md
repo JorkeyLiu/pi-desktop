@@ -2156,6 +2156,24 @@ Renderer: `apps/desktop/src/components/Markdown.tsx` + `apps/desktop/src/lib/shi
   across the whole message, and footnotes also number, reuse and back-link
   across it, so the message renders as one parse context and gives up per-block
   memoization for as long as it streams.
+  During active streaming, unmatched trailing emphasis/strikethrough markers in
+  the current tail receive temporary closing markers for rendering. An
+  incomplete link renders its label text without any destination, an incomplete
+  image is omitted, and unmatched inline code or math delimiters, fenced code,
+  indented code, raw `<pre>` bodies, and glob text stay literal; a math
+  delimiter that a completed inline code span or fence already owns is not
+  unmatched. Which bytes are code is decided by the same block grammar that
+  renders the tail, not by line indentation, so an indented or unclosed fenced
+  block nested in a list item or blockquote — where the marker is relative to
+  the container and may not start the line — stays literal too, while a loose
+  list item's own paragraph keeps its repair. A tail that opens display math
+  without a closer renders its bytes instead of entering the math renderer. The
+  derived text is never stored,
+  copied, searched, or used for source offsets: any anchor on the presented
+  tail resolves back to the original bytes, each kept character keeps its own
+  offset, and only the temporary closing markers clamp to the end of the text
+  they close. Completed and stopped messages render their original Markdown.
+  Ambiguous table and heading prefixes can still reflow while the tail grows.
 - **Bounded large content**: transcript linkification uses one shared per-tree
   budget of 128 Ki UTF-16 code units, at most 512 file candidates and 256
   generated links; one file candidate is at most 512 code units, while URLs

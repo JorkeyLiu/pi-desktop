@@ -70,6 +70,10 @@ import { useAppStore } from "../stores/app-store";
 import { useReferencedImageDataUrl } from "../lib/use-referenced-image-data-url";
 import { absoluteImagePath, remarkLocalImagePaths } from "../lib/markdown-image-paths";
 import { remarkNormalizeWrappedMarkdownLinkDestinations } from "../lib/markdown-link-destinations";
+import {
+  opensUnclosedDisplayMath,
+  presentStreamingMarkdown,
+} from "../lib/markdown-stream-presentation";
 import { useOpenChatFileRef } from "../hooks/use-preview-target";
 import {
   useChatFileMenuItems,
@@ -894,6 +898,7 @@ const Block = memo(function MarkdownBlock({
   renderDiagrams,
   workspaceRoot,
   baseDir,
+  sourceOffsets,
 }: {
   raw: string;
   originalRaw: string;
@@ -901,6 +906,7 @@ const Block = memo(function MarkdownBlock({
   renderDiagrams: boolean;
   workspaceRoot?: string | null;
   baseDir?: string;
+  sourceOffsets?: number[];
 }) {
   const context = useMemo(
     () => ({
@@ -922,8 +928,11 @@ const Block = memo(function MarkdownBlock({
     [originalRaw, workspaceRoot, baseDir],
   );
   const positionedRehypePlugins = useMemo(
-    () => [...rehypePlugins!, [rehypeSourcePositions, { offset: sourceOffset }]] as Options["rehypePlugins"],
-    [sourceOffset],
+    () => [...rehypePlugins!, [rehypeSourcePositions, {
+      offset: sourceOffset,
+      sourceOffsets,
+    }]] as Options["rehypePlugins"],
+    [sourceOffset, sourceOffsets],
   );
   return (
     <Profiler
@@ -1010,6 +1019,12 @@ export const Markdown = memo(function Markdown({
     fullSourceTooLarge ? "" : normalizedSource,
     markdownTailLimit,
   );
+  const presentedTail = useMemo(() => {
+    if (!streaming || blocks.length === 0 || fullSourceTooLarge) return null;
+    const rawTail = blocks[blocks.length - 1];
+    if (rawTail.length > markdownTailLimit) return null;
+    return presentStreamingMarkdown(rawTail);
+  }, [blocks, fullSourceTooLarge, markdownTailLimit, streaming]);
   let sourceOffset = 0;
   return (
     <MarkdownFileMenuContext.Provider value={openMarkdownFileMenu}>
@@ -1041,15 +1056,27 @@ export const Markdown = memo(function Markdown({
               </div>
             );
           }
+          if (streaming && opensUnclosedDisplayMath(raw)) {
+            return (
+              <p
+                key={i}
+                data-source-start={start}
+                data-source-end={start + raw.length}
+              >
+                {originalRaw}
+              </p>
+            );
+          }
           return (
             <Block
               key={i}
-              raw={raw}
+              raw={streaming && i === blocks.length - 1 ? (presentedTail?.markdown ?? raw) : raw}
               originalRaw={originalRaw}
               sourceOffset={start}
               renderDiagrams={renderDiagrams}
               workspaceRoot={workspaceRoot}
               baseDir={baseDir}
+              sourceOffsets={streaming && i === blocks.length - 1 ? presentedTail?.sourceOffsets : undefined}
             />
           );
         })}
