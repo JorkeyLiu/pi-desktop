@@ -20,6 +20,7 @@
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
+import { estimateVisibleResponseOutputTokens } from "./response-token-estimate.js";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -241,6 +242,7 @@ export class SubagentRun {
   private readonly opts: SubagentRunOptions;
   private currentAssistant?: UiMessage;
   private lastReportText = "";
+  private streamStartedAt?: number;
   private lastReportTruncated = false;
   private turns = 0;
   private toolCalls = 0;
@@ -869,6 +871,7 @@ export class SubagentRun {
         const retryingAssistant = this.providerRetryInProgress
           ? this.currentAssistant
           : undefined;
+        this.streamStartedAt = Date.now();
         this.currentAssistant = {
           ...(retryingAssistant ?? this.newAssistantRow()),
           content: content.text,
@@ -1007,8 +1010,21 @@ export class SubagentRun {
               isCertificateVerificationError(classifiedError?.details?.networkCode)
             ? { error: classifiedError } : {}),
         };
+        const durationMs = this.streamStartedAt !== undefined
+          ? Math.max(0, Date.now() - this.streamStartedAt)
+          : undefined;
+        const responseOutputTokens = aborted && (!messageUsage || messageUsage.outputTokens <= 0)
+          ? estimateVisibleResponseOutputTokens({ content: row.content, thinking: row.thinking })
+          : undefined;
+        const settledRow: UiMessage = {
+          ...row,
+          ...(durationMs !== undefined ? { modelStreamDurationMs: durationMs } : {}),
+          ...(aborted && durationMs !== undefined ? { responseDurationMs: durationMs } : {}),
+          ...(responseOutputTokens !== undefined ? { responseOutputTokens } : {}),
+        };
+        this.streamStartedAt = undefined;
         this.currentAssistant = undefined;
-        this.emit({ type: "message_end", message: row });
+        this.emit({ type: "message_end", message: settledRow });
         break;
       }
       case "tool_execution_start":

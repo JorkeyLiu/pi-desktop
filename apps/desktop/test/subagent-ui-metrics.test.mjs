@@ -159,16 +159,38 @@ test("the four slots always exist: a reported zero is a zero, an unreported figu
     subagentMetricsLine({ contextTokens: 41_200 }, english, "en"),
     "Turns — · Tool calls — · Context 41.2K · Spent —",
   );
-  // An estimate keeps its label and is never rewritten as a tilde.
+  // An estimate is provenance the presenter receives, never a word it prints:
+  // a child's own usage reads as the plain occupancy figure it is, with no
+  // marker and no tilde.
   assert.equal(
     subagentMetricsLine(
       { contextTokens: 7_700, contextEstimated: true },
       english,
       "en",
     ),
-    "Turns — · Tool calls — · Context 7.7K (est.) · Spent —",
+    "Turns — · Tool calls — · Context 7.7K · Spent —",
   );
-  // An estimate flag without an occupancy marks nothing: there is no figure.
+  // Nothing else on the line moves because the occupancy was an estimate.
+  assert.deepEqual(
+    subagentMetricsParts(
+      {
+        turns: 1,
+        toolCalls: 2,
+        contextTokens: 7_700,
+        usage: { totalTokens: 3_400 },
+        contextEstimated: true,
+      },
+      english,
+      "en",
+    ),
+    subagentMetricsParts(
+      { turns: 1, toolCalls: 2, contextTokens: 7_700, usage: { totalTokens: 3_400 } },
+      english,
+      "en",
+    ),
+  );
+  // An estimate flag without an occupancy still marks nothing: there is no
+  // figure to state, so the slot keeps its labelled dash.
   assert.equal(
     subagentMetricsLine({ turns: 1, contextEstimated: true }, english, "en"),
     "Turns 1 · Tool calls — · Context — · Spent —",
@@ -403,6 +425,51 @@ test("a card keeps all four figures visible whether the run reported zeros or no
     for (const html of [silent, render(taskCall({ metrics: reported }))]) {
       assert.equal((html.match(/class="subagent-task-metrics"/g) ?? []).length, 1);
     }
+  } finally {
+    await vite.close();
+  }
+});
+
+/**
+ * An estimated occupancy is a figure, not a disclaimer. The child's own usage
+ * is provenance the presenter receives; the card states the number plainly,
+ * the tooltip built from the same parts carries no marker either, and the same
+ * number reads identically when a `Task` snapshot later replaces the source.
+ */
+test("an estimated occupancy is a plain figure on the card and in its title", async () => {
+  const { vite, render } = await setup("en");
+  try {
+    const lineOf = (html) =>
+      html.match(/class="subagent-task-metrics"[^>]*>([\s\S]*?)<\/span>/)?.[1] ?? null;
+    const tooltipOf = (html) =>
+      html.match(/class="subagent-task-metrics" title="([^"]*)"/)?.[1] ?? null;
+    // The reader's real fallback source: the child's own reported usage, read
+    // through the same chain fold the transcript supplies.
+    const child = {
+      id: "a1",
+      role: "assistant",
+      content: "working on it",
+      createdAt: CREATED_AT,
+      parentToolCallId: "call-1",
+      agentName: "manifestor",
+      usage: { inputTokens: 6_800, outputTokens: 900, totalTokens: 7_700 },
+    };
+    const legacy = taskCall({ metrics: undefined });
+    const estimated = render(legacy, [legacy, child]);
+    // The same chain once the Task snapshot carries the same figure.
+    const snapshot = taskCall({ metrics: { contextTokens: 7_700 } });
+    const settled = render(snapshot, [snapshot, child]);
+    assert.equal(
+      lineOf(estimated),
+      "Turns — · Tool calls — · Context 7.7K · Spent 7.7K",
+    );
+    // Child usage then snapshot: the figure the reader saw does not move.
+    assert.equal(lineOf(estimated), lineOf(settled));
+    assert.equal(tooltipOf(estimated), tooltipOf(settled));
+    // Neither the rendered line nor the title it mirrors states a marker.
+    assert.doesNotMatch(estimated, /\(est\.\)|estimated|≈/i);
+    assert.doesNotMatch(tooltipOf(estimated), /\(est\.\)|estimated|≈/i);
+    assert.match(tooltipOf(estimated), /Context 7\.7K/);
   } finally {
     await vite.close();
   }

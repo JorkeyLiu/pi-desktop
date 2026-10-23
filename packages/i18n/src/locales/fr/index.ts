@@ -670,6 +670,8 @@ export const fr = {
     "subagentMetricsCallsUnit_other": "calls",
     "subagentMetricsContextUnknownHelp": "No context data reported yet. Shows once the subagent reports usage.",
     "subagentMetricsEstimated": "(est.)",
+    "subagentThroughputLabel": "TPS moyen",
+    "subagentThroughputHelp": "Tokens de sortie moyens par seconde sur {{samples}} réponses de modèle enregistrées, raisonnement inclus. Les échantillons manquants ou incomplets sont exclus.",
     "subagentContinuePlaceholder": "Send a follow-up — continues this subagent…",
     "subagentContinueSend": "Send",
     "subagentContinueSending": "Sending…",

@@ -17,6 +17,8 @@ export const ptBREntries: ChangelogEntry[] = [
       "Os menus de projeto permanecem visíveis quando abertos nas linhas próximas ao fim da barra lateral.",
       "O Windows mantém o bloqueio do instalador enquanto remove backups antigos.",
       "Ao voltar a uma conversa, as mensagens carregadas e a posição de leitura são mantidas; uma conversa longa também se posiciona de forma mais confiável no lugar certo ao abrir.",
+      "As linhas de ferramentas mantêm o nome da ferramenta durante a execução e mostram o resultado à direita, sem alternar entre verbos na mesma chamada. Comandos com código de saída diferente de zero aparecem como concluídos com o código ao lado; comando e saída podem ser copiados separadamente no terminal expandido.",
+      "A aba do subagente mostra a média de tokens de saída por segundo junto com contexto, gastos e turnos; respostas interrompidas são marcadas como estimativas.",
     ],
   },
   {

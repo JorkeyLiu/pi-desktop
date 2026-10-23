@@ -381,6 +381,7 @@ export function createQueueSlice({
           materializedKey = key;
         }
         if (!sessionId) throw new Error(i18n.t("errors.noActiveSession"));
+        const startedIn = sessionId;
         if (get().pendingPlans[sessionId]?.status === "pending") return false;
         if (get().runningSessions[sessionId]) {
           // Native Pi children have no Desktop prompt queue. Reject the send
@@ -397,7 +398,6 @@ export function createQueueSlice({
           if (accepted) onAccepted?.(sessionId);
           return accepted;
         }
-        const startedIn = sessionId;
         const messageCountBeforeSend =
           startedIn === get().activeSessionId
             ? get().messages.length
@@ -433,10 +433,10 @@ export function createQueueSlice({
         const nextTitle = promptFallbackSessionTitle(content, untitledTaskTitle());
         const wasUntitled = isDefaultSessionTitle(current?.title);
         if (wasUntitled && current?.source !== "pi-native" && !isDefaultSessionTitle(nextTitle)) {
-          void api.deriveSessionTitle(sessionId, nextTitle)
+          void api.deriveSessionTitle(startedIn, nextTitle)
             .then(() => {
               if (current?.source === "remote") return;
-              return api.generateSessionTitle({ sessionId, prompt: content, fallbackTitle: nextTitle });
+              return api.generateSessionTitle({ sessionId: startedIn, prompt: content, fallbackTitle: nextTitle });
             })
             .then(() => get().refreshSessions())
             .catch(() => undefined);

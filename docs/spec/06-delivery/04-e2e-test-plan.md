@@ -8134,11 +8134,14 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
     implies a graph: there is no main-agent root, connector, group-level
     subagent summary or group-level Stop all, and delegate rows appear only in
     the child's own transcript tab, never in the turn stream or the minimap.
-  - Each card's progress line reports what the child said about itself (steps,
-    turns, tool calls, and estimated context occupancy, with unknown occupancy
-    as a labelled dash), and clicking the card opens its transcript tab, where
-    the brief, the report exactly once, `status`/`turns`/`toolCalls`, and the
-    child's own rows live beside the billed spend figure.
+  - Each card's progress line reports what the child said about itself (turns,
+    tool calls, and context occupancy, with unknown occupancy as a labelled
+    dash), and clicking the card opens its transcript tab, where the brief, the
+    report exactly once, `status`/`turns`/`toolCalls`, and the child's own rows
+    live beside the billed spend figure. The occupancy reads as one plain
+    figure: a child-usage fallback never appears as a `(est.)` marker between
+    the child's own report and the `Task` snapshot, and a swap of source with
+    the same token count changes nothing the reader sees.
   - At narrow, default, and wide panel widths, card titles, roles and progress
     lines reflow within the card instead of using a fixed one-line ellipsis.
     Long tool paths, commands, and answer fragments in the
@@ -8331,6 +8334,11 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
     presenter: a Task payload that carried context and spend without counters
     states no counters on its card, a resume chain sums only the counters its
     segments reported, and a chain whose segments reported zero reports zero.
+    The occupancy is one plain figure on the card, in the dock row and in the
+    child's tab header: a figure sourced from the child's own provider usage
+    carries no `(est.)`/`(预估)` marker and no other qualifier, so a chain that
+    moves from child usage to a `Task` snapshot of the same tokens shows no
+    transient label and no change to the number the reader sees.
   - The permission card's args preview uses the same blocks.
   - Host truncation markers stay visible, a `truncated` chip appears, a host
     `notice` renders as a neutral note under the block it qualifies, capped
@@ -10442,7 +10450,6 @@ This test plan spec is accepted when:
   name remains a dotted-underline action when a workspace is open.
 - Composer omits the 本地 workspace label and shows Agent/Plan/Goal plus the
   active model ID; both locales expose the Plan and Goal approval copy.
-
 ### US-UI-06 First-message session titles
 - Sending the first prompt in an ordinary local session immediately shows a
   normalized 48-character fallback title.
@@ -11676,7 +11683,7 @@ This test plan spec is accepted when:
 - **Status**: Documented
 
 
-#### E2E-129: A run row shows its command once and copies it from the head
+#### E2E-129: A tool row keeps one fixed identity and states its lifecycle on the right
 
 - **Preconditions**: App running with a project open and a conversation that has
   produced at least three command rows: one that succeeded with output, one that
@@ -11689,52 +11696,61 @@ This test plan spec is accepted when:
   visible height and confirm the output stays inside its capped scroll region,
   rather than pushing the transcript out of view. Confirm later output replaces
   the same body in place while the row remains open.
-  1b) Expand the successful row and confirm the body shows the command's output
-     as plain text — no `Output` heading, no bordered card, no per-block copy
-     button — and that the command is not repeated inside the body, with no
-     argument list in its place.
-  2) Confirm each row's head states its outcome to the right of the summary:
-     `Done`, `Failed`, `Denied`, or `Working…`, each with a dot in the matching
-     tint, and that the running row shows the pulsing dot instead of the row
-     spinner.
-  2a) Run a command that exits non-zero (`pnpm test` on a failing suite, or
-     `false`) and confirm the row reads `Failed` with the error dot and opens
-     itself, even though the tool call completed. Confirm the exit-code chip and
-     the worded outcome agree.
-  2b) Interrupt a long command so the shell is killed with no exit code, and
-     confirm the row reads `Failed` rather than `Done`.
-  3) Hover the successful row and confirm a copy button and the chevron appear
-     between the summary and the row's right edge; move the pointer away and
-     confirm both fade while the status label stays visible.
-  4) Activate the copy button and confirm the clipboard holds the command as it
-     was issued — a multi-line command keeps its line breaks, unlike the
-     single-line summary in the head — and that the button acknowledges the copy
-     before returning to its idle icon.
-  5) Confirm the hover fill covers the whole head, including the copy button and
-     chevron, and that a row with nothing to expand takes no fill at all.
-  6) Tab through the row and confirm the header is the only stop that toggles
-     the body, the copy button is reachable and takes a visible focus ring
-     (revealing itself on focus), and the chevron is never a tab stop.
-  7) With a screen reader, expand and collapse the row and confirm the outcome
+  1b) Expand the successful row and confirm the terminal shows its command and
+     output, each in its own labeled pane with its own copy control.
+  2) Confirm each row's head states invocation status to the right of the
+     summary: `Done`, `Failed`, `Denied`, or `Working…`, each with a dot in the
+     matching tint, and that the running row shows the pulsing dot instead of
+     the row spinner.
+  2a) Run a command that exits non-zero (`false`) and confirm the row reads
+     `Done` with the completion dot plus a separate exit-code chip. The host
+     tool error remains available to agent control flow.
+  2b) Trigger a spawn/setup error or interrupt a long command so no numeric exit
+     code is returned; confirm the row reads `Failed`. Pending and running rows
+     keep their lifecycle states while output streams.
+  2c) Inspect a `Read`, a `Bash`, and a plugin or MCP tool row in each of the
+     running, success, error, and denied states. Confirm the icon and the name
+     are the tool's own identity in every state — the name the call used, never
+     a progress or past-tense label, and for an unknown tool its formatted raw
+     name rather than a generic "Using". Confirm the call's state changes only
+     the right-hand status.
+  2d) Trigger `TaskWait`, `TaskList`, and `TaskStop` on a live delegation.
+     Confirm each row keeps its own fixed name, and that the number of subagents
+     it reports on and its wait outcome (`Results arrived`, `Wait timed out ·
+     still working`, `Interrupted`, `Stopped subagents`) are stated on the right.
+  3) Confirm the collapsed row has no copy button. Expand it, copy from the
+     command pane and output pane, and confirm each clipboard value matches its
+     own pane (including multi-line command bytes and exact output bytes).
+  4) Confirm the disclosure header toggles the body, the chevron is never a tab
+     stop, and the status label stays visible.
+  5) With a screen reader, expand and collapse the row and confirm the outcome
      is announced once, not twice.
-  8) Ask the agent to run a command that requires approval and confirm the
+  6) Ask the agent to run a command that requires approval and confirm the
      permission card still shows the command it is asking about.
-  9) Enable "reduce motion" and confirm the running dot holds still and the copy
-     button appears without a fade.
-  10) Repeat steps 1–3 in Chinese and in both light and dark themes.
-- **Expected**: A command appears exactly once per row, in the head, alongside a
-  copy control that yields it verbatim and a worded outcome that does not rely
-  on the dot's color. The outcome reports what the command did — a non-zero or
-  missing exit code reads `Failed` regardless of the tool call's own status — and
-  a row with nothing to report states nothing instead of claiming `Done`. The
-  running row is collapsed by default, and expanding it during execution shows
-  the cumulative `details.output` stream in the stdout channel. The body keeps
-  the live output in a capped internal scroll region and updates in place without
-  rerendering unrelated rows; the completed `details.stdout` value wins over any
-  older partial snapshot. The expanded body holds only what the command printed,
-  as bare text, and a command that printed nothing opens empty rather than
-  falling back to its arguments.
-  Approval cards are unaffected, since they have no head of their own.
+  7) Enable "reduce motion" and confirm the running dot holds still.
+  8) Repeat in Chinese and in both light and dark themes.
+- **Expected**: The collapsed row shows one natural-language command
+  description in UI sans typography, with command and path tokens remaining
+  monospace, and no copy button. The icon and visible name are the tool's own
+  identity (`Read`, `Bash`, `Edit`, or a generic tool's formatted raw name) and
+  are identical in every lifecycle state; no progress or past-tense label ever
+  replaces them, and an unknown tool never reads as a generic "Using". Lifecycle
+  is stated only on the right: the row spinner while live, then a toned dot with
+  `Done`, `Failed`, or `Denied`. A numeric Bash exit code means the invocation
+  completed: the row reads `Done`, while non-zero codes appear in a separate
+  chip. An explicit invocation error, denial, or missing numeric code reads
+  `Failed`; pending and running states remain lifecycle status. The host keeps
+  `toolStatus: error` for agent control flow. A delegate control row keeps its own
+  fixed name (`Task Wait`, `Task List`, `Task Stop`) and puts the subagent count
+  and its wait outcome on the right. Expanded terminal panes copy their
+  own command and output bytes. The running row is collapsed by default, and
+  expanding during execution shows cumulative `details.output` in stdout. The
+  body keeps live output in a capped internal scroll region and updates in place
+  without rerendering unrelated rows; completed `details.stdout` wins over an
+  older progress snapshot. A command that printed nothing opens empty rather
+  than falling back to its arguments. A `Task` call keeps the child's own card
+  and the model's task title, never a tool row's phase label. Approval cards are
+  unaffected.
 - **Specs linked**: `04-ux/08-component-spec.md` §9.2, §9.3, §9.5, §9.10
 - **Acceptance**: E (tools & permissions), H (localization)
 - **Milestone**: M5+
@@ -12368,9 +12384,18 @@ This test plan spec is accepted when:
   the delegate's live thinking/tool/answer rows using the same row components as
   the main conversation. The tab header carries only the outcome, the delivery
   owner while the child runs, and one localized metrics group (context occupancy
-  with the labelled dash and its helper when unknown, billed spend when the child
-  reported it, turns/calls); the child's model and reasoning level sit on the
-  footer's static model chip.
+  as one plain figure — no `(est.)` marker when the figure came from the child's
+  own usage — with the labelled dash and its helper when unknown, billed spend
+  when the child reported it, turns/calls, and average output throughput); the
+  child's model and reasoning level sit on the
+  footer's static model chip. The throughput figure is the summed output tokens
+  of the chain's settled direct-child model responses over their summed model
+  stream durations: wait, tool, and whole-response time never move it, a nested
+  delegate or another child's row never joins it, an in-flight row is not a
+  sample, and a repeated row counts once in its latest settled form. It reads
+  `—` when no row carries usable figures, prefixes `≈` when an interrupted
+  response fell back to its visible-content estimate, and its help names the
+  recorded sample count.
   The card is a single button that activates this tab — there is no second click
   on the card that closes it, no caret and no `aria-expanded` on the card — and
   the tab is closed only through its own close control.
@@ -12398,7 +12423,11 @@ This test plan spec is accepted when:
   terminal Task snapshot that carries a failure before parent polling. The
   opened transcript's metrics, actions and session scoping are rendered by
   `node scripts/e2e-subagent-dock.mjs`, which passed before the current
-  detail-copy corrections; their revalidation is pending.
+  detail-copy corrections; their revalidation is pending. Average throughput is
+  covered by `subagent-throughput.test.mjs` (weighting, exclusions, repeated
+  ids, provider zero versus estimate) and by the rendered tab header in
+  `subagent-continue-user-path.test.mjs` (rounded rate, `≈` estimate, `—` with
+  no sample, per-chain isolation, sample count in the help).
 
 #### E2E-SUBAGENT-settlement-updates-before-parent-poll
 
@@ -12406,23 +12435,28 @@ This test plan spec is accepted when:
   finish while the other continues and the parent does not poll lifecycle tools.
 - **Steps**: 1) Start both delegates and open the first delegate's transcript
   tab. 2) Optionally let TaskList report both as running. 3) Complete only the
-  first delegate while the parent turn remains live. 4) Switch sessions and
-  return, then reload history after the turn finishes. 5) Repeat with failed and
-  stopped delegates, and with a delegate finishing before its Task result
-  arrives.
+  first delegate while the parent turn remains live. 4) While the other
+  delegate has finished at least one child turn but has not settled, switch
+  sessions and return. Then let it finish, switch again, and reload history
+  after the turn finishes. 5) Repeat with failed and stopped delegates, and with
+  a delegate finishing before its Task result arrives.
 - **Expected**: The settled card stops spinning immediately, its status is
   completed (green) or the actual failure/stop outcome, and its elapsed time
   stops increasing. The sibling's card remains running and states its own
   outcome; no group-level aggregate reports a settled count. The open tab
   updates with the same status and failure details. A stale running TaskList
   snapshot cannot undo settlement. Reload preserves the actual terminal outcome
-  and original Task identity, arguments, and usage.
+  and original Task identity, arguments, and usage. A running card restored by
+  switching mid-run reads the counters, occupancy, and spend of its latest
+  child turn rather than the launch zeros, and needs no further child event to
+  do so.
 - **Specs linked**: `03-runtime/02-agent-runtime.md` §Subagents,
   `04-ux/08-component-spec.md` §9.9
 - **Acceptance criterion**: C, Quality
 - **Milestone**: M6+
-- **Status**: Runtime event-order and renderer projection regressions automated;
-  desktop journey documented. Required suites: `test:e2e`, `test:e2e:subagents`.
+- **Status**: Runtime event-order, renderer projection, and host persistence
+  regressions automated; desktop journey documented. Required suites:
+  `test:e2e`, `test:e2e:subagents`.
 
 #### E2E-SUBAGENT-resume-a-settled-delegation
 

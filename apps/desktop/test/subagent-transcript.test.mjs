@@ -106,16 +106,15 @@ test("a lifecycle row summarizes by agent name, never by delegation id", () => {
   assert.match(topologySource, /Array\.isArray\(payload\.stopped\)/);
   // A repeated definition is counted rather than listed twice.
   assert.match(topologySource, /count > 1 \? `\$\{name\} ×\$\{count\}` : name/);
-  // The row's badge rolls the roster up with the shared status vocabulary.
-  assert.match(
-    transcriptSource,
-    /rosterOutcome\s*\n?\s*\? t\(`chat\.subagentStatus\.\$\{rosterOutcome\}`\)/,
-  );
-  // A lifecycle row is presented as a subagent row, not as "Delegated". A
-  // settled TaskWait, or an active TaskList that blocked on the coordinator,
-  // names its backend-owned wait outcome (results arrived vs interim progress
-  // vs timeout/interrupted) instead of a generic waited label; a cheap
-  // TaskList snapshot and TaskStop keep their own settled labels.
+  // The row's status carries the roster's rollup tint: a failed or denied
+  // delegate colours the state dot even when the wait itself settled.
+  assert.match(transcriptSource, /rosterOutcome === "failed"/);
+  assert.match(transcriptSource, /rosterOutcome === "denied"/);
+  // A lifecycle row keeps its fixed tool identity and states its own wait on
+  // the right, not as a "Delegated" label. A settled TaskWait, or an active
+  // TaskList that blocked on the coordinator, names its backend-owned wait
+  // outcome (results arrived vs interim progress vs timeout/interrupted); a
+  // cheap TaskList snapshot and TaskStop keep their own settled labels.
   assert.match(transcriptSource, /waitLabelKey/);
   assert.match(transcriptSource, /WAIT_SETTLED_LABEL_KEYS/);
   assert.match(transcriptSource, /WAIT_PROGRESS_LABEL_KEYS/);
@@ -140,12 +139,14 @@ test("a lifecycle row summarizes by agent name, never by delegation id", () => {
   assert.match(topologySource, /if \(isDelegationActivityItem\(item\)\) continue;/);
 });
 
-test("a TaskWait row renders its wait outcome with a tooltip, never a bare waited label", () => {
-  // SSR contract: the row names its backend-owned wait outcome key and keeps
-  // the roster in the tooltip. Key resolution itself is covered by the tab
-  // SSR fixtures; here the source contract proves no generic waited label can
-  // reach the row.
-  assert.match(transcriptSource, /waitLabelKey\s*\n?\s*\? t\(waitLabelKey\)/);
+test("a TaskWait row states its wait outcome on the right and keeps it in the tooltip", () => {
+  // SSR contract: the row resolves its backend-owned wait outcome key, prints
+  // it in the right-hand status and keeps the roster in the tooltip. Key
+  // resolution itself is covered by the tab SSR fixtures; here the source
+  // contract proves the outcome reaches the status while the row's name stays
+  // the fixed tool identity.
+  assert.match(transcriptSource, /t\(waitLabelKey \?\? LIFECYCLE_LABEL_KEYS\[lifecycle\]\)/);
+  assert.match(transcriptSource, /const waitTitle = waitLabelKey\s*\n?\s*\? \[t\(waitLabelKey\), rosterSummary\]/);
   assert.match(transcriptSource, /WAIT_SETTLED_LABEL_KEYS\.completed/);
   assert.match(transcriptSource, /WAIT_PROGRESS_LABEL_KEYS\[waitLifecycle\.reason\]/);
   assert.match(transcriptSource, /taskWaitLifecycle\(message\)/);

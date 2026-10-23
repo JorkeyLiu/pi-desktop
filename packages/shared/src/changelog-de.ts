@@ -17,6 +17,8 @@ export const deEntries: ChangelogEntry[] = [
       "Projektmenüs bleiben sichtbar, wenn sie über Zeilen am unteren Rand der Seitenleiste geöffnet werden.",
       "Windows hält die Installationssperre, während alte Sicherungen entfernt werden.",
       "Beim Zurückwechseln zu einer Unterhaltung bleiben geladene Nachrichten und Leseposition erhalten; ein langer Verlauf landet beim ersten Öffnen zudem zuverlässiger an der richtigen Stelle.",
+      "Tool-Zeilen behalten während der Ausführung den Namen des Tools und zeigen das Ergebnis rechts an. Ein Aufruf wechselt nicht mehr zwischen Verben. Befehle mit einem Exit-Code ungleich null gelten als abgeschlossen und zeigen den Exit-Code; Befehl und Ausgabe lassen sich im aufgeklappten Terminal getrennt kopieren.",
+      "Der Tab eines Subagents zeigt neben Kontext, Kosten und Zuganzahl die durchschnittliche Ausgabe pro Sekunde in Tokens an; bei unterbrochenen Antworten wird der Wert als Schätzung markiert.",
     ],
   },
   {

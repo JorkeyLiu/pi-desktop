@@ -1,3 +1,4 @@
+import { estimateVisibleResponseOutputTokens } from "./response-token-estimate.js";
 import {
   MAX_MUTATION_RECOVERY_FAILURES, BASH_PATCH_FAILURE_KEY,
   RECOVERABLE_MUTATION_ERROR_CODES, mutationFailureKey, isPatchCommand,
@@ -1673,14 +1674,6 @@ function estimateToolTokenUsage(
     totalTokens: argumentTokens + resultTokens,
     estimated: true,
   };
-}
-
-function estimateVisibleResponseOutputTokens(
-  message: Pick<UiMessage, "content" | "thinking">,
-): number | undefined {
-  const visible = `${message.thinking ?? ""}\n${message.content}`.trim();
-  if (!visible) return undefined;
-  return Math.max(1, Math.ceil(Array.from(visible).length / 4));
 }
 
 /** host-core's `worktree.delegate.settle` result (ADR 0329). */

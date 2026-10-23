@@ -17,6 +17,8 @@ export const esEntries: ChangelogEntry[] = [
       "Los menús de proyecto siguen visibles al abrirlos desde filas cerca de la parte inferior de la barra lateral.",
       "Windows mantiene el bloqueo del instalador mientras elimina copias de seguridad antiguas.",
       "Al volver a una conversación se conservan los mensajes cargados y la posición de lectura; además, un historial largo se sitúa de forma más fiable en el punto correcto al abrirse.",
+      "Las filas de herramientas conservan el nombre de la herramienta mientras se ejecuta y muestran el resultado a la derecha, sin cambiar de verbo durante una misma llamada. Los comandos con código de salida distinto de cero aparecen como completados con ese código; el comando y la salida se copian por separado desde la terminal desplegada.",
+      "La pestaña de cada subagente muestra la media de tokens de salida por segundo junto con el contexto, el gasto y los turnos; si se interrumpe una respuesta, indica que es una estimación.",
     ],
   },
   {

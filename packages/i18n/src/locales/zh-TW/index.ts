@@ -675,6 +675,8 @@ export const zhTW = {
     subagentMetricsCallsUnit_other: "次",
     subagentMetricsContextUnknownHelp: "尚無上下文資料，子智慧體回報用量後會顯示。",
     subagentMetricsEstimated: "(預估)",
+    subagentThroughputLabel: "平均 TPS",
+    subagentThroughputHelp: "根據 {{samples}} 筆已記錄模型回應計算的平均輸出 token/秒，包含推理內容。缺失或不完整的逐字稿樣本不會計入。",
     subagentContinuePlaceholder: "傳送補充說明——繼續該子智慧體…",
     subagentContinueSend: "傳送",
     subagentContinueSending: "傳送中…",

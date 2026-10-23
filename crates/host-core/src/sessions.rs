@@ -221,6 +221,9 @@ pub struct UiMessage {
     /// Elapsed model streaming time for the response throughput statistic.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_duration_ms: Option<i64>,
+    /// Model streaming duration measured from assistant message start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_stream_duration_ms: Option<i64>,
     /// Partial output estimate used when a user stops before final usage arrives.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_output_tokens: Option<i64>,
@@ -401,6 +404,9 @@ pub(crate) fn ui_to_record(message: &UiMessage) -> (MessageRecord, Option<String
     }
     if let Some(usage) = &message.usage {
         meta_obj.insert("usage".into(), json!(usage));
+    }
+    if let Some(duration) = message.model_stream_duration_ms {
+        meta_obj.insert("modelStreamDurationMs".into(), json!(duration));
     }
     if let Some(duration) = message.response_duration_ms {
         meta_obj.insert("responseDurationMs".into(), json!(duration));
@@ -587,6 +593,7 @@ pub(crate) fn record_to_ui(record: MessageRecord) -> UiMessage {
     });
     let error = meta.get("error").cloned();
     let response_duration_ms = meta.get("responseDurationMs").and_then(|v| v.as_i64());
+    let model_stream_duration_ms = meta.get("modelStreamDurationMs").and_then(|v| v.as_i64());
     let response_output_tokens = meta.get("responseOutputTokens").and_then(|v| v.as_i64());
     let revision_root_id = meta
         .get("revisionRootId")
@@ -682,6 +689,7 @@ pub(crate) fn record_to_ui(record: MessageRecord) -> UiMessage {
             provider_id,
             usage,
             response_duration_ms,
+            model_stream_duration_ms,
             response_output_tokens,
             error,
             revision_root_id,
@@ -736,6 +744,7 @@ pub(crate) fn record_to_ui(record: MessageRecord) -> UiMessage {
             provider_id,
             usage,
             response_duration_ms,
+            model_stream_duration_ms,
             response_output_tokens,
             error,
             revision_root_id,
@@ -2449,8 +2458,13 @@ fn indexed_message_record(
 }
 
 /// Task is already a completed tool call while its delegated work is running.
-/// Only its matching terminal result may replace that provisional result; replay
-/// must neither reopen a settled delegate nor overwrite another call's metadata.
+/// Its durable row carries the latest delegation summary: the runtime
+/// re-snapshots it once per child turn, and settlement sends the terminal one.
+/// Either may replace the stored summary, but only while that stored row still
+/// runs, only for this call and delegation, and never backwards — replay must
+/// neither reopen a settled delegate nor overwrite another call's metadata. The
+/// persistence outbox keeps one entry per message id in emission order, so the
+/// last snapshot to arrive is also the newest.
 fn update_delegation_snapshot(
     db: &Database,
     session_id: &str,
@@ -2467,9 +2481,12 @@ fn update_delegation_snapshot(
         return Ok(());
     };
     let details = &next["result"]["details"];
+    // `running` is the per-child-turn progress snapshot; the stored row must
+    // still be running, which is what stops a late progress write from
+    // reopening a settled delegation.
     if !matches!(
         details["status"].as_str(),
-        Some("completed" | "stopped" | "aborted" | "failed" | "timed_out")
+        Some("running" | "completed" | "stopped" | "aborted" | "failed" | "timed_out")
     ) {
         return Ok(());
     }
@@ -4301,6 +4318,7 @@ mod tests {
             provider_id: None,
             usage: None,
             response_duration_ms: None,
+            model_stream_duration_ms: None,
             response_output_tokens: None,
             error: None,
             revision_root_id: None,
@@ -5186,6 +5204,7 @@ mod tests {
             provider_id: None,
             usage: None,
             response_duration_ms: None,
+            model_stream_duration_ms: None,
             response_output_tokens: None,
             error: None,
             revision_root_id: None,
@@ -5314,6 +5333,116 @@ mod tests {
         append_message(&db, &first.id, &stopped, None).unwrap();
         append_message(&db, &first.id, &task, None).unwrap();
         assert_eq!(read(&first.id)[0].tool_result, stopped.tool_result);
+    }
+
+    /// A running delegate's durable `Task` row carries the live metrics the
+    /// runtime re-snapshots once per child turn. The renderer's live/durable
+    /// merge prefers the durable row of a completed tool call, so a session
+    /// switch that reads the transcript back would otherwise restore the launch
+    /// zeros even when the live cache already holds newer progress.
+    #[test]
+    fn running_delegation_progress_updates_the_durable_task_row() {
+        let db = test_db();
+        let session = create_session(&db, None, None, None, None, None).unwrap();
+        let task_row = |status: &str, turns: i64, tool_calls: i64, context_tokens: i64| {
+            let mut row = user_msg(
+                "task-live",
+                "Delegation delegate-live started.",
+                "2026-10-05T00:00:00Z",
+            );
+            row.role = "tool".into();
+            row.tool_name = Some("Task".into());
+            row.tool_call_id = Some("call-live".into());
+            row.tool_status = Some("success".into());
+            row.status = Some("complete".into());
+            row.tool_args = Some(json!({ "agent": "explorer" }));
+            row.tool_result = Some(json!({
+                "content": [{ "type": "text", "text": format!("Delegation delegate-live: {status}.") }],
+                "details": {
+                    "delegationId": "delegate-live",
+                    "agent": "explorer",
+                    "modelId": "model-live",
+                    "thinkingLevel": "medium",
+                    "status": status,
+                    "startedAt": 1_700_000_000_000i64,
+                    "turns": turns,
+                    "toolCalls": tool_calls,
+                    "contextTokens": context_tokens,
+                    "usage": { "inputTokens": 900, "outputTokens": 90, "totalTokens": 990 }
+                }
+            }));
+            row
+        };
+        let read = || get_session(&db, &session.id).unwrap().unwrap().messages;
+        append_message(&db, &session.id, &task_row("running", 0, 0, 0), None).unwrap();
+        let launch = read();
+        assert_eq!(launch.len(), 1);
+        assert_eq!(
+            launch[0].tool_result.as_ref().unwrap()["details"]["turns"],
+            json!(0)
+        );
+
+        // One child assistant `message_end` persists the same Task id again with
+        // live metrics; only the delegation summary may change.
+        append_message(&db, &session.id, &task_row("running", 2, 3, 12_345), None).unwrap();
+        let progress = read();
+        assert_eq!(progress.len(), 1);
+        let details = &progress[0].tool_result.as_ref().unwrap()["details"];
+        assert_eq!(details["status"], json!("running"));
+        assert_eq!(details["turns"], json!(2));
+        assert_eq!(details["toolCalls"], json!(3));
+        assert_eq!(details["contextTokens"], json!(12_345));
+        assert_eq!(details["usage"]["totalTokens"], json!(990));
+        // The call's own identity and timing still belong to the launch row.
+        assert_eq!(progress[0].tool_args, launch[0].tool_args);
+        assert_eq!(progress[0].tool_call_id.as_deref(), Some("call-live"));
+        assert_eq!(progress[0].tool_status.as_deref(), Some("success"));
+        assert_eq!(progress[0].created_at, launch[0].created_at);
+
+        // A later child turn replaces the earlier progress instead of stacking.
+        append_message(&db, &session.id, &task_row("running", 5, 7, 20_000), None).unwrap();
+        let later = read();
+        assert_eq!(later.len(), 1);
+        assert_eq!(
+            later[0].tool_result.as_ref().unwrap()["details"]["turns"],
+            json!(5)
+        );
+        assert_eq!(
+            later[0].tool_result.as_ref().unwrap()["details"]["toolCalls"],
+            json!(7)
+        );
+
+        // Another call's or another delegation's progress never touches the row.
+        let mut other_delegation = task_row("running", 90, 90, 90_000);
+        other_delegation.tool_result.as_mut().unwrap()["details"]["delegationId"] =
+            json!("delegate-other");
+        append_message(&db, &session.id, &other_delegation, None).unwrap();
+        let mut other_call = task_row("running", 91, 91, 91_000);
+        other_call.tool_call_id = Some("call-other".into());
+        append_message(&db, &session.id, &other_call, None).unwrap();
+        let unchanged = read();
+        assert_eq!(unchanged.len(), 1);
+        assert_eq!(unchanged[0].tool_result, later[0].tool_result);
+
+        // Settlement still replaces the running summary, and a late running
+        // snapshot cannot reopen or regress it.
+        append_message(&db, &session.id, &task_row("completed", 5, 7, 20_000), None).unwrap();
+        let settled = read();
+        assert_eq!(
+            settled[0].tool_result.as_ref().unwrap()["details"]["status"],
+            json!("completed")
+        );
+        append_message(&db, &session.id, &task_row("running", 6, 8, 21_000), None).unwrap();
+        let still_settled = read();
+        assert_eq!(still_settled.len(), 1);
+        assert_eq!(
+            still_settled[0].tool_result.as_ref().unwrap()["details"]["status"],
+            json!("completed")
+        );
+        assert_eq!(
+            still_settled[0].tool_result.as_ref().unwrap()["details"]["turns"],
+            json!(5)
+        );
     }
 
     #[test]
@@ -5812,6 +5941,7 @@ mod tests {
                 accounting: serde_json::Map::new(),
             }),
             response_duration_ms: Some(2_000),
+            model_stream_duration_ms: Some(1_800),
             response_output_tokens: Some(34),
             error: None,
             revision_root_id: None,
@@ -5870,7 +6000,41 @@ mod tests {
         assert_eq!(usage.reasoning_tokens, Some(5));
         assert_eq!(usage.total_tokens, 48);
         assert_eq!(detail.messages[0].response_duration_ms, Some(2_000));
+        assert_eq!(detail.messages[0].model_stream_duration_ms, Some(1_800));
         assert_eq!(detail.messages[0].response_output_tokens, Some(34));
+    }
+
+    #[test]
+    fn model_stream_duration_roundtrips_and_legacy_rows_stay_valid() {
+        let db = test_db();
+        let session = create_session(&db, None, None, None, None, None).unwrap();
+        let mut timed = user_msg("timed", "answer", "2025-05-01T00:00:01Z");
+        timed.role = "assistant".into();
+        timed.status = Some("complete".into());
+        timed.response_duration_ms = Some(2_000);
+        timed.model_stream_duration_ms = Some(1_800);
+        timed.response_output_tokens = Some(20);
+        append_message(&db, &session.id, &timed, None).unwrap();
+
+        // A row written before the field existed has no such key and must
+        // still load, with the duration simply unknown.
+        let mut legacy = user_msg("legacy", "old answer", "2025-05-01T00:00:02Z");
+        legacy.role = "assistant".into();
+        legacy.status = Some("complete".into());
+        append_message(&db, &session.id, &legacy, None).unwrap();
+
+        let records = transcripts::read_transcript(db.data_dir(), &session.id).unwrap();
+        let timed_meta = records[0].meta.as_ref().expect("timed metadata");
+        assert_eq!(timed_meta["modelStreamDurationMs"], json!(1_800));
+        assert_eq!(timed_meta["responseDurationMs"], json!(2_000));
+        assert_eq!(timed_meta["responseOutputTokens"], json!(20));
+        let legacy_meta = records[1].meta.as_ref().expect("legacy metadata");
+        assert!(legacy_meta.get("modelStreamDurationMs").is_none());
+
+        let detail = get_session(&db, &session.id).unwrap().unwrap();
+        assert_eq!(detail.messages[0].model_stream_duration_ms, Some(1_800));
+        assert_eq!(detail.messages[0].response_output_tokens, Some(20));
+        assert_eq!(detail.messages[1].model_stream_duration_ms, None);
     }
 
     #[test]
@@ -5893,6 +6057,7 @@ mod tests {
             provider_id: Some("provider-1".into()),
             usage: None,
             response_duration_ms: None,
+            model_stream_duration_ms: None,
             response_output_tokens: None,
             error: None,
             revision_root_id: None,

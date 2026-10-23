@@ -682,6 +682,8 @@ export const en = {
     subagentMetricsCallsUnit_other: "calls",
     subagentMetricsContextUnknownHelp: "No context data reported yet. Shows once the subagent reports usage.",
     subagentMetricsEstimated: "(est.)",
+    subagentThroughputLabel: "Average TPS",
+    subagentThroughputHelp: "Average output tokens per second from {{samples}} recorded model responses, including reasoning. Missing or partial transcript samples are excluded.",
     subagentContinuePlaceholder: "Send a follow-up — continues this subagent…",
     subagentContinueSend: "Send",
     subagentContinueSending: "Sending…",

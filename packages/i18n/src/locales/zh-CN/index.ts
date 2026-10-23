@@ -675,6 +675,8 @@ export const zhCN = {
     subagentMetricsCallsUnit_other: "次",
     subagentMetricsContextUnknownHelp: "暂无上下文数据，子智能体上报用量后会显示。",
     subagentMetricsEstimated: "(预估)",
+    subagentThroughputLabel: "平均 TPS",
+    subagentThroughputHelp: "根据 {{samples}} 条已记录模型响应计算的平均输出 token/秒，包含推理内容。缺失或不完整的转录样本不会计入。",
     subagentContinuePlaceholder: "发送补充说明——继续该子智能体…",
     subagentContinueSend: "发送",
     subagentContinueSending: "发送中…",

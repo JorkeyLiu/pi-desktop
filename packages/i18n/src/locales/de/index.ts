@@ -670,6 +670,8 @@ export const de = {
     "subagentMetricsCallsUnit_other": "calls",
     "subagentMetricsContextUnknownHelp": "No context data reported yet. Shows once the subagent reports usage.",
     "subagentMetricsEstimated": "(est.)",
+    "subagentThroughputLabel": "Durchschnittliche TPS",
+    "subagentThroughputHelp": "Durchschnittliche Ausgabe-Tokens pro Sekunde aus {{samples}} aufgezeichneten Modellantworten, einschließlich Schlussfolgerungen. Fehlende oder unvollständige Transkriptproben werden ausgeschlossen.",
     "subagentContinuePlaceholder": "Send a follow-up — continues this subagent…",
     "subagentContinueSend": "Send",
     "subagentContinueSending": "Sending…",

@@ -1407,13 +1407,25 @@ It does not render separate Details or Output tabs.
   delegate's thinking, tool rows, and answer fragments, which reuse the same
   components and styling as the main conversation. The tab header carries the
   outcome, the delivery owner, and one localized metrics group (occupancy, spend,
-  turns/calls); the child's model and reasoning level are stated once, in the tab
+  turns/calls, and average output throughput); the child's model and reasoning
+  level are stated once, in the tab
   composer's static model chip. Every figure in that group is stated only as the
   chain reported it: an unreported counter leaves the turns/calls figure out
   rather than printing `0`, an unreported occupancy keeps its `—`, and an
   unreported spend states no spend, while a reported zero is stated as zero.
-  Long paths, commands, and tool summaries in the
-  live process wrap inside the dock instead of becoming one-line ellipses.
+  Long paths, commands, and tool summaries in the live process wrap inside the
+  dock instead of becoming one-line ellipses.
+- The metrics group ends with average output throughput (`TPS`). It is the sum of
+  matched settled source-assistant output tokens divided by the sum of those
+  rows' model stream durations, so wait time, tool time, and a whole response's
+  duration never enter the figure. Only the selected chain's direct-child model
+  streams count: a nested delegate, another child, an in-flight row, a row with
+  no positive stream duration, and a row with no usable token figure are not
+  samples, and a repeated message id counts once in its latest settled
+  representation. A provider output count is used whenever it was reported,
+  including a genuine zero; an interrupted response's visible-content estimate is
+  used otherwise and prefixes the figure with `≈`. With no usable sample the
+  value is `—`, and the metric's help names how many model responses it recorded.
 - A delegate that settles without completing explains why, because the process
   alone does not: a `Failed`, `Timed out`, or `Aborted` capsule with no reason
   is all a reader gets, and a delegate that dies before emitting a message row
@@ -2442,15 +2454,30 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
 
 ### 9.2 Anatomy
 [sparkle] Processed for 12s  3 tools                 [›]
-          ├─ [file] Read /src/foo.ts        [›]
-          ├─ [search] Searched TODO  24 matches   [›]
-          └─ [terminal] Ran pnpm test  exit 1  • Failed  [copy] [›]
-             3 passing
-             1 failing
+          ├─ [file] Read /src/foo.ts                    [›]
+          ├─ [search] Grep TODO  24 matches             [›]
+          ├─ [terminal] Bash pnpm test  exit 1   • Done  [›]
+          │  3 passing
+          └─ [bot] Task Wait  1 subagent  • Results arrived  [›]
 ```
 
-- The leading Lucide icon reflects the action type: file, folder, search,
-  edit, terminal, web, or generic tool.
+- The leading Lucide icon and the visible name are the tool's own identity, and
+  the pair never changes with the call's state: a known tool keeps the name the
+  model called (`Read`, `Bash`, `Edit`, `Grep`), never a progress or past-tense
+  label, and a generic, plugin, or MCP tool keeps its formatted raw name
+  (`Issue Tracker Create`), never a generic "Using". The localized generic word
+  is used only when the call carries no name at all.
+- Lifecycle is stated once, on the right, and nowhere else: a live row shows the
+  row spinner, a settled row names its state beside a toned dot (`Done`,
+  `Failed`, `Denied`), and the identity on the left carries no running colour or
+  pulse. A delegate control row (`TaskWait`, `TaskList`, `TaskStop`) keeps its
+  own fixed name and puts the subagent count and its wait outcome on the right,
+  the backend-owned outcome outranking the generic lifecycle label.
+- A provider-hosted search round follows the same identity rule: the globe and
+  the kind's own name (`Web search`, `Open page`, `Find in page`) hold for the
+  whole round, the right edge states `Searching the web` while it searches or
+  `Web search failed` when it did not complete, and the query, sources and
+  source count stay in the head and body either way.
 - The process header owns elapsed time plus the turn's tool and issue counts and
   stays in the transcript after completion. In Detailed it starts open while the
   turn is active and closes on completion only if untouched; compact-hidden
@@ -2467,18 +2494,24 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
   thinking follows its own disclosure policy and never opens sibling payloads.
 - The processing group spans the full available assistant column, so expanded
   result details keep a usable width even when the header or payload is short.
-- The visible label is a natural-language action (`Read`, `Ran`, `Searched`),
-  not the raw function name. Running actions use the progressive form.
-- The primary argument is a clamped single-line monospace hint.
+- The visible label is the tool's own identity, never a lifecycle verb: the
+  action's icon plus the tool's name (`Read`, `Bash`, `Edit`) for a known tool,
+  and the formatted raw name for a plugin, MCP, or unknown tool. Presentation
+  tables (`TOOL_ACTION_KEYS`, `TOOL_RUNNING_KEYS`, `LIFECYCLE_*_KEYS`) may still
+  name progress in aggregate surfaces such as the activity group, but they never
+  select a row's identity.
+- The primary argument is a clamped single-line hint. Natural-language
+  descriptions use the UI sans face at the header size; structured commands and
+  paths remain monospace.
 - Result chips follow the hint: exit code (error hue), match/file counts,
   replacement count, Write byte size, Read line count plus its 1-based closed
   line range (`{lineCount},L{offset+1}-L{offset+lineCount}`), `truncated`, and
   `scratch`. Read uses `offset` and `lineCount` from the returned window rather
   than `fileBytes`; if those fields are unavailable, it omits the read-size
   chip instead of presenting the whole-file size as the amount read. A
-  successful exit earns no chip — the row status already says so. The
-  `truncated` chip follows `details.truncated` and therefore appears only when
-  this result was cut short, not when a Read window of a longer file was filled
+  successful exit earns no chip.
+  The `truncated` chip follows `details.truncated` and appears only when this
+  result was cut short, not when a Read window of a longer file was filled
   (D306).
 - A path hint names the file: the row prints the last segment of the path and
   nothing else, because the hint is scanned rather than read and the name is
@@ -2501,11 +2534,14 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
   row is the one payload a turn opens by itself — its checklist is the live work
   the reader is watching — and the reader's collapse choice survives later
   streaming updates to that row.
-- A `run` row's head carries two more controls than the others, because its
-  command lives only there (D226, §9.10): the outcome with a toned dot, and a
-  copy control beside the chevron. That outcome comes from the exit code the
-  shell reported, not from the status of the call that carried it (D227).
-
+- A `run` row's head reports the invocation status with a toned dot. A numeric
+  Bash `exitCode` means the invocation returned normally, including non-zero;
+  the exit code appears in its own chip. `Failed` means an explicit invocation
+  error, denial, or no numeric exit code. Pending and running remain lifecycle
+  states. Keep host `toolStatus: error` semantics for agent control flow; the
+  row derives completed invocation status from the result payload. There is no
+  collapsed copy control; expanded terminal panes copy the command and each
+  output channel independently (D226 follow-up, §9.3/§9.10).
 ### 9.3 Expanded blocks
 
 The expanded body is a list of labeled blocks, never a JSON dump (D192). The
@@ -2858,11 +2894,14 @@ coexist as independent tabs. The tab renders the delegation as a conversation:
   (`Turns — · Tool calls — · Context — · Spent —`) instead of nothing. A figure
   the runtime reported is stated, including a reported zero; a figure it never
   reported — or reported as something that is not a non-negative count — keeps
-  the labelled dash instead of an invented number, and an estimated occupancy is
-  marked as one. Per segment, provenance falls
+  the labelled dash instead of an invented number. Per segment, provenance falls
   back from the `Task` summary to the lifecycle roster to the latest valid child
-  assistant usage (estimated); the latest segment decides, so a latest segment
-  with no occupancy reports unknown rather than reusing an old gauge.
+  assistant usage; the latest segment decides, so a latest segment with no
+  occupancy reports unknown rather than reusing an old gauge. Provenance stays
+  internal: the occupancy reads as one plain figure on the card, in the tab
+  header and in the dock row, with no `(est.)` marker, no `≈` prefix and no
+  other qualifier — a child's own usage and a `Task` snapshot that report the
+  same tokens state the same visible figure.
 - Outcome prefers the structured `Task` result (`completed`, `truncated`,
   `aborted`, `stopped`, `failed`) and falls back to transport state (`running`,
   `error`, `denied`, `success`).
@@ -2884,27 +2923,28 @@ coexist as independent tabs. The tab renders the delegation as a conversation:
   narrow chat widths the title, role and progress line wrap instead of introducing
   horizontal overflow.
 
-### 9.10 A run row's command lives in its head (D226)
+### 9.10 A run row's head states its command and its status (D226)
 
 A `run` row is the one row whose primary argument is the whole point of the
-call. Its head prints that command, so the head carries the copy control and the
-outcome; the body is the terminal the command ran in, with the command and its
-output as labelled panes.
+call. Its head prints that command as its hint and states the invocation status;
+the body is the terminal the command ran in, with the command and its output as
+labelled panes. The head carries no copy control.
 
 ```text
-└─ [terminal] Ran  pnpm test  exit 1   • Failed  [copy] [›]
+└─ [terminal] Bash  pnpm test  exit 1   • Done  [›]
    desktop test 648 tests
    1 failing: run head keeps its caret
 ```
 
-- **The head still owns the summary and the whole command.** The body repeats
+- **The head owns the summary and the whole command.** The body repeats
   the command only inside the terminal's own `Command` pane, which highlights it
   and copies it byte for byte; the head's hint is the model's `description` when
-  it wrote one, and its copy control always yields the command. A PermissionCard
-  has no head of its own, so its terminal pane is the only place the command
-  appears.
-- **Copy sits beside the chevron** and yields the command as it was written,
-  including newlines the one-line head hint had to squeeze out.
+  it wrote one. A PermissionCard has no head of its own, so its terminal pane is
+  the only place the command appears.
+- **Copy lives in the body, not beside the chevron.** The collapsed head offers
+  no copy control: the command and every output channel are copied from their
+  own labelled panes, each yielding its bytes as they were written, including
+  newlines the one-line head hint had to squeeze out (D226 follow-up).
 - **The body is a terminal** (D226 follow-up, D227). `Command`, `Output` and
   `Errors` are labelled panes with their own copy controls in one column at
   every width — the command first, its output beneath it (§9.4) — so a long
@@ -2920,19 +2960,19 @@ output as labelled panes.
   it as stdout. The completed `details.stdout` value takes precedence when both
   fields are present, so the final result cannot regress to an older progress
   snapshot.
-- **The outcome is what the command did, not what the call did** (D227). It is
-  read from the exit code the shell reported: non-zero is `Failed` even when the
-  tool call around it came back fine, and a killed shell that reports no code at
-  all is `Failed` too. Tools that report no exit code fall back to the call's
-  status; a row with neither states nothing rather than claiming `Done`.
+- **The outcome is the invocation's, derived from the result payload** (D227
+  follow-up). A numeric Bash `exitCode` means the shell returned normally,
+  including a non-zero one: the row reads `Done` and the code appears in its own
+  chip. `Failed` means an explicit invocation error, a denial, or no numeric exit
+  code at all. The host keeps `toolStatus: error` for agent control flow; the row
+  derives the completed invocation status it prints.
 - **The outcome is stated, success included**: a toned dot plus `Done`,
   `Failed`, `Denied`, or `Working…`. A `run` row shows no spinner; the running
   dot pulses instead, and holds still under `prefers-reduced-motion`. The label
-  carries the meaning, so the dot's hue is never the only signal. A failing
-  command opens its own row, whichever layer noticed the failure.
-- Both new controls follow the chevron's quiet-until-needed rule: hidden at
-  rest, revealed on row hover, on focus, and while the row is open. The status
-  label is always visible — it is the outcome, not an affordance.
+  carries the meaning, so the dot's hue is never the only signal.
+- The status label is always visible — it is the outcome, not an affordance — and
+  it is the only part of the head that changes with the call's lifecycle; the
+  icon and name never do.
 - The head is a flex row of three controls, so the hover fill belongs to the
   head rather than to the disclosure button inside it; a row that cannot expand
   takes no fill at all.
@@ -3241,8 +3281,10 @@ reasoning-level control.
   child reports, and the card above for the same child reads the same line. A
   figure the child reported is stated, including a reported zero; a figure it
   never reported — or reported as something that is not a non-negative count —
-  keeps the labelled dash the transcript tab uses, never an invented zero, and an
-  estimated value is marked as an estimate.
+  keeps the labelled dash the transcript tab uses, never an invented zero. Which
+  source supplied the occupancy is internal provenance rather than row copy: the
+  row states the plain figure with no `(est.)` marker, and the card above for the
+  same child states the same one.
 - The row body is itself the open action: the whole row is one native button, so a
   click anywhere on it — or Enter or Space — opens that child's chain tab in the
   work panel (§9.9). The per-child Stop control is a sibling of that button rather

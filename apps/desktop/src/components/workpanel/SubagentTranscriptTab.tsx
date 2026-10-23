@@ -19,8 +19,10 @@ import {
   subagentChainDeliveryOwner,
   subagentChainInstantiated,
   subagentChainLatestDelegationId,
+  subagentChainCallIds,
 } from "../../lib/subagent-chain";
 import { sessionAllows } from "../../lib/remote-session-safety";
+import { aggregateSubagentThroughput } from "../../lib/subagent-throughput";
 import { api } from "../../lib/api";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -86,6 +88,16 @@ function formatCount(value: number, language: string): string {
     return new Intl.NumberFormat(language || undefined).format(value);
   } catch {
     return `${value}`;
+  }
+}
+
+function formatRate(value: number, language: string): string {
+  try {
+    return new Intl.NumberFormat(language || undefined, {
+      maximumFractionDigits: 1,
+    }).format(value);
+  } catch {
+    return `${Math.round(value * 10) / 10}`;
   }
 }
 
@@ -173,6 +185,10 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
   );
   const chainMetrics = useMemo(
     () => aggregateChainMetricsFromMessages(messages, activeDelegationId),
+    [messages, activeDelegationId],
+  );
+  const throughput = useMemo(
+    () => aggregateSubagentThroughput(messages, subagentChainCallIds(messages, activeDelegationId)),
     [messages, activeDelegationId],
   );
   // A backend instance exists once a `Task` call of the chain carries a
@@ -546,11 +562,6 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                 <span className="subagent-transcript-metric-value" data-testid="subagent-metrics-context">
                   {contextValue}
                 </span>
-                {chainMetrics.contextEstimated ? (
-                  <span className="subagent-transcript-metric-flag">
-                    {t("chat.subagentMetricsEstimated")}
-                  </span>
-                ) : null}
               </span>
               {spendValue !== null ? (
                 <span className="subagent-transcript-metric">
@@ -572,12 +583,26 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
               {!contextKnown ? (
                 <HelpIcon label={t("chat.subagentMetricsContextUnknownHelp")} />
               ) : null}
+              <span
+                className="subagent-transcript-metric"
+                data-testid="subagent-metrics-throughput"
+                title={t("chat.subagentThroughputHelp", { samples: throughput.samples })}
+              >
+                <span className="subagent-transcript-metric-label">
+                  {t("chat.subagentThroughputLabel")}
+                </span>
+                <span className="subagent-transcript-metric-value">
+                  {throughput.tokensPerSecond === null
+                    ? "—"
+                    : `${throughput.estimated ? "≈" : ""}${formatRate(throughput.tokensPerSecond, language)}`}
+                </span>
+              </span>
             </div>
           ) : null}
         </div>
         <div
-          ref={scrollRef}
           data-scroll-owner="follow"
+          ref={scrollRef}
           className="subagent-transcript-scroll"
           onScroll={handleScroll}
           role="log"

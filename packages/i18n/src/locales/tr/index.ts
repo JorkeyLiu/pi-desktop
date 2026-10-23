@@ -679,6 +679,8 @@ export const tr = {
     subagentMetricsCallsUnit_other: "çağrı",
     subagentMetricsContextUnknownHelp: "Henüz bağlam verisi bildirilmedi. Alt ajan kullanımı bildirdiğinde görünür.",
     subagentMetricsEstimated: "(tahm.)",
+    subagentThroughputLabel: "Ortalama TPS",
+    subagentThroughputHelp: "Akıl yürütme dahil, kaydedilen {{samples}} model yanıtındaki saniye başına ortalama çıktı tokenı. Eksik veya tamamlanmamış döküm örnekleri hesaba katılmaz.",
     subagentContinuePlaceholder: "Takip iletisi gönder — bu alt ajanı sürdürür…",
     subagentContinueSend: "Gönder",
     subagentContinueSending: "Gönderiliyor…",

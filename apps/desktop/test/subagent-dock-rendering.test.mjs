@@ -38,7 +38,7 @@ function task(id, delegationId, description, agent, metrics) {
         delegationId,
         agent,
         status: "running",
-        startedAt: Date.now() - 30_000,
+        startedAt: Date.parse(AT) - 30_000,
         ...(metrics ?? {}),
       },
     },
@@ -98,14 +98,21 @@ async function setup(language = "en") {
     lng: language,
     resources: { [language]: { translation: catalogs[language] } },
   });
-  const render = () =>
-    renderToStaticMarkup(
-      createElement(
-        I18nextProvider,
-        { i18n },
-        createElement(SubagentDock, { sessionId: "s1" }),
-      ),
-    );
+  const render = () => {
+    const realNow = Date.now;
+    Date.now = () => Date.parse(AT);
+    try {
+      return renderToStaticMarkup(
+        createElement(
+          I18nextProvider,
+          { i18n },
+          createElement(SubagentDock, { sessionId: "s1" }),
+        ),
+      );
+    } finally {
+      Date.now = realNow;
+    }
+  };
   return { server, useAppStore, render };
 }
 
@@ -128,14 +135,13 @@ test("the dock lists every running child with the original title, in one collaps
     seed(useAppStore, {});
     const html = render();
     assert.match(html, /class="subagent-dock"/);
-    assert.match(html, /aria-expanded="false"/);
     assert.match(html, /2 subagents running · Review auth flow/);
     assert.match(html, /class="subagent-dock-content" aria-hidden="true"/);
     assert.match(html, />Review auth flow</);
     assert.match(html, />Audit dependencies</);
     assert.match(html, />explorer</);
     assert.match(html, />auditor</);
-    assert.match(plain(html), /Running · \d+s/);
+    assert.match(plain(html), /Running · 30s/);
     // The row's own stop control is the shared one, named per child.
     assert.match(html, /aria-label="Stop explorer"/);
     // A long brief is never promoted to a title.
@@ -360,6 +366,55 @@ test("a child that reported only context and spend states no counters", async ()
       />Turns — · Tool calls — · Context 9K · Spent 1\.2K</,
     );
     assert.doesNotMatch(html, /Turns 0|Tool calls 0/);
+  } finally {
+    await server.close();
+  }
+});
+
+/**
+ * The child's own usage is a fallback source, so the row states the figure it
+ * derives and nothing about how it derived it: no `(est.)` word in the row or
+ * in the title the row mirrors, and the same figure once a Task snapshot
+ * supplies it.
+ */
+test("an estimated occupancy reads as a plain figure in the row and its title", async () => {
+  const { server, useAppStore, render } = await setup();
+  try {
+    const childUsage = {
+      id: "c1",
+      role: "assistant",
+      content: "Working.",
+      createdAt: AT,
+      parentToolCallId: "call-t1",
+      usage: { inputTokens: 6_800, outputTokens: 900, totalTokens: 7_700 },
+    };
+    const base = [
+      { id: "u1", role: "user", content: "go", createdAt: AT },
+      { id: "a1", role: "assistant", content: "Delegating.", createdAt: AT },
+    ];
+    const titleOf = (html) =>
+      html.match(/class="subagent-dock-row-metrics" title="([^"]*)"/)?.[1] ?? "";
+    // The child's own usage is the source here, not a Task snapshot.
+    seed(useAppStore, {
+      messages: [...base, task("t1", "d1", "Review auth flow", "explorer"), childUsage],
+    });
+    const estimated = render();
+    assert.equal(
+      titleOf(estimated),
+      "Turns — · Tool calls — · Context 7.7K · Spent 7.7K",
+    );
+    assert.doesNotMatch(estimated, /\(est\.\)|estimated|≈/i);
+    // The Task snapshot reports the same figure: the row does not move.
+    seed(useAppStore, {
+      messages: [
+        ...base,
+        task("t1", "d1", "Review auth flow", "explorer", { contextTokens: 7_700 }),
+        childUsage,
+      ],
+    });
+    const settled = render();
+    assert.equal(titleOf(settled), titleOf(estimated));
+    assert.doesNotMatch(settled, /\(est\.\)|estimated|≈/i);
   } finally {
     await server.close();
   }

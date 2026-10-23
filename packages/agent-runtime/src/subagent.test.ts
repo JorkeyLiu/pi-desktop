@@ -292,6 +292,119 @@ describe("SubagentRun event forwarding", () => {
     expect(update.deltaText).toBe("ing at");
   });
 
+  it("records duration and provider usage for each completed streamed response", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(10_000);
+      const { run, events } = createRun();
+      run.handleEvent({
+        type: "message_start",
+        message: assistantMessage({ content: [{ type: "text", text: "first" }] }),
+      });
+      vi.setSystemTime(12_500);
+      run.handleEvent({
+        type: "message_end",
+        message: assistantMessage({
+          content: [{ type: "text", text: "first" }],
+          usage: { input: 4, output: 7, cacheRead: 0, cacheWrite: 0, totalTokens: 11 },
+        }),
+      });
+      vi.setSystemTime(20_000);
+      run.handleEvent({
+        type: "message_start",
+        message: assistantMessage({ content: [{ type: "text", text: "second" }] }),
+      });
+      vi.setSystemTime(20_750);
+      run.handleEvent({
+        type: "message_end",
+        message: assistantMessage({
+          content: [{ type: "text", text: "second" }],
+          usage: { input: 3, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 8 },
+        }),
+      });
+
+      const settled = events
+        .filter((event) => event.event.type === "message_end")
+        .map((event) => (event.event as { message: Record<string, unknown> }).message);
+      expect(settled).toHaveLength(2);
+      expect(settled[0]).toMatchObject({
+        status: "complete",
+        modelStreamDurationMs: 2_500,
+        usage: { outputTokens: 7 },
+      });
+      expect(settled[0].responseOutputTokens).toBeUndefined();
+      expect(settled[1]).toMatchObject({
+        status: "complete",
+        modelStreamDurationMs: 750,
+        usage: { outputTokens: 5 },
+      });
+      expect(settled[1].responseOutputTokens).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records streamed response duration and estimates tokens for an interrupted response", () => {
+    vi.useFakeTimers();
+    try {
+      const { run, events } = createRun();
+      const start = Date.now();
+      run.handleEvent({
+        type: "message_start",
+        message: assistantMessage({ content: [{ type: "text", text: "partial" }] }),
+      });
+      vi.setSystemTime(start + 1200);
+      run.handleEvent({
+        type: "message_end",
+        message: assistantMessage({
+          content: [{ type: "thinking", thinking: "reason" }, { type: "text", text: "partial" }],
+          stopReason: "aborted",
+          usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1 },
+        }),
+      });
+      const ended = events.at(-1)?.event as { message: Record<string, unknown> };
+      expect(ended.message).toMatchObject({
+        status: "aborted",
+        modelStreamDurationMs: 1200,
+        responseDurationMs: 1200,
+      });
+      expect(ended.message.responseOutputTokens).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("trusts provider output over the visible estimate for an aborted response", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(5_000);
+      const { run, events } = createRun();
+      run.handleEvent({
+        type: "message_start",
+        message: assistantMessage({ content: [{ type: "text", text: "partial" }] }),
+      });
+      vi.setSystemTime(5_400);
+      run.handleEvent({
+        type: "message_end",
+        message: assistantMessage({
+          content: [{ type: "thinking", thinking: "reason" }, { type: "text", text: "partial" }],
+          stopReason: "aborted",
+          usage: { input: 2, output: 9, cacheRead: 0, cacheWrite: 0, totalTokens: 11 },
+        }),
+      });
+      const ended = events.at(-1)?.event as { message: Record<string, unknown> };
+      expect(ended.message).toMatchObject({
+        status: "aborted",
+        modelStreamDurationMs: 400,
+        responseDurationMs: 400,
+        usage: { outputTokens: 9 },
+      });
+      expect(ended.message.responseOutputTokens).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps turn and agent lifecycle events inside the delegate", () => {
     const { run, events } = createRun();
 

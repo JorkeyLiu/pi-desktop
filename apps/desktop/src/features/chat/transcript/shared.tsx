@@ -415,7 +415,9 @@ export const TOOL_RUNNING_KEYS: Record<ToolAction, string> = {
 };
 
 export function ToolActionIcon({ action }: { action: ToolAction }) {
-  const props = { size: 15, "aria-hidden": true };
+  // `data-icon` names the action the glyph stands for, so presentation checks
+  // can assert the icon belongs to the tool's action without reading markup.
+  const props = { size: 15, "aria-hidden": true, "data-icon": action };
   switch (action) {
     case "read":
       return <IconFileText {...props} />;
@@ -690,23 +692,6 @@ export function LinkifiedText({
   );
 }
 
-/** Definition name a `Task` row delegated to, from the rows it produced or,
- * before any arrived, from the call's own argument. */
-
-export function ToolCommandCopy({ command }: { command: string }) {
-  const { t } = useTranslation();
-  const { copied, copy } = useCopy();
-  return (
-    <TooltipButton
-      className={`tool-row-head-copy${copied ? " copied" : ""}`}
-      ariaLabel={`${t("chat.copy")} ${t("chat.toolBlockCommand")}`}
-      tooltip={copied ? t("chat.copied") : t("chat.copy")}
-      onClick={() => copy(command)}
-    >
-      {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
-    </TooltipButton>
-  );
-}
 
 export function DisclosureCollapseRail({
   label,

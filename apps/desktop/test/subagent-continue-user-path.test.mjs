@@ -42,12 +42,13 @@ function taskMessage(id, callId, delegationId, status, extraDetails = {}) {
   });
 }
 
-function childAssistant(id, callId, usage, content = "working on it") {
+function childAssistant(id, callId, usage, content = "working on it", extra = {}) {
   return message(id, "assistant", content, {
     parentToolCallId: callId,
     agentName: "explorer",
     status: "complete",
     ...(usage ? { usage } : {}),
+    ...extra,
   });
 }
 
@@ -61,7 +62,7 @@ function lifecycleMessage(id, kind, entries) {
   });
 }
 
-async function setup() {
+async function setup(language = "en") {
   const vite = await createServer({
     root, configFile: false,
     server: { middlewareMode: true, hmr: false, ws: false },
@@ -72,7 +73,10 @@ async function setup() {
   // Production loads flattened catalogs (see renderer-catalogs); the tab
   // under test resolves `t("chat.subagentMetricsTurnsUnit", { count })`
   // through i18next plural rules, never a hardcoded `_one` suffix.
-  await i18n.init({ lng: "en", resources: { en: { translation: flattenCatalog(catalogs.en) } } });
+  await i18n.init({
+    lng: language,
+    resources: { [language]: { translation: flattenCatalog(catalogs[language]) } },
+  });
   const { SubagentTranscriptTab } = await vite.ssrLoadModule(
     "/src/components/workpanel/SubagentTranscriptTab.tsx",
   );
@@ -195,11 +199,29 @@ test("single metrics region separates context from spend with unknown helper", a
     seed(useAppStore, {
       messages: [
         taskMessage("t1", "call-1", "d1", "completed", { contextTokens: 12000, usage: opUsage("op-1", 1500) }),
-        childAssistant("a1", "call-1", opUsage("op-1", 1500)),
+        // Stale earlier representation of the same id: the latest settled row
+        // is the sample, never both and never the stale one.
+        childAssistant("a1", "call-1", { outputTokens: 900, totalTokens: 900 }, "working on it", {
+          modelStreamDurationMs: 1000,
+        }),
+        childAssistant("a1", "call-1", { outputTokens: 423, totalTokens: 423 }, "working on it", {
+          modelStreamDurationMs: 10000,
+        }),
+        // Nested delegate under the selected Task call: never this delegate's
+        // own model stream, so it never moves the average.
+        childAssistant("a-nested", "call-1", { outputTokens: 999, totalTokens: 999 }, "nested", {
+          modelStreamDurationMs: 1000,
+          nestedParentToolCallId: "inner-call",
+        }),
       ],
       running: false,
     });
     const html = render("d1");
+    assert.match(html, /data-testid="subagent-metrics-throughput"/);
+    assert.match(html, /Average TPS/);
+    assert.match(html, /subagent-transcript-metric-value">42\.3</);
+    assert.match(html, /1 recorded model responses, including reasoning/);
+    assert.doesNotMatch(html, /≈42\.3/);
     // One region only: header owns it, footer never duplicates.
     assert.equal((html.match(/subagent-transcript-metrics/g) ?? []).length, 1);
     assert.doesNotMatch(html, /subagent-transcript-footer-metrics/);
@@ -213,6 +235,38 @@ test("single metrics region separates context from spend with unknown helper", a
     assert.match(html, /title="1 turn · 1 call"/);
     assert.doesNotMatch(html, /TurnsUnit_|CallsUnit_/);
     assert.doesNotMatch(html, /subagent-metrics-context">—</);
+    // Interrupted response: runtime provider 0 plus the visible estimate is
+    // an estimate and states so with the ≈ prefix.
+    const estimatedTask = taskMessage("t12", "call-12", "d12", "completed", { contextTokens: 8000, usage: opUsage("op-12", 900) });
+    const estimatedChild = childAssistant("a12", "call-12", { outputTokens: 0, totalTokens: 0 }, "partial", {
+      status: "aborted",
+      modelStreamDurationMs: 2000,
+      responseOutputTokens: 100,
+    });
+    seed(useAppStore, { messages: [estimatedTask, estimatedChild], running: false });
+    const estimatedHtml = render("d12");
+    assert.match(estimatedHtml, /subagent-transcript-metric-value">≈50</);
+    assert.match(estimatedHtml, /1 recorded model responses, including reasoning/);
+    // No settled sample with stream time: the header states the dash, never a
+    // fabricated rate, and keeps status, context, and spend intact.
+    const missingTask = taskMessage("t13", "call-13", "d13", "completed", { contextTokens: 5000, usage: opUsage("op-13", 700) });
+    const missingChild = childAssistant("a13", "call-13", { outputTokens: 100, totalTokens: 100 }, "done");
+    seed(useAppStore, { messages: [missingTask, missingChild], running: false });
+    const missingHtml = render("d13");
+    assert.match(missingHtml, /subagent-transcript-metric-value">—</);
+    assert.match(missingHtml, /0 recorded model responses, including reasoning/);
+    assert.match(missingHtml, /Completed/);
+    assert.match(missingHtml, /data-testid="subagent-metrics-context"/);
+    assert.match(missingHtml, /data-testid="subagent-metrics-spend"/);
+    // A different selected chain reads its own samples, not every child row.
+    const otherTask = taskMessage("t2", "call-9", "d2", "completed", { contextTokens: 1000, usage: opUsage("op-2", 300) });
+    const otherChild = childAssistant("a2", "call-9", { outputTokens: 100, totalTokens: 100 }, "other", {
+      modelStreamDurationMs: 1000,
+    });
+    seed(useAppStore, { messages: [otherTask, otherChild], running: false });
+    const otherHtml = render("d2");
+    assert.match(otherHtml, /subagent-transcript-metric-value">100</);
+    assert.doesNotMatch(otherHtml, /42\.3/);
     // Unknown context renders — with a helper, never 0 and never hidden.
     const legacyTask = taskMessage("t1", "call-1", "d9", "completed");
     seed(useAppStore, { messages: [legacyTask], running: false });
@@ -245,6 +299,41 @@ test("single metrics region separates context from spend with unknown helper", a
     assert.match(zeroedHtml, /title="0 turns · 0 calls"/);
     assert.doesNotMatch(zeroedHtml, /NaN|undefined/);
   } finally { await vite.close(); }
+});
+
+/**
+ * The child's own usage is a fallback source, not a disclaimer the reader has
+ * to interpret: while it is the occupancy's source the header states the plain
+ * figure, and the same figure keeps reading the same way once the `Task`
+ * snapshot lands. Provenance stays internal; the renderer never turns it into
+ * a `(est.)` / `(预估)` word.
+ */
+test("the header states an estimated occupancy as a plain context figure", async () => {
+  // 7.7K is the child's own total usage, the last source before unknown.
+  const childUsage = { inputTokens: 6_800, outputTokens: 900, totalTokens: 7_700 };
+  for (const [language, expected] of [["en", "7.7K"], ["zh-CN", "7700"]]) {
+    const { vite, render, useAppStore } = await setup(language);
+    try {
+      const legacyTask = taskMessage("t1", "call-1", "d1", "completed");
+      delete legacyTask.toolResult.details.contextTokens;
+      delete legacyTask.toolResult.details.usage;
+      const child = childAssistant("a1", "call-1", childUsage);
+      seed(useAppStore, { messages: [legacyTask, child], running: false });
+      const estimatedHtml = render("d1");
+      assert.match(estimatedHtml, new RegExp(`subagent-metrics-context">${expected}<`));
+      assert.doesNotMatch(estimatedHtml, /\(est\.\)|\(预估\)|estimated/i);
+      // The same chain now reports a Task snapshot carrying the same figure:
+      // the child usage is no longer the source, and nothing visible changes.
+      const snapshotTask = taskMessage("t1", "call-1", "d1", "completed", {
+        contextTokens: 7_700,
+      });
+      seed(useAppStore, { messages: [snapshotTask, child], running: false });
+      const snapshotHtml = render("d1");
+      assert.match(snapshotHtml, new RegExp(`subagent-metrics-context">${expected}<`));
+      assert.doesNotMatch(snapshotHtml, /\(est\.\)|\(预估\)|estimated/i);
+      assert.equal(snapshotHtml, estimatedHtml);
+    } finally { await vite.close(); }
+  }
 });
 
 test("header names the live report owner from backend fields, settled stays bare", async () => {

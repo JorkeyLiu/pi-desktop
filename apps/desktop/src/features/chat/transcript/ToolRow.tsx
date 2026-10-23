@@ -25,7 +25,7 @@ import {
   getToolAction,
   getToolDisplayName,
   getToolSummary,
-  getToolSummaryValue,
+  getToolSummaryKey,
   isToolPathSummary,
 } from "../../../lib/tool-display";
 import { ToolPathSummary } from "./ToolPathSummary";
@@ -62,7 +62,6 @@ import {
   IconArrowDown,
   IconBot,
   IconChevronRight,
-  IconCircleAlert,
 } from "../../../components/icons";
 import { TooltipButton } from "../../../components/ui";
 import { DisclosureAnchorContext } from "../../../lib/disclosure-anchor-context";
@@ -74,9 +73,6 @@ import {
   PREVIEWABLE_ACTIONS,
   ThinkingRow,
   ToolActionIcon,
-  ToolCommandCopy,
-  TOOL_ACTION_KEYS,
-  TOOL_RUNNING_KEYS,
   WAIT_PROGRESS_LABEL_KEYS,
   WAIT_SETTLED_LABEL_KEYS,
   useAutomaticDisclosure,
@@ -211,11 +207,10 @@ function HostToolRow({
   const { fileMenu, openFileMenu, closeFileMenu } = useChatFileMenu();
   const status = message.toolStatus;
   const action = getToolAction(message.toolName);
-  // A run row states what the command did, not what the call around it did: an
-  // exit code the shell reported outranks a tool call that came back fine
-  // (D227). Property reads only, so a streaming row can afford it every tick.
+  // A numeric exit code means Bash returned normally; only invocation errors
+  // without a normal exit, or explicit error payloads, mark the row as failed.
   const run = action === "run" ? runOutcome(message) : null;
-  const failed = status === "error" || run === "failed";
+  const failed = run ? run === "failed" : status === "error";
   // A tool call never opens itself — except a checklist, which is the work the
   // user is watching live, and whose own body is what shows that progress. That
   // default is a derived default: once the user collapses the row, their choice
@@ -236,14 +231,12 @@ function HostToolRow({
     onUserInteraction?.();
     collapseDisclosure();
   }, [collapseDisclosure, onUserInteraction]);
-  const actionLabel = t(
-    status === "running" ? TOOL_RUNNING_KEYS[action] : TOOL_ACTION_KEYS[action],
-  );
   const rawName = getToolDisplayName(message.toolName) || t("chat.tool");
   const argSummary = getToolSummary(message.toolName, message.toolArgs);
   // A path stays whole in `title`, in the copy menu and in its preview target;
   // only what the row prints omits its middle.
   const summaryIsPath = isToolPathSummary(message.toolName, message.toolArgs);
+  const summaryIsCode = getToolSummaryKey(message.toolName, message.toolArgs) === "command";
   // A workspace mutation carries its own durable review record (D192): the row
   // ends with its +a/−d and hosts the diff, so the transcript never grows a
   // second collapsed row naming the same file.
@@ -251,13 +244,8 @@ function HostToolRow({
   const previewTarget = PREVIEWABLE_ACTIONS.has(action)
     ? getToolPreviewTarget(message.toolArgs, root)
     : null;
-  // A run row keeps its command in the head and only its output in the body, so
-  // the head carries the two things the body no longer offers: a copy of the
-  // command, and the outcome (D226).
+  // A run row keeps its command in the head and only its output in the body.
   const runHead = action === "run";
-  const command = runHead
-    ? getToolSummaryValue(message.toolName, message.toolArgs)
-    : "";
   // A delegation is always expandable: its brief, report and the delegate's
   // own rows all live in the body.
   const hasDetails =
@@ -281,6 +269,10 @@ function HostToolRow({
     lifecycle === "wait" || lifecycle === "list"
       ? taskWaitLifecycle(message)
       : null;
+  // A settled wait names its backend-owned outcome (results arrived, timeout,
+  // interrupted) or, for a checkpoint that woke on progress, the reason it
+  // woke; a `TaskStop` and a cheap `TaskList` snapshot have neither and keep
+  // their own settled label.
   const waitLabelKey =
     waitLifecycle?.kind === "completed"
       ? WAIT_SETTLED_LABEL_KEYS.completed
@@ -294,23 +286,9 @@ function HostToolRow({
   // History stays inspectable: a folded checkpoint's tooltip names the
   // actual wait outcome, so repeated waits on the same live delegation read
   // as one ongoing state without losing what each row did.
-  const waitTitle =
-    (lifecycle === "wait" || lifecycle === "list") &&
-    waitLifecycle &&
-    waitLifecycle.kind !== "unknown"
-      ? [
-          waitLifecycle.kind === "completed"
-            ? t(WAIT_SETTLED_LABEL_KEYS.completed)
-            : waitLifecycle.kind === "timeout"
-              ? t(WAIT_SETTLED_LABEL_KEYS.timeout)
-              : waitLifecycle.kind === "interrupted"
-                ? t(WAIT_SETTLED_LABEL_KEYS.interrupted)
-                : t(WAIT_PROGRESS_LABEL_KEYS[waitLifecycle.reason]),
-          rosterSummary,
-        ]
-          .filter(Boolean)
-          .join(" · ")
-      : undefined;
+  const waitTitle = waitLabelKey
+    ? [t(waitLabelKey), rosterSummary].filter(Boolean).join(" · ")
+    : undefined;
   const agentName =
     action === "delegate" && !lifecycle
       ? delegateAgentName(message, delegate)
@@ -356,9 +334,17 @@ function HostToolRow({
   // running it has no roster yet, and `delegationIds` would otherwise reach the
   // head as a JSON blob of UUIDs (D268).
   const summary = lifecycle ? rosterSummary : argSummary;
-  const statusLabel = rosterOutcome
-    ? t(`chat.subagentStatus.${rosterOutcome}`)
-    : run
+  // A delegate control row states its own wait state on the right: which kind
+  // of check it is making while it runs, the backend-owned outcome once it
+  // settles. Its name stays the fixed tool identity.
+  const lifecycleLabel = lifecycle
+    ? status === "running"
+      ? t(LIFECYCLE_RUNNING_KEYS[lifecycle])
+      : t(waitLabelKey ?? LIFECYCLE_LABEL_KEYS[lifecycle])
+    : null;
+  const statusLabel =
+    lifecycleLabel ??
+    (run
       ? runLabel
       : status === "running"
         ? t("chat.running")
@@ -366,7 +352,7 @@ function HostToolRow({
           ? t("chat.toolFailed")
           : status === "denied"
             ? t("chat.toolDenied")
-            : t("chat.toolCompleted");
+            : t("chat.toolCompleted"));
 
   // Auto-scroll the nested `.tool-row-content` containers to their bottom
   // while the tool is still running. These elements have `max-height: 260px`
@@ -392,12 +378,28 @@ function HostToolRow({
   const statusTone =
     run === "running" || (!run && status === "running")
       ? "is-running"
-      : failed
+      : failed || rosterOutcome === "failed"
         ? "is-error"
-        : run === "denied" || (!run && status === "denied")
+        : run === "denied" ||
+            (!run && status === "denied") ||
+            rosterOutcome === "denied"
           ? "is-denied"
           : "is-done";
   const caret = hasDetails ? <IconChevronRight size={12} /> : null;
+  // Lifecycle is stated once, at the row's right edge: a live row spins, a
+  // settled row names its state. The identity on the left never changes with
+  // it, so a reader can tell which tool ran without reading its status. A
+  // delegate control row names its wait even while it runs, because which
+  // check is in flight is the whole content of that row.
+  const statusBadge =
+    !runHead && !lifecycle && status === "running" ? (
+      <span className="tool-spinner" aria-label={t("chat.running")} />
+    ) : runHead || lifecycle || status === "error" || status === "denied" ? (
+      <span className={`tool-row-state ${statusTone}`} role="status" aria-live="polite">
+        <span className="tool-row-state-dot" aria-hidden />
+        {statusLabel}
+      </span>
+    ) : null;
 
   return (
     <div
@@ -419,30 +421,12 @@ function HostToolRow({
             title={summary || rawName}
             onClick={() => hasDetails && toggleRow()}
           >
-            <span
-              className={`tool-row-icon${lifecycle ? " is-subagent" : ""}`}
-            >
+            <span className={`tool-row-icon${action === "delegate" ? " is-subagent" : ""}`}>
               <ToolActionIcon action={action} />
             </span>
-            <span
-              className={`tool-row-name ${status === "running" ? "running" : ""}`}
-              title={waitTitle}
-            >
-              {waitLabelKey
-                ? t(waitLabelKey)
-                : lifecycle
-                  ? t(
-                      (status === "running"
-                        ? LIFECYCLE_RUNNING_KEYS
-                        : LIFECYCLE_LABEL_KEYS)[lifecycle],
-                    )
-                  : actionLabel}
+            <span className="tool-row-name" title={waitTitle}>
+              {rawName}
             </span>
-            {lifecycle && roster.length > 0 ? (
-              <span className="tool-row-agent is-count">
-                {t("chat.subagentCount", { count: roster.length })}
-              </span>
-            ) : null}
             {agentName ? (
               <span className="tool-row-agent" title={t("chat.subagentAgent")}>
                 {agentName}
@@ -450,22 +434,11 @@ function HostToolRow({
             ) : null}
             {summary ? (
               <span
-                className={`tool-row-summary${previewTarget && localToolsAllowed ? " linked" : ""}${summaryIsPath ? " is-path" : ""}`}
-                title={
-                  // A file row prints its file name, so the whole path is what
-                  // hovering it offers; any other hint keeps its preview label.
-                  summaryIsPath
-                    ? summary
-                    : previewTarget && localToolsAllowed
-                      ? previewTarget.kind === "file"
-                        ? t("chat.previewFile")
-                        : t("chat.previewUrl")
-                      : undefined
-                }
+                className={`tool-row-summary${summaryIsCode ? " is-code" : ""}${previewTarget && localToolsAllowed ? " linked" : ""}${summaryIsPath ? " is-path" : ""}`}
+                title={summary}
                 onClick={
                   previewTarget && localToolsAllowed
                     ? (e) => {
-                        // Open the preview target instead of toggling details.
                         e.stopPropagation();
                         openTarget(previewTarget);
                       }
@@ -473,8 +446,7 @@ function HostToolRow({
                 }
                 onContextMenu={
                   localToolsAllowed && previewTarget?.kind === "file"
-                    ? (event) =>
-                        openFileMenu(event, { path: previewTarget.path })
+                    ? (event) => openFileMenu(event, { path: previewTarget.path })
                     : undefined
                 }
               >
@@ -483,49 +455,22 @@ function HostToolRow({
             ) : null}
             <ToolChips chips={chips} />
             {review ? <ReviewChangeCounts change={review} /> : null}
-            {runHead && statusLabel ? (
-              <span
-                className={`tool-row-state ${statusTone}`}
-                role="status"
-                aria-live="polite"
-              >
-                <span className="tool-row-state-dot" aria-hidden />
-                {statusLabel}
+            {lifecycle && roster.length > 0 ? (
+              <span className="tool-row-lifecycle">
+                <span className="tool-row-agent is-count">
+                  {t("chat.subagentCount", { count: roster.length })}
+                </span>
+                {statusBadge}
               </span>
-            ) : status === "running" ? (
-              <span className="tool-spinner" aria-label={t("chat.running")} />
-            ) : status === "error" ? (
-              <span
-                className="tool-row-status error"
-                aria-label={t("chat.toolFailed")}
-              >
-                <IconCircleAlert size={13} />
-                {t("chat.toolFailed")}
-              </span>
-            ) : status === "denied" ? (
-              <span className="tool-row-status">{t("chat.toolDenied")}</span>
-            ) : null}
-            {runHead && statusLabel ? null : (
-              <span className="sr-only" role="status" aria-live="polite">
-                {statusLabel}
-              </span>
+            ) : (
+              statusBadge
             )}
             {runHead || !caret ? null : (
-              <span className="tool-row-caret" aria-hidden>
-                {caret}
-              </span>
+              <span className="tool-row-caret" aria-hidden>{caret}</span>
             )}
           </button>
-          {runHead && command ? <ToolCommandCopy command={command} /> : null}
           {runHead && caret ? (
-            // Redundant for the keyboard — the header itself is the disclosure —
-            // so it is a pointer target only and stays out of the reading order.
-            <button
-              className="tool-row-caret is-toggle"
-              aria-hidden="true"
-              tabIndex={-1}
-              onClick={toggleRow}
-            >
+            <button className="tool-row-caret is-toggle" aria-hidden="true" tabIndex={-1} onClick={toggleRow}>
               {caret}
             </button>
           ) : null}
@@ -544,9 +489,6 @@ function HostToolRow({
             onCollapse={collapseRow}
           />
           {blocks && blocks.length > 0 ? (
-            // A run row hands its body to the terminal, which brings the
-            // labeled panes and copy controls itself (D226); `plain` still
-            // covers the notes that body may carry.
             <ToolDetailBlocks blocks={blocks} plain={runHead} streaming={status === "running"} />
           ) : null}
           {review ? (

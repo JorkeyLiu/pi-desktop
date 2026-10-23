@@ -4,7 +4,7 @@ import { useState, type ReactNode } from "react";
 import { createInstance } from "i18next";
 import { I18nextProvider } from "react-i18next";
 import { catalogs } from "@pi-desktop/i18n";
-import type { UiMessage } from "@pi-desktop/shared";
+import type { HostedSearchRound, UiMessage } from "@pi-desktop/shared";
 import { ToolRow } from "../../apps/desktop/src/features/chat/transcript/ToolRow";
 import { AssistantTurn } from "../../apps/desktop/src/features/chat/transcript/AssistantTurn";
 import { buildTranscriptEntries } from "../../apps/desktop/src/lib/assistant-turns";
@@ -14,6 +14,7 @@ import { ActivityItems } from "../../apps/desktop/src/features/chat/transcript/A
 import { SubagentTitleProvider } from "../../apps/desktop/src/lib/subagent-title-provider";
 import { SubagentChainMetricsProvider } from "../../apps/desktop/src/lib/subagent-metrics-provider";
 import { aggregateChainMetricsFromMessages } from "../../apps/desktop/src/lib/subagent-metrics";
+import { HostedSearchRow } from "../../apps/desktop/src/features/chat/transcript/HostedSearchRow";
 import { subagentMetricsLine } from "../../apps/desktop/src/lib/subagent-ui-metrics";
 
 declare global {
@@ -41,6 +42,7 @@ function message(
 }
 
 const COMMAND = "pnpm test --filter desktop --reporter=dot";
+const DESCRIPTION = "运行测试 Run tests /src/session.ts";
 const STDOUT = [
   "\u001b[32m✓\u001b[0m tool-presentation.test.mjs",
   "\u001b[1m3 passing\u001b[0m",
@@ -49,13 +51,12 @@ const STDOUT = [
 const STDERR = "\u001b[31m✗\u001b[0m 1 failing assertion\n";
 const LONG_PATH =
   "/Users/me/workspace/repos/pi-desktop/apps/desktop/src/components/transcript/nested/tool/ToolTerminal.tsx";
-
 const bash = (id: string, running = false): UiMessage =>
   message(id, "", {
     toolName: "Bash",
     toolCallId: `call-${id}`,
     toolStatus: running ? "running" : "success",
-    toolArgs: { command: COMMAND, description: "Run the desktop tests" },
+    toolArgs: { command: COMMAND, description: DESCRIPTION },
     toolResult: {
       details: running
         ? {
@@ -284,8 +285,18 @@ const settle = async (ticks = 4) => {
     await new Promise((resolve) => setTimeout(resolve, 30));
   }
 };
-
-const tracks = (value: string) => value.split(" ").filter(Boolean).length;
+const tracks = (value: string) => value.trim().split(/\s+/).filter(Boolean).length;
+const clickCopy = async (
+  host: HTMLElement,
+  selector: string,
+  copied: string[],
+) => {
+  const button = host.querySelector<HTMLElement>(selector);
+  if (!button) throw new Error(`no copy control at ${selector}`);
+  button.click();
+  await settle(2);
+  return copied.at(-1);
+};
 
 
 /**
@@ -418,6 +429,77 @@ globalThis.toolCardsProbe = async () => {
         outputLeft: wideOutput.left,
       },
     );
+    const typographyHost = mount(wide, <ToolRow message={bash("run-typography")} />);
+    const typographyHeader = typographyHost.querySelector<HTMLElement>(".tool-row-header")!;
+    const proseSummary = typographyHost.querySelector<HTMLElement>(".tool-row-summary")!;
+    const summaryStyle = getComputedStyle(proseSummary);
+    const headerStyle = getComputedStyle(typographyHeader);
+    const fontEvidence = {
+      summary: {
+        family: summaryStyle.fontFamily,
+        size: summaryStyle.fontSize,
+        lineHeight: summaryStyle.lineHeight,
+        top: proseSummary.getBoundingClientRect().top,
+        height: proseSummary.getBoundingClientRect().height,
+      },
+      header: {
+        family: headerStyle.fontFamily,
+        size: headerStyle.fontSize,
+        lineHeight: headerStyle.lineHeight,
+        top: typographyHeader.getBoundingClientRect().top,
+        height: typographyHeader.getBoundingClientRect().height,
+      },
+    };
+    check(
+      "collapsed Run header has no copy button and aligns mixed-language prose",
+      typographyHost.querySelectorAll(".tool-row-head-copy").length === 0 &&
+        summaryStyle.fontFamily === headerStyle.fontFamily &&
+        summaryStyle.fontSize === headerStyle.fontSize &&
+        summaryStyle.lineHeight === headerStyle.lineHeight,
+      fontEvidence,
+    );
+    const baselineHost = document.createElement("div");
+    baselineHost.style.cssText = "width:900px;min-width:0";
+    baselineHost.innerHTML = "<div class=\"subagent-transcript-tab\"><div class=\"subagent-transcript-header\"><span class=\"subagent-transcript-status\" role=\"status\">Running · User-owned</span><div class=\"subagent-transcript-metrics\" role=\"group\"><span class=\"subagent-transcript-metric\"><span class=\"subagent-transcript-metric-label\">Context</span><span class=\"subagent-transcript-metric-value\">22K</span></span><span class=\"subagent-transcript-metric\"><span class=\"subagent-transcript-metric-label\">Spent</span><span class=\"subagent-transcript-metric-value\">6.4K</span></span><span class=\"subagent-transcript-metric\"><span class=\"subagent-transcript-metric-value\">Turns 4 · Tool calls 6</span></span></div></div></div>";
+    wide.append(baselineHost);
+    const baselineHeader = baselineHost.querySelector<HTMLElement>(".subagent-transcript-header")!;
+    const baselineStatus = baselineHost.querySelector<HTMLElement>(".subagent-transcript-status")!;
+    const baselineMetrics = baselineHost.querySelector<HTMLElement>(".subagent-transcript-metrics")!;
+    const baselineStatusBox = baselineStatus.getBoundingClientRect();
+    const baselineMetricsBox = baselineMetrics.getBoundingClientRect();
+    baselineHost.dataset.workPanelHeader = "true";
+    const baselineNormal = { header: baselineHeader.getBoundingClientRect().height, status: [baselineStatusBox.top, baselineStatusBox.bottom], metrics: [baselineMetricsBox.top, baselineMetricsBox.bottom], align: getComputedStyle(baselineHeader).alignItems, wraps: baselineMetricsBox.top > baselineStatusBox.top };
+    baselineHost.style.width = "300px";
+    await settle(2);
+    const wrappedStatusBox = baselineStatus.getBoundingClientRect();
+    const wrappedMetricsBox = baselineMetrics.getBoundingClientRect();
+    const baselineWrapped = { header: baselineHeader.getBoundingClientRect().height, status: [wrappedStatusBox.top, wrappedStatusBox.bottom], metrics: [wrappedMetricsBox.top, wrappedMetricsBox.bottom], align: getComputedStyle(baselineHeader).alignItems, wraps: wrappedMetricsBox.top > wrappedStatusBox.top };
+    check("work panel header baseline alignment and narrow wrap", baselineNormal.align === "baseline" && baselineNormal.wraps === false && baselineWrapped.align === "baseline" && baselineWrapped.wraps === true && baselineWrapped.header > baselineNormal.header, { normal: baselineNormal, wrapped: baselineWrapped });
+    const exitFailure = message("bash-exit-1", "", {
+      toolName: "Bash",
+      toolStatus: "error",
+      toolArgs: { command: "false", description: DESCRIPTION },
+      toolResult: { details: { exitCode: 1, stdout: "", stderr: "" } },
+    });
+    const failureHost = mount(wide, <ToolRow message={exitFailure} />);
+    check(
+      "non-zero exit completes the invocation with its own exit chip",
+      failureHost.querySelector(".tool-row-state.is-done") !== null &&
+        /exit\s*1/.test(failureHost.textContent ?? ""),
+      failureHost.textContent,
+    );
+    const invocationFailure = message("bash-spawn-error", "", {
+      toolName: "Bash",
+      toolStatus: "error",
+      toolArgs: { command: "missing-command", description: DESCRIPTION },
+      toolResult: { details: { error: "spawn failed", code: "ENOENT" } },
+    });
+    const invocationFailureHost = mount(wide, <ToolRow message={invocationFailure} />);
+    check(
+      "an explicit invocation error remains failed",
+      invocationFailureHost.querySelector(".tool-row-state.is-error") !== null,
+      invocationFailureHost.textContent,
+    );
     check(
       "narrow: output stacks under the command",
       narrowOutput.top > narrowCommand.bottom - 2 &&
@@ -464,21 +546,261 @@ globalThis.toolCardsProbe = async () => {
       stderrPane!.className,
     );
 
-    // ── 3. Copy controls hand back the bytes they label ──
-    const clickCopy = async (host: HTMLElement, selector: string) => {
-      const button = host.querySelector<HTMLElement>(selector);
-      if (!button) throw new Error(`no copy control at ${selector}`);
-      button.click();
-      await settle(2);
-      return copied.at(-1);
-    };
     const copiedCommand = await clickCopy(
       wideBash,
       ".tool-terminal-pane.is-command .tool-row-copy",
+      copied,
     );
+    // The left side is the tool's own identity and action, and it does not
+    // move: the same pair renders for every lifecycle state, with the state
+    // stated on the right. A known tool is never renamed to a progress or
+    // past-tense verb, and an unknown tool keeps its formatted raw name
+    // instead of a generic "Using".
+    const identityCases = [
+      ["Read", "Read", "read"],
+      ["Write", "Write", "write"],
+      ["Edit", "Edit", "edit"],
+      ["Grep", "Grep", "search"],
+      ["Bash", "Bash", "run"],
+      ["Task", "Task", "delegate"],
+      ["plugin_issue_tracker_create", "Issue Tracker Create", "use"],
+      ["mcp__srv__do_thing", "Mcp Srv Do Thing", "use"],
+    ] as const;
+    const lifecycle = ["running", "success", "error", "denied"] as const;
+    for (const [toolName, expectedName, expectedIcon] of identityCases) {
+      const seen = [] as Array<{ name: string; icon: string; status: string }>;
+      for (const toolStatus of lifecycle) {
+        const host = mount(wide, <ToolRow message={message(`identity-${toolName}-${toolStatus}`, "", {
+          toolName,
+          toolStatus,
+          toolArgs: toolName === "Bash" ? { command: "true" } : {},
+        })} />);
+        const label = host.querySelector<HTMLElement>(".tool-row-name");
+        const icon = host.querySelector<HTMLElement>(".tool-row-icon svg");
+        const rightStatus = host.querySelector<HTMLElement>(".tool-row-state, .tool-spinner");
+        seen.push({ name: label?.textContent ?? "", icon: icon?.outerHTML ?? "", status: rightStatus?.className ?? "" });
+        // A live row shows its liveness on the right; a failed or denied row
+        // names it there; a settled run row states its completion; a settled
+        // non-run row adds nothing.
+        const right =
+          toolStatus === "running"
+            ? Boolean(rightStatus)
+            : toolStatus === "error" || toolStatus === "denied"
+              ? Boolean(host.querySelector(".tool-row-state.is-error, .tool-row-state.is-denied"))
+              : toolName === "Bash"
+                ? Boolean(host.querySelector(".tool-row-state.is-done"))
+                : rightStatus === null;
+        check(`${toolName} identity ${toolStatus}`, label?.textContent === expectedName && !!icon && icon.getAttribute("data-icon") === expectedIcon && right, seen.at(-1));
+      }
+      check(`${toolName} identity and icon stable across lifecycle`, seen.every((entry) => entry.name === seen[0].name && entry.icon === seen[0].icon) && new Set(seen.map((entry) => entry.status)).size > 1, seen);
+    }
+
+    // A provider-hosted search round is named by what the provider did, and the
+    // label does not move: the same globe and the same kind name render while it
+    // searches, after it settles and when it fails. Liveness and failure are
+    // stated on the right, and the round's query and sources stay on the row.
+    const hostedRound = (
+      id: string,
+      round: Partial<HostedSearchRound>,
+    ): HostedSearchRound => ({
+      id,
+      status: "searching",
+      query: "electron context isolation",
+      sources: [],
+      ...round,
+    });
+    const hostedCases: Array<[string, HostedSearchRound]> = [
+      ["searching", hostedRound("round-searching", { status: "searching" })],
+      [
+        "completed",
+        hostedRound("round-completed", {
+          status: "completed",
+          sources: [
+            {
+              url: "https://www.electronjs.org/docs/latest/tutorial/context-isolation",
+              title: "Context Isolation",
+            },
+          ],
+        }),
+      ],
+      ["failed", hostedRound("round-failed", { status: "failed" })],
+    ];
+    const hostedSeen = [] as Array<{
+      name: string;
+      icon: string;
+      state: string;
+    }>;
+    for (const [state, round] of hostedCases) {
+      // The turn streams in all three: a round that already completed is still
+      // part of a live turn, so only the round's own status may settle it.
+      const host = mount(
+        wide,
+        <HostedSearchRow messageId={`hosted-${state}`} round={round} streaming />,
+      );
+      const name = host.querySelector<HTMLElement>(".tool-row-name")!;
+      const badge = host.querySelector<HTMLElement>(".tool-row-state");
+      const expected =
+        state === "searching"
+          ? "Searching the web"
+          : state === "failed"
+            ? "Web search failed"
+            : "";
+      const right =
+        state === "searching"
+          ? Boolean(badge?.classList.contains("is-running")) && badge?.textContent === expected
+          : state === "failed"
+            ? Boolean(badge?.classList.contains("is-error")) && badge?.textContent === expected
+            : badge === null;
+      hostedSeen.push({
+        name: name.textContent ?? "",
+        icon: host.querySelector<HTMLElement>(".tool-row-icon svg")?.outerHTML ?? "",
+        state: badge?.className ?? "settled",
+      });
+      check(
+        `hosted search ${state} keeps its identity and states its state on the right`,
+        name.textContent === "Web search" &&
+          name.className === "tool-row-name" &&
+          right &&
+          host.querySelector<HTMLElement>(".tool-row-summary")?.textContent ===
+            "electron context isolation",
+        hostedSeen.at(-1),
+      );
+      if (state === "searching") {
+        const headerBox = host
+          .querySelector<HTMLElement>(".tool-row-header")!
+          .getBoundingClientRect();
+        const summaryRight = host
+          .querySelector<HTMLElement>(".tool-row-summary")!
+          .getBoundingClientRect().right;
+        const badgeBox = badge!.getBoundingClientRect();
+        // The state sits after the summary, in the right half, leaving only the
+        // disclosure caret's slot between it and the row's trailing edge.
+        check(
+          "a searching hosted search states its state at the row's right edge",
+          badgeBox.left >= summaryRight - 1 &&
+            badgeBox.left > headerBox.left + headerBox.width / 2 &&
+            headerBox.right - badgeBox.right < 40,
+          {
+            summaryRight,
+            badgeLeft: badgeBox.left,
+            badgeRight: badgeBox.right,
+            header: [headerBox.left, headerBox.right],
+          },
+        );
+      }
+    }
+    check(
+      "hosted search identity and icon stable across its states",
+      hostedSeen.every(
+        (entry) =>
+          entry.name === hostedSeen[0].name && entry.icon === hostedSeen[0].icon,
+      ) && new Set(hostedSeen.map((entry) => entry.state)).size > 1,
+      hostedSeen,
+    );
+    // The kind is the identity: opening a page and finding in one are reported
+    // as themselves, not as a search, and a settled row carries no live marker.
+    const pageUrl = "https://www.electronjs.org/docs/latest/tutorial/context-isolation";
+    const kindCases: Array<[HostedSearchRound, string]> = [
+      [
+        { id: "round-open-page", status: "completed", kind: "openPage", url: pageUrl, sources: [] },
+        "Open page",
+      ],
+      [
+        {
+          id: "round-find-in-page",
+          status: "completed",
+          kind: "findInPage",
+          query: "contextBridge",
+          url: pageUrl,
+          sources: [],
+        },
+        "Find in page",
+      ],
+    ];
+    for (const [round, expectedName] of kindCases) {
+      const host = mount(
+        wide,
+        <HostedSearchRow messageId={`hosted-${round.id}`} round={round} streaming />,
+      );
+      check(
+        `hosted search names ${round.kind}`,
+        host.querySelector<HTMLElement>(".tool-row-name")?.textContent === expectedName &&
+          host.querySelector(".tool-row-state") === null &&
+          Boolean(host.querySelector<HTMLElement>(".tool-row-summary")?.textContent),
+        host.textContent,
+      );
+    }
+    // A settled round keeps what it found: the source count in the head, the
+    // deduped preview in the body and the overflow count after it.
+    const settledHost = mount(
+      wide,
+      <HostedSearchRow
+        messageId="hosted-settled"
+        round={{
+          id: "round-settled",
+          status: "completed",
+          sources: Array.from({ length: 7 }, (_, index) => ({
+            url: `https://example.com/source-${index + 1}`,
+            title: `Source ${index + 1}`,
+          })),
+        }}
+        streaming={false}
+      />,
+    );
+    check(
+      "a settled hosted search keeps its source count and no live marker",
+      settledHost.querySelector<HTMLElement>(".tool-row-summary")?.textContent ===
+        "7 sources" && settledHost.querySelector(".tool-row-state") === null,
+      settledHost.textContent,
+    );
+    await open(settledHost);
+    check(
+      "a settled hosted search keeps its preview and overflow details",
+      settledHost.querySelectorAll(".hosted-search-sources a").length === 5 &&
+        settledHost.querySelector<HTMLElement>(".hosted-search-more")?.textContent ===
+          "+2 more sources" &&
+        settledHost
+          .querySelector(".hosted-search-sources a")
+          ?.getAttribute("href") === "https://example.com/source-1",
+      settledHost.querySelector(".tool-row-body")?.textContent,
+    );
+
+    // A delegate control row keeps its own fixed name. What it did to the
+    // subagents — the backend-owned wait outcome and the roster it reports on —
+    // is stated on the right, never as the row's name.
+    const lifecycleCases = [
+      ["TaskWait", "Task Wait"],
+      ["TaskList", "Task List"],
+      ["TaskStop", "Task Stop"],
+    ] as const;
+    for (const [toolName, expectedName] of lifecycleCases) {
+      const host = mount(wide, <ToolRow message={message(`lifecycle-${toolName}`, "", {
+        toolName,
+        toolStatus: "success",
+        toolArgs: { delegationIds: ["del-roster"] },
+        toolResult: {
+          details: {
+            status: "completed",
+            delegations: [{ delegationId: "del-roster", agent: "fixer", status: "completed" }],
+          },
+        },
+      })} />);
+      const name = host.querySelector<HTMLElement>(".tool-row-name")?.textContent ?? "";
+      const cluster = host.querySelector<HTMLElement>(".tool-row-lifecycle");
+      const summaryRight = host.querySelector<HTMLElement>(".tool-row-summary")?.getBoundingClientRect().right ?? 0;
+      check(`${toolName} keeps its own fixed name`, name === expectedName, name);
+      check(
+        `${toolName} states its roster count and wait on the right`,
+        Boolean(cluster?.querySelector(".tool-row-agent.is-count")) &&
+          Boolean(cluster?.querySelector(".tool-row-state")) &&
+          cluster.getBoundingClientRect().left >= summaryRight - 1,
+        cluster?.textContent,
+      );
+    }
     const copiedStdout = await clickCopy(
       wideBash,
       ".tool-terminal-stream.is-stdout .tool-row-copy",
+      copied,
     );
     check("the command pane copies the command", copiedCommand === COMMAND, copiedCommand);
     check(
@@ -963,6 +1285,29 @@ globalThis.toolCardsProbe = async () => {
       "the buttons on a card are never nested",
       cardsHost.querySelectorAll("button button").length === 0,
       cardsHost.querySelectorAll("button button").length,
+    );
+    // A `Task` call keeps the card the child's own transcript opens: no tool
+    // row (with its fixed identity or its lifecycle status) replaces it.
+    check(
+      "a Task card is not a tool phase row",
+      !cardOf("task-original").querySelector(".tool-row-name") &&
+        !cardOf("task-original").querySelector(".tool-row-state") &&
+        !cardOf("task-original").querySelector(".tool-row-lifecycle"),
+      {
+        names: cardOf("task-original").querySelectorAll(".tool-row-name").length,
+        states: cardOf("task-original").querySelectorAll(".tool-row-state").length,
+      },
+    );
+    // The lifecycle row beside it states its own wait: a fixed name on the
+    // left, the roster count and the backend-owned wait outcome on the right.
+    const waitRow = cardsHost.querySelector<HTMLElement>('[data-message-id="task-wait"]')!;
+    check(
+      "a lifecycle row states its name on the left and its wait on the right",
+      waitRow.querySelector<HTMLElement>(".tool-row-name")?.textContent === "Task Wait" &&
+        Boolean(waitRow.querySelector(".tool-row-lifecycle .tool-row-agent.is-count")) &&
+        waitRow.querySelector<HTMLElement>(".tool-row-lifecycle .tool-row-state")?.textContent ===
+          "Results arrived",
+      waitRow.textContent,
     );
     check(
       "a card's headline is the task title, not the role",

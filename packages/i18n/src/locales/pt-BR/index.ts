@@ -669,6 +669,8 @@ export const ptBR = {
     subagentMetricsCallsUnit_other: "calls",
     subagentMetricsContextUnknownHelp: "No context data reported yet. Shows once the subagent reports usage.",
     subagentMetricsEstimated: "(est.)",
+    subagentThroughputLabel: "TPS médio",
+    subagentThroughputHelp: "Tokens de saída médios por segundo em {{samples}} respostas de modelo registradas, incluindo raciocínio. Amostras ausentes ou incompletas são excluídas.",
     subagentContinuePlaceholder: "Send a follow-up — continues this subagent…",
     subagentContinueSend: "Send",
     subagentContinueSending: "Sending…",

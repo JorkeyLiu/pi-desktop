@@ -17,6 +17,8 @@ export const trEntries: ChangelogEntry[] = [
       "Kenar çubuğunun altındaki satırlardan açılan proje menüleri görünür kalır.",
       "Windows eski yedekleri kaldırırken yükleme kilidini korur.",
       "Bir konuşmaya geri döndüğünüzde yüklenmiş mesajlar ve okuma konumu korunur; uzun bir konuşma ilk açıldığında da doğru konuma daha güvenilir şekilde yerleşir.",
+      "Araç satırları çalışırken aracın kendi adını korur ve sonucu sağda belirtir; aynı çağrı fiiller arasında değişip durmaz. Sıfırdan farklı çıkış kodlu komutlar artık yanında çıkış koduyla tamamlandı olarak gösterilir; komut ve çıktı, genişletilmiş terminalden ayrı ayrı kopyalanabilir.",
+      "Alt ajanın sekmesi bağlam, harcama ve tur sayılarının yanında saniyedeki ortalama çıktı token sayısını da gösterir; yanıt kesintiye uğradığında tahmin olduğu belirtilir.",
     ],
   },
   {

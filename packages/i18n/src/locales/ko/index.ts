@@ -679,6 +679,8 @@ export const ko = {
     subagentMetricsCallsUnit_other: "calls",
     subagentMetricsContextUnknownHelp: "No context data reported yet. Shows once the subagent reports usage.",
     subagentMetricsEstimated: "(est.)",
+    subagentThroughputLabel: "평균 TPS",
+    subagentThroughputHelp: "추론을 포함한 기록된 모델 응답 {{samples}}개의 평균 초당 출력 토큰입니다. 누락되거나 불완전한 대화 기록 샘플은 제외됩니다.",
     subagentContinuePlaceholder: "Send a follow-up — continues this subagent…",
     subagentContinueSend: "Send",
     subagentContinueSending: "Sending…",

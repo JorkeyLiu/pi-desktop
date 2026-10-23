@@ -819,11 +819,10 @@ function resultFailed(message: ToolPresentationMessage): boolean {
 }
 
 /**
- * What actually happened to a command, read from what the shell returned rather
- * than from the status of the call that carried it: a command that exits
- * non-zero has failed even when the tool call around it succeeded, and a shell
- * that was killed reports no code at all (D227). `unknown` means the row has
- * nothing to claim — an imported or half-written message — so it says nothing.
+ * The Run row describes the tool invocation lifecycle. A numeric shell exit
+ * code means Bash returned normally, even when the command itself failed; the
+ * exit chip carries that command outcome. Explicit error envelopes and results
+ * without an exit code still describe an invocation failure.
  */
 export function runOutcome(
   message: ToolPresentationMessage,
@@ -831,9 +830,15 @@ export function runOutcome(
   if (message.toolStatus === "running") return "running";
   if (message.toolStatus === "denied") return "denied";
   const details = asRecord(toolResultPayload(message));
-  if (details && "exitCode" in details) {
-    return numberAt(details, "exitCode") === 0 ? "ok" : "failed";
+  if (
+    details?.isError === true ||
+    typeof details?.error === "string" ||
+    typeof details?.errorCode === "string"
+  ) {
+    return "failed";
   }
+  if (details && numberAt(details, "exitCode") !== null) return "ok";
+  if (message.isError === true) return "failed";
   if (message.toolStatus === "error") return "failed";
   if (message.toolStatus === "success") return "ok";
   return "unknown";

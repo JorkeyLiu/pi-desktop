@@ -20,6 +20,8 @@ export const enEntries: ChangelogEntry[] = [
       "Switching back to a conversation keeps its loaded messages and reading position; a long transcript also settles in the right place more reliably when it first loads.",
       "Incomplete emphasis and strikethrough stay readable as Markdown streams; incomplete links show their label without a destination, incomplete images stay hidden, and code or math is left untouched. Final text and source positions remain unchanged.",
       "New local sessions get an immediate first-prompt title, with optional asynchronous refinement using a globally configured fast model.",
+      "Tool rows keep the tool's own name while they run and state their result on the right, so the sum of ten steps reads as one fixed identity instead of a flickering verb. A command that exits non-zero now reads as done with its exit code beside it, and its command and output are copied from the expanded terminal.",
+      "A subagent's tab reports average output tokens per second alongside its context, spend, and turn counts, with an estimate marked when a response was interrupted.",
     ],
   },
   {

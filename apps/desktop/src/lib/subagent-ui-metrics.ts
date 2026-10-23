@@ -39,6 +39,11 @@ export type SubagentInfoMetrics = {
   toolCalls?: number;
   /** Occupancy of the child's window; absent means "not reported". */
   contextTokens?: number;
+  /**
+   * Provenance of `contextTokens`: true when the figure came from the child's
+   * own provider usage rather than a reported snapshot. Internal metadata —
+   * the figures line states the number without marking how it was derived.
+   */
   contextEstimated?: boolean;
   /** Cumulative billed spend; `totalTokens` is the figure the row states. */
   usage?: { totalTokens?: number } | undefined;
@@ -75,12 +80,11 @@ function figurePart(
   value: number | undefined,
   language: string,
   format: (value: number, language: string) => string,
-  suffix = "",
 ): string {
   const reported = reportedValue(value);
   return reported === undefined
     ? `${label} ${SUBAGENT_METRIC_ABSENT}`
-    : `${label} ${format(reported, language)}${suffix}`;
+    : `${label} ${format(reported, language)}`;
 }
 
 /**
@@ -88,17 +92,18 @@ function figurePart(
  * calls, context occupancy, then total spend. Both the card and the dock print
  * exactly these four slots, so the same report cannot read two ways and neither
  * surface can state a different number of figures than the other.
+ *
+ * Occupancy reads as one plain figure whatever reported it. Which source won —
+ * a `Task` snapshot, a lifecycle roster, the child's own provider usage — is
+ * provenance the reader keeps, and stating it as a marker would put a qualifier
+ * on a number the reader can do nothing about and make the same figure change
+ * shape as the source changes.
  */
 export function subagentMetricsParts(
   metrics: SubagentInfoMetrics | null | undefined,
   t: Translate,
   language: string,
 ): string[] {
-  // An estimate marks a figure that was reported; the dash estimates nothing.
-  const estimated =
-    reportedValue(metrics?.contextTokens) !== undefined && metrics?.contextEstimated
-      ? ` ${t("chat.subagentMetricsEstimated")}`
-      : "";
   return [
     figurePart(
       t("chat.subagentMetricsTurnsLabel"),
@@ -118,7 +123,6 @@ export function subagentMetricsParts(
       metrics?.contextTokens,
       language,
       formatCompactTokens,
-      estimated,
     ),
     // Spend is cumulative billed tokens, never the occupancy above it.
     figurePart(

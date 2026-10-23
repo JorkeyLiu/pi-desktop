@@ -136,10 +136,18 @@ test("active turns show immediate and phase-specific feedback without a progress
   assert.match(messagesStyles, /\.working-indicator-mark > span\s*\{[\s\S]*?animation:\s*working-indicator-dot\s+1s/);
   assert.doesNotMatch(proseStyles, /\.working-indicator\s*\{|\.shimmer-text\s*\{/);
   assert.doesNotMatch(messagesStyles, /\.shimmer-text\s*\{|animation:\s*shimmer\b/);
-  assert.match(
-    messagesStyles,
-    /\.tool-activity-label\.running::after,\s*\.tool-row-name\.running::after\s*\{[\s\S]*?animation:\s*activity-marker-pulse\s+1s/,
-  );
+  // A live label carries the pulsing marker: the activity group names progress
+  // on its own label, and a streaming thinking row marks its label the same
+  // way. A tool or hosted-search row states liveness on its right edge
+  // instead, so its own name takes no marker. Each label is asserted on its
+  // own, so the rules may be grouped or separate without rewriting this
+  // contract.
+  for (const label of ["tool-activity-label", "tool-row-name"]) {
+    assert.match(
+      messagesStyles,
+      new RegExp(`\\.${label}\\.running::after[^{}]*\\{[^}]*animation:\\s*activity-marker-pulse\\s+1s`),
+    );
+  }
   assert.doesNotMatch(
     en,
     /progressUnderstanding|progressWorking|progressChecking|progressFinalizing|progressWaiting/,

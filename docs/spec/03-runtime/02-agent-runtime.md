@@ -1045,6 +1045,16 @@ never double-charge. The two are reported separately and must not be confused.
 A running delegate's `Task` transcript row is re-snapshotted once per child
 turn with live metrics, without executing the tool again or adding usage to the
 parent turn.
+The host persists those progress snapshots on the same Task message id. A
+running snapshot replaces the stored delegation summary only while that stored
+row is still running and only when the stored call id and delegation id match,
+so the counters, occupancy, and spend a session switch restores are the latest
+child turn's, not the launch zeros, without waiting for another child event or
+a live-metrics channel. Settlement then replaces the same row, and a late
+running snapshot can never reopen or regress a settled delegation. The
+persistence outbox keeps one entry per message id in emission order, so the
+newest snapshot is the one that lands. No new event type or storage schema is
+required.
 
 **Explicit desktop cancellation.** A running delegate can be stopped from its
 card or detail panel. The subagent group header also offers session-wide stop-all.

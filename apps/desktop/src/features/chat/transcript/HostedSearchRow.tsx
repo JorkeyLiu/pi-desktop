@@ -1,11 +1,7 @@
 import { memo, useCallback, useId } from "react";
 import { useTranslation } from "react-i18next";
 import type { HostedSearchRound } from "@pi-desktop/shared";
-import {
-  IconChevronRight,
-  IconCircleAlert,
-  IconGlobe,
-} from "../../../components/icons";
+import { IconChevronRight, IconGlobe } from "../../../components/icons";
 import {
   DisclosureCollapseRail,
   useAutomaticDisclosure,
@@ -76,15 +72,20 @@ export const HostedSearchRow = memo(function HostedSearchRow({
       : sources.length > 0
         ? t("chat.webSearchSources", { count: sources.length })
         : "");
-  const name = failed
+  // The visible name states what the provider did, never what it is doing: the
+  // round's kind is the row's identity, so the same label and globe render for
+  // the whole round. Liveness and failure are stated once, on the right.
+  const name =
+    round.kind === "openPage"
+      ? t("chat.webOpenPage")
+      : round.kind === "findInPage"
+        ? t("chat.webFindInPage")
+        : t("chat.webSearch");
+  const stateLabel = failed
     ? t("chat.webSearchFailed")
     : searching
       ? t("chat.webSearching")
-      : round.kind === "openPage"
-        ? t("chat.webOpenPage")
-        : round.kind === "findInPage"
-          ? t("chat.webFindInPage")
-          : t("chat.webSearch");
+      : null;
 
   return (
     <div className={`tool-row hosted-search ${open ? "open" : ""}`}>
@@ -97,14 +98,20 @@ export const HostedSearchRow = memo(function HostedSearchRow({
         onClick={toggleRow}
       >
         <span className="tool-row-icon" aria-hidden>
-          {failed ? <IconCircleAlert size={15} /> : <IconGlobe size={15} />}
+          <IconGlobe size={15} />
         </span>
-        <span
-          className={`tool-row-name ${searching ? "running" : ""} ${failed ? "turn-process-error" : ""}`}
-        >
-          {name}
-        </span>
+        <span className="tool-row-name">{name}</span>
         {summary ? <span className="tool-row-summary">{summary}</span> : null}
+        {stateLabel ? (
+          <span
+            className={`tool-row-state ${failed ? "is-error" : "is-running"}`}
+            role="status"
+            aria-live="polite"
+          >
+            <span className="tool-row-state-dot" aria-hidden />
+            {stateLabel}
+          </span>
+        ) : null}
         {expandable ? (
           <span className="tool-row-caret" aria-hidden>
             <IconChevronRight size={12} />
