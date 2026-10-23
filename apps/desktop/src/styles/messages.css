@@ -3551,9 +3551,6 @@
   display: none;
 }
 
-  font-family: var(--font-mono);
-  font-size: var(--text-xs-plus);
-}
 .turn-process-body > .assistant-turn-fragment {
   color: var(--ds-text-secondary);
   margin-block: 8px;
