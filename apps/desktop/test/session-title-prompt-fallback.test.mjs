@@ -63,7 +63,7 @@ test("the fallback only fires for a still-untitled session the owning host can t
     queueSlice,
     /isDefaultSessionTitle\(current\?\.title\)[\s\S]{0,200}source !== "pi-native"/,
   );
-  assert.match(queueSlice, /\bapi\.deriveSessionTitle\(sessionId, nextTitle\)/);
+  assert.match(queueSlice, /if \(wasUntitled && current\?\.source !== "pi-native" && !isDefaultSessionTitle\(nextTitle\)\) \{[\s\S]{0,120}api\.deriveSessionTitle\(startedIn, nextTitle\)[\s\S]{0,180}api\.generateSessionTitle\(\{ sessionId: startedIn, prompt: content, fallbackTitle: nextTitle \}\)/);
   assert.match(queueSlice, /if \(wasUntitled && current\?\.source !== "pi-native"/);
 });
 
