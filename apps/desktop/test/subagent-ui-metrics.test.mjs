@@ -522,7 +522,9 @@ test("the canonical reader keeps an unreported counter absent and a reported zer
     assert.doesNotMatch(line(invalid), /NaN|Infinity|-5/);
 
     // A chain sums only what its segments reported. The first segment reported
-    // no counters; the second reported a real zero for tool calls.
+    // no counters; the second reported a real zero for tool calls. The gauge
+    // the first segment reported is a measurement of that window and stands
+    // while no segment reports a newer one.
     const folded = metrics.aggregateSubagentChainMetrics([
       { contextTokens: 4_000 },
       { toolCalls: 0, turns: 2 },
@@ -531,7 +533,7 @@ test("the canonical reader keeps an unreported counter absent and a reported zer
     assert.equal(folded.turns, 2);
     assert.equal(
       line(folded),
-      "Turns 2 · Tool calls 0 · Context — · Spent —",
+      "Turns 2 · Tool calls 0 · Context 4K · Spent —",
     );
 
     // No segment reported a counter: the chain reports none, never a zero.
@@ -541,11 +543,12 @@ test("the canonical reader keeps an unreported counter absent and a reported zer
     ]);
     assert.equal(silentCounters.turns, undefined);
     assert.equal(silentCounters.toolCalls, undefined);
-    // Spend still folds and its total is untouched by the missing counters.
+    // Spend still folds and its total is untouched by the missing counters;
+    // the occupancy is the last one actually reported, not a dash.
     assert.equal(silentCounters.usage.totalTokens, 1_200);
     assert.equal(
       line(silentCounters),
-      "Turns — · Tool calls — · Context — · Spent 1.2K",
+      "Turns — · Tool calls — · Context 4K · Spent 1.2K",
     );
   } finally {
     await vite.close();

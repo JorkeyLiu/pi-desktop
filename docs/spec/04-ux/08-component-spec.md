@@ -1414,8 +1414,10 @@ It does not render separate Details or Output tabs.
   level are stated once, in the tab
   composer's static model chip. Every figure in that group is stated only as the
   chain reported it: an unreported counter leaves the turns/calls figure out
-  rather than printing `0`, an unreported occupancy keeps its `—`, and an
-  unreported spend states no spend, while a reported zero is stated as zero.
+  rather than printing `0`, an occupancy no segment of the chain has reported
+  keeps its `—` (a segment that reports none leaves the last known figure
+  standing), and an unreported spend states no spend, while a reported zero is
+  stated as zero.
   Long paths, commands, and tool summaries in the live process wrap inside the
   dock instead of becoming one-line ellipses.
 - The metrics group ends with average output throughput (`TPS`). It is the sum of
@@ -1446,6 +1448,64 @@ It does not render separate Details or Output tabs.
   the previously active tab, if any; `Cmd/Ctrl + J` hides the whole panel.
   Opening another child's card activates its own tab without changing panel
   width or the conversation scroll position.
+- A tab represents its whole resume chain, never a single run of it. Every tab
+  of that chain — the one the first `Task` opened and any tab a later card
+  opened — resolves the chain's newest run for its transcript, header outcome,
+  Stop, and Send, so a continuation presented in a new card never strands the
+  tab the user already had. No tab is treated as stale and there is no
+  "continued elsewhere" state; a concurrent send is the backend's serial
+  admission to refuse, not a local guess.
+- A user continuation's prompt is stated once: the turn's own user row carries
+  it, and the seeded child row that repeats the same text is that message, so
+  it never renders a second time. Later steering echoes in the same run are
+  separate user rows.
+- A run the user continued after the parent stopped it is live, not aborted. It
+  owns its own execution-accounting turn, so the parent turn's idleness never
+  reconstructs it as `aborted`; the header states `Running` with the
+  `User-owned` report owner while the delegate's own `Task` snapshot says
+  `running`. Settling — completed, stopped, or failed — replaces that snapshot
+  and returns the composer to continue mode with its input enabled, without
+  waiting for a new card. The composer's single action slot stays icon-only
+  Stop for as long as the run is live and its steer path cannot act (no owner
+  turn known yet, a read-only session), so a running delegate is always
+  cancellable instead of showing a disabled Send.
+- Steering a live run names that run's own execution turn, taken from its
+  persisted `Task` row (`details.executionTurnId`) — the identity that survives
+  a closed and reopened tab or a rebuilt renderer. The parent session's current
+  turn is only a fallback for an attached run, never the owner of a user-owned
+  one, so a reopened tab keeps its input enabled, its Stop, and its ability to
+  steer the run the chain is actually executing. A tab opened while its `Task`
+  call is still being created follows that same call once the run's identity
+  lands, instead of going blank and requiring a second card.
+- The composer's own text is the draft, and its fate follows the send alone: an
+  accepted steer or continuation clears it because the text is now a row in the
+  transcript, a rejected one keeps it for retry with the failure stated in
+  place, and text typed while a send is in flight is the next message and is
+  never treated as the text that was sent. Switching tab or session, or
+  returning to a tab later, starts from an empty composer. The composer states
+  what it does through its placeholder and its send label; it adds no helper
+  line explaining runs or turns.
+- The tab's composer is the main composer's editor, not a second one: it mounts
+  the same input and shell components, so the editor grows with the draft,
+  keeps the main IME guard — an Enter that confirms an IME candidate never
+  sends, Enter sends only where the keybinding allows, and Shift+Enter inserts
+  a newline — and holds the toolbar with its agent and model selectors plus the
+  single send/stop action inside the shell. Its enlarged surfaces take the work
+  panel's own theme tokens, so a dark panel keeps its elevated tile treatment
+  instead of a hard-coded color, and focusing an ordinary control follows the
+  panel's focus semantics.
+- Images attach the way they do in the main composer: the photo picker and file
+  import entry points, a paste, and one staged reference per file with preview
+  and remove. What gates a pick is the session's attach capability, never the
+  child model's declared vision support, and a picked image is delivered to the
+  endpoint the run uses instead of being dropped locally. A non-image pick and
+  a session that cannot attach each state their own localized reason. An
+  accepted steer or continuation clears exactly the text and attachments it
+  carried; a rejected one keeps both for retry, and anything typed or picked
+  while a send is in flight is the next request and is never swept into the one
+  in flight. Switching tab or session carries neither into another run. The
+  tab's own rows render their attachment images, and copying a message that
+  carries none still yields plain text.
 - A session switch or leaving the chat route hides the selection. A stale or
   deleted delegation shows a localized unavailable state and never displays
   another session's rows.
@@ -2705,6 +2765,23 @@ card line. A delegate whose log carries no description — an older session — 
 named by its role, then by the localized unnamed label; the `task` brief is
 never a title.
 
+One card stands for the dispatch the main chat started, not for each run of the
+chain. A continuation the user types in that delegation's own tab is recorded as
+a `Task` row marked `source: "user"`, and the main transcript does not project
+it: the row stays in the session messages for the chain, the child transcript
+and persistence, and the runtime already keeps it out of the parent's model
+context, but it adds no card, no activity group and no assistant turn to the
+conversation. The dispatch card keeps the state and runtime its own run ended
+in — a stopped dispatch still reads stopped while the chain's newest run is
+live — and opening it opens the chain's newest run in the tab, so the card is
+the history of the dispatch and the tab is the present of the work. A
+`Task(resume …)` the parent model issued itself is a parent call and keeps its
+own card; a `Task` row without a user source is never affected.
+
+Its state and runtime are its own run's; its totals line still states the
+chain's figures, because a resumed chain is one child session and the tab it
+opens reports the same totals.
+
 The card is width-aware at every panel size. Its title may occupy up to two
 lines, and its progress line can wrap rather than forcing the user to resize the
 divider. The complete title remains available through the card's hover title;
@@ -2885,8 +2962,14 @@ coexist as independent tabs. The tab renders the delegation as a conversation:
   the invocation a card happens to represent: turns and tool calls accumulate
   over the segments that reported them, spend is its cumulative spend
   deduplicated by operation,
-  and occupancy is the latest segment's gauge — never a sum of the chain's
-  windows. The card reads them through the same conversation-wide chain
+  and occupancy is the chain's gauge — the latest figure a segment actually
+  reported, never a sum of the chain's windows and never a dash while one of
+  its segments has already reported one. A resumed segment that reports no
+  window of its own (the `Task(resume …)` marker, the progress snapshots before
+  its reply) leaves the last known figure and that figure's own provenance
+  standing; a newer reported figure replaces it, a decrease and a real `0`
+  included, and only a chain no segment ever measured states `—`. The card
+  reads them through the same conversation-wide chain
   aggregation its own tab header and the dock row read, so the card, the tab it
   opens and the dock cannot state the same child differently, and every card of
   one chain states the same totals while other chains are untouched. A
@@ -2899,8 +2982,10 @@ coexist as independent tabs. The tab renders the delegation as a conversation:
   reported — or reported as something that is not a non-negative count — keeps
   the labelled dash instead of an invented number. Per segment, provenance falls
   back from the `Task` summary to the lifecycle roster to the latest valid child
-  assistant usage; the latest segment decides, so a latest segment with no
-  occupancy reports unknown rather than reusing an old gauge. Provenance stays
+  assistant usage, and it always describes the figure that is present: a later
+  segment that reported none never relabels or erases the earlier figure it
+  left standing, no figure is derived from spend, and no figure crosses from
+  one chain to another. Provenance stays
   internal: the occupancy reads as one plain figure on the card, in the tab
   header and in the dock row, with no `(est.)` marker, no `≈` prefix and no
   other qualifier — a child's own usage and a `Task` snapshot that report the

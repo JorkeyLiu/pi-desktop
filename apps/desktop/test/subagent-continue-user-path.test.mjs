@@ -163,7 +163,7 @@ test("metrics prefer snapshot, then lifecycle, then child estimate, else unknown
   } finally { await vite.close(); }
 });
 
-test("spend dedups by operation and latest segment occupancy never masks missing", async () => {
+test("spend dedups by operation and a repeated gauge keeps the last known occupancy", async () => {
   const vite = await createServer({
     root, configFile: false,
     server: { middlewareMode: true, hmr: false, ws: false },
@@ -184,15 +184,147 @@ test("spend dedups by operation and latest segment occupancy never masks missing
       },
     });
     const replayed = metrics.aggregateChainMetricsFromMessages([first, second], "d1");
-    // Same physical operation reported twice collapses; latest segment has no
-    // occupancy so the chain reports unknown instead of the older gauge.
+    // Same physical operation reported twice collapses; the resumed segment
+    // reported work but no window of its own, so the chain keeps the figure its
+    // first run actually reported — a progress re-report is not a measurement.
     assert.equal(replayed.usage.totalTokens, 1500);
-    assert.equal(replayed.contextTokens, undefined);
-    assert.equal(replayed.contextProvenance, "unknown");
+    assert.equal(replayed.contextTokens, 12000);
+    assert.equal(replayed.contextProvenance, "snapshot");
     assert.equal(replayed.toolCalls, 5);
   } finally { await vite.close(); }
 });
 
+/**
+ * The chain's context gauge on the real message path: a `Task(resume …)` marker
+ * arrives with no snapshot of its own, and the card, the dock row and the tab
+ * header must keep stating the figure the chain last actually reported instead
+ * of falling back to a dash — until the continued run reports a window of its
+ * own, including a smaller one and a real zero. A chain that never reported one
+ * stays unknown, and two chains never borrow from each other.
+ */
+test("a continued run keeps the chain's known context until it reports its own", async () => {
+  const vite = await createServer({
+    root, configFile: false,
+    server: { middlewareMode: true, hmr: false, ws: false },
+    esbuild: { jsx: "automatic" }, appType: "custom",
+    optimizeDeps: { noDiscovery: true, include: [] },
+  });
+  try {
+    const metrics = await vite.ssrLoadModule("/src/lib/subagent-metrics.ts");
+    const firstRun = taskMessage("t1", "call-1", "d1", "stopped", {
+      contextTokens: 12000,
+      usage: opUsage("op-1", 1500),
+    });
+    const resumeMarker = (extra = {}) => message("t2", "tool", "", {
+      toolName: "Task", toolCallId: "call-2", toolStatus: "success",
+      toolArgs: { agent: "explorer", task: "Continue", resume: "d1", source: "user" },
+      toolResult: { details: { delegationId: "d2", status: "running", resumedFrom: "d1", ...extra } },
+    });
+    // The marker carries identity and progress, never a window.
+    const afterMarker = metrics.aggregateChainMetricsFromMessages(
+      [firstRun, resumeMarker({ turns: 1, toolCalls: 0 })],
+      "d1",
+    );
+    assert.equal(afterMarker.contextTokens, 12000);
+    assert.equal(afterMarker.contextProvenance, "snapshot");
+    // Repeated progress snapshots without a window leave it exactly there.
+    const afterProgress = metrics.aggregateChainMetricsFromMessages(
+      [firstRun, resumeMarker({ turns: 2, toolCalls: 3 }), resumeMarker({ turns: 3, toolCalls: 5 })],
+      "d1",
+    );
+    assert.equal(afterProgress.contextTokens, 12000);
+    assert.equal(afterProgress.contextProvenance, "snapshot");
+    // The reply's snapshot reports the child's window: it replaces the gauge.
+    const afterReply = metrics.aggregateChainMetricsFromMessages(
+      [firstRun, resumeMarker({ turns: 3, toolCalls: 5 }), resumeMarker({ status: "completed", turns: 4, toolCalls: 6, contextTokens: 14000 })],
+      "d1",
+    );
+    assert.equal(afterReply.contextTokens, 14000);
+    assert.equal(afterReply.contextProvenance, "snapshot");
+    // A smaller reported window is the child's newer one, not a stale high.
+    const afterShrink = metrics.aggregateChainMetricsFromMessages(
+      [firstRun, resumeMarker({ status: "completed", contextTokens: 3000 })],
+      "d1",
+    );
+    assert.equal(afterShrink.contextTokens, 3000);
+    // A reported zero is a report and replaces the gauge like any other figure.
+    const afterEmpty = metrics.aggregateChainMetricsFromMessages(
+      [firstRun, resumeMarker({ status: "completed", contextTokens: 0 })],
+      "d1",
+    );
+    assert.equal(afterEmpty.contextTokens, 0);
+    assert.equal(afterEmpty.contextProvenance, "snapshot");
+    // Never reported anywhere in the chain: unknown, never an invented zero.
+    const silentFirst = taskMessage("t1", "call-1", "d1", "stopped");
+    delete silentFirst.toolResult.details.contextTokens;
+    const never = metrics.aggregateChainMetricsFromMessages(
+      [silentFirst, message("t2", "tool", "", {
+        toolName: "Task", toolCallId: "call-2", toolStatus: "success",
+        toolArgs: { agent: "explorer", task: "Continue", resume: "d1" },
+        toolResult: { details: { delegationId: "d2", status: "running" } },
+      })],
+      "d1",
+    );
+    assert.equal(never.contextTokens, undefined);
+    assert.equal(never.contextProvenance, "unknown");
+    // The retained figure keeps the provenance it was actually reported from.
+    const lifecycleFirst = taskMessage("t1", "call-1", "d1", "stopped");
+    delete lifecycleFirst.toolResult.details.contextTokens;
+    const lifecycleKept = metrics.aggregateChainMetricsFromMessages(
+      [lifecycleFirst,
+        lifecycleMessage("l1", "TaskList", [{ delegationId: "d1", status: "stopped", contextTokens: 9000, toolCalls: 2, turns: 1 }]),
+        resumeMarker({ turns: 1, toolCalls: 0 })],
+      "d1",
+    );
+    assert.equal(lifecycleKept.contextTokens, 9000);
+    assert.equal(lifecycleKept.contextProvenance, "lifecycle");
+    // Two independent chains never borrow each other's figure, and the older
+    // chain keeps its own known value while the other reports nothing.
+    const independent = [firstRun, resumeMarker({ turns: 1 }), taskMessage("t9", "call-9", "d9", "completed", { contextTokens: 50000 })];
+    assert.equal(metrics.aggregateChainMetricsFromMessages(independent, "d1").contextTokens, 12000);
+    assert.equal(metrics.aggregateChainMetricsFromMessages(independent, "d9").contextTokens, 50000);
+    const unknownChain = [firstRun, taskMessage("t8", "call-8", "d8", "completed")];
+    delete unknownChain[1].toolResult.details.contextTokens;
+    assert.equal(metrics.aggregateChainMetricsFromMessages(unknownChain, "d8").contextTokens, undefined);
+    // Counters and deduplicated spend keep accumulating independently of the
+    // gauge across the same segments.
+    assert.equal(afterReply.toolCalls, 12);
+    assert.equal(afterReply.turns, 8);
+    assert.equal(afterReply.usage.totalTokens, 1500);
+  } finally { await vite.close(); }
+});
+
+
+/**
+ * The same gauge on the production tab: a resumed marker that carries no
+ * snapshot leaves the header's Context figure at the value the chain reported,
+ * and the continued run's own snapshot replaces it.
+ */
+test("the child tab header keeps its known context across a resumed marker", async () => {
+  const { vite, render, useAppStore } = await setup();
+  try {
+    const firstRun = taskMessage("t1", "call-1", "d1", "stopped", {
+      contextTokens: 12000,
+      usage: opUsage("op-1", 1500),
+    });
+    const marker = (extra = {}) => message("t2", "tool", "", {
+      toolName: "Task", toolCallId: "call-2", toolStatus: "success",
+      toolArgs: { agent: "explorer", task: "Continue", resume: "d1", source: "user" },
+      toolResult: { details: { delegationId: "d2", status: "running", resumedFrom: "d1", ...extra } },
+    });
+    const context = (html) =>
+      html.match(/data-testid="subagent-metrics-context">([^<]*)</)?.[1] ?? null;
+    seed(useAppStore, { messages: [firstRun, marker({ turns: 1, toolCalls: 1 })], running: false });
+    assert.equal(context(render("d1")), "12K");
+    // The chain-latest tab states the same figure: one chain, one gauge.
+    assert.equal(context(render("call-2")), "12K");
+    seed(useAppStore, {
+      messages: [firstRun, marker({ status: "completed", turns: 2, toolCalls: 2, contextTokens: 14000 })],
+      running: false,
+    });
+    assert.equal(context(render("d1")), "14K");
+  } finally { await vite.close(); }
+});
 test("single metrics region separates context from spend with unknown helper", async () => {
   const { vite, render, useAppStore } = await setup();
   try {
@@ -391,7 +523,8 @@ test("running steers, every settled child continues, only an instance-less call 
     const settled = render("d2");
     assert.match(settled, /Completed/);
     assert.match(settled, /Send a follow-up/);
-    assert.match(settled, /Continues this subagent as a new run/);
+    // The composer explains itself through its placeholder, not a helper line.
+    assert.doesNotMatch(settled, /Continues this subagent as a new run/);
     assert.doesNotMatch(settled, /Ask parent/);
     assert.doesNotMatch(settled, /Task\(resume/);
     // Outcome is history, never a gate: every instantiated settled child —
@@ -499,12 +632,18 @@ test("delivery owner reads backend fields and steer prefers the kept execution t
     );
     assert.equal(actions.subagentDeliveryOwner({ details: { delivery: "parent" } }), "parent");
     assert.equal(actions.subagentDeliveryOwner({}), "parent");
-    // Owner turn: a kept execution turn covers the status-lag window after
-    // a detached continue; otherwise the status's current turn travels
-    // (live parent turn attached, adopted execution turn detached).
+    // Owner turn, one priority order: a kept execution turn covers the
+    // status-lag window right after a detached continue; the run's own
+    // execution turn read back from its Task row is the authority that
+    // survives a reopened tab (and outranks parent status); parent status is
+    // the last resort for an attached run.
     assert.equal(
-      actions.resolveSteerOwnerTurn({ keptTurnId: "exec-1", currentTurnId: "turn-parent" }),
+      actions.resolveSteerOwnerTurn({ keptTurnId: "exec-1", runTurnId: "exec-2", currentTurnId: "turn-parent" }),
       "exec-1",
+    );
+    assert.equal(
+      actions.resolveSteerOwnerTurn({ runTurnId: "exec-2", currentTurnId: "turn-parent" }),
+      "exec-2",
     );
     assert.equal(
       actions.resolveSteerOwnerTurn({ currentTurnId: "turn-parent" }),
@@ -524,6 +663,40 @@ test("delivery owner reads backend fields and steer prefers the kept execution t
     });
     assert.equal(chain.subagentChainDeliveryOwner([first, marker], "d1"), "user");
     assert.equal(chain.subagentChainDeliveryOwner([first, marker], "d2"), "user");
+    // The run's own execution turn travels on its Task row, and the chain's
+    // LATEST segment decides it — an older segment's turn never leaks forward.
+    const ownedFirst = taskMessage("t1", "call-1", "d1", "completed", { executionTurnId: "turn-parent" });
+    const ownedMarker = message("t2", "tool", "", {
+      toolName: "Task", toolCallId: "call-2", toolStatus: "success",
+      toolArgs: { agent: "explorer", task: "Continue", resume: "d1", source: "user" },
+      toolResult: {
+        details: { delegationId: "d2", status: "running", resumedFrom: "d1", executionTurnId: "turn-exec" },
+      },
+    });
+    assert.equal(
+      chain.subagentChainExecutionTurnId([ownedFirst, ownedMarker], "d1"),
+      "turn-exec",
+    );
+    assert.equal(
+      chain.subagentChainExecutionTurnId([ownedFirst, ownedMarker], "d2"),
+      "turn-exec",
+    );
+    assert.equal(chain.subagentChainExecutionTurnId([ownedFirst], "d1"), "turn-parent");
+    assert.equal(chain.subagentChainExecutionTurnId([first], "d1"), undefined);
+    // A tab opened while its Task call is still being created is keyed by the
+    // bare call id and must stay on that call's chain once the run's identity
+    // lands, instead of going blank and needing a new card.
+    const creating = message("call-9", "tool", "", {
+      toolName: "Task", toolCallId: "call-9", toolStatus: "running",
+      toolArgs: { agent: "explorer", task: "Map the cache." },
+    });
+    assert.equal(chain.subagentChainCallIds([creating], "call-9").has("call-9"), true);
+    const identified = taskMessage("call-9", "call-9", "d9", "running");
+    assert.equal(chain.subagentChainCallIds([identified], "call-9").has("call-9"), true);
+    assert.equal(chain.subagentChainLatestDelegationId([identified], "call-9"), "d9");
+    const unrelated = chain.subagentChainCallIds([first, identified], "d9");
+    assert.equal(unrelated.has("call-9"), true);
+    assert.equal(unrelated.has("call-1"), false, "an unrelated call must not join another chain");
   } finally { await vite.close(); }
 });
 
@@ -586,7 +759,6 @@ test("header styles exist once and narrow panels wrap instead of clipping", asyn
     ".subagent-transcript-metric-value",
     ".subagent-transcript-model-static",
     ".subagent-transcript-error",
-    ".subagent-transcript-helper",
   ]) {
     assert.ok(css.includes(selector), `${selector} missing`);
   }
@@ -662,20 +834,25 @@ const frame = () => new Promise(requestAnimationFrame);
 async function settle() { await frame(); await frame(); await frame(); }
 function check(condition, message) { if (!condition) throw new Error(message); }
 function header() { return document.querySelector('[data-testid="subagent-panel-header"]'); }
-function composerTextarea() { return document.querySelector('[data-testid="subagent-panel-footer"] textarea'); }
+// The panel composer is the shared contenteditable: the draft is its text with
+// BR line breaks mapped back to "\n".
+function composerEditor() { return document.querySelector('[data-testid="subagent-panel-footer"] [role="textbox"]'); }
+function readDraft() {
+  const node = composerEditor();
+  if (!node) return null;
+  return [...node.childNodes].map((child) => (child.nodeName === "BR" ? "\n" : child.textContent ?? "")).join("");
+}
 function sendButton() {
   return [...document.querySelectorAll('[data-testid="subagent-panel-footer"] button')]
     .find((button) => /^Send/.test(button.getAttribute("aria-label") || ""));
 }
 function stopButton() { return document.querySelector('[data-testid="subagent-panel-footer"] .stop-btn'); }
 function setDraft(value) {
-  const area = composerTextarea();
-  check(area, "composer textarea missing");
-  area.focus();
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
-  setter.call(area, value);
-  area.dispatchEvent(new Event("input", { bubbles: true }));
-  area.dispatchEvent(new Event("change", { bubbles: true }));
+  const editor = composerEditor();
+  check(editor, "composer editor missing");
+  editor.focus();
+  editor.textContent = value;
+  editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
 }
 window.continueProbe = async () => {
   async function setPanelWidth(px) {
@@ -724,7 +901,7 @@ window.continueProbe = async () => {
   check(continued.req.delegationId === "d1" && continued.req.content === "go on", "continue payload wrong: " + JSON.stringify(continued.req));
   check(!("expectedTurnId" in continued.req), "idle continue must omit expectedTurnId");
   check(!calls.some((call) => call.channel === "pi-desktop/agent/steerSubagent"), "settled must not steer");
-  check(composerTextarea().value === "", "draft must clear after accepted continue");
+  check(readDraft() === "", "draft must clear after accepted continue");
   // Failure preserves the draft for retry with a fresh idempotent id.
   setDraft("retry me");
   await settle();
@@ -732,7 +909,7 @@ window.continueProbe = async () => {
   calls.length = 0;
   flushSync(() => sendButton().click());
   await settle(); await settle(); await new Promise((r) => setTimeout(r, 50)); await settle();
-  check(composerTextarea().value === "retry me", "failure must preserve draft");
+  check(readDraft() === "retry me", "failure must preserve draft");
   check(document.body.textContent.includes("host refused"), "failure must surface");
   // A child stopped before its first transcript event (no retained child rows)
   // still continues directly: the Task chain identity is enough, the outcome
@@ -744,8 +921,7 @@ window.continueProbe = async () => {
     await settle();
     check(document.body.textContent.includes(statusText), outcome + " status missing");
     check(!document.body.textContent.includes("cannot continue"), outcome + " must not show cannot-continue");
-    check(composerTextarea(), outcome + " continue composer missing");
-    check(document.body.textContent.includes("Continues this subagent"), outcome + " continue help missing");
+    check(!document.body.textContent.includes("Continues this subagent"), outcome + " must not add a helper line");
     setDraft("continue after " + outcome);
     await settle();
     const send = sendButton();
@@ -759,7 +935,7 @@ window.continueProbe = async () => {
       outcome + " continue payload wrong: " + JSON.stringify(continued.req));
     check(!("expectedTurnId" in continued.req), outcome + " idle continue must omit expectedTurnId");
     check(!calls.some((call) => call.channel === "pi-desktop/agent/steerSubagent"), outcome + " must not steer");
-    check(composerTextarea().value === "", outcome + " draft must clear after accepted continue");
+    check(readDraft() === "", outcome + " draft must clear after accepted continue");
   }
   // Running narrow panel at 320px: steer path intact, same single region.
   await setPanelWidth(320);

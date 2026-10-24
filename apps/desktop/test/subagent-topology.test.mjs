@@ -371,6 +371,28 @@ test("a finished turn treats leftover running delegates as aborted", () => {
   );
 });
 
+test("a user-owned running run survives the parent turn ending", () => {
+  // A detached continuation owns its own execution turn: the parent going idle
+  // is not evidence that the child ended, so its own snapshot stays
+  // authoritative and the tab keeps showing the live run.
+  const detached = task("d2", "success", "running");
+  detached.message.toolArgs = { agent: "reviewer", description: "Task d2", resume: "d1", source: "user" };
+  detached.message.toolResult.details.delivery = "user";
+  const statuses = collectDelegationStatuses([detached], { turnLive: false });
+  assert.equal(statuses.get("d2"), undefined);
+  assert.equal(subagentOutcome(detached.message, statuses), "running");
+  // Its terminal snapshot still wins once the runtime records it.
+  const stopped = task("d2", "success", "stopped");
+  stopped.message.toolArgs = detached.message.toolArgs;
+  const settled = collectDelegationStatuses([stopped], { turnLive: false });
+  assert.equal(settled.get("d2"), "stopped");
+  // A parent-owned delegate keeps the reconstruct-as-aborted rule.
+  assert.equal(
+    collectDelegationStatuses([task("d1", "success", "running")], { turnLive: false }).get("d1"),
+    "aborted",
+  );
+});
+
 test("summarizes partial fan-out without deduplicating repeated agent names", () => {
   assert.deepEqual(
     summarizeSubagentActivity([

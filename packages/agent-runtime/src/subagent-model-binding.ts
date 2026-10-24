@@ -46,10 +46,20 @@ export function subagentModelBinding(opts: {
   // field, which is why the sibling `thinkingLevelMap` override below can
   // share the same object.
   const builtModel = buildProviderModel(opts.provider);
-  const model =
+  const cappedModel =
     opts.maxTokens !== undefined
       ? { ...builtModel, maxTokens: opts.maxTokens }
       : builtModel;
+  // A gateway's catalog metadata is not a reliable vision signal: it commonly
+  // reports `input: ["text"]` for an endpoint that does accept images. The
+  // only pictures a delegate receives are the user's own child inputs, whose
+  // bytes the host has already validated, so the child transport always
+  // offers them. pi-ai otherwise replaces every image block with a text
+  // placeholder for a model whose input omits `image`, which would silently
+  // drop the user's picture before the request is built.
+  const model = cappedModel.input.includes("image")
+    ? cappedModel
+    : { ...cappedModel, input: [...cappedModel.input, "image" as const] };
   const models = createProviderModels(opts.provider, model);
   const omitThinking = opts.thinkingLevel === "omit";
   const agentThinkingLevel = agentThinkingLevelFor(opts.thinkingLevel);

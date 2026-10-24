@@ -6,6 +6,7 @@ import type {
 } from "@pi-desktop/shared";
 import { addUsage, hostedSearchRounds } from "@pi-desktop/shared";
 import { isDelegationStartTool } from "./tool-display";
+import { subagentDeliveryOwner } from "./subagent-actions";
 import { messageContentFacts } from "./transcript-summary";
 
 export type AssistantActivityItem =
@@ -69,7 +70,27 @@ export function messageThinking(message: UiMessage): string {
   return message.thinking.trim() ? message.thinking : "";
 }
 
+/**
+ * A direct continuation from the delegation's own tab is a ledger row, not a
+ * parent call: the user typed the follow-up there, so the main transcript has
+ * nothing to add — no card, no activity group, no turn. The row itself stays in
+ * the session messages for the chain, the child transcript and persistence to
+ * read (the runtime already keeps it out of the parent's model context), and
+ * the `Task` card the work was first dispatched from keeps its own history.
+ *
+ * Only the user-origin shape is hidden. A `Task(resume …)` the parent model
+ * issued itself is a parent call and keeps its card, and every `Task` row
+ * without a user source is untouched.
+ */
+function isUserContinueMarker(message: UiMessage): boolean {
+  if (message.role !== "tool" || !isDelegationStartTool(message.toolName)) {
+    return false;
+  }
+  return subagentDeliveryOwner({ toolArgs: message.toolArgs }) === "user";
+}
+
 function isVisibleMessage(message: UiMessage): boolean {
+  if (isUserContinueMarker(message)) return false;
   if (message.role === "system" && message.modelSystem) return false;
   return !(
     message.role === "assistant" &&

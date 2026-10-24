@@ -24,8 +24,9 @@ import {
   formatPromptPathText,
   isSvgAttachment,
   locateInlinePromptPaths,
-  SVG_MIME_TYPE,
   MAX_INLINE_IMAGE_BYTES,
+  MAX_INLINED_IMAGE_HISTORY_BYTES,
+  SVG_MIME_TYPE,
   type AgentPromptAttachment,
   type MessageAttachment,
 } from "@pi-desktop/shared";
@@ -66,6 +67,8 @@ const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
   tiff: "image/tiff",
   webp: "image/webp",
 };
+/** PNG's own eight-byte header: the only signature longer than a word. */
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 type PromptPath = {
   absolute: string;
   root: "project" | "scratch" | "attachment";
@@ -96,6 +99,42 @@ function promptMimeType(path: string, supplied?: string, name?: string): string 
   if (value) return value;
   const extension = path.split(".").at(-1)?.toLowerCase() ?? "";
   return IMAGE_MIME_BY_EXTENSION[extension] ?? "application/octet-stream";
+}
+/**
+ * The image type a file's own leading bytes declare, or `undefined`.
+ *
+ * A subagent input is inlined on the strength of being an image, so the bytes
+ * decide: the renderer's `mimeType` is a label the host never corroborates, and
+ * a mislabelled or renamed file would otherwise reach the child endpoint as
+ * base64 that no provider can read. The main chat prompt keeps trusting the
+ * label because the runtime there only offers an image to a model it believes
+ * accepts one.
+ */
+function sniffImageMimeType(bytes: Buffer): string | undefined {
+  const ascii = (start: number, end: number) => bytes.subarray(start, end).toString("latin1");
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(PNG_SIGNATURE)) return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (bytes.length >= 6 && (ascii(0, 6) === "GIF87a" || ascii(0, 6) === "GIF89a")) {
+    return "image/gif";
+  }
+  if (bytes.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") {
+    return "image/webp";
+  }
+  if (bytes.length >= 2 && ascii(0, 2) === "BM") return "image/bmp";
+  if (bytes.length >= 4) {
+    const tiff = ascii(0, 4);
+    if (tiff === "II*\u0000" || tiff === "MM\u0000*") return "image/tiff";
+  }
+  if (bytes.length >= 12 && ascii(4, 8) === "ftyp") {
+    const brand = ascii(8, 12);
+    if (brand === "avif" || brand === "avis") return "image/avif";
+    if (brand === "heic" || brand === "heix" || brand === "hevc" || brand === "mif1" || brand === "msf1") {
+      return "image/heic";
+    }
+  }
+  return undefined;
 }
 
 function isImagePromptAttachment(
@@ -351,4 +390,122 @@ export function appendPromptFallbackPaths(
   const text = content.trim();
   if (!text) return paths;
   return paths ? `${text}\n${paths}` : text;
+}
+
+/**
+ * Largest number of images one child-input request may inline.
+ *
+ * The main chat composer sends unlimited path references because the runtime
+ * only inlines the ones its model accepts; a child input always inlines every
+ * image, so the count, the per-image bound, and the aggregate bound are all
+ * enforced here before any byte reaches the sidecar.
+ */
+export const MAX_SUBAGENT_INLINE_ATTACHMENTS = 8;
+
+export type PreparedSubagentAttachment = {
+  /** Durable transcript entry: a content-addressed ref, never bytes. */
+  message: MessageAttachment;
+  /** Base64 bytes this child request carries to the child provider. */
+  data: string;
+};
+
+/**
+ * Prepare images the user attached to a subagent's own input (child steer or
+ * direct continuation).
+ *
+ * This is deliberately not `preparePromptAttachments` with a vision flag. The
+ * child endpoint's vision support is never inferred from a client capability
+ * label — a gateway can report anything — so every image is inlined and the
+ * provider is asked to accept it. An input this host cannot deliver is
+ * refused with a coded error instead of degrading to a text path: silently
+ * turning the user's image into a filename would answer a different request.
+ */
+export async function prepareSubagentPromptAttachments(
+  dataRoot: string,
+  sessionId: string,
+  projectPath: string | undefined,
+  attachments: readonly AgentPromptAttachment[],
+  /** The child message text; an `@path` the user kept inline stays there. */
+  promptContent: string,
+): Promise<PreparedSubagentAttachment[]> {
+  if (attachments.length > MAX_SUBAGENT_INLINE_ATTACHMENTS) {
+    throw Object.assign(
+      new Error(
+        `A subagent input carries at most ${MAX_SUBAGENT_INLINE_ATTACHMENTS} images; ${attachments.length} were attached.`,
+      ),
+      { errorCode: ErrorCodes.INVALID_ARGUMENT },
+    );
+  }
+  const inlineSpans = locateInlinePromptPaths(
+    promptContent,
+    attachments.map((attachment) => attachment.path),
+  );
+  const prepared: PreparedSubagentAttachment[] = [];
+  let totalBytes = 0;
+  for (const [index, attachment] of attachments.entries()) {
+    const source = resolvePromptPath(dataRoot, sessionId, projectPath, attachment.path);
+    if (!source) {
+      throw Object.assign(new Error(`Attachment path is outside the session roots: ${attachment.path}`), {
+        errorCode: ErrorCodes.PATH_OUTSIDE_WORKSPACE,
+      });
+    }
+    const name = attachment.name.trim() || source.absolute.split(/[\\/]/).at(-1) || "attachment";
+    const declared = promptMimeType(source.absolute, attachment.mimeType, name);
+    if (!isImagePromptAttachment(attachment, source.absolute)) {
+      throw Object.assign(
+        new Error(`A subagent input carries images only: ${name} is not an image.`),
+        { errorCode: ErrorCodes.UNSUPPORTED },
+      );
+    }
+    const size = statSync(source.absolute).size;
+    if (size > MAX_INLINE_IMAGE_BYTES) {
+      throw Object.assign(
+        new Error(
+          `${name} is ${size} bytes; an image sent to a subagent is limited to ${MAX_INLINE_IMAGE_BYTES} bytes.`,
+        ),
+        { errorCode: ErrorCodes.PAYLOAD_TOO_LARGE },
+      );
+    }
+    totalBytes += size;
+    if (totalBytes > MAX_INLINED_IMAGE_HISTORY_BYTES) {
+      throw Object.assign(
+        new Error(
+          `Images attached to one subagent input exceed ${MAX_INLINED_IMAGE_HISTORY_BYTES} bytes in total.`,
+        ),
+        { errorCode: ErrorCodes.PAYLOAD_TOO_LARGE },
+      );
+    }
+    const bytes = await readFile(source.absolute);
+    // The bytes, not the label, decide what this file is. An input that is not
+    // a readable image is refused here: inlining unknown bytes would ask the
+    // child provider to interpret something this host cannot vouch for.
+    const mimeType = sniffImageMimeType(bytes);
+    if (!mimeType) {
+      throw Object.assign(
+        new Error(
+          `A subagent input carries images only: ${name} is not a readable image (declared ${declared}).`,
+        ),
+        { errorCode: ErrorCodes.UNSUPPORTED },
+      );
+    }
+    const ref =
+      source.root === "attachment" && attachment.path.trim().startsWith("attachments/")
+        ? attachment.path.trim()
+        : ensureAttachmentBlob(dataRoot, bytes);
+    const inlinePath = inlineSpans[index]
+      ? formatPromptPathText(attachment.path)
+      : undefined;
+    prepared.push({
+      message: {
+        kind: "image",
+        name,
+        ref,
+        mimeType,
+        size,
+        ...(inlinePath ? { inlinePath } : {}),
+      },
+      data: bytes.toString("base64"),
+    });
+  }
+  return prepared;
 }

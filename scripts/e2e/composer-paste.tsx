@@ -64,7 +64,7 @@ function Fixture({ sessionId, t, workspacePath }: { sessionId: string; t: TFunct
     composerPrefill: null,
     clearComposerPrefill: noop,
     t,
-    invalidatePromptEnhancement: noop,
+    invalidateComposerTransforms: noop,
     inputBlocked: false,
   });
   controller = draft;

@@ -30,6 +30,11 @@
 //     that aborted chain runs independently with no old-parent request or wake,
 //     and a later explicit parent `Task(resume)` reattaches the chain as a new
 //     parent-owned run whose report depends only on the new dependency.
+//  7. An image-only steer of a live child and an image-only direct
+//     continuation both travel Main handler -> real sidecar -> child provider
+//     even though the child model's metadata declares text-only input; the
+//     transcript keeps content-addressed refs, never the bytes, and a
+//     continuation naming an ended turn is refused before any provider work.
 //
 // Requires a freshly built agent-runtime/sidecar dist that carries the program
 // coordinator. A stale dist is detected from the emitted TaskWait tool schema
@@ -38,7 +43,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { register } from "node:module";
 import { tmpdir } from "node:os";
@@ -82,12 +87,24 @@ const STOP_CONTINUE_REPORT = "Stopped-chain continuation report EPSILON.";
 const PARENT_STOP_REPORT = "Independent continuation report ZETA.";
 const REATTACH_STOP_REPORT = "Reattached stop-chain report ETA.";
 const QUIET_WINDOW_MS = 2_500; // > stale timeoutSeconds:1, << the 900s program period
+const IMAGE_STEER_TASK = "Delegate image steer fixture.";
+const PHASE7_PROMPT = "PHASE7: steer a live child with an image, then continue its chain with an image.";
+const IMAGE_STEER_REPORT = "Image steer fixture report KAPPA.";
+const IMAGE_CONTINUE_REPORT = "Image continuation report LAMBDA.";
+// A real 1x1 PNG: the bytes the handler inlines must be a decodable image.
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9z8AAAAASUVORK5CYII=",
+  "base64",
+);
+const PNG_BASE64 = PNG.toString("base64");
+const CHILD_IMAGE_ATTACHMENT = { path: "child-steer.png", name: "child-steer.png", kind: "image", mimeType: "image/png" };
 
 const root = mkdtempSync(join(tmpdir(), "pi-subagent-lifecycle-"));
 const dataDir = join(root, "data");
 const homeDir = join(root, "home");
 const projectPath = join(root, "project");
 for (const path of [dataDir, homeDir, projectPath]) mkdirSync(path);
+writeFileSync(join(projectPath, "child-steer.png"), PNG);
 const env = { ...process.env, HOME: homeDir, USERPROFILE: homeDir, PI_DESKTOP_DATA_DIR: dataDir,
   HTTP_PROXY: "", HTTPS_PROXY: "", ALL_PROXY: "", NO_PROXY: "127.0.0.1,localhost" };
 
@@ -115,6 +132,8 @@ let turnIdS;
 let turnIdP;
 let continuedStopped;
 let continuedParentStop;
+let delegationI;
+let continuedImage;
 let stepped = {};
 
 const changed = () => { for (const check of [...parentObservers]) check(); };
@@ -232,6 +251,18 @@ function countReportDeliveries(report) {
     return last?.role === "tool" && textOf(last.content).includes(report);
   }).length;
 }
+/**
+ * Image parts in the child's newest user message. The child's own inputs are
+ * the only user turns this fixture can see, so this is the request-side half of
+ * the image assertion.
+ */
+function lastUserImages(payload) {
+  const users = payload.messages.filter((message) => message.role === "user");
+  const last = users.at(-1);
+  if (!last || !Array.isArray(last.content)) return [];
+  return last.content.filter((part) => part?.type === "image_url");
+}
+const childImages = () => childRequests.filter((request) => lastUserImages(request).length > 0);
 
 function respondParent(payload, stream) {
   parentRequests.push(payload);
@@ -320,6 +351,21 @@ function respondParent(payload, stream) {
     // turn open while the child runs, so a later parent abort owns both.
     return say(stream, "PHASE6_PARENT_IDLE");
   }
+  if (text.includes("PHASE7")) {
+    if (!hasToolResult(payload, "task_i7")) {
+      return toolCalls(stream, [{ id: "task_i7", name: "Task", args: { agent: "explorer", task: IMAGE_STEER_TASK } }]);
+    }
+    if (!hasToolResult(payload, "wait_i7")) {
+      delegationI = extractDelegationId(payload);
+      assert.ok(delegationI, "phase 7 parent must observe the image steer delegation id before waiting");
+      return toolCalls(stream, [{ id: "wait_i7", name: "TaskWait", args: { delegationIds: [delegationI] } }]);
+    }
+    stepped.phase7WaitResult = toolResultText(payload, "wait_i7");
+    stepped.phase7Parent = stepped.phase7WaitResult.includes(IMAGE_STEER_REPORT)
+      ? "PARENT_RECEIVED_IMAGE_STEER_REPORT"
+      : "PARENT_UNEXPECTED";
+    return say(stream, stepped.phase7Parent);
+  }
   throw new Error(`unexpected parent request: ${text.slice(-200)}`);
 }
 
@@ -328,6 +374,13 @@ function respondChild(payload, stream) {
   // Branch on the child's LATEST user message: a resumed chain replays earlier
   // tasks/continuations, so history text is ambiguous by design.
   const text = lastUserText(payload);
+  // An image-only child input: the request body itself is the evidence that the
+  // Main handler's prepared bytes reached this provider. The held stream marks
+  // the live steer; otherwise this is the detached image continuation.
+  if (lastUserImages(payload).length) {
+    if (held.has("I")) { held.delete("I"); return say(stream, IMAGE_STEER_REPORT); }
+    return say(stream, IMAGE_CONTINUE_REPORT);
+  }
   if (text.includes("STEER_MARKER")) { stepped.childAdoptedSteer = true; return say(stream, CHILD_B_REPORT); }
   if (text.includes("Reattach A fixture")) return say(stream, REATTACH_REPORT);
   if (text.includes("Reattach stop fixture")) return say(stream, REATTACH_STOP_REPORT);
@@ -339,6 +392,7 @@ function respondChild(payload, stream) {
   if (text.includes("CONTINUE_PARENT_STOP")) return say(stream, PARENT_STOP_REPORT);
   if (text.includes("Delegate B fixture")) { held.set("B", { res: stream.res, stream }); return stream.hold(); }
   if (text.includes("Delegate A fixture")) { held.set("A", { res: stream.res, stream }); return stream.hold(); }
+  if (text.includes("Delegate image steer fixture")) { held.set("I", { res: stream.res, stream }); return stream.hold(); }
   if (text.includes("Delegate parent-stop fixture")) {
     held.set("P", { res: stream.res, stream });
     // The parent abort cancels this child's in-flight request; the release of
@@ -393,7 +447,7 @@ async function ingest(envelope) {
 const watchdog = setTimeout(() => {
   console.error(`TIMEOUT subagent lifecycle after watchdog; step=${JSON.stringify(stepped)}`);
   process.exit(4);
-}, 90_000);
+}, 150_000);
 
 const hostBinary = (() => {
   try { return resolveHostBinary(); } catch { return undefined; }
@@ -456,7 +510,20 @@ try {
           // Global program wakeup: the exclusive timing owner for this session.
           subagentWakeup: { kind: "time", value: 900 },
           commandShell: { id: "bash", label: "Bash", dialect: "posix", available: true, isDefault: true },
-          subagentProviders: { "fixture/delegate-fixture": { ...provider, modelId: "delegate-fixture" } },
+          // The child model's catalog metadata declares text-only input, the way
+          // a gateway mislabels a vision upstream: the handler's prepared image
+          // must reach this provider's request anyway.
+          subagentProviders: { "fixture/delegate-fixture": { ...provider, modelId: "delegate-fixture",
+            modelConfig: {
+              source: "generic",
+              name: "Delegate Fixture (text-only metadata)",
+              baseUrl: provider.baseUrl,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128_000,
+              maxTokens: 8_192,
+            } } },
           subagents: ["explorer"].map((name) => ({ name, description: "Local fixture delegate", tools: ["Read"],
             prompt: "Answer the fixture task.", source: "builtin", model: { providerId: "fixture", modelId: "delegate-fixture" } })) } };
     },
@@ -548,6 +615,19 @@ try {
   const marker = events.find((envelope) => envelope.event.type === "message_end" && envelope.event.message.role === "tool" && envelope.event.message.toolName === "Task" && envelope.event.message.toolArgs?.source === "user");
   assert.ok(marker, "the user continuation must persist a user-origin Task marker row");
   assert.equal(marker.event.message.toolArgs.resume, delegationA, "the user marker must resume the delivered chain");
+  // The marker also names the run's OWN execution turn, which is the only
+  // identity a reopened tab or a rebuilt renderer still has: the parent turn
+  // ended before this continuation started.
+  assert.equal(
+    marker.event.message.toolResult?.details?.executionTurnId,
+    continued.turnId,
+    "the user marker must publish the detached run's execution turn",
+  );
+  assert.equal(
+    marker.event.message.toolArgs.source,
+    "user",
+    "the user marker must state its delivery owner",
+  );
 
   // ---- Phase 4: explicit parent Task(resume) reattaches the report --------
   await invoke(IPC.invoke.agentPrompt, [{ sessionId, content: PHASE4_PROMPT }]);
@@ -638,6 +718,84 @@ try {
   assert.equal(allUserText(reattachStopRequest).includes("CONTINUE_PARENT_STOP"), true, "the parent resume must reattach the independently continued chain");
   assert.equal(parentRequests.some((request) => JSON.stringify(request.messages).includes(PARENT_STOP_REPORT)), false, "the earlier user-owned report must never reach the parent after reattaching");
   await until(() => !activeTurns.has(sessionId), "phase 6R parent turn did not settle");
+  // ---- Phase 7: Main handler -> sidecar -> child provider, images ----------
+  // The launch fixture's child model declares text-only input metadata, the way
+  // a gateway mislabels a vision upstream. This phase proves the production
+  // handler's prepared bytes survive a real sidecar run and reach the child
+  // provider's request anyway, while every transcript row keeps only its ref.
+  await invoke(IPC.invoke.agentPrompt, [{ sessionId, content: PHASE7_PROMPT }]);
+  await until(() => activeTurns.has(sessionId), "phase 7 turn did not become active");
+  const turnIdI = activeTurns.get(sessionId);
+  await until(() => held.has("I"), "image steer fixture child stream was not held");
+  await until(() => delegationI, "phase 7 parent did not observe the image steer delegation id");
+  const parentBeforeImageSteer = parentRequests.length;
+  await invoke(IPC.invoke.agentSteerSubagent, [{
+    sessionId, delegationId: delegationI, expectedTurnId: turnIdI, content: "",
+    attachments: [CHILD_IMAGE_ATTACHMENT],
+  }]);
+  assert.equal(parentRequests.length, parentBeforeImageSteer, "an image-only steer must not issue a parent provider request");
+  // Releasing the held stream is the deterministic point where the runtime
+  // applies the queued steer and re-enters the provider with it.
+  held.get("I").stream.finish({ role: "assistant", content: "Interim acknowledgement." }, "stop");
+  await until(() => childImages().length >= 1, "the steered child did not adopt the image into a provider request");
+  await until(() => stepped.phase7Parent === "PARENT_RECEIVED_IMAGE_STEER_REPORT", "parent did not receive the image steer report");
+  await eventWork;
+  const steeredImageRequest = childImages()[0];
+  assert.equal(steeredImageRequest.model, "delegate-fixture", "the image must reach the delegate's own provider model");
+  assert.equal(textOf(steeredImageRequest.messages.at(-1).content).trim(), "", "an image-only steer must reach the provider with no synthesized text");
+  assert.equal(JSON.stringify(steeredImageRequest).includes(`data:image/png;base64,${PNG_BASE64}`), true, "the child provider request must carry the prepared image bytes");
+  await until(() => !activeTurns.has(sessionId), "phase 7 parent turn did not settle");
+
+  // A continuation naming a turn the session no longer owns is refused before
+  // any provider work: ownership drift never becomes a silent new prompt.
+  const requestsBeforeStaleContinue = requests.length;
+  const staleContinue = await invoke(IPC.invoke.agentContinueSubagent, [{
+    sessionId, delegationId: delegationS, content: "", expectedTurnId: turnIdS,
+    attachments: [CHILD_IMAGE_ATTACHMENT],
+  }]).then(() => null, (error) => error);
+  assert.ok(staleContinue, "a continuation naming an ended turn must be refused");
+  assert.equal(staleContinue.errorCode, "TURN_NOT_FOUND", `the refusal must name the ended turn: ${staleContinue.message}`);
+  assert.equal(requests.length, requestsBeforeStaleContinue, "a refused continuation must not reach any provider");
+
+  // Image-only direct continuation of the settled chain: the same full path,
+  // detached, on a chain that no longer has a live parent turn.
+  const parentBeforeImageContinue = parentRequests.length;
+  continuedImage = await invoke(IPC.invoke.agentContinueSubagent, [{
+    sessionId, delegationId: delegationS, content: "", attachments: [CHILD_IMAGE_ATTACHMENT],
+  }]);
+  assert.equal(continuedImage.delivery, "user", "an image-only continuation of a settled chain must run user-owned");
+  assert.ok(continuedImage.turnId, "the image continuation must own an execution turn");
+  assert.equal([turnIdA, turnIdB, turnIdS, turnIdP].includes(continuedImage.turnId), false, "the image continuation must not reuse a parent turn");
+  await until(() => childImages().length >= 2, "the image continuation did not reach the child provider");
+  await until(() => !activeTurns.has(sessionId), "the image continuation did not settle");
+  await eventWork;
+  const continuedImageRequest = childImages()[1];
+  assert.equal(JSON.stringify(continuedImageRequest).includes(`data:image/png;base64,${PNG_BASE64}`), true, "the continuation request must carry the prepared image bytes");
+  assert.equal(textOf(continuedImageRequest.messages.at(-1).content).trim(), "", "the image-only continuation must reach the provider with no synthesized text");
+  assert.equal(parentRequests.length, parentBeforeImageContinue, "an image-only continuation must issue ZERO parent provider requests");
+  assert.ok(finishedTurns.some((turn) => turn.turnId === continuedImage.turnId), "the image continuation must open and close its own execution turn");
+  // The transcript keeps a content-addressed ref, never the bytes: both the
+  // child row the handler echoes and the row the runtime persisted carry `ref`.
+  const childImageRows = events.filter((envelope) =>
+    envelope.parentToolCallId && envelope.event.type === "message_end" &&
+    envelope.event.message.role === "user" && (envelope.event.message.attachments?.length ?? 0) > 0);
+  assert.equal(childImageRows.length >= 2, true, "each image child input must echo its own transcript row");
+  for (const envelope of childImageRows) {
+    for (const attachment of envelope.event.message.attachments) {
+      assert.match(attachment.ref, /^attachments\/[0-9a-f]{64}$/, `a child input row must carry a content-addressed ref: ${String(attachment.ref).slice(0, 40)}`);
+    }
+  }
+  assert.equal(JSON.stringify(events).includes(PNG_BASE64), false, "child image bytes must never enter the transcript events");
+  const persisted = await host.call("session.get", { id: sessionId, messageLimit: 200 });
+  const persistedImageRows = (persisted.session?.messages ?? []).filter((message) =>
+    message.role === "user" && (message.attachments?.length ?? 0) > 0);
+  assert.equal(persistedImageRows.length >= 2, true, "the runtime must persist each child image input as a transcript row");
+  for (const message of persistedImageRows) {
+    for (const attachment of message.attachments) {
+      assert.match(attachment.ref, /^attachments\/[0-9a-f]{64}$/, "a persisted child input must keep its ref");
+    }
+  }
+  assert.equal(JSON.stringify(persistedImageRows).includes(PNG_BASE64), false, "a persisted child input must never store the image bytes");
 
   await eventWork;
   assert.equal(eventError, undefined, `fixture error: ${eventError?.stack ?? ""}`);
@@ -650,6 +808,7 @@ try {
     phase4: { parentReceivedReattach: stepped.phase4Parent === "PARENT_RECEIVED_REATTACH_REPORT", reportDeliveries: countReportDeliveries(REATTACH_REPORT) },
     phase5: { parentSawStopped: stepped.phase5Parent === "PARENT_SAW_STOPPED", continueDelivery: continuedStopped.delivery, seededOriginalTask: true, concurrentRefused: true, parentRequests: 0 },
     phase6: { continueDelivery: continuedParentStop.delivery, parentRequestsThroughStopAndContinue: 0, reattachedReportDeliveries: countReportDeliveries(REATTACH_STOP_REPORT) },
+    phase7: { imageSteerChildRequestBytes: true, imageContinueDelivery: continuedImage.delivery, imageContinueParentRequests: 0, persistedRefsOnly: true },
     requestCounts: { provider: requests.length, parent: parentRequests.length, child: childRequests.length },
     finishedTurns: finishedTurns.map((turn) => turn.turnId),
   })}`);

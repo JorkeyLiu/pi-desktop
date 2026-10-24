@@ -1,10 +1,21 @@
-import type { UiMessage } from "@pi-desktop/shared";
+import type { MessageAttachment, UiMessage } from "@pi-desktop/shared";
 import { messageThinking, type SubagentRunItem } from "./assistant-turns";
+import { subagentDeliveryOwner } from "./subagent-actions";
 import { isDelegationStartTool } from "./tool-display";
+import { toolResultPayload } from "./tool-presentation";
 import { subagentChainCallIds } from "./subagent-chain";
 
-/** One user/assistant exchange of a delegate session. */
-export type SubagentTranscriptTurn = { task: string; rows: SubagentRunItem[] };
+/**
+ * One user/assistant exchange of a delegate session.
+ *
+ * `attachments` are the images the sending side gave the child: they belong to
+ * the turn's own user row, which has no text when the user sent images only.
+ */
+export type SubagentTranscriptTurn = {
+  task: string;
+  attachments?: MessageAttachment[];
+  rows: SubagentRunItem[];
+};
 
 /**
  * A delegate's conversation as alternating turns: each Task call of the
@@ -81,6 +92,14 @@ export function buildSubagentTranscript(
   for (const call of calls) {
     const callId = call.toolCallId as string;
     if (!chain.has(callId)) continue;
+    const task = delegateTaskDescription(call);
+    // A user continuation's `Task` marker is the parent ledger row for a run
+    // the user started; its follow-up enters the child as a user row.
+    const userOrigin =
+      subagentDeliveryOwner({ details: toolResultPayload(call), toolArgs: call.toolArgs }) ===
+      "user";
+    let seedRendered = false;
+    let turnAttachments: MessageAttachment[] | undefined;
     const rows: SubagentRunItem[] = [];
     for (const message of messages) {
       if (message.parentToolCallId !== callId) continue;
@@ -93,9 +112,22 @@ export function buildSubagentTranscript(
       // of chain replay (`selectChainRows`), so they render as the user side
       // here without changing replay membership.
       if (message.role === "user") {
-        if ((message.content || "").trim() || message.error) {
-          rows.push({ kind: "steering-user", message });
+        const text = (message.content || "").trim();
+        const attachments = message.attachments ?? [];
+        // An image-only steer is a real user turn: empty text with an
+        // attachment still has to render.
+        if (!text && !attachments.length && !message.error) continue;
+        // A continuation seeds the turn with the same text its `Task` marker
+        // carries, so the turn's own user row already shows it; rendering the
+        // seeded child row as well would show one follow-up twice. Images the
+        // seed carries move to the turn itself, because the marker only holds
+        // the follow-up text.
+        if (userOrigin && !seedRendered && text === task) {
+          seedRendered = true;
+          if (attachments.length) turnAttachments = attachments;
+          continue;
         }
+        rows.push({ kind: "steering-user", message });
         continue;
       }
       // A delegate turn can carry reasoning and text at once, and both are
@@ -106,7 +138,7 @@ export function buildSubagentTranscript(
         rows.push({ kind: "answer", message });
       }
     }
-    turns.push({ task: delegateTaskDescription(call), rows });
+    turns.push(turnAttachments ? { task, attachments: turnAttachments, rows } : { task, rows });
   }
 
   return {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DelegationChain } from "./delegation-history.js";
 import {
+  buildContinueSpawnEmissions,
   buildContinueSyntheticMessages,
   continueEmissions,
   continueHydrationSource,
@@ -12,6 +13,14 @@ import {
   validateSubagentContinue,
   type ContinueSourceState,
 } from "./subagent-continue.js";
+
+/** The `details` record a tool result carries, without assuming its shape. */
+function toolDetailsOf(message: { toolResult?: unknown } | undefined): Record<string, unknown> | undefined {
+  const result = message?.toolResult;
+  if (!result || typeof result !== "object") return undefined;
+  const details = (result as { details?: unknown }).details;
+  return details && typeof details === "object" ? (details as Record<string, unknown>) : undefined;
+}
 
 function chain(overrides: Partial<DelegationChain> = {}): DelegationChain {
   return {
@@ -193,6 +202,48 @@ describe("continue synthetic rows", () => {
     expect(emissions.marker.turnId).toBe("exec-turn");
     expect(emissions.followup.parentToolCallId).toBe("invoke-1");
     expect(emissions.followup.agentName).toBe("explorer");
+  });
+
+  it("publishes the run's own execution turn on its Task marker", () => {
+    // The marker is the row a reopened tab reads back, so it must name the
+    // turn that owns the continuation's steering rather than leaving the
+    // surface to infer one from parent state.
+    const synthetic = buildContinueSyntheticMessages({
+      chain: chain(),
+      delegationId: "del-1",
+      text: "go deeper",
+      toolCallId: "invoke-1",
+    });
+    const built = buildContinueSpawnEmissions({
+      sessionId: "s",
+      executionTurnId: "exec-turn",
+      agentName: "explorer",
+      validated: {
+        outcome: "continue",
+        delegationId: "del-1",
+        chain: chain(),
+        text: "go deeper",
+        images: [],
+        toolCallId: "invoke-1",
+        taskMessage: synthetic.taskMessage,
+        childMessage: synthetic.childMessage,
+      },
+      newDelegationId: "del-2",
+    });
+    expect(toolDetailsOf(built.taskMessage)).toMatchObject({
+      delegationId: "del-2",
+      resumedFrom: "del-1",
+      executionTurnId: "exec-turn",
+    });
+    expect(JSON.parse(built.taskMessage.content).details).toMatchObject({
+      executionTurnId: "exec-turn",
+    });
+    // Both marker emissions carry it, so a message_start-only subscriber sees
+    // the same identity as one that waits for message_end.
+    for (const envelope of [built.markerStart, built.markerEnd]) {
+      const message = (envelope.event as { message?: typeof built.taskMessage }).message;
+      expect(toolDetailsOf(message)).toMatchObject({ executionTurnId: "exec-turn" });
+    }
   });
 });
 

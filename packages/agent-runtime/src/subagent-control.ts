@@ -13,13 +13,15 @@ import { randomUUID } from "node:crypto";
 import {
   addUsage,
   isUuid,
-  type AgentEventEnvelope,
-  type MessageUsage,
-  type UiMessage,
   type AgentActivityAgentPhase,
+  type AgentEventEnvelope,
+  type MessageAttachment,
+  type MessageUsage,
   type SubagentWakeReason,
   type SubagentWaitStatus,
+  type UiMessage,
 } from "@pi-desktop/shared";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { nowIso, truncateTextWithMarker } from "./agent-messages.js";
 import {
   MAX_SUBAGENT_REPORT_CHARS,
@@ -75,6 +77,10 @@ export type SteerInput = {
   delegationId: unknown;
   text: unknown;
   messageId?: unknown;
+  /** Durable refs the echoed child row keeps; never carries bytes. */
+  attachments?: MessageAttachment[];
+  /** Image blocks the child loop receives for this input. */
+  images?: ImageContent[];
 };
 
 export type ValidatedSubagentSteer =
@@ -82,6 +88,7 @@ export type ValidatedSubagentSteer =
       outcome: "steer";
       delegationId: string;
       text: string;
+      images: ImageContent[];
       message: UiMessage;
     }
   | { outcome: "already-applied"; delegationId: string };
@@ -117,7 +124,10 @@ export function validateSubagentSteer(
     );
   }
   const rawText = typeof request.text === "string" ? request.text : "";
-  if (!rawText.trim()) {
+  const images = request.images ?? [];
+  // An image-only steer is a real input: the user picked a picture and wrote
+  // nothing, and the child still has to see it.
+  if (!rawText.trim() && images.length === 0) {
     throw codedError("Steering text required", "INVALID_ARGUMENT");
   }
   if (
@@ -162,10 +172,11 @@ export function validateSubagentSteer(
     createdAt: nowIso(),
     status: "complete",
     steering: true,
+    ...(request.attachments?.length ? { attachments: request.attachments } : {}),
     parentToolCallId: record.parentToolCallId,
     agentName: record.agentName,
   };
-  return { outcome: "steer", delegationId, text: rawText, message };
+  return { outcome: "steer", delegationId, text: rawText, images, message };
 }
 
 /**
@@ -245,7 +256,8 @@ export function applyValidatedSteer(
     ownerTurnId: string;
     parentToolCallId: string;
     agentName: string;
-    steerLoop: (text: string) => void;
+    /** Hands the input to the child loop: text plus any image blocks. */
+    steerLoop: (text: string, images: readonly ImageContent[]) => void;
     markSteered: (messageId: string) => void;
     appendRow: (envelope: AgentEventEnvelope, message: UiMessage) => void;
     emit: (envelope: AgentEventEnvelope) => void;
@@ -260,7 +272,7 @@ export function applyValidatedSteer(
     agentName: deps.agentName,
   });
   try {
-    deps.steerLoop(validated.text);
+    deps.steerLoop(validated.text, validated.images);
   } catch {
     throw codedError(
       `Delegation "${validated.delegationId}" settled before the steering arrived; continue it with Task(resume: "${validated.delegationId}").`,

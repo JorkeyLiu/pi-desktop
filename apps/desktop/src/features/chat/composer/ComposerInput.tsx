@@ -24,14 +24,17 @@ export type ComposerInputProps = {
   pasting: boolean;
   enterToSend: boolean;
   runActive: boolean;
-  composerAc: CompletionController;
+  /** Autocomplete is optional: a composer with no completion source passes none. */
+  composerAc?: CompletionController;
+  /** Hover text for a blocked editor explaining why it cannot be typed into. */
+  title?: string;
   onPaste: (event: ClipboardEvent<HTMLDivElement>) => void;
-  onAcceptCompletion: (index: number) => void;
+  onAcceptCompletion?: (index: number) => void;
   onSubmit: (steering?: boolean) => void;
   onInsertNewline: () => void;
   onInput: (source: string, caret: number) => void;
-  /** Terminal-style recall; returns true when the arrow key was consumed. */
-  onHistoryNavigate: (direction: "older" | "newer") => boolean;
+  /** Terminal-style recall; a composer with no history passes none. */
+  onHistoryNavigate?: (direction: "older" | "newer") => boolean;
   onCompositionStart: () => void;
   onCompositionEnd: (event: FormEvent<HTMLDivElement>) => void;
   /**
@@ -57,6 +60,7 @@ export function ComposerInput({
   enterToSend,
   runActive,
   composerAc,
+  title,
   onPaste,
   onAcceptCompletion,
   onSubmit,
@@ -83,6 +87,7 @@ export function ComposerInput({
         <div
           ref={inputRef}
           className="composer-input"
+          title={title}
           role="textbox"
           aria-multiline="true"
           aria-readonly={inputBlocked}
@@ -124,17 +129,17 @@ export function ComposerInput({
             if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
             if (event.key === "Enter" && event.altKey && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
               event.preventDefault();
-              composerAc.close();
+              composerAc?.close();
               onSubmit(runActive);
               return;
             }
-            if (composerAc.open && event.key === "Escape") {
+            if (composerAc?.open && event.key === "Escape") {
               event.preventDefault();
               event.stopPropagation();
               composerAc.close();
               return;
             }
-            if (composerAc.hasItems) {
+            if (composerAc?.hasItems) {
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 event.preventDefault();
                 const delta = event.key === "ArrowDown" ? 1 : -1;
@@ -146,7 +151,7 @@ export function ComposerInput({
               }
               if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey) {
                 event.preventDefault();
-                onAcceptCompletion(composerAc.highlight);
+                onAcceptCompletion?.(composerAc.highlight);
                 return;
               }
             }
@@ -156,7 +161,7 @@ export function ComposerInput({
               !event.altKey &&
               !event.metaKey &&
               !event.ctrlKey &&
-              onHistoryNavigate(event.key === "ArrowUp" ? "older" : "newer")
+              onHistoryNavigate?.(event.key === "ArrowUp" ? "older" : "newer")
             ) {
               event.preventDefault();
               return;

@@ -33,7 +33,7 @@ import {
   type AgentTool,
   type PrepareNextTurnContext,
 } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent, UserMessage } from "@earendil-works/pi-ai";
 import {
   addUsage,
   cumulativeDelta,
@@ -176,6 +176,17 @@ export type SubagentRunOptions = {
    * turn; these messages are everything that came before it.
    */
   initialMessages?: AgentMessage[];
+
+  /**
+   * Image blocks this run's opening user turn carries.
+   *
+   * Only a direct user continuation sets them: the user's own input may be
+   * images only, and the parent's `Task` brief never carries attachments. The
+   * bytes are inlined regardless of what the child model's capability
+   * metadata claims — the delegate's real endpoint is the authority, and a
+   * refusal must surface as a provider error, not a silent text-only turn.
+   */
+  initialImages?: ImageContent[];
 };
 
 /**
@@ -319,7 +330,7 @@ export class SubagentRun {
     try {
       const initialTaskMessage: AgentMessage = {
         role: "user",
-        content: this.opts.task,
+        content: this.initialTaskContent(),
         timestamp: Date.now(),
       };
       const agentState = this.agent.state;
@@ -363,7 +374,7 @@ export class SubagentRun {
       if (initialContext.kind !== "unchanged") {
         this.installContextOutcome(initialContext);
       }
-      await this.agent.prompt(this.opts.task);
+      await this.agent.prompt(initialTaskMessage);
       await this.agent.waitForIdle();
       while (!signal?.aborted) {
         if (this.pendingProviderRetry) {
@@ -433,6 +444,25 @@ export class SubagentRun {
     return this.bindingFor(this.provider, this.thinkingLevel);
   }
 
+  /**
+   * The opening user turn's content.
+   *
+   * A text-only input stays a plain string, exactly as before images existed.
+   * With images it becomes a block list: the text block first (omitted when the
+   * input was images only, because providers reject an empty text block), then
+   * one image block per attachment. The bytes travel to whatever endpoint this
+   * run is bound to; nothing here consults a capability label.
+   */
+  private initialTaskContent(): UserMessage["content"] {
+    const images = this.opts.initialImages ?? [];
+    if (images.length === 0) return this.opts.task;
+    const text = this.opts.task.trim() ? this.opts.task : "";
+    return [
+      ...(text ? [{ type: "text" as const, text }] : []),
+      ...images,
+    ];
+  }
+
   /** True once `run()` settled; steering afterwards must be rejected, not queued. */
   isSettled(): boolean {
     return this.finished;
@@ -441,17 +471,23 @@ export class SubagentRun {
   /**
    * Feed one user turn into the live child conversation (child steer).
    *
-   * The text enters only this delegate's agent loop: the runtime emits the
+   * The input enters only this delegate's agent loop: the runtime emits the
    * attributed transcript echo itself, so the parent's model context never
    * sees it. Tools are untouched — nested `Task` and `asktool` stay denied.
+   * Images travel as blocks next to the text and are offered to this run's
+   * endpoint as they are; the model's capability metadata is not a gate.
    * Throws when the run already settled, so a stale steer fails loudly
    * instead of queuing onto a dead loop.
    */
-  steer(text: string): void {
+  steer(text: string, images: readonly ImageContent[] = []): void {
     if (this.finished) {
       throw new Error("The subagent run already settled.");
     }
-    this.agent.steer({ role: "user", content: text, timestamp: Date.now() });
+    const body = text.trim() ? text : "";
+    const content: UserMessage["content"] = images.length
+      ? [...(body ? [{ type: "text" as const, text: body }] : []), ...images]
+      : body;
+    this.agent.steer({ role: "user", content, timestamp: Date.now() });
   }
 
   /**

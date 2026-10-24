@@ -392,10 +392,23 @@ describe("RuntimeService prompt lifecycle", () => {
     ).resolves.toEqual({ accepted: false });
     await expect(
       service.steerSubagent({ sessionId: "s1", delegationId: " ", turnId: "turn-1", content: "lost" }),
-    ).resolves.toEqual({ accepted: false });
+    ).resolves.toEqual({ accepted: false, errorCode: "INVALID_ARGUMENT" });
+    // Empty text is invalid here unless an image rides along, and this host
+    // cannot read image files.
     await expect(
       service.steerSubagent({ sessionId: "s1", delegationId: "del-1", turnId: "turn-1", content: "  " }),
-    ).resolves.toEqual({ accepted: false });
+    ).resolves.toEqual({ accepted: false, errorCode: "INVALID_ARGUMENT" });
+    await expect(
+      service.steerSubagent({
+        sessionId: "s1",
+        delegationId: "del-1",
+        turnId: "turn-1",
+        content: "",
+        attachments: [
+          { path: "/tmp/shot.png", name: "shot.png", kind: "image" },
+        ],
+      }),
+    ).resolves.toEqual({ accepted: false, errorCode: "UNSUPPORTED" });
     expect(sidecar.calls.length).toBe(before);
   });
 
@@ -417,6 +430,18 @@ describe("RuntimeService prompt lifecycle", () => {
     await expect(
       service.continueSubagent({ sessionId: "s1", delegationId: "del-1", content: "Go deeper." }),
     ).rejects.toMatchObject({ errorCode: "AGENT_BUSY" });
+    // A host without file access refuses a child image input loudly instead of
+    // continuing with text the user never sent.
+    await expect(
+      service.continueSubagent({
+        sessionId: "s1",
+        delegationId: "del-1",
+        content: "",
+        attachments: [
+          { path: "/tmp/shot.png", name: "shot.png", kind: "image" },
+        ],
+      }),
+    ).rejects.toMatchObject({ errorCode: "UNSUPPORTED" });
     expect(sidecar.calls.length).toBe(before);
   });
 
@@ -431,6 +456,23 @@ describe("RuntimeService prompt lifecycle", () => {
     expect(sidecar.calls.some((call) => call.method === "agent.prompt")).toBe(false);
     expect(host.messages.get("s1") ?? []).toHaveLength(0);
     expect(service.isChildExecutionTurn("s1", "turn-1")).toBe(true);
+    // Steering this detached run names its execution turn — the id the
+    // renderer reads back from the run's own Task row — and is dispatched;
+    // the parent's earlier turn is stale and refused before the sidecar.
+    const beforeSteer = sidecar.calls.length;
+    await expect(
+      service.steerSubagent({ sessionId: "s1", delegationId: "del-2", turnId: "turn-1", content: "Stay on the cache." }),
+    ).resolves.toEqual({ accepted: true });
+    expect(sidecar.calls.at(-1)).toMatchObject({
+      method: "agent.steerSubagent",
+      params: { sessionId: "s1", delegationId: "del-2", expectedTurnId: "turn-1", content: "Stay on the cache." },
+    });
+    const afterSteer = sidecar.calls.length;
+    await expect(
+      service.steerSubagent({ sessionId: "s1", delegationId: "del-2", turnId: "turn-parent", content: "Wrong owner." }),
+    ).resolves.toEqual({ accepted: false });
+    expect(sidecar.calls.length).toBe(afterSteer);
+    expect(afterSteer).toBe(beforeSteer + 1);
     // The child's terminal finalizes its durable row without a parent conclusion.
     sidecar.notify?.("agent.event", {
       sessionId: "s1",

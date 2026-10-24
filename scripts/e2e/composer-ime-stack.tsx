@@ -55,7 +55,7 @@ function Fixture() {
     composerPrefill: null,
     clearComposerPrefill: noop,
     t,
-    invalidatePromptEnhancement: noop,
+    invalidateComposerTransforms: noop,
     inputBlocked: false,
   });
   const completions = useComposerCompletions({
@@ -67,7 +67,7 @@ function Fixture() {
     fileReferencesRef: draft.fileReferencesRef,
     applyEditorDraft: draft.applyEditorDraft,
     handleInput: draft.handleInput,
-    invalidatePromptEnhancement: noop,
+    invalidateComposerTransforms: noop,
   });
   draftValue = draft.value;
   draftComposing = draft.composing;

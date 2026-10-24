@@ -199,7 +199,7 @@ test("subagent card stop controls are icon-only with localized accessible names"
   } finally { await vite.close(); }
 });
 
-test("settled continuable tab offers direct continue while stale and remote tabs stay read-only", async () => {
+test("every tab of a continued chain continues it while remote tabs stay read-only", async () => {
   const { vite, render, useAppStore } = await setup();
   try {
     const first = taskMessage("t1", "call-1", "d1", "failed");
@@ -208,8 +208,9 @@ test("settled continuable tab offers direct continue while stale and remote tabs
     // Latest tab owns the direct continue action with a single composer.
     const latest = render("d2");
     assert.match(latest, /Completed/);
-    // Unified continue composer: a follow-up continues the same subagent, one Send.
-    assert.match(latest, /Continues this subagent as a new run/);
+    // Unified continue composer: a follow-up continues the same subagent, one
+    // Send, with no helper line beneath it.
+    assert.doesNotMatch(latest, /Continues this subagent/);
     assert.match(latest, /Send/);
     // No parent-prompt path remains: no ask-parent label, no follow-up
     // distinction, no resume help.
@@ -224,10 +225,13 @@ test("settled continuable tab offers direct continue while stale and remote tabs
     const headerCount = (latest.match(/subagent-transcript-metrics/g) ?? []).length;
     assert.equal(headerCount, 1);
     assert.doesNotMatch(latest, /subagent-transcript-footer-metrics/);
-    // Stale tab never duplicates the continue for the same chain.
-    const stale = render("d1");
-    assert.doesNotMatch(stale, /Send a follow-up/);
-    assert.match(stale, /continued elsewhere/);
+    // The older tab of the same chain is the same action surface: it already
+    // shows and continues the chain-latest run, so the user never has to open
+    // a new card to keep working in the window they have.
+    const older = render("d1");
+    assert.match(older, /Completed/);
+    assert.match(older, /Send a follow-up/);
+    assert.doesNotMatch(older, /continued elsewhere/);
     // Remote sessions stay read-only even when the delegate is continuable.
     seed(useAppStore, {
       session: { id: "s1", source: "remote", title: "fixture" },
@@ -263,13 +267,13 @@ test("owner chip and blocked composers name their own capability reason", async 
     const detached = render("d2");
     assert.match(detached, /User-owned/);
     assert.match(detached, /Taken over by you/);
-    // Stale tab names itself instead of the generic read-only copy.
+    // An older tab follows the same chain and keeps its continue surface.
     const first = taskMessage("t1", "call-1", "d1", "failed");
     const resume = resumeCall("t2", "call-2", "d1", "d2", "completed");
     seed(useAppStore, { messages: [first, resume], running: false });
-    const stale = render("d1");
-    assert.match(stale, /continued elsewhere/);
-    assert.doesNotMatch(stale, /Send a follow-up/);
+    const older = render("d1");
+    assert.doesNotMatch(older, /continued elsewhere/);
+    assert.match(older, /Send a follow-up/);
     // A tab whose Task calls are missing has no instance: it names the
     // no-instance reason instead of a permanent cannot-continue line.
     seed(useAppStore, {
@@ -306,7 +310,7 @@ test("owner chip and blocked composers name their own capability reason", async 
   } finally { await vite.close(); }
 });
 
-test("draft clear guard preserves text across failure, session switch, and chain advance", async () => {
+test("draft clear guard preserves text across failure, session switch, and foreign chain advance", async () => {
   const vite = await createServer({
     root, configFile: false,
     server: { middlewareMode: true, hmr: false, ws: false },
@@ -322,6 +326,7 @@ test("draft clear guard preserves text across failure, session switch, and chain
       currentSessionId: "s1",
       capturedDelegationId: "d1",
       currentDelegationId: "d1",
+      draftUnchanged: true,
     };
     assert.equal(actions.shouldClearSteerDraft(same), true);
     // Rejected steer preserves the draft for retry.
@@ -329,8 +334,10 @@ test("draft clear guard preserves text across failure, session switch, and chain
     // A session switch during dispatch never wipes the new context's draft.
     assert.equal(actions.shouldClearSteerDraft({ ...same, currentSessionId: "s2" }), false);
     assert.equal(actions.shouldClearSteerDraft({ ...same, capturedSessionId: undefined }), false);
-    // A d1 -> d2 continuation arriving mid-dispatch moves the composer to a
-    // different target: the sent text stays instead of clearing the new draft.
+    // Text the user typed after the capture is not what was sent.
+    assert.equal(actions.shouldClearSteerDraft({ ...same, draftUnchanged: false }), false);
+    // The accepted continuation itself moves the chain to the run it opened;
+    // that is the same conversation, so the sent text clears there.
     const first = taskMessage("t1", "call-1", "d1", "failed");
     const cont = resumeCall("t2", "call-2", "d1", "d2", "running");
     const before = [first];
@@ -341,6 +348,17 @@ test("draft clear guard preserves text across failure, session switch, and chain
       actions.shouldClearSteerDraft({
         ...same,
         currentDelegationId: chain.subagentChainLatestDelegationId(after, "d1"),
+        sendDelegationId: "d2",
+      }),
+      true,
+    );
+    // A target this send did not open was moved by something else: the text
+    // stays instead of clearing a draft that belongs to another target.
+    assert.equal(
+      actions.shouldClearSteerDraft({
+        ...same,
+        currentDelegationId: chain.subagentChainLatestDelegationId(after, "d1"),
+        sendDelegationId: "d9",
       }),
       false,
     );
@@ -348,7 +366,7 @@ test("draft clear guard preserves text across failure, session switch, and chain
     // delegation and clears the composer whenever delegation or session moves.
     const tabSource = await readFile(new URL("../src/components/workpanel/SubagentTranscriptTab.tsx", import.meta.url), "utf8");
     assert.match(tabSource, /<TranscriptDisclosureProvider key=\{delegationId\}>/);
-    assert.match(tabSource, /setDraft\(""\);\s*\n\s*setSendError\(null\)/);
+    assert.match(tabSource, /text\.setValue\(""\);\s*\n\s*images\.reset\(\);\s*\n\s*setSendError\(null\)/);
     assert.match(tabSource, /\}, \[delegationId, activeSessionId\]\);/);
     // No parent-prompt resume path remains in the surface.
     assert.doesNotMatch(tabSource, /buildSubagentResumePrompt/);

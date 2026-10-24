@@ -90,21 +90,25 @@ test("the work panel renders the delegation tab like every other resource", () =
 
 test("the delegation tab renders a message list with a child composer", () => {
   assert.match(tabSource, /data-testid="subagent-transcript-tab"/);
-  // Chain-latest owns the view (F5): after d1 -> d2 the old tab follows the
-  // same chain, so transcript, status, send, stop and resume all resolve
-  // through the latest id — a stale tab never duplicates the action.
+  // Chain-latest owns the view (F5): after d1 -> d2 every tab of the chain
+  // follows it, so transcript, status, send, stop and continue all resolve
+  // through the latest id and no tab is stranded.
   assert.match(tabSource, /subagentChainLatestDelegationId\(messages, delegationId\)/);
-  assert.match(tabSource, /isStaleSubagentTab\(messages, delegationId\)/);
+  assert.doesNotMatch(tabSource, /isStaleSubagentTab/);
   assert.match(tabSource, /buildSubagentTranscript\(messages, activeDelegationId\)/);
   assert.match(tabSource, /className="message-row user"/);
   assert.match(tabSource, /className="message-user-text selectable"/);
   assert.match(tabSource, /className="message-row assistant"/);
   assert.match(tabSource, /data-message-id=\{row\.message\.id\}/);
-  assert.match(tabSource, /<Textarea/);
-  assert.match(tabSource, /disabled/);
-  assert.match(tabSource, /rows=\{2\}/);
+  // The child composer is the shared editor now, not a private textarea: the
+  // panel reuses the main composer's input, box, and draft hook.
+  assert.match(tabSource, /<ComposerShell className="subagent-transcript-shell"/);
+  assert.match(tabSource, /<ComposerInput/);
+  assert.match(tabSource, /useComposerTextDraft\(\)/);
+  assert.doesNotMatch(tabSource, /<Textarea/);
+  assert.doesNotMatch(tabSource, /<Textarea/);
   assert.match(tabSource, /readonlyReason \?\? t\("panel\.subagentReadOnly"\)/);
-  assert.match(tabSource, /className="subagent-transcript-composer-controls"/);
+  assert.match(tabSource, /className="subagent-transcript-composer-controls composer-toolbar"/);
   assert.match(tabSource, /subagent-transcript-model-static/);
   assert.doesNotMatch(tabSource, /subagent-transcript-model-picker/);
   assert.match(tabSource, /delegateModelId\(result\)/);
@@ -127,11 +131,13 @@ test("the delegation tab renders a message list with a child composer", () => {
   assert.doesNotMatch(tabSource, /askParentToResume/);
   assert.doesNotMatch(tabSource, /sendPrompt\(/);
   // Display-only where no action exists: the blocked composer names its own
-  // capability reason (stale/no-instance/remote), while an instantiated
-  // settled child always continues regardless of its outcome. The model
-  // picker never opens.
-  assert.match(tabSource, /aria-label=\{readonlyReason \?\? t\("panel\.subagentReadOnly"\)\}/);
-  assert.match(tabSource, /panel\.subagentStale/);
+  // capability reason (no-instance/remote), while an instantiated settled
+  // child always continues regardless of its outcome. The model picker never
+  // opens.
+  // The shared editor carries the reason as its hover title and its
+  // placeholder; there is no private textarea aria-label any more.
+  assert.match(tabSource, /title=\{readOnlyComposer \? \(readonlyReason \?\? undefined\) : undefined\}/);
+  assert.doesNotMatch(tabSource, /panel\.subagentStale/);
   assert.match(tabSource, /panel\.subagentNoInstance/);
   assert.match(tabSource, /subagentChainInstantiated\(/);
 });

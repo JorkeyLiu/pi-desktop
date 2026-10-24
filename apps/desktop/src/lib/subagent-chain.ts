@@ -65,7 +65,13 @@ function resumedCallIds(
 /**
  * Every `Task` call id in the same resume chain as `delegationId`: the
  * initial call plus every `Task(resume …)` follow-up, forward and backward.
- * Accepts either a delegation id or a bare call id as the entry point.
+ *
+ * Accepts either a delegation id or a bare call id as the entry point. The
+ * bare form is a real state, not a legacy one: a tab opened while its `Task`
+ * call is still being created is keyed by the call id, and the call identifies
+ * itself by that id until the run's own result lands. Matching both keeps that
+ * tab on its chain as the identity arrives, instead of stranding it and
+ * requiring a second card.
  */
 export function subagentChainCallIds(
   messages: readonly UiMessage[],
@@ -82,10 +88,12 @@ export function subagentChainCallIds(
   );
   let chain = new Set(
     calls
-      .filter((call) => delegationIdForMessage(call) === target)
+      .filter(
+        (call) =>
+          delegationIdForMessage(call) === target || call.toolCallId === target,
+      )
       .map((call) => call.toolCallId as string),
   );
-  if (chain.size === 0) return chain;
   for (;;) {
     const forward = resumedCallIds(messages, chain, callByDelegationId);
     const backward = new Set(
@@ -116,18 +124,33 @@ export function subagentChainLatestDelegationId(
 ): string {
   const target = delegationId.trim();
   if (!target) return delegationId;
-  const chain = subagentChainCallIds(messages, target);
-  if (chain.size === 0) return target;
-  const ordered = messages.filter(
-    (message) =>
-      message.role === "tool" &&
-      isDelegationStartTool(message.toolName) &&
-      message.toolCallId &&
-      chain.has(message.toolCallId),
-  );
-  const last = ordered.at(-1);
+  const last = subagentChainLatestCall(messages, target);
   if (!last) return target;
   return delegationIdForMessage(last);
+}
+
+/**
+ * The chain's last `Task` call in session order. One resolution for the view,
+ * the report owner, and the run's execution turn, so they can never disagree
+ * about which segment of the chain is current.
+ */
+function subagentChainLatestCall(
+  messages: readonly UiMessage[],
+  delegationId: string,
+): UiMessage | undefined {
+  const target = delegationId.trim();
+  if (!target) return undefined;
+  const chain = subagentChainCallIds(messages, target);
+  if (chain.size === 0) return undefined;
+  return messages
+    .filter(
+      (message) =>
+        message.role === "tool" &&
+        isDelegationStartTool(message.toolName) &&
+        message.toolCallId &&
+        chain.has(message.toolCallId),
+    )
+    .at(-1);
 }
 
 /**
@@ -165,16 +188,6 @@ export function subagentChainInstantiated(
   });
 }
 
-/** Whether `delegationId` is not the chain-latest tab (stale after resume). */
-export function isStaleSubagentTab(
-  messages: readonly UiMessage[],
-  delegationId: string,
-): boolean {
-  const target = delegationId.trim();
-  if (!target) return false;
-  return subagentChainLatestDelegationId(messages, target) !== target;
-}
-
 /**
  * Who receives the chain-latest run's report, from the latest `Task` call's
  * own backend-owned fields (`details.delivery` or the user-origin marker's
@@ -185,21 +198,31 @@ export function subagentChainDeliveryOwner(
   messages: readonly UiMessage[],
   delegationId: string,
 ): "parent" | "user" {
-  const target = delegationId.trim();
-  if (!target) return "parent";
-  const chain = subagentChainCallIds(messages, target);
-  if (chain.size === 0) return "parent";
-  const ordered = messages.filter(
-    (message) =>
-      message.role === "tool" &&
-      isDelegationStartTool(message.toolName) &&
-      message.toolCallId &&
-      chain.has(message.toolCallId),
-  );
-  const last = ordered.at(-1);
+  const last = subagentChainLatestCall(messages, delegationId);
   if (!last) return "parent";
   return subagentDeliveryOwner({
     details: toolResultPayload(last),
     toolArgs: last.toolArgs,
   });
+}
+
+/**
+ * The chain-latest run's own execution turn, as the runtime published it on the
+ * `Task` result (`details.executionTurnId`).
+ *
+ * A continuation opened while the parent was idle runs under a child-only
+ * execution-accounting turn, and that turn — never the parent's current turn —
+ * is what owns its steering. Publishing it on the persisted `Task` row means a
+ * reopened tab or a rebuilt renderer still names the authoritative turn
+ * instead of depending on in-memory state that did not survive.
+ */
+export function subagentChainExecutionTurnId(
+  messages: readonly UiMessage[],
+  delegationId: string,
+): string | undefined {
+  const last = subagentChainLatestCall(messages, delegationId);
+  const payload = last ? toolResultPayload(last) : undefined;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const turnId = (payload as { executionTurnId?: unknown }).executionTurnId;
+  return typeof turnId === "string" && turnId.trim() ? turnId.trim() : undefined;
 }

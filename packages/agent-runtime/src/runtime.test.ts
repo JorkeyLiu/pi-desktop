@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { formatSessionMessage, type SessionMessageOrigin } from "@pi-desktop/shared";
 import { estimateContextTokens as estimateTranscriptTokens } from "@earendil-works/pi-ai/utils/estimate";
+import { delegationSummary } from "./subagent-progress.js";
 import { buildSessionContext } from "./session-context.js";
 import { estimateContextTokens as estimateAgentContextTokens, estimateTokens } from "./pi-runtime-estimates.js";
 import {
@@ -56,6 +57,8 @@ const subagentRuns = vi.hoisted(() => ({
   resolveRun: undefined as ((result: unknown) => void) | undefined,
   /** Texts steered into live mock runs, in order. */
   steered: [] as string[],
+  /** Image blocks steered into live mock runs, one list per steer. */
+  steeredImages: [] as unknown[][],
 }));
 vi.mock("./subagent.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./subagent.js")>();
@@ -78,8 +81,9 @@ vi.mock("./subagent.js", async (importOriginal) => {
       isSettled() {
         return false;
       }
-      steer(text: string) {
+      steer(text: string, images?: unknown[]) {
         subagentRuns.steered.push(String(text));
+        subagentRuns.steeredImages.push(images ?? []);
       }
       run() {
         if (subagentRuns.deferred) {
@@ -7836,6 +7840,46 @@ describe("DesktopAgentRuntime subagents", () => {
     );
   }
 
+  it("publishes the owning execution turn on every Task result", async () => {
+    // The Task row is the only carrier a reopened tab keeps, so it names the
+    // turn that owns the run: the parent turn while attached, and (for a user
+    // continuation) the child-only execution turn the record adopted.
+    const runtime = createRuntime({ subagents: [explorer], turnId: "turn-parent" });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    try {
+      const started = await taskTool(runtime).execute("task-1", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      expect((started.details as any).executionTurnId).toBe("turn-parent");
+      const delegationId = (started.details as any).delegationId as string;
+      expect((runtime as any).delegations.get(delegationId).executionTurnId).toBe(
+        "turn-parent",
+      );
+      // The refreshed snapshot republishes the same identity, so the field
+      // survives the row's own progress updates.
+      const record = (runtime as any).delegations.get(delegationId);
+      expect(delegationSummary(record)).toMatchObject({
+        delegationId,
+        executionTurnId: "turn-parent",
+      });
+      subagentRuns.resolveRun!({
+        agentName: "explorer",
+        status: "completed",
+        report: "done",
+        turns: 1,
+        toolCalls: 0,
+      });
+      await record.completion;
+    } finally {
+      await runtime.dispose();
+      subagentRuns.deferred = false;
+    }
+  });
+
   it("offers Task as a core Agent-mode tool that advertises every definition", async () => {
     const runtime = createRuntime({ subagents: [explorer, pinned] });
     const tool = taskTool(runtime);
@@ -12191,6 +12235,112 @@ describe("DesktopAgentRuntime subagent wakeup, progress and child steer", () => 
         );
       }
       expect(subagentRuns.steered).toEqual(["Focus on auth."]);
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("steers an image-only child input to the live run without persisting its bytes", async () => {
+    const image = {
+      type: "image" as const,
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9z8AAAAASUVORK5CYII=",
+      mimeType: "image/png",
+    };
+    const runtime = createRuntime({ subagents: [explorer], turnId: "parent-turn" });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    subagentRuns.steered.length = 0;
+    subagentRuns.steeredImages.length = 0;
+    try {
+      const started = await taskTool(runtime).execute("task-image-steer", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      runtime.steerSubagent({
+        delegationId,
+        expectedParentTurnId: "parent-turn",
+        // An image-only steer carries no words.
+        text: "",
+        images: [image],
+        attachments: [
+          {
+            kind: "image",
+            name: "shot.png",
+            ref: "attachments/sha-fixture",
+            mimeType: "image/png",
+            size: 70,
+          },
+        ],
+      });
+      expect(subagentRuns.steered).toEqual([""]);
+      expect(subagentRuns.steeredImages).toEqual([[image]]);
+      // The transcript keeps the ref, never the base64 bytes.
+      const history = JSON.stringify((runtime as any).transcriptHistory);
+      expect(history).not.toContain(image.data);
+      expect(history).toContain("attachments/sha-fixture");
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("continues a settled chain with an image-only input on the child endpoint", async () => {
+    const image = {
+      type: "image" as const,
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9z8AAAAASUVORK5CYII=",
+      mimeType: "image/png",
+    };
+    const runtime = createRuntime({ subagents: [explorer] });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    try {
+      const started = await taskTool(runtime).execute("task-image-continue", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const delegationId = (started.details as any).delegationId as string;
+      const record = (runtime as any).delegations.get(delegationId);
+      subagentRuns.resolveRun!({
+        agentName: "explorer",
+        status: "completed",
+        report: "done",
+        turns: 1,
+        toolCalls: 0,
+      });
+      await record.completion;
+      subagentRuns.calls.length = 0;
+      subagentRuns.steered.length = 0;
+      const accepted = await runtime.continueSubagent({
+        delegationId,
+        text: "",
+        images: [image],
+        attachments: [
+          {
+            kind: "image",
+            name: "shot.png",
+            ref: "attachments/sha-fixture",
+            mimeType: "image/png",
+            size: 70,
+          },
+        ],
+      });
+      expect(accepted.accepted).toBe(true);
+      const spawn = subagentRuns.calls.at(-1) as {
+        task?: string;
+        initialImages?: unknown[];
+      };
+      // The image opens the new run; no words were invented for it.
+      expect(spawn.task).toBe("");
+      expect(spawn.initialImages).toEqual([image]);
+      const history = JSON.stringify((runtime as any).transcriptHistory);
+      expect(history).not.toContain(image.data);
+      expect(history).toContain("attachments/sha-fixture");
     } finally {
       subagentRuns.deferred = false;
       await runtime.dispose();

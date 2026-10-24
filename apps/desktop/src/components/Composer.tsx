@@ -2,7 +2,6 @@ import { isRemoteSession, sessionAllows } from "../lib/remote-session-safety";
 import { inheritedSessionModelBinding } from "../lib/session-model";
 import {
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -32,10 +31,7 @@ import { AskToolCard } from "./AskToolCard";
 import { PlanApprovalBar } from "./PlanApprovalBar";
 import { SubagentDock } from "./SubagentDock";
 import {
-  COMPOSER_MAX_VISIBLE_ROWS,
-  COMPOSER_MIN_HEIGHT_PX,
   PLACEHOLDER_KEYS,
-  cssPixels,
   isPermissionMode,
   isThinkingLevel,
   thinkingLevelForProvider,
@@ -52,6 +48,8 @@ import { useComposerSubmit } from "../features/chat/composer/hooks/useComposerSu
 import { useComposerTransforms } from "../features/chat/composer/hooks/useComposerTransforms";
 import { ComposerInput } from "../features/chat/composer/ComposerInput";
 import { useComposerModelMenu } from "../features/chat/composer/hooks/useComposerModelMenu";
+import { ComposerShell } from "../features/chat/composer/ComposerShell";
+import { useComposerAutosize } from "../features/chat/composer/hooks/useComposerAutosize";
 import { useVoiceInput } from "../features/voice/useVoiceInput";
 import { ComposerToolbar } from "../features/chat/composer/ComposerToolbar";
 import { ComposerStatus } from "../features/chat/composer/ComposerStatus";
@@ -259,57 +257,7 @@ export function Composer({
     placeholderKeys[placeholderIndex % placeholderKeys.length] ?? placeholderKeys[0];
   const placeholderText = t(placeholderKey);
 
-  const textareaMetricsRef = useRef<{ lineHeight: number; verticalChrome: number } | null>(null);
-  const appliedHeightRef = useRef<number | null>(null);
-  const appliedOverflowRef = useRef<string | null>(null);
-  useEffect(() => {
-    textareaMetricsRef.current = null;
-    appliedHeightRef.current = null;
-    appliedOverflowRef.current = null;
-  }, [variant]);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    let metrics = textareaMetricsRef.current;
-    if (!metrics) {
-      const style = window.getComputedStyle(el);
-      metrics = {
-        lineHeight: cssPixels(style.lineHeight) || COMPOSER_MIN_HEIGHT_PX,
-        verticalChrome:
-          cssPixels(style.paddingTop) +
-          cssPixels(style.paddingBottom) +
-          cssPixels(style.borderTopWidth) +
-          cssPixels(style.borderBottomWidth),
-      };
-      textareaMetricsRef.current = metrics;
-    }
-    const maxHeight = Math.ceil(
-      metrics.lineHeight * COMPOSER_MAX_VISIBLE_ROWS + metrics.verticalChrome,
-    );
-    const applied =
-      appliedHeightRef.current !== null &&
-      el.style.height === `${appliedHeightRef.current}px`
-        ? appliedHeightRef.current
-        : null;
-    let content = applied === null ? -1 : el.scrollHeight;
-    if (
-      applied === null ||
-      (content <= el.clientHeight && applied > COMPOSER_MIN_HEIGHT_PX)
-    ) {
-      el.style.height = "auto";
-      content = el.scrollHeight;
-    }
-    const next = Math.max(COMPOSER_MIN_HEIGHT_PX, Math.min(content, maxHeight));
-    const overflowY = content > maxHeight ? "auto" : "hidden";
-    if (appliedHeightRef.current !== next || el.style.height !== `${next}px`) {
-      el.style.height = `${next}px`;
-      appliedHeightRef.current = next;
-    }
-    if (appliedOverflowRef.current !== overflowY) {
-      el.style.overflowY = overflowY;
-      appliedOverflowRef.current = overflowY;
-    }
-  }, [value]);
+  useComposerAutosize(ref, value, variant);
 
 
   const activeSession = sessions.find((session) => session.id === activeSessionId);
@@ -547,11 +495,10 @@ export function Composer({
           insertDroppedDirectoryPaths={insertDroppedDirectoryPaths}
           dismissDroppedDirectories={dismissDroppedDirectories}
         />
-        <div
+        <ComposerShell
           ref={composerShellRef}
-          className={`composer-shell${inputBlocked ? " is-gated" : ""}${
-            dropTargetActive ? " is-drop-target" : ""
-          }`}
+          gated={inputBlocked}
+          dropTarget={dropTargetActive}
           onDragEnter={onComposerDragEnter}
           onDragOver={onComposerDragOver}
           onDragLeave={onComposerDragLeave}
@@ -634,7 +581,7 @@ export function Composer({
             workSessionId={activeSessionId ?? undefined}
             workSessionLabel={activeSessionSummary?.title}
           />
-        </div>
+        </ComposerShell>
       </div>
     </div>
   );
