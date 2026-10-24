@@ -142,7 +142,19 @@ export type UiMessage = {
   skillMentions?: Array<{ start: number; end: number; id: string }>;
   toolName?: string;
   toolCallId?: string;
-  toolStatus?: "running" | "success" | "error" | "denied";
+  /**
+   * `preparing` covers the stretch from the moment the model has named the
+   * call until it actually executes: nothing has run, so the row carries no
+   * arguments or result yet and is never persisted in that state.
+   */
+  toolStatus?: "preparing" | "running" | "success" | "error" | "denied";
+  /**
+   * Renderer projection on a `preparing` row: the model finished writing this
+   * call's arguments but execution has not started. The row stays visible at
+   * its position and stops its preparing pulse; it still states no execution
+   * outcome. Cleared when the call starts, and never persisted.
+   */
+  toolArgsComplete?: boolean;
   toolArgs?: unknown;
   toolResult?: unknown;
   /** Renderer projection; never written back into canonical model evidence. */

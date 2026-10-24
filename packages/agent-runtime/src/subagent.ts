@@ -33,7 +33,7 @@ import {
   type AgentTool,
   type PrepareNextTurnContext,
 } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import {
   addUsage,
   cumulativeDelta,
@@ -48,6 +48,7 @@ import {
   type UiMessage,
 } from "@pi-desktop/shared";
 import { classifyAgentError } from "./agent-errors.js";
+import { createToolArgsPreparation } from "./tool-args-preparation.js";
 import { readLocalRequestErrorDetails } from "./local-request-errors.js";
 import { withProviderFetchFailure } from "./provider-transport-recovery.js";
 import {
@@ -241,6 +242,8 @@ export class SubagentRun {
   private readonly agent: Agent;
   private readonly opts: SubagentRunOptions;
   private currentAssistant?: UiMessage;
+  /** Calls whose identity settled while their arguments were still streaming. */
+  private readonly toolArgsPreparation = createToolArgsPreparation();
   private lastReportText = "";
   private streamStartedAt?: number;
   private lastReportTruncated = false;
@@ -854,6 +857,26 @@ export class SubagentRun {
   }
 
   /**
+   * Tell the parent transcript which calls this delegate has named but not yet
+   * finished writing. The rows are transient and execution-neutral: they only
+   * put each call where it happened, and `tool_start` replaces it in place.
+   */
+  private prepareToolCalls(event: AssistantMessageEvent | undefined): void {
+    // A synthetic or truncated update carries no provider frame: there is
+    // nothing to learn from it, and nothing to prepare.
+    if (!event) return;
+    for (const call of this.toolArgsPreparation.observe(event)) {
+      this.emit({
+        type: "tool_prepare",
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        ...(call.taskTitle ? { taskTitle: call.taskTitle } : {}),
+        ...(call.ready ? { ready: true } : {}),
+      });
+    }
+  }
+
+  /**
    * Translate delegate events into transcript events.
    *
    * Only message and tool events are forwarded. `agent_end`, `turn_end` and
@@ -872,6 +895,7 @@ export class SubagentRun {
           ? this.currentAssistant
           : undefined;
         this.streamStartedAt = Date.now();
+        this.toolArgsPreparation.reset();
         this.currentAssistant = {
           ...(retryingAssistant ?? this.newAssistantRow()),
           content: content.text,
@@ -890,6 +914,7 @@ export class SubagentRun {
       }
       case "message_update": {
         if (!this.currentAssistant || event.message.role !== "assistant") break;
+        this.prepareToolCalls(event.assistantMessageEvent);
         const content = assistantContent((event.message as AssistantMessage).content);
         const previousText = this.currentAssistant.content;
         const previousThinking = this.currentAssistant.thinking ?? "";

@@ -3,10 +3,17 @@ import type {
   SessionSummary,
   UiMessage,
 } from "@pi-desktop/shared";
-import { applyMessageUpdate } from "@pi-desktop/shared";
+import {
+  applyMessageUpdate,
+  preparingToolMessage,
+  toolPreparationScope,
+} from "@pi-desktop/shared";
 import { api } from "../../lib/api";
 import { createNavigationIntentController } from "../../lib/navigation-intent";
 import {
+  applyPreparingTool,
+  beginLiveToolExecution,
+  clearLivePreparedTools,
   dedupeSessionMessages,
   durableCoversLiveSessionMessages,
   mergeLiveSessionMessages,
@@ -263,9 +270,16 @@ export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime 
     const { event } = envelope;
     let next = current;
     switch (event.type) {
-      case "message_start":
-        next = upsertLiveSessionMessage(current, event.message);
+      case "message_start": {
+        // A new assistant message ends the previous attempt: a call it
+        // prepared but never executed is not history.
+        const base =
+          event.message.role === "assistant"
+            ? clearLivePreparedTools(current, toolPreparationScope(envelope))
+            : current;
+        next = upsertLiveSessionMessage(base, event.message);
         break;
+      }
       case "message_update": {
         const normalized = dedupeSessionMessages(current);
         const index = getSessionMessageSnapshot(normalized).positions.get(event.message.id);
@@ -274,11 +288,24 @@ export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime 
         break;
       }
       case "message_end": {
-        next = projectMessageEnd(current, event);
+        const projected = projectMessageEnd(current, event);
+        next =
+          event.message.role === "assistant" &&
+          (event.message.status === "error" || event.message.status === "aborted")
+            ? clearLivePreparedTools(projected, toolPreparationScope(envelope))
+            : projected;
         break;
       }
+      case "tool_prepare":
+        next = applyPreparingTool(
+          current,
+          preparingToolMessage(envelope, event),
+        );
+        break;
       case "tool_start":
-        next = upsertLiveSessionMessage(current, {
+        // Executing continues the preparing row in place: same id, same
+        // position, now with the call's real arguments.
+        next = beginLiveToolExecution(current, {
           id: event.toolCallId,
           role: "tool",
           content: "",
@@ -349,6 +376,12 @@ export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime 
           : upsertLiveSessionMessage(current, completed);
         break;
       }
+      case "turn_end":
+      case "agent_end":
+      case "error":
+        // The attempt is over, so nothing it was still preparing will run.
+        next = clearLivePreparedTools(current, toolPreparationScope(envelope));
+        break;
       default:
         return current;
     }

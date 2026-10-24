@@ -827,6 +827,9 @@ function resultFailed(message: ToolPresentationMessage): boolean {
 export function runOutcome(
   message: ToolPresentationMessage,
 ): "running" | "denied" | "failed" | "ok" | "unknown" {
+  // Preparing and running are both in flight: the call has not returned, so it
+  // is never "ok" or "unknown" before it actually runs.
+  if (message.toolStatus === "preparing") return "running";
   if (message.toolStatus === "running") return "running";
   if (message.toolStatus === "denied") return "denied";
   const details = asRecord(toolResultPayload(message));

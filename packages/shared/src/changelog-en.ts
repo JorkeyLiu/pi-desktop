@@ -23,6 +23,8 @@ export const enEntries: ChangelogEntry[] = [
       "New local sessions get an immediate first-prompt title, with optional asynchronous refinement using a globally configured fast model.",
       "Tool rows keep the tool's own name while they run and state their result on the right, so the sum of ten steps reads as one fixed identity instead of a flickering verb. A command that exits non-zero now reads as done with its exit code beside it, and its command and output are copied from the expanded terminal.",
       "A subagent's tab reports average output tokens per second alongside its context, spend, and turn counts, with an estimate marked when a response was interrupted.",
+      "A tool call takes its place in the conversation as soon as it starts streaming, before its arguments finish, with a subtle pulse on its icon and name instead of a spinner.",
+      "A subagent's transcript shows the working indicator while the child is working, instead of a list of rows that sits still between updates.",
     ],
   },
   {

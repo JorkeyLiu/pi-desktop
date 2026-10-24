@@ -89,6 +89,12 @@ export function SubagentTaskCard({
   // itself, and the title keeps its whole width for the work's own name.
   const role = chainTitle ? agentName : "";
   const outcome = subagentOutcome(message, delegationStatuses);
+  // The parent is still writing this call's arguments: the card keeps its
+  // shell and breathes on its avatar and title instead of claiming the child
+  // is executing. Once the arguments are complete but execution has not started
+  // the same shell waits, static, still claiming nothing.
+  const preparing = message.toolStatus === "preparing";
+  const pulsing = preparing && message.toolArgsComplete !== true;
   // A bare `running` Task call is still being created: the delegate runtime is
   // spawning and no structured snapshot exists yet. That is not a delegation a
   // reader can act on, so the card says so instead of claiming it is running,
@@ -124,11 +130,13 @@ export function SubagentTaskCard({
       ? formatToolDuration(durationMs / 1000)
       : "";
   useEffect(() => {
-    if (outcome !== "running") return;
+    // Nothing is ticking before the call runs: its duration begins with
+    // execution, not with the model writing the arguments.
+    if (outcome !== "running" || preparing) return;
     setNow(Date.now());
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
-  }, [outcome]);
+  }, [outcome, preparing]);
   // The child session's totals, read from the conversation-wide chain fold the
   // transcript supplies: a `Task(resume …)` continuation is one child session,
   // so this card states the same turns, tool calls, spend and latest occupancy
@@ -159,13 +167,17 @@ export function SubagentTaskCard({
     onUserInteraction?.();
     openSubagentTab(panelSelectionId, title);
   }, [canOpen, onUserInteraction, openSubagentTab, panelSelectionId, title]);
-  const tooltip = joinSubagentInfo([title, role, ...metricsParts, ...stateParts]);
+  // Before execution the card names the work only: no child state, no clock,
+  // and no metric placeholders, so hovering adds no status copy either.
+  const tooltip = preparing
+    ? joinSubagentInfo([title, role])
+    : joinSubagentInfo([title, role, ...metricsParts, ...stateParts]);
 
   return (
     <div
       className={`tool-row subagent-task${panelOpen ? " is-panel-open" : ""}${
         outcome === "running" ? " is-running" : ""
-      }${creating ? " is-creating" : ""}`}
+      }${creating ? " is-creating" : ""}${pulsing ? " is-preparing" : ""}`}
       data-message-id={message.id}
       data-outcome={outcome}
     >
@@ -199,40 +211,45 @@ export function SubagentTaskCard({
                 running mark, then the localized outcome, then its runtime,
                 every boundary the shared separator. The mark keeps its slot in
                 every state, so the status text never shifts as a child starts
-                or settles. */}
-            <span className="subagent-task-state">
-              <span
-                className="subagent-task-spinner"
-                data-active={running ? "true" : "false"}
-                aria-hidden="true"
-              />
-              <span
-                className="subagent-task-status"
-                role="status"
-                aria-live="polite"
-              >
-                {statusLabel}
+                or settles. A call whose arguments are still being written, or
+                that has not started yet, states no child state at all. */}
+            {preparing ? null : (
+              <span className="subagent-task-state">
+                <span
+                  className="subagent-task-spinner"
+                  data-active={running ? "true" : "false"}
+                  aria-hidden="true"
+                />
+                <span
+                  className="subagent-task-status"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {statusLabel}
+                </span>
+                {duration ? (
+                  <>
+                    <span className="subagent-sep" aria-hidden="true">{" · "}</span>
+                    <span className="subagent-task-duration">{duration}</span>
+                  </>
+                ) : null}
               </span>
-              {duration ? (
-                <>
-                  <span className="subagent-sep" aria-hidden="true">{" · "}</span>
-                  <span className="subagent-task-duration">{duration}</span>
-                </>
-              ) : null}
-            </span>
+            )}
           </span>
           {role ? (
             <span className="subagent-task-role" title={t("chat.subagentAgent")}>
               {role}
             </span>
           ) : null}
-          <span
-            className="subagent-task-metrics"
-            title={metricsLine}
-            aria-label={t("chat.subagentMetricsLabel")}
-          >
-            {metricsLine}
-          </span>
+          {preparing ? null : (
+            <span
+              className="subagent-task-metrics"
+              title={metricsLine}
+              aria-label={t("chat.subagentMetricsLabel")}
+            >
+              {metricsLine}
+            </span>
+          )}
         </span>
       </button>
       {/* A sibling of the card, never a button inside it: opening the child's

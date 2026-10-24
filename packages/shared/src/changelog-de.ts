@@ -23,6 +23,8 @@ export const deEntries: ChangelogEntry[] = [
       "Neue lokale Sitzungen erhalten sofort einen Titel aus der ersten Eingabe; optional kann ein global konfiguriertes schnelles Modell ihn asynchron verfeinern.",
       "Tool-Zeilen behalten während der Ausführung den Namen des Tools und zeigen das Ergebnis rechts an. Ein Aufruf wechselt nicht mehr zwischen Verben. Befehle mit einem Exit-Code ungleich null gelten als abgeschlossen und zeigen den Exit-Code; Befehl und Ausgabe lassen sich im aufgeklappten Terminal getrennt kopieren.",
       "Der Tab eines Subagents zeigt neben Kontext, Kosten und Zuganzahl die durchschnittliche Ausgabe pro Sekunde in Tokens an; bei unterbrochenen Antworten wird der Wert als Schätzung markiert.",
+      "Ein Tool-Aufruf erscheint jetzt an seiner Stelle im Gespräch, sobald er zu streamen beginnt, noch bevor seine Argumente fertig sind; Symbol und Name pulsieren dezent statt eines Spinners.",
+      "Das Transcript eines Subagents zeigt den Arbeitsindikator, solange das Kind arbeitet, statt einer Liste, die zwischen Aktualisierungen stillsteht.",
     ],
   },
   {

@@ -352,6 +352,7 @@ mapping is fixed:
 | `message_update` | `item.delta` | no | `stream: \"delta\"` plus `deltaText`/`deltaThinking`; content is complete in `item.completed` (D412) |
 | `message_end` | `item.completed` | yes | Full `UiMessage` |
 | `tool_start` | `item.started` | yes | `itemType: "tool"` |
+| `tool_prepare` | `tool.progress` | no | Transient preparation frame; the call is complete in `item.started` (`tool_start`) |
 | `tool_update` | `tool.progress` | no | Partial results are complete in `item.completed` |
 | `tool_end` | `item.completed` | yes | Full result with `isError` and usage |
 | `compaction_start`, `compaction_end` | `item.started`, `item.completed` | yes | `itemType: "compaction"`; compaction adds a transcript row locally (D203) |

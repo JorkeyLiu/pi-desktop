@@ -1,6 +1,9 @@
 import { projectPlanHistory } from "../../lib/plan-history";
 import i18n from "i18next";
 import {
+  applyPreparingTool,
+  beginLiveToolExecution,
+  clearLivePreparedTools,
   dedupeSessionMessages,
   projectMessageEnd,
   reconcilePersistedUserMessage,
@@ -21,6 +24,8 @@ import type {
 import {
   applyMessageUpdate,
   mergeAgentEventEnvelopes,
+  preparingToolMessage,
+  toolPreparationScope,
 } from "@pi-desktop/shared";
 import { createFrameBatcher } from "../../lib/frame-batcher";
 import {
@@ -535,18 +540,42 @@ export function createEventsSlice({
           }
           break;
         case "agent_end":
-          set({ isRunning: false });
+          set((state) => ({
+            isRunning: false,
+            messages: clearLivePreparedTools(
+              state.messages,
+              toolPreparationScope(envelope),
+            ),
+          }));
           void get().refreshSessions();
           break;
         case "turn_end":
+          // The turn closed without running whatever was still being prepared.
+          set((state) => {
+            const messages = clearLivePreparedTools(
+              state.messages,
+              toolPreparationScope(envelope),
+            );
+            return messages === state.messages ? state : { messages };
+          });
           break;
-        case "message_start":
-          set((state) =>
-            getSessionMessageSnapshot(state.messages).positions.has(event.message.id)
-              ? state
-              : { messages: upsertLiveSessionMessage(state.messages, event.message) },
-          );
+        case "message_start": {
+          // A new assistant message means the previous attempt is over: any
+          // call it prepared but never executed is not history (a retry, a
+          // re-run, or a new round).
+          const scope = toolPreparationScope(envelope);
+          set((state) => {
+            const messages =
+              event.message.role === "assistant"
+                ? clearLivePreparedTools(state.messages, scope)
+                : state.messages;
+            if (getSessionMessageSnapshot(messages).positions.has(event.message.id)) {
+              return messages === state.messages ? state : { messages };
+            }
+            return { messages: upsertLiveSessionMessage(messages, event.message) };
+          });
           break;
+        }
         case "message_update":
           set((state) => {
             const normalized = dedupeSessionMessages(state.messages);
@@ -559,32 +588,51 @@ export function createEventsSlice({
             return messages === state.messages ? state : { messages };
           });
           break;
-        case "message_end":
+        case "message_end": {
+          const settled = projectMessageEnd;
+          set((state) => {
+            const next = settled(state.messages, event);
+            if (
+              event.message.role !== "assistant" ||
+              (event.message.status !== "error" && event.message.status !== "aborted")
+            ) {
+              return { messages: next };
+            }
+            // The reply stopped before its calls could run, so nothing it
+            // prepared will execute.
+            return { messages: clearLivePreparedTools(next, toolPreparationScope(envelope)) };
+          });
+          break;
+        }
+        case "tool_prepare":
           set((state) => ({
-            messages: projectMessageEnd(state.messages, event),
+            messages: applyPreparingTool(
+              state.messages,
+              preparingToolMessage(envelope, event),
+            ),
           }));
           break;
         case "tool_start":
+          // The call executes where its preparing row already stands: same id,
+          // same position, now with its real arguments. A call that was never
+          // prepared appends exactly as before.
           set((state) => ({
-            messages: [
-              ...state.messages,
-              {
-                id: event.toolCallId,
-                role: "tool",
-                content: "",
-                createdAt: new Date(envelope.ts).toISOString(),
-                toolCallId: event.toolCallId,
-                toolName: event.toolName,
-                toolArgs: event.args,
-                toolStatus: "running",
-                status: "streaming",
-                ...(envelope.parentToolCallId
-                  ? { parentToolCallId: envelope.parentToolCallId }
-                  : {}),
-                ...(envelope.nestedParentToolCallId ? { nestedParentToolCallId: envelope.nestedParentToolCallId } : {}),
-                ...(envelope.agentName ? { agentName: envelope.agentName } : {}),
-              },
-            ],
+            messages: beginLiveToolExecution(state.messages, {
+              id: event.toolCallId,
+              role: "tool",
+              content: "",
+              createdAt: new Date(envelope.ts).toISOString(),
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              toolArgs: event.args,
+              toolStatus: "running",
+              status: "streaming",
+              ...(envelope.parentToolCallId
+                ? { parentToolCallId: envelope.parentToolCallId }
+                : {}),
+              ...(envelope.nestedParentToolCallId ? { nestedParentToolCallId: envelope.nestedParentToolCallId } : {}),
+              ...(envelope.agentName ? { agentName: envelope.agentName } : {}),
+            }),
           }));
           break;
         case "tool_update":
@@ -679,7 +727,10 @@ export function createEventsSlice({
             const hasErrorMessage =
               last?.role === "assistant" &&
               (last.status === "error" || last.isError === true);
-            const messages: UiMessage[] = state.messages
+            const messages: UiMessage[] = clearLivePreparedTools(
+              state.messages,
+              toolPreparationScope(envelope),
+            )
               .filter(
                 (message) =>
                   !(

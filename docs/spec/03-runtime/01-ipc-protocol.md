@@ -802,6 +802,8 @@ type AgentEvent =
      stream?: "delta"; resetText?: boolean; resetThinking?: boolean }
  | { type: "message_end"; message: UiMessage; replacesMessageId?: string }
  | { type: "tool_start"; toolCallId: string; toolName: string; args: unknown }
+ | { type: "tool_prepare"; toolCallId: string; toolName: string;
+     taskTitle?: string; ready?: boolean }
  | { type: "tool_update"; toolCallId: string; partialResult?: unknown }
   | { type: "tool_end"; toolCallId: string; result: unknown; isError?: boolean;
       toolUsage?: ToolTokenUsage }
@@ -824,6 +826,13 @@ type AgentEvent =
 
 > These are **UI-normalized events**, not a pass-through of raw pi events.
 > `packages/agent-runtime` is responsible for mapping pi events to this model.
+
+`tool_prepare` is transient and never durable: it reports a call whose identity
+the model has settled while its arguments were still streaming, and its `ready`
+frame reports the end of argument generation. The renderer uses it only to place
+the call's row at its chronological position and to stop the preparing pulse;
+`tool_start` still carries the complete arguments and replaces that row in
+place, and a call that never runs leaves no row behind.
 
 Append-only `message_update` frames set `stream: \"delta\"` and omit growing
 `content` / `thinking` from `message`. Consumers apply `deltaText` /

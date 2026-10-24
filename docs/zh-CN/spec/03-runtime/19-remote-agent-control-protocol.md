@@ -148,6 +148,7 @@ type RemoteError = { code: string; message: string; retriable: boolean; traceId:
 | `message_update` | `item.delta` | no | 内容在 `item.completed` 中完整 |
 | `message_end` | `item.completed` | yes | 完整 `UiMessage` |
 | `tool_start` | `item.started` | yes | `itemType: "tool"` |
+| `tool_prepare` | `tool.progress` | no | 瞬态准备帧；调用在 `item.started`（`tool_start`）中完整 |
 | `tool_update` | `tool.progress` | no | 部分结果在 `item.completed` 中完整 |
 | `tool_end` | `item.completed` | yes | 完整结果 |
 | `compaction_start`、`compaction_end` | `item.started`、`item.completed` | yes | `itemType: "compaction"` |

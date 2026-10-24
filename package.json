@@ -42,6 +42,7 @@
     "test:e2e:transcript": "node scripts/e2e-transcript-render.mjs",
     "test:e2e:thinking-row": "node scripts/e2e-thinking-row.mjs",
     "test:e2e:tool-path-name": "node scripts/e2e-tool-path-name.mjs",
+    "test:e2e:tool-preparation": "node scripts/e2e-tool-preparation.mjs",
     "test:e2e:renderer-responsiveness": "node scripts/e2e-renderer-responsiveness.mjs",
     "test:e2e:transcript-minimap-jump": "node scripts/e2e-transcript-minimap-jump.mjs",
     "test:e2e:copy-tex": "node scripts/e2e-copy-tex.mjs",

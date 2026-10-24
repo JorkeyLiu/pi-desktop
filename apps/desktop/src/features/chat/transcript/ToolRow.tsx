@@ -162,9 +162,15 @@ function toolRowPropsEqual(
  */
 export const ToolRow = memo(function ToolRow(props: ToolRowProps) {
   const { message, variant } = props;
+  // A call that has not executed yet has no result for a plugin's own card to
+  // present, so the preparing row stays the host's one-line row.
   const cardEntry = useSlotEntryForKey(
     "toolCard",
-    !variant && message.toolStatus !== "denied" ? message.toolName : undefined,
+    !variant &&
+      message.toolStatus !== "denied" &&
+      message.toolStatus !== "preparing"
+      ? message.toolName
+      : undefined,
   );
   if (variant === "task") return <SubagentTaskCard {...props} />;
   const proposal = planSubmission(message);
@@ -207,6 +213,14 @@ function HostToolRow({
   const openTarget = useOpenPreviewTarget();
   const { fileMenu, openFileMenu, closeFileMenu } = useChatFileMenu();
   const status = message.toolStatus;
+  // The model has named this call but its arguments are not necessarily done:
+  // nothing has run, so the row shows the call's identity only — its icon and
+  // its localized name — and no summary, chips, caret, or status text. The row
+  // is replaced in place by the executing row (see <ToolRow>). It breathes only
+  // while the arguments are still being written; once they are complete the
+  // same identity row waits, still claiming no outcome, until execution starts.
+  const preparing = status === "preparing";
+  const pulsing = preparing && message.toolArgsComplete !== true;
   const action = getToolAction(message.toolName);
   // A numeric exit code means Bash returned normally; only invocation errors
   // without a normal exit, or explicit error payloads, mark the row as failed.
@@ -249,7 +263,7 @@ function HostToolRow({
   // A delegation is always expandable: its brief, report and the delegate's
   // own rows all live in the body.
   const hasDetails =
-    hasToolDetails(message) || Boolean(delegate) || Boolean(review);
+    !preparing && (hasToolDetails(message) || Boolean(delegate) || Boolean(review));
   const chips = toolResultChips(message);
   // A lifecycle row (ADR 0089) is about subagents, so it is presented as one:
   // the agent names it reports on replace the bare delegation ids it was
@@ -387,6 +401,10 @@ function HostToolRow({
   }, [status, open, message, disclosure.bodyRef]);
 
 
+  // Preparing is a nonvisual state: while the arguments stream the row shows
+  // no status wording at all, but a screen reader still hears a localized
+  // running state instead of a stale "completed".
+  const accessibleStatus = preparing ? t("chat.running") : statusLabel;
   const statusTone =
     run === "running" || (!run && status === "running")
       ? "is-running"
@@ -403,7 +421,7 @@ function HostToolRow({
   // it, so a reader can tell which tool ran without reading its status. A
   // delegate control row names its wait even while it runs, because which
   // check is in flight is the whole content of that row.
-  const statusBadge =
+  const statusBadge = preparing ? null :
     !runHead && !lifecycle && status === "running" ? (
       <span className="tool-spinner" aria-label={t("chat.running")} />
     ) : runHead || lifecycle || status === "error" || status === "denied" ? (
@@ -417,11 +435,12 @@ function HostToolRow({
     <div
       className={`tool-row ${
         open ? "open" : ""
-      } status-${run === "failed" ? "error" : status || "success"}`}
+      }${pulsing ? " is-preparing" : ""} status-${run === "failed" ? "error" : status || "success"}`}
       role="region"
       data-message-id={message.id}
       data-tool-name={message.toolName ?? ""}
-      aria-label={`${t("chat.toolCall")}: ${rawName}${agentName ? `, ${agentName}` : ""}${statusLabel ? `, ${statusLabel}` : ""}`}
+      aria-busy={preparing ? true : undefined}
+      aria-label={`${t("chat.toolCall")}: ${rawName}${agentName ? `, ${agentName}` : ""}${accessibleStatus ? `, ${accessibleStatus}` : ""}`}
     >
         <div className={`tool-row-head${runHead ? " is-run" : ""}`}>
           <button
@@ -431,7 +450,7 @@ function HostToolRow({
             aria-controls={hasDetails ? detailsId : undefined}
             aria-describedby={summaryIsPath && summary ? pathId : undefined}
             disabled={!hasDetails}
-            title={summary || rawName}
+            title={preparing ? undefined : summary || rawName}
             onClick={() => hasDetails && toggleRow()}
           >
             <span className={`tool-row-icon${action === "delegate" ? " is-subagent" : ""}`}>
@@ -445,7 +464,7 @@ function HostToolRow({
                 {agentName}
               </span>
             ) : null}
-            {summary ? (
+            {!preparing && summary ? (
               <span
                 className={`tool-row-summary${summaryIsCode ? " is-code" : ""}${previewTarget && localToolsAllowed ? " linked" : ""}${summaryIsPath ? " is-path" : ""}`}
                 title={summary}

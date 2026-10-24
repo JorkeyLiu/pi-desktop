@@ -23,6 +23,8 @@ export const frEntries: ChangelogEntry[] = [
       "Les nouvelles sessions locales reçoivent immédiatement un titre tiré du premier prompt ; un modèle rapide configuré globalement peut, en option, l’affiner de manière asynchrone.",
       "Les lignes d’outil conservent le nom de l’outil pendant son exécution et indiquent le résultat à droite, sans changer de verbe au cours d’un même appel. Les commandes dont le code de sortie est différent de zéro sont marquées comme terminées avec ce code ; la commande et la sortie peuvent être copiées séparément depuis le terminal développé.",
       "L’onglet d’un sous-agent affiche le nombre moyen de tokens générés par seconde, en plus du contexte, des coûts et des tours ; une réponse interrompue est signalée comme estimation.",
+      "Un appel d’outil apparaît désormais à sa place dans la conversation dès qu’il commence à être diffusé, avant la fin de ses arguments, avec une pulsation discrète sur son icône et son nom au lieu d’un indicateur rotatif.",
+      "La transcription d’un sous-agent affiche l’indicateur de travail tant que l’enfant travaille, au lieu d’une liste figée entre deux mises à jour.",
     ],
   },
   {
