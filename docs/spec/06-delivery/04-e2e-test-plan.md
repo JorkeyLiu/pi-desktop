@@ -7437,6 +7437,137 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   Existing host permission tests keep Write/Edit denied regardless of grants or
   permission mode. No paid provider or user Desktop profile is used.
 
+#### E2E-1175: A stopped subagent's tab keeps following the continued chain
+
+- **Preconditions**: Local Agent session whose `Task` delegation ran and was
+  stopped from the main chat, leaving the delegation tab open on the stopped
+  run. No provider, paid API, or user desktop instance is used: the fixture
+  mounts the production `SubagentTranscriptTab` and the real app store in an
+  isolated Electron window and drives the host event contract
+  (`IPC.event.agentMessage`) at the preload boundary.
+- **Steps**:
+  1. Type one follow-up in the stopped delegation's tab and send it.
+  2. Deliver the continuation emissions the runtime produces for a detached
+     run: the `Task` marker pair, the child follow-up row, then four delegate
+     tool calls — each as its own `tool_start`/`tool_end`, the persisted tool
+     row replay, and a whole-`Task`-row progress snapshot.
+  3. Between the tool calls, keep a draft in the composer and assert the panel
+     element, the draft, the header state and the run identity never change.
+  4. Close and reopen the tab while the run is live (a real unmount/remount of
+     the production component) with no parent turn id in store state: the
+     header still reads the live run, the input stays enabled, Stop stays
+     available, and a steer typed after the reopen reaches the same delegation
+     with the run's own execution turn as `expectedTurnId`.
+  5. Open a tab on a `Task` call that is still being created (no result yet),
+     then deliver its result: the same tab keeps its prompt, adopts the run's
+     identity without being rebuilt, and stays stoppable and continuable.
+  6. Click Stop, then deliver the settled `Task` snapshot and the execution
+     turn's own terminal event; then send a second follow-up from the same tab.
+- **Expected**: The follow-up renders exactly once (the run's own user row, not
+  the `Task` marker's task argument plus the child echo). The tab keeps
+  following the chain-latest run through the same tab element — no rebuild, no
+  state flip between running and settled, no identity change, no lost draft.
+  The live continued run reads `Running`, states the user-owned report owner,
+  keeps its input usable, and offers Stop when the draft is empty; Stop names
+  the current run's delegation id. After the settle the composer returns to
+  continue mode, the session carries no running flag or execution turn, and the
+  same tab continues the chain again with no new card. A run that completes on
+  its own is reported `Completed` by the same path.
+- **Automation**: `apps/desktop/test/subagent-stop-resume-user-path.test.mjs`
+  (`node --test`) with the production tab, store, i18n catalogs and stylesheet;
+  `pnpm test:e2e:subagent-lifecycle` asserts the same identity end to end (phase
+  3 reads the persisted user marker's `details.executionTurnId`, phase 5 covers
+  stop, then direct continuation as a `user`-owned run).
+- **Specs linked**: `04-ux/08-component-spec.md` (delegation tab),
+  `04-ux/09-interaction-patterns.md` (work panel tabs),
+  `03-runtime/02-agent-runtime.md` §5f (direct continuation).
+- **Acceptance**: Quality
+- **Milestone**: M6
+- **Status**: Automated
+
+#### E2E-1176: A continued delegation never appends cards to the main chat
+
+- **Preconditions**: Local Agent session whose `Task` delegation ran and was
+  stopped from the main chat, then continued twice from that delegation's own
+  tab. No provider, paid API, or user desktop instance is used: the fixture
+  mounts the production main-chat transcript component and the real app store
+  in an isolated Electron window and drives the host event contract
+  (`IPC.event.agentMessage`) at the preload boundary.
+- **Steps**:
+  1. Mount the main-chat transcript over the persisted conversation: one
+     dispatch card, stopped, with the reply that reported the stop.
+  2. Deliver the continuation emissions the runtime produces for a direct
+     continuation typed in the delegation's tab — the `Task` marker pair
+     (`source: "user"` with a `resume` target) and the child user row — then a
+     second continuation after its terminal snapshot.
+  3. After each continuation, assert the card count, the card's own outcome and
+     runtime, the assistant-turn count, the activity-group count and the tool
+     count of the process line.
+  4. Read the session messages and the chain back from the store.
+  5. Click the dispatch card.
+- **Expected**: The conversation holds exactly the one card the work was
+  dispatched from, still stating the state its own run ended in; a continuation
+  adds no card, no activity group, no assistant turn, no empty group and no
+  inflated tool count. Both marker rows remain in the session messages, the
+  chain still reports its newest run, and the dispatch card opens that newest
+  run's tab.
+- **Automation**: `apps/desktop/test/subagent-main-chat-user-path.test.mjs`
+  (isolated Electron) and
+  `apps/desktop/test/subagent-main-chat-continuation.test.mjs` (projection: one
+  card, no extra turn, an explicit parent `Task(resume)` keeps its card, raw
+  messages and chain unchanged).
+- **Specs linked**: `04-ux/08-component-spec.md` §9.9 (delegation cards),
+  `04-ux/09-interaction-patterns.md` (work panel tabs).
+- **Acceptance**: Quality
+- **Milestone**: M6
+- **Status**: Automated
+
+#### E2E-1177: A delegation's composer attaches images and follows the main IME rules
+
+- **Preconditions**: Local Agent session with a continuable delegation tab open, plus
+  a live run for the steer case. No provider, paid API, or user desktop instance is
+  used: the fixture mounts the production `SubagentTranscriptTab`, its shared
+  composer input and shell, the real app store and the stylesheet in an isolated
+  Electron window.
+- **Steps**:
+  1. Stage an image through the picker and through a paste, preview each staged
+     reference, remove one, and assert the editor keeps its text and its focus.
+  2. Grant the session the attach capability while the child model declares no
+     vision support, then send an image-only steer.
+  3. Continue a settled delegation with an image-only request.
+  4. Type text and pick another image while a send is in flight.
+  5. Compose with an IME active: Enter that confirms a candidate, Enter with a
+     plain draft, and Shift+Enter.
+- **Expected**: The pick is gated by the session's attach capability alone — an
+  image is never refused locally because of the model's declared vision support,
+  and an accepted request carries it. The accepted steer or continuation clears
+  exactly the text and attachments it carried; a rejected send keeps both for
+  retry. Text and images entered during an in-flight send are the next request
+  and are never swept into the one in flight, and a tab or session switch carries
+  neither. An Enter that confirms an IME candidate never sends, Enter sends only
+  where the keybinding allows, and Shift+Enter inserts a newline. The tab's own
+  rows render their attachment images, and copying a message without images
+  still yields plain text.
+- **Automation**: `apps/desktop/test/subagent-image-attachments-user-path.test.mjs`
+  (five probes: staged pick/paste with preview and remove, image-only steer,
+  image continuation, transcript images, composer surface with autosize, shell
+  toolbar and IME). The same IME rules are asserted for the shared editor in
+  `apps/desktop/test/subagent-stop-resume-user-path.test.mjs`, and
+  `scripts/e2e-composer-ime-stack.mjs` exercises the main composer's IME stack in
+  a live window. The same images are proven off the wire by
+  `pnpm test:e2e:subagent-lifecycle` phase 7: the production
+  `agentSteerSubagent` and `agentContinueSubagent` handlers run against the real
+  sidecar and a local provider fixture whose child model declares text-only
+  input, and both an image-only steer and an image-only continuation reach the
+  child provider request while the transcript row keeps a content-addressed ref
+  (never the bytes) and a continuation naming an ended turn is refused before
+  any provider work.
+- **Specs linked**: `04-ux/08-component-spec.md` (delegation tab composer),
+  `04-ux/09-interaction-patterns.md` (work panel tabs).
+- **Acceptance**: Quality
+- **Milestone**: M6
+- **Status**: Automated
+
 #### E2E-149: Recover provider rate limits (429) silently in place
 
 - **Preconditions**: A project-bound Agent session uses deterministic provider
@@ -8068,11 +8199,15 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
        child instance (a `Task` call denied before spawn, or an unresolvable
        chain) keeps the disabled read-only hint, in every supported locale.
        The running composer follows the same single-slot switching as the main
-       composer: running with an empty draft shows icon-only Stop; a draft shows
-       the Send button.
-  6. Wait for the failed delegate to settle, open its tab, and verify the
+       composer — running with an empty draft shows icon-only Stop, a draft
+       shows the Send button — except that a live delegate whose steer path
+       cannot act keeps icon-only Stop instead of a disabled Send.
+  6. Both tabs show the same chain-latest run and stay operable: neither is
+     marked stale, and a follow-up sent from the first tab continues the chain
+     without opening another card.
+  7. Wait for the failed delegate to settle, open its tab, and verify the
      ended tab persists until manually closed.
-  7. Switch to another session and back. Verify the tabs are restored per
+  8. Switch to another session and back. Verify the tabs are restored per
      session and closed tabs stay closed.
 - **Expected**: No auto-open on delegate start; N `Task` calls = N coexisting
   closable tabs whose labels are the chain's original task description with a
@@ -8321,10 +8456,15 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
     context occupancy and cumulative spend — the same figures its own tab
     header states, not the counters of the single invocation the card
     represents: after a `Task(resume …)` continuation reported more work, both
-    cards of the chain read the chain's totals, the occupancy is the latest
-    segment's gauge rather than a sum, the totals move on both cards when the
-    running segment reports again, and a neighbouring single-run card keeps its
-    own figures.
+    cards of the chain read the chain's totals, the occupancy is the chain's
+    gauge rather than a sum, the totals move on both cards when the running
+    segment reports again, and a neighbouring single-run card keeps its own
+    figures. The gauge is the last figure a segment actually reported: the
+    resumed marker and the progress snapshots before its reply carry no window
+    of their own, so the card, the dock row and the tab header keep stating the
+    known figure instead of dropping to `—`, the reply's own snapshot replaces
+    it (a smaller figure and a real `0` included), and only a chain no segment
+    ever measured reads `—`.
   - The card's figures line is never conditional. A run that reported zeros
     states those zeros (`Turns 0 · Tool calls 0 · Context 0 · Spent 0`), a run
     that has reported no figure keeps the four labelled placeholders
@@ -8354,7 +8494,11 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   `subagent-task-title.test.mjs`, `subagent-ui-metrics.test.mjs` for the chain
   totals a resumed card shares with its tab header and for the four
   always-present figure slots (a reported zero versus an unreported dash) on
-  both the card and the dock row);
+  both the card and the dock row; `subagent-child-controls.test.mjs` and
+  `subagent-continue-user-path.test.mjs` for the chain's context gauge across a
+  resumed marker, repeated progress and a reply snapshot; and
+  `subagent-stop-resume-user-path.test.mjs` for the same evolution on the
+  production tab in an Electron window);
 
 #### E2E-146: A turn that produces no visible text re-runs once
 

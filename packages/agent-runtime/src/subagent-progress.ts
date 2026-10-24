@@ -82,6 +82,10 @@ export function delegationSummary(record: DelegationRecord): Record<string, unkn
       ? { contextTokens: record.contextTokens }
       : {}),
     ...(record.lastToolName ? { lastToolName: record.lastToolName } : {}),
+    // The run's own execution turn, published so a surface that outlives this
+    // process (a reopened tab, a rebuilt renderer) can name the turn that
+    // owns a continuation's steering instead of guessing from parent state.
+    ...(record.executionTurnId ? { executionTurnId: record.executionTurnId } : {}),
     ...(record.completedAt ? { completedAt: record.completedAt } : {}),
     ...(record.result?.modelFailures ? { modelFailures: record.result.modelFailures } : {}),
     ...(record.result?.error ? { error: record.result.error } : {}),

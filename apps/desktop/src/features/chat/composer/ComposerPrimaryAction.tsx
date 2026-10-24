@@ -8,12 +8,17 @@ export type ComposerPrimaryActionKind = "stop" | "send";
  * The composer's single submit slot: Stop while a run is active with an empty
  * draft, Send otherwise. Shared by the main composer and the subagent panel
  * composer so the switching policy is defined once instead of forked.
+ *
+ * `canSend` names whether the Send half could actually act. A live run whose
+ * send path is unavailable — no owner turn to steer, a read-only surface — still
+ * offers Stop: a running delegate must stay cancellable, never a dead button.
  */
 export function composerPrimaryAction(
   running: boolean,
   hasDraft: boolean,
+  canSend = true,
 ): ComposerPrimaryActionKind {
-  return running && !hasDraft ? "stop" : "send";
+  return running && (!hasDraft || !canSend) ? "stop" : "send";
 }
 
 export type ComposerSendAction = {

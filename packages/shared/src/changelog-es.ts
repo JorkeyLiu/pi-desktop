@@ -23,6 +23,7 @@ export const esEntries: ChangelogEntry[] = [
       "Las sesiones locales nuevas reciben de inmediato un título basado en el primer mensaje; de forma opcional, un modelo rápido configurado globalmente puede mejorarlo en segundo plano.",
       "Las filas de herramientas conservan el nombre de la herramienta mientras se ejecuta y muestran el resultado a la derecha, sin cambiar de verbo durante una misma llamada. Los comandos con código de salida distinto de cero aparecen como completados con ese código; el comando y la salida se copian por separado desde la terminal desplegada.",
       "La pestaña de cada subagente muestra la media de tokens de salida por segundo junto con el contexto, el gasto y los turnos; si se interrumpe una respuesta, indica que es una estimación.",
+      "La pestaña de un subagente detenido sigue siendo utilizable al continuarlo: la continuación aparece una sola vez, Detener sigue disponible mientras se ejecuta y la misma pestaña vuelve a continuar la cadena. La conversación conserva la tarjeta con la que se delegó el trabajo y no añade ninguna por una continuación. Su editor ahora adjunta, pega, previsualiza y elimina imágenes como el principal, y sigue la misma regla de IME: Intro que confirma un candidato nunca envía. La cifra de contexto conserva el último valor que informó el subagente hasta que la continuación informe el suyo.",
     ],
   },
   {

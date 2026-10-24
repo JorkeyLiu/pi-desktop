@@ -555,28 +555,121 @@ body:has(> .context-menu) .work-panel-header {
   padding: 10px 14px;
 }
 
-.subagent-transcript-composer textarea {
-  font-size: var(--text-base);
-  line-height: var(--leading-chat);
-  display: block;
-  width: 100%;
-  min-height: calc(var(--leading-chat) * 2em);
-  resize: none;
+/*
+  The panel keeps the dock's own filled-field tone rather than the chat
+  composer plate: the work-panel browser field paints its resting fill with
+  `--ds-tile-hover`, exactly the rgb(46,46,46) plate the pane's old textarea
+  sat on, and focus adds only its ring to that same plate instead of lifting
+  the surface to a different tone. Only the shell's fill and elevation are
+  re-pointed here — the editor, toolbar, and padding inside stay the shared
+  ones, so the box never reads as a second plate stacked on the pane.
+
+  The selector is anchored on the tab so it outranks the theme shell fills
+  (`:root[data-theme=…] .composer-shell`) instead of depending on import
+  order. `--ds-tile-hover` is a theme token, so a contributed theme still
+  moves the resting and focused surfaces together.
+*/
+.subagent-transcript-tab
+  .subagent-transcript-composer
+  .composer-shell.subagent-transcript-shell {
+  background: var(--ds-tile-hover);
+  box-shadow: none;
+  border: 0;
+  outline: 0;
 }
 
+.subagent-transcript-tab
+  .subagent-transcript-composer
+  .composer-shell.subagent-transcript-shell:focus-within {
+  background: var(--ds-tile-hover);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--ds-accent) 22%, transparent);
+}
+
+/*
+  Staged images ride above the editor inside the same plate: a row of tiles
+  the user can open (the composer's own preview dialog) or remove. The row
+  shares the editor's inset padding so the box stays one surface.
+*/
+.subagent-transcript-shell .composer-attachment-strip {
+  display: flex;
+  width: 100%;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px 0;
+}
+
+.subagent-transcript-shell .composer-attachment-tile {
+  position: relative;
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+}
+
+.subagent-transcript-shell .composer-attachment-open {
+  display: inline-flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--ds-tile-deep);
+  color: var(--ds-text-muted);
+}
+
+.subagent-transcript-shell .composer-attachment-open:focus-visible {
+  outline: 1.5px solid color-mix(in oklab, var(--ds-accent) 80%, transparent);
+  outline-offset: 1px;
+}
+
+.subagent-transcript-shell .composer-attachment-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.subagent-transcript-shell .composer-attachment-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.subagent-transcript-shell .composer-attachment-remove {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--ds-raised);
+  color: var(--ds-text-secondary);
+  box-shadow: var(--ds-raised-shadow);
+}
+
+.subagent-transcript-shell .composer-attachment-remove:hover,
+.subagent-transcript-shell .composer-attachment-remove:focus-visible {
+  background: var(--ds-bg-hover);
+  color: var(--ds-text-primary);
+}
 .subagent-transcript-composer-controls {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding-top: 8px;
 }
 
-/* Static model/thinking label: display-only, never a fake menu. */
+/* Static model/thinking label: display-only, never a fake menu. It shares the
+   action row with Send/Stop, so it shrinks and ellipsizes before the action
+   can be pushed out of the composer. */
 .subagent-transcript-model-static {
   display: inline-flex;
   min-width: 0;
-  flex: 1 1 auto;
+  max-width: 100%;
+  flex: 0 1 auto;
   align-items: center;
   gap: 4px;
   overflow: hidden;
@@ -587,6 +680,7 @@ body:has(> .context-menu) .work-panel-header {
 
 .subagent-transcript-model-static .composer-model-thinking-model,
 .subagent-transcript-model-static .composer-model-thinking-level {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -599,15 +693,6 @@ body:has(> .context-menu) .work-panel-header {
   line-height: var(--leading-normal);
   overflow-wrap: anywhere;
 }
-
-.subagent-transcript-helper {
-  padding-top: 6px;
-  color: var(--ds-text-muted);
-  font-size: var(--text-sm);
-  line-height: var(--leading-normal);
-  overflow-wrap: anywhere;
-}
-
 /* Narrow sidebar panels: controls wrap so Send never overlaps the label. */
 @media (max-width: 480px) {
   .subagent-transcript-header {
@@ -622,18 +707,23 @@ body:has(> .context-menu) .work-panel-header {
   .subagent-transcript-composer-controls {
     flex-wrap: wrap;
   }
-  .subagent-transcript-model-static {
-    flex: 1 1 100%;
-  }
 }
 
-/* The panel composer's single slot shares the main composer icon size;
-   both halves (stop and send) use the same compact geometry. */
-.subagent-transcript-composer-controls > :is(.stop-btn, .send-btn) {
+/* The panel composer's single action slot shares the main composer icon size;
+   both halves (stop and send) use the same compact geometry. The static label
+   sits in the same right-hand group one comfortable step to their left: unlike
+   the main composer's model chip it carries no inline padding of its own, so
+   the group gap alone has to keep the label from touching the action. */
+.subagent-transcript-composer-controls > .composer-right {
+  gap: 10px;
+}
+
+.subagent-transcript-composer-controls .composer-right > :is(.stop-btn, .send-btn) {
   width: 26px;
   height: 26px;
   flex-basis: 26px;
 }
+
 /* Shared per-tool empty state used by Files and plugin fallback surfaces. */
 .work-tab-empty {
   display: flex;

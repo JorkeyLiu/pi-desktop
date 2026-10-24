@@ -23,6 +23,7 @@ export const trEntries: ChangelogEntry[] = [
       "Yeni yerel oturumlar ilk istemden hemen bir başlık alır; genel olarak yapılandırılmış hızlı modelle isteğe bağlı olarak daha kısa bir başlık eşzamansız biçimde oluşturulabilir.",
       "Araç satırları çalışırken aracın kendi adını korur ve sonucu sağda belirtir; aynı çağrı fiiller arasında değişip durmaz. Sıfırdan farklı çıkış kodlu komutlar artık yanında çıkış koduyla tamamlandı olarak gösterilir; komut ve çıktı, genişletilmiş terminalden ayrı ayrı kopyalanabilir.",
       "Alt ajanın sekmesi bağlam, harcama ve tur sayılarının yanında saniyedeki ortalama çıktı token sayısını da gösterir; yanıt kesintiye uğradığında tahmin olduğu belirtilir.",
+      "Durdurulmuş bir alt ajanı sürdürdüğünüzde özgün sekmesi kullanılabilir kalır: devam iletisi bir kez görünür, çalışma sırasında Durdur kullanılabilir ve aynı sekme zinciri yeniden sürdürebilir. Konuşma, işin devredildiği kartı korur ve bir devam için yeni kart eklemez. Düzenleyici artık görselleri ana düzenleyici gibi ekler, yapıştırır, önizler ve kaldırır; adayı onaylayan Enter hiçbir zaman göndermez. Bağlam değeri, sürdürülen çalışma kendi değerini bildirene kadar alt ajanın en son bildirdiği değeri korur.",
     ],
   },
   {

@@ -15,8 +15,8 @@ import {
   subagentSteerBlockedReason,
 } from "../../lib/subagent-actions";
 import {
-  isStaleSubagentTab,
   subagentChainDeliveryOwner,
+  subagentChainExecutionTurnId,
   subagentChainInstantiated,
   subagentChainLatestDelegationId,
   subagentChainCallIds,
@@ -31,8 +31,15 @@ import { useChatSessionCapability } from "../../hooks/use-chat-session-capabilit
 import { useFollowScroll } from "../../hooks/use-follow-scroll";
 import { useTranscriptView } from "../../hooks/use-transcript-view";
 import { useTranscriptSearchFocus } from "../../hooks/use-transcript-search-focus";
-import { IconArrowDown, IconBot } from "../icons";
-import { HelpIcon, Textarea, TooltipButton } from "../ui";
+import { IconArrowDown, IconBot, IconImage } from "../icons";
+import { HelpIcon, TooltipButton } from "../ui";
+import { ComposerInput } from "../../features/chat/composer/ComposerInput";
+import { ComposerShell } from "../../features/chat/composer/ComposerShell";
+import { useComposerAutosize } from "../../features/chat/composer/hooks/useComposerAutosize";
+import { useComposerTextDraft } from "../../features/chat/composer/hooks/useComposerTextDraft";
+import { useComposerImageAttachments } from "../../features/chat/composer/hooks/useComposerImageAttachments";
+import { useComposerImagePreview } from "../../features/chat/composer/hooks/useComposerImagePreview";
+import { ComposerImageStrip } from "../../features/chat/composer/ComposerImageStrip";
 import {
   ComposerSendButton,
   composerPrimaryAction,
@@ -42,10 +49,13 @@ import { TranscriptDisclosureProvider } from "../../features/chat/transcript/dis
 import { buildSubagentTranscript } from "../../lib/subagent-transcript";
 import {
   AssistantErrorMessage,
+  MessageAttachmentImage,
   ThinkingRow,
 } from "../../features/chat/transcript/shared";
+import { useOpenChatFileRef } from "../../hooks/use-preview-target";
 import { ToolRow } from "../../features/chat/transcript/ToolRow";
 import { Markdown } from "../Markdown";
+import type { MessageAttachment } from "@pi-desktop/shared";
 import { delegateModelId, delegateThinkingLevel } from "../../features/chat/transcript/model";
 
 /**
@@ -61,6 +71,12 @@ import { delegateModelId, delegateThinkingLevel } from "../../features/chat/tran
  * matter how it ended — outcome labels stay as history, never a permanent
  * cannot-continue state. There is no parent `Task(resume)` text prompt and no
  * ask-parent/follow-up distinction.
+ *
+ * The tab is its whole chain, not one run of it: status, transcript, Stop and
+ * Send all resolve the chain's newest run, so a continuation opened elsewhere
+ * (a new card, another tab) never strands this one. A user continuation owns
+ * its own execution turn and therefore reads `running` while the parent is
+ * idle — the parent's idleness is not evidence that the child ended.
  */
 export function SubagentTranscriptTab({ delegationId }: { delegationId: string }) {
   return (
@@ -90,6 +106,33 @@ function formatCount(value: number, language: string): string {
     return `${value}`;
   }
 }
+/**
+ * The images a user sent to the child, rendered in the transcript's own
+ * attachment language (chip + hover preview + click-to-open), so an
+ * image-only steer still shows what actually reached the delegate.
+ */
+function SubagentUserAttachments({ attachments }: { attachments?: MessageAttachment[] }) {
+  const { t } = useTranslation();
+  const openFile = useOpenChatFileRef();
+  const images = (attachments ?? []).filter((attachment) => attachment.kind === "image");
+  if (!images.length) return null;
+  return (
+    <span
+      className="message-attachments"
+      role="list"
+      aria-label={t("chat.messageAttachments")}
+    >
+      {images.map((attachment) => (
+        <MessageAttachmentImage
+          key={`${attachment.ref}:${attachment.name}`}
+          attachment={attachment}
+          onOpenFile={openFile}
+        />
+      ))}
+    </span>
+  );
+}
+
 
 function formatRate(value: number, language: string): string {
   try {
@@ -141,10 +184,6 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
   // the same chain, so status/send/stop/continue all target the latest id.
   const activeDelegationId = useMemo(
     () => subagentChainLatestDelegationId(messages, delegationId),
-    [messages, delegationId],
-  );
-  const staleTab = useMemo(
-    () => isStaleSubagentTab(messages, delegationId),
     [messages, delegationId],
   );
   const outcome = useMemo<SubagentOutcome>(() => {
@@ -199,32 +238,64 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     () => subagentChainInstantiated(messages, activeDelegationId),
     [messages, activeDelegationId],
   );
-  // The chain-latest tab owns the action so a stale tab never duplicates it.
+  // Every tab of a chain continues it: the action always targets the
+  // chain-latest run, so an older tab stays usable without opening a new card.
   const continuable = shouldShowSubagentContinue({
     outcome,
     hasInstance: instantiated,
     canPromptParent,
     readOnlySession,
-    isStaleTab: staleTab,
   });
-
-  const [draft, setDraft] = useState("");
+  // The shared editor owns typing and caret; this surface owns submission.
+  const text = useComposerTextDraft();
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const sendingRef = useRef(false);
+  // Every user edit bumps the revision. A send captures it, so a reply that
+  // lands after the user started the next message never wipes that message as
+  // if it were the text that was sent.
+  const draftRevisionRef = useRef(0);
+  const editDraft = (next: string) => {
+    draftRevisionRef.current += 1;
+    text.handleInput(next);
+  };
   // Latest chain target as of the most recent render: a d1 -> d2 continuation
   // arriving mid-dispatch moves the composer to d2, so the await below must
   // not clear a draft that no longer belongs to the delegation it sent to.
   const activeDelegationRef = useRef(activeDelegationId);
   activeDelegationRef.current = activeDelegationId;
   const showToast = useAppStore((state) => state.showToast);
+  // The main composer's attach gate, on this surface's session: reaching a
+  // remote or read-only conversation never offers a picker, and no model
+  // capability label is consulted — an image is either stageable here or not.
+  const attachmentsAllowed = useAppStore((state) =>
+    sessionAllows(
+      state.sessions.find((item) => item.id === state.activeSessionId) ??
+        (state.activeSessionId?.startsWith("remote:") ? { id: state.activeSessionId } : undefined),
+      "canAttach",
+    ),
+  );
+  // Images staged for this tab, and the same controller the main composer
+  // uses for its preview dialog: one safe data-URL read per staged image.
+  const images = useComposerImageAttachments({
+    sessionId: activeSessionId ?? null,
+    blocked: readOnlySession || !attachmentsAllowed,
+  });
+  const imagePreview = useComposerImagePreview({
+    references: images.references,
+    value: text.value,
+    sessionId: activeSessionId ?? "",
+    editorRef: text.ref,
+  });
 
   // Stale identity/draft guards: a tab/session switch never carries the old
-  // draft or error into the new context.
+  // draft, staged images, or error into the new context.
   useEffect(() => {
     sendingRef.current = false;
     setSending(false);
-    setDraft("");
+    draftRevisionRef.current += 1;
+    text.setValue("");
+    images.reset();
     setSendError(null);
   }, [delegationId, activeSessionId]);
 
@@ -244,8 +315,16 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
   // else the status's current turn (the live parent turn when attached, the
   // adopted execution turn when detached). Never the parent session's
   // generic running flag: a running child may outlive parent UI idleness.
+  // The run's own execution turn, read from its persisted `Task` row: the
+  // authority a reopened tab or a rebuilt renderer still has after the
+  // in-memory kept turn is gone.
+  const runTurnId = useMemo(
+    () => subagentChainExecutionTurnId(messages, activeDelegationId),
+    [messages, activeDelegationId],
+  );
   const ownerTurnId = resolveSteerOwnerTurn({
     keptTurnId: ownerTurnRef.current.get(activeDelegationId),
+    runTurnId,
     currentTurnId: expectedTurnId,
   });
 
@@ -266,9 +345,16 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
   // a live parent additionally guards with its current turn id.
   const continueEnabled = !running && continuable && !sending;
 
+  // A send carries the text and the images staged for it. An image needs no
+  // words: the child model receives it as an image, so an empty draft is a
+  // complete request as long as one image is attached.
   const sendSteer = async () => {
-    const content = draft.trim();
-    if (!content || sendingRef.current) return;
+    const content = text.value.trim();
+    const outgoing = images.attachments;
+    if ((!content && !outgoing.length) || sendingRef.current) return;
+    // Only the images this send carries may clear afterwards: an image staged
+    // while the request is in flight belongs to the next one.
+    const outgoingIds = images.references.map((reference) => reference.id);
     // Capture turn identity, session, and the chain-latest delegation before
     // the await so a tab/session switch during dispatch never steers the
     // wrong child and never clears the new context's draft. The owner turn
@@ -276,11 +362,17 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     // current turn; the backend validates it either way.
     const capturedSessionId = useAppStore.getState().activeSessionId;
     const capturedDelegationId = activeDelegationId;
+    const capturedRevision = draftRevisionRef.current;
     const liveTurnId = capturedSessionId
       ? useAppStore.getState().agentStatuses[capturedSessionId]?.currentTurnId
       : undefined;
+    const capturedRunTurn = subagentChainExecutionTurnId(
+      useAppStore.getState().messages,
+      capturedDelegationId,
+    );
     const capturedOwnerTurn = resolveSteerOwnerTurn({
       keptTurnId: ownerTurnRef.current.get(capturedDelegationId),
+      runTurnId: capturedRunTurn,
       currentTurnId: liveTurnId,
     });
     const target = useAppStore.getState().sessions.find((item) => item.id === capturedSessionId);
@@ -311,16 +403,16 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
         delegationId: capturedDelegationId,
         expectedTurnId: turnId,
         content,
+        ...(outgoing.length ? { attachments: outgoing } : {}),
         messageId,
       });
       // Keep the owning turn for the next steer of this run: for a detached
       // run it is the execution turn the status row may not show yet.
       keepOwnerTurn(capturedDelegationId, response.turnId);
       // Echo is persisted backend and rendered in the chain; clear only on
-      // success and only when the composer still targets the same session
-      // and chain-latest delegation. A tab/session switch or a d1 -> d2
-      // continuation during dispatch moves the target, so the draft is
-      // preserved. Failures preserve it.
+      // success, only while the composer still belongs to this session and
+      // still holds the text that was sent. A tab/session switch or text typed
+      // after the capture preserves the draft, and a failure always does.
       if (
         shouldClearSteerDraft({
           sendSucceeded: true,
@@ -328,9 +420,14 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
           currentSessionId: useAppStore.getState().activeSessionId,
           capturedDelegationId,
           currentDelegationId: activeDelegationRef.current,
+          sendDelegationId: response.delegationId,
+          draftUnchanged: draftRevisionRef.current === capturedRevision,
         })
       ) {
-        setDraft("");
+        text.setValue("");
+        // The images this steer carried are now the child's; an image staged
+        // during the flight stays in the composer for the next send.
+        images.discard(outgoingIds);
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -343,8 +440,10 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
   };
 
   const sendContinue = async () => {
-    const content = draft.trim();
-    if (!content || sendingRef.current) return;
+    const content = text.value.trim();
+    const outgoing = images.attachments;
+    if ((!content && !outgoing.length) || sendingRef.current) return;
+    const outgoingIds = images.references.map((reference) => reference.id);
     // Capture session, live parent turn (when any), and the chain-latest
     // delegation before the await so a tab/session switch or a d1 -> d2
     // continuation during dispatch never continues the wrong delegate and
@@ -357,6 +456,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
       ? (useAppStore.getState().runningSessions[capturedSessionId] ?? false)
       : false;
     const capturedDelegationId = activeDelegationId;
+    const capturedRevision = draftRevisionRef.current;
     const target = useAppStore.getState().sessions.find((item) => item.id === capturedSessionId);
     const captured = captureContinueIdentity({
       sessionId: capturedSessionId ?? undefined,
@@ -385,6 +485,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
         sessionId: captured.sessionId,
         delegationId: capturedDelegationId,
         content,
+        ...(outgoing.length ? { attachments: outgoing } : {}),
         messageId,
         ...(captured.turnId ? { expectedTurnId: captured.turnId } : {}),
       });
@@ -393,9 +494,10 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
       // attached and detached runs) so a prompt steer of the new run names
       // the right owner before the status row catches up.
       keepOwnerTurn(response.delegationId, response.turnId);
-      // The continued run arrives backend-side as a new chain segment; clear
-      // only on success and only when the composer still targets the same
-      // session and chain-latest delegation. Failures preserve the draft.
+      // The continued run arrives backend-side as a new chain segment, so the
+      // composer's chain target moves to the delegation this send just opened:
+      // the accepted text clears there. A tab/session switch, text typed after
+      // the capture, or a failure preserves the draft.
       if (
         shouldClearSteerDraft({
           sendSucceeded: true,
@@ -403,9 +505,12 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
           currentSessionId: useAppStore.getState().activeSessionId,
           capturedDelegationId,
           currentDelegationId: activeDelegationRef.current,
+          sendDelegationId: response.delegationId,
+          draftUnchanged: draftRevisionRef.current === capturedRevision,
         })
       ) {
-        setDraft("");
+        text.setValue("");
+        images.discard(outgoingIds);
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -503,19 +608,17 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
       ? t("chat.subagentDeliveryUserHelp")
       : t("chat.subagentDeliveryParentHelp");
   // Explicit capability reasons: every blocked composer names its own cause
-  // without exposing harness internals. Stale tabs never duplicate the
-  // chain-latest action. A delegation with no backend instance — a denied
-  // never-started call, or a tab whose Task chain is missing — names that
-  // instead of a cannot-continue line, because an instantiated settled child
-  // always continues; remote, native, and permission blocks keep their copy.
+  // without exposing harness internals. A delegation with no backend instance
+  // — a denied never-started call, or a tab whose Task chain is missing —
+  // names that instead of a cannot-continue line, because an instantiated
+  // settled child always continues; remote, native, and permission blocks keep
+  // their copy.
   const readonlyReason = !running && !continuable
-    ? staleTab
-      ? t("panel.subagentStale")
-      : !instantiated
-        ? t("panel.subagentNoInstance")
-        : readOnlySession
-          ? t("chat.subagentSteerReadOnly")
-          : t("panel.subagentReadOnly")
+    ? !instantiated
+      ? t("panel.subagentNoInstance")
+      : readOnlySession
+        ? t("chat.subagentSteerReadOnly")
+        : t("panel.subagentReadOnly")
     : null;
   const composerPlaceholder = running
     ? (steerBlockedReason ?? t("chat.subagentSteerPlaceholder"))
@@ -527,9 +630,32 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     : running
       ? t("chat.subagentSteerSend")
       : t("chat.subagentContinueSend");
+  // An image-only request is a complete request: `hasContent` counts the text
+  // or a staged image, and nothing here consults the child model's declared
+  // vision support — the host delivers what the user attached.
+  const hasContent = text.value.trim().length > 0 || images.references.length > 0;
   const sendDisabled = running
-    ? !steerEnabled || !draft.trim()
-    : !continueEnabled || !draft.trim();
+    ? !steerEnabled || !hasContent
+    : !continueEnabled || !hasContent;
+  // A live run is stoppable even when its steer path is unavailable (no owner
+  // turn yet, or a read-only session): the Stop must not disappear behind a
+  // disabled send button.
+  const primaryAction = composerPrimaryAction(running, hasContent, !running || steerEnabled);
+  // A delegation that is neither live nor continuable has no submission path:
+  // its editor stays readable but frozen and names its own cause.
+  const readOnlyComposer = !running && !continuable;
+  const editorBlocked = readOnlyComposer ? true : running ? !steerEnabled : sending;
+  // The shared editor grows like the main composer instead of a fixed 2 rows.
+  useComposerAutosize(text.ref, text.value, "subagent-panel");
+  // A refusal from the attach path is the surface's own: a non-image pick, a
+  // blocked session, or the host's rejection reason.
+  const attachError = images.error
+    ? images.error.code === "not-an-image"
+      ? t("chat.subagentImagesOnly")
+      : images.error.code === "unavailable"
+        ? t("chat.subagentAttachUnavailable")
+        : (images.error.detail ?? null)
+    : null;
 
   return (
     <DisclosureAnchorContext.Provider value={disclosureAnchorNotifier}>
@@ -617,9 +743,12 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                   <div className="message-row user">
                     <div className="message-col">
                       <div className="message-bubble">
-                        <div className="message-user-text selectable">
-                          {turn.task || t("panel.subagentTaskEmpty")}
-                        </div>
+                        {turn.task || !turn.attachments?.length ? (
+                          <div className="message-user-text selectable">
+                            {turn.task || t("panel.subagentTaskEmpty")}
+                          </div>
+                        ) : null}
+                        <SubagentUserAttachments attachments={turn.attachments} />
                       </div>
                     </div>
                   </div>
@@ -640,9 +769,12 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                       >
                         <div className="message-col">
                           <div className="message-bubble">
-                            <div className="message-user-text selectable">
-                              {row.message.content}
-                            </div>
+                            {row.message.content ? (
+                              <div className="message-user-text selectable">
+                                {row.message.content}
+                              </div>
+                            ) : null}
+                            <SubagentUserAttachments attachments={row.message.attachments} />
                             {row.message.error ? (
                               <AssistantErrorMessage message={row.message} />
                             ) : null}
@@ -691,67 +823,103 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
           </TooltipButton>
         ) : null}
         <footer className="subagent-transcript-composer" data-testid="subagent-panel-footer">
-          {running || continuable ? (
-            <>
-              <Textarea
-                rows={2}
-                value={draft}
-                disabled={running ? !steerEnabled : sending}
-                aria-label={composerPlaceholder}
-                placeholder={composerPlaceholder}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === "Enter" &&
-                    !event.shiftKey &&
-                    (enterToSend || event.metaKey || event.ctrlKey)
-                  ) {
-                    event.preventDefault();
-                    sendComposer();
-                  }
-                }}
-              />
-              {sendError ? (
-                <div className="subagent-transcript-error" role="alert">
-                  {sendError}
-                </div>
-              ) : null}
-              {!running ? (
-                <div className="subagent-transcript-helper">
-                  {t("chat.subagentContinueHelp")}
-                </div>
-              ) : null}
-              <div className="subagent-transcript-composer-controls">
-                <span
-                  className="subagent-transcript-model-static"
-                  aria-label={`${t("chat.model")}: ${delegateSettings.modelId || "—"}. ${t("chat.reasoningLevel")}: ${delegateSettings.thinkingLevel || "—"}`}
-                  title={modelLabel || undefined}
-                >
-                  <span className="composer-model-thinking-icon" aria-hidden="true"><IconBot size={14} /></span>
-                  <span className="composer-model-thinking-model">{delegateSettings.modelId || "—"}</span>
-                  <span className="composer-model-thinking-dot" aria-hidden="true">·</span>
-                  <span className="composer-model-thinking-level">{delegateSettings.thinkingLevel || "—"}</span>
-                </span>
-                {composerPrimaryAction(running, draft.trim().length > 0) === "stop" ? (
-                  <SubagentStopButton delegationId={activeDelegationId} running compact />
-                ) : (
-                  <ComposerSendButton
-                    tooltip={sendLabel}
-                    ariaLabel={sendLabel}
-                    disabled={sendDisabled}
-                    onClick={sendComposer}
-                  />
-                )}
-              </div>
-            </>
-          ) : (
-            <Textarea
-              disabled
-              rows={2}
-              aria-label={readonlyReason ?? t("panel.subagentReadOnly")}
-              placeholder={readonlyReason ?? t("panel.subagentReadOnly")}
-              title={readonlyReason ?? undefined}
+          {/* The panel reuses the main composer's editor, box, and tokens; it
+            only owns what the panel decides, which is what to send. */}
+          <ComposerShell className="subagent-transcript-shell" gated={editorBlocked}>
+            <ComposerImageStrip
+              references={images.references}
+              sources={imagePreview.sources}
+              onOpen={(reference) => imagePreview.open(reference)}
+              onRemove={(id) => images.remove(id)}
+              onPreview={t("chat.imagePreview.title")}
+              onRemoveLabel={(name) => t("chat.removeFileReference", { name })}
+              failedLabel={t("chat.imagePreview.error")}
             />
+            <ComposerInput
+              imagePreview={imagePreview}
+              inputRef={text.ref}
+              value={text.value}
+              placeholderText={
+                readOnlyComposer
+                  ? (readonlyReason ?? t("panel.subagentReadOnly"))
+                  : composerPlaceholder
+              }
+              placeholderKey={`subagent-${outcome}`}
+              inputBlocked={editorBlocked}
+              pasting={images.busy}
+              enterToSend={enterToSend}
+              runActive={running}
+              title={readOnlyComposer ? (readonlyReason ?? undefined) : undefined}
+              // Clipboard images are staged for the child; any other clipboard
+              // content falls through to the editor's own paste.
+              onPaste={(event) => {
+                const files = Array.from(event.clipboardData?.files ?? []);
+                if (!files.length) return;
+                event.preventDefault();
+                void images.paste(files);
+              }}
+              onSubmit={() => sendComposer()}
+              onInsertNewline={() => text.insertNewline()}
+              onInput={editDraft}
+              onCompositionStart={() => undefined}
+              onCompositionEnd={() => undefined}
+              onSettledInput={() => undefined}
+              onFocus={() => undefined}
+              onBlur={() => undefined}
+            />
+            {readOnlyComposer ? null : (
+              <div className="subagent-transcript-composer-controls composer-toolbar">
+                <div className="composer-left">
+                  {/* The panel's picker is image-only: a delegate input can
+                    carry images and nothing else, so the native dialog states
+                    that before a file is chosen. */}
+                  <TooltipButton
+                    type="button"
+                    className="icon-btn icon-btn-square"
+                    tooltip={t("chat.addImages")}
+                    ariaLabel={t("chat.addImages")}
+                    disabled={images.busy || !attachmentsAllowed || readOnlySession}
+                    onClick={() => void images.pick()}
+                  >
+                    <IconImage size={15} aria-hidden="true" />
+                  </TooltipButton>
+                </div>
+                {/* The static label describes what the next send will run as,
+                  so it sits with the action instead of the picker. */}
+                <div className="composer-right">
+                  <span
+                    className="subagent-transcript-model-static"
+                    aria-label={`${t("chat.model")}: ${delegateSettings.modelId || "—"}. ${t("chat.reasoningLevel")}: ${delegateSettings.thinkingLevel || "—"}`}
+                    title={modelLabel || undefined}
+                  >
+                    <span className="composer-model-thinking-icon" aria-hidden="true"><IconBot size={14} /></span>
+                    <span className="composer-model-thinking-model">{delegateSettings.modelId || "—"}</span>
+                    <span className="composer-model-thinking-dot" aria-hidden="true">·</span>
+                    <span className="composer-model-thinking-level">{delegateSettings.thinkingLevel || "—"}</span>
+                  </span>
+                  {primaryAction === "stop" ? (
+                    <SubagentStopButton delegationId={activeDelegationId} running compact />
+                  ) : (
+                    <ComposerSendButton
+                      tooltip={sendLabel}
+                      ariaLabel={sendLabel}
+                      disabled={sendDisabled}
+                      onClick={sendComposer}
+                    />
+                  )}
+                </div>
+              </div>
+            )}
+          </ComposerShell>
+          {attachError ? (
+            <div className="subagent-transcript-error" role="alert">
+              {attachError}
+            </div>
+          ) : null}
+          {readOnlyComposer || !sendError ? null : (
+            <div className="subagent-transcript-error" role="alert">
+              {sendError}
+            </div>
           )}
         </footer>
       </div>

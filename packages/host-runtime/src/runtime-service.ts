@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AgentContinueSubagentRequest,
   AgentContinueSubagentResponse,
+  AgentPromptAttachment,
 } from "@pi-desktop/shared";
 import type { RuntimePort, TurnStartRequest, TurnSteerRequest } from "@pi-desktop/agent-host";
 import {
@@ -426,23 +427,34 @@ export class RuntimeService implements RuntimePort {
   }
 
   /**
-   * Steer one live delegate with user text. Turn-scoped like `steer`: the
+   * Steer one live delegate with user input. Turn-scoped like `steer`: the
    * expected parent turn must still own the session, and the sidecar runtime
    * revalidates before touching the child loop. Returns `accepted: false`
    * instead of throwing, so headless callers get the safe contract.
+   *
+   * A child input's images are inlined from disk, which this host has no
+   * access to: a request that carries them is refused with `UNSUPPORTED`
+   * rather than steered as text the user did not write.
    */
   async steerSubagent(request: {
     sessionId: string;
     delegationId: string;
     turnId: string;
     content: string;
+    attachments?: AgentPromptAttachment[];
     sessionMessageId?: string;
-  }): Promise<{ accepted: boolean }> {
+  }): Promise<{ accepted: boolean; errorCode?: string }> {
     const sessionId = request.sessionId.trim();
     const delegationId = request.delegationId.trim();
     const content = request.content;
-    if (!sessionId || !delegationId || typeof content !== "string" || !content.trim()) {
-      return { accepted: false };
+    const attachments = request.attachments ?? [];
+    const unsupported = this.childInputImagesUnsupported(attachments);
+    if (unsupported) return unsupported;
+    if (
+      !sessionId || !delegationId || typeof content !== "string" ||
+      (!content.trim() && attachments.length === 0)
+    ) {
+      return { accepted: false, errorCode: ErrorCodes.INVALID_ARGUMENT };
     }
     if (!this.isTurnDispatchable(sessionId, request.turnId)) return { accepted: false };
     try {
@@ -463,6 +475,19 @@ export class RuntimeService implements RuntimePort {
       this.options.log("warn", "steer subagent failed", { sessionId, turnId: request.turnId, delegationId, error: String(error) });
       return { accepted: false };
     }
+  }
+
+  /**
+   * This host reads no files, so it cannot inline a child input's images.
+   *
+   * Refusing loudly is the point: steering the text alone would answer with a
+   * message the user never sent. `undefined` means the request carries no
+   * images and the caller may proceed.
+   */
+  private childInputImagesUnsupported(
+    attachments: readonly unknown[],
+  ): { accepted: false; errorCode: string } | undefined {
+    return attachments.length ? { accepted: false, errorCode: ErrorCodes.UNSUPPORTED } : undefined;
   }
 
   /**
@@ -493,11 +518,18 @@ export class RuntimeService implements RuntimePort {
     if (!sessionId || !delegationId) {
       throw typedError("sessionId and delegationId required", ErrorCodes.INVALID_ARGUMENT);
     }
+    // This host reads no files, so it cannot inline the continuation's images.
+    // Refuse loudly: continuing with the text alone would answer with a message
+    // the user never sent. A host with file access resolves them before this
+    // layer (the desktop IPC boundary does).
+    if (request.attachments?.length) {
+      throw typedError(
+        "Continuing a subagent with images requires a host with file access",
+        ErrorCodes.UNSUPPORTED,
+      );
+    }
     if (typeof content !== "string" || !content.trim()) {
       throw typedError("Continuation text required", ErrorCodes.INVALID_ARGUMENT);
-    }
-    if (delegationId.length > 128 || content.length > 20_000 || (expectedTurnId && expectedTurnId.length > 128)) {
-      throw typedError("continueSubagent payload out of bounds", ErrorCodes.INVALID_ARGUMENT);
     }
     return this.withSessionOperation(sessionId, () =>
       this.continueSubagentTurn(sessionId, delegationId, content, messageId, expectedTurnId),

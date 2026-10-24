@@ -1587,16 +1587,36 @@ Project drag/drop follows these patterns:
   A tab shows the delegation as a message list: every `Task` call of the
   resume chain renders its prompt as a user row, and the rows the delegate
   produced under that call render with the main transcript's message-list
-  language, so a follow-up prompt reads as the next user turn. One Send composer
-  serves both states: a live delegate steers text-only via
-  `pi-desktop/agent/steerSubagent` with the owning turn identity, while a
-  settled continuable delegate continues directly via
+  language, so a follow-up prompt reads as the next user turn. A user
+  continuation's prompt appears once — the turn's user row — never again as a
+  repeated child echo. One Send composer serves both states: a live delegate
+  steers text-only via `pi-desktop/agent/steerSubagent` with the owning turn
+  identity, while a settled continuable delegate continues directly via
   `pi-desktop/agent/continueSubagent`, seeding the next run from any remaining
   child rows or the original task brief alone — no second
   parent-resume strategy, and a `stopped` / `aborted` delegate stays continuable
-  for the same reason, so its composer keeps the send path. At the minimum panel width, long commands, paths, and
+  for the same reason, so its composer keeps the send path. Every tab of a
+  chain follows its newest run: continuing from a new card never disables the
+  tab the user already had, and that tab keeps continuing the same chain.
+  Continuing there is that tab's action, not a new dispatch: the main chat keeps
+  the one card the work was dispatched from, in the state that run ended in, and
+  gains no card, activity group or turn for the follow-up. A live run whose
+  steer path cannot act (no owner turn known yet, a read-only session) keeps the
+  Stop action instead of a disabled Send, so it can always be cancelled, and a
+  live run that continues after the parent stopped it reads `Running` rather
+  than `aborted`. The composer is the main composer's own editor and shell: the
+  same autosize growth, the same IME guard — an Enter that confirms an IME
+  candidate never sends, Enter sends only where the keybinding allows, and
+  Shift+Enter adds a newline — and the same image path, where a pick is gated by
+  the session's attach capability rather than the run model's declared vision
+  support, and a staged image is previewed, removed, and delivered with the
+  request that carries it. Switching tab or session carries no draft or staged
+  image into another run. At the minimum panel width, long commands, paths, and
   tool summaries wrap inside the committed width instead of expanding the
-  panel past the client area.
+  panel past the client area. Its control row keeps the image picker alone on
+  the left and places the display-only model and reasoning label immediately
+  left of the single Send/Stop slot, so a long label ellipsizes inside its own
+  slot instead of displacing the action.
   A tab is never opened automatically when a delegate starts; only a node
   click opens one. Tabs persist after the delegate settles until the user
   closes them, and they are scoped to their session like every other tab.

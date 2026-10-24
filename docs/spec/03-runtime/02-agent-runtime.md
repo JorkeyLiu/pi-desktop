@@ -978,9 +978,14 @@ core set rather than the on-demand catalog of §7.1:
   session holds a single active turn, so a parent send stays `AGENT_BUSY`
   until the detached run settles or stops. A running user-owned run steers
   through its execution owner, never through the parent's generic running
-  flag. `expectedTurnId` is only a stale guard (the source record decides
-  ownership); a caller `messageId` dedups retries and post-restart hydration
-  rebuilds history from the transcript with no parent provider call. Only an
+  flag. That owner is published on the run's own `Task` result — launch, every
+  progress snapshot, the user-origin marker row, and the terminal snapshot
+  carry `details.executionTurnId` — so a surface that outlives the process (a
+  reopened delegation tab, a rebuilt renderer) names the exact turn this
+  contract validates instead of inferring one from the parent's current turn.
+  `expectedTurnId` is only a stale guard (the source record decides ownership);
+  a caller `messageId` dedups retries and post-restart hydration rebuilds
+  history from the transcript with no parent provider call. Only an
   explicit parent `Task(resume)` reattaches the chain as a new parent-owned run.
 
 **Program coordinator (one cadence, model resumes on program terms).** One persistent
@@ -1236,11 +1241,35 @@ first continues via `agent.continueSubagent` instead. A settled delegate
 continues directly, seeded from whatever child rows remain or its original task
 brief — no parent prompt. Only an explicit
 parent-model `Task(resume)` reattaches a chain as a new parent-owned run.
-The renderer exposes one Send composer: while running it steers text-only via
+The renderer exposes one Send composer: while running it steers via
 `agent.steerSubagent` with the owning turn identity; while settled and
 continuable it continues via `agent.continueSubagent`; there is no second
 parent-resume strategy and the model line is plain display. The Subagents
 settings destination carries the persistent wake defaults.
+
+**Child image inputs.** A user input to a delegate carries text, one or more
+images, or both; either request's `content` may be empty when an image is
+attached. Electron main resolves every path against the same session roots as
+the parent prompt (session scratch, data `attachments/`, project), confirms the
+bytes are a readable image by their own signature rather than the declared
+name or MIME label, refuses non-images, caps one input at 8 images, 10 MB per
+image, and 30 MB total, and persists each image as a content-addressed
+`attachments/<sha256>` blob. Only those refs enter the transcript and the
+`Task` tool arguments; base64 crosses the sidecar for one turn and is never
+written to a row.
+
+The runtime hands the bytes to the child endpoint as image blocks beside the
+text (`initialImages` on the continued run's opening turn, the second
+`steer()` argument while running). The host has already validated them, so no
+capability metadata gates the request: the gateway's `input: ["text"]` catalog
+entry is not trusted, and the child transport always offers the image — a
+provider that cannot read it reports that itself instead of the host silently
+dropping the user's picture. A resumed chain replays its own image inputs:
+the delegate's rows are hydrated from the host blob store through the same
+session roots before seeding, an image-only chain seeds from its first image
+row without a synthesized text brief, and a chain with neither text nor a
+readable image remains the only no-history case. Steering or continuing across
+a turn/ownership change stays refused before any image is claimed.
 
 **Model pins.** `model: <provider>/<model>` in the frontmatter is resolved once
 per launch in Electron main, where credentials and the Pi catalog snapshot live, against

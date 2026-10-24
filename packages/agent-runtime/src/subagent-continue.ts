@@ -20,12 +20,31 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { isUuid, type AgentEventEnvelope, type SubagentDeliveryOwner, type UiMessage } from "@pi-desktop/shared";
+import {
+  isUuid,
+  type AgentEventEnvelope,
+  type MessageAttachment,
+  type SubagentDeliveryOwner,
+  type UiMessage,
+} from "@pi-desktop/shared";
+
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { DEFAULT_SUBAGENT_PERMISSION } from "@pi-desktop/shared";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { SubagentDefinition } from "@pi-desktop/shared";
 import { nowIso } from "./agent-messages.js";
 import type { DelegationChain } from "./delegation-history.js";
+
+/**
+ * Transport bound on images in one child input.
+ *
+ * Electron main holds the authoritative limit and refuses an over-limit request
+ * before any byte crosses the sidecar; this re-check catches a hand-written or
+ * corrupted payload that skipped it. The number matches the host's, and the
+ * bound belongs in `@pi-desktop/shared` once the workspace resolves its own
+ * packages rather than a sibling checkout's build.
+ */
+const MAX_CHILD_INPUT_IMAGES = 8;
 
 function codedError(message: string, errorCode: string): Error {
   return Object.assign(new Error(message), { errorCode });
@@ -57,14 +76,21 @@ export type ContinueInput = {
   delegationId: unknown;
   text: unknown;
   messageId?: unknown;
+  /** Durable refs the echoed child row keeps; never carries bytes. */
+  attachments?: MessageAttachment[];
+  /** Image blocks the new run's opening user turn carries. */
+  images?: ImageContent[];
 };
-
 export type ValidatedSubagentContinue =
   | {
       outcome: "continue";
       delegationId: string;
       chain: DelegationChain;
       text: string;
+      /** Image blocks the continued run's opening user turn carries. */
+      images: ImageContent[];
+      /** Durable refs the echoed child row keeps; never carries bytes. */
+      attachments?: MessageAttachment[];
       /** Real `Task(resume)` tool invocation id owning the new run's rows. */
       toolCallId: string;
       /** Idempotency key for the synthetic action, when the caller gave one. */
@@ -106,7 +132,10 @@ export function validateSubagentContinue(
     );
   }
   const rawText = typeof request.text === "string" ? request.text : "";
-  if (!rawText.trim()) {
+  const images = request.images ?? [];
+  // An image-only continuation is a real input: the user sent a picture with
+  // no words, and the continued run still starts from that picture.
+  if (!rawText.trim() && images.length === 0) {
     throw codedError("Continuation text required", "INVALID_ARGUMENT");
   }
   if (rawText.trim().length > 20_000) {
@@ -158,12 +187,15 @@ export function validateSubagentContinue(
     delegationId,
     text: rawText.trim(),
     messageId: idempotencyKey,
+    ...(request.attachments?.length ? { attachments: request.attachments } : {}),
   });
   return {
     outcome: "continue",
     delegationId,
     chain,
     text: rawText.trim(),
+    images,
+    ...(request.attachments?.length ? { attachments: request.attachments } : {}),
     toolCallId,
     ...(idempotencyKey ? { idempotencyKey } : {}),
     taskMessage,
@@ -253,6 +285,9 @@ export function buildContinueSyntheticMessages(options: {
   delegationId: string;
   text: string;
   messageId?: string;
+  /** Durable refs the echoed child row carries; an image-only input has none
+   * of its own text, so the row reads as the image the user sent. */
+  attachments?: MessageAttachment[];
   /** Real `Task(resume)` invocation id; mints only before the spawn assigns it. */
   toolCallId?: string;
 }): { taskMessage: UiMessage; childMessage: UiMessage; toolCallId: string } {
@@ -304,6 +339,7 @@ export function buildContinueSyntheticMessages(options: {
     content: options.text,
     createdAt: now,
     status: "complete",
+    ...(options.attachments?.length ? { attachments: options.attachments } : {}),
     steering: true,
     parentToolCallId: toolCallId,
     agentName: options.chain.agentName,
@@ -359,6 +395,8 @@ export function parseContinueSidecarParams(params: unknown): {
   delegationId: string;
   expectedTurnId?: string;
   content: string;
+  images?: ImageContent[];
+  attachments?: MessageAttachment[];
   messageId?: string;
 } {
   const source = (params ?? {}) as Record<string, unknown>;
@@ -369,11 +407,14 @@ export function parseContinueSidecarParams(params: unknown): {
       ? source.expectedTurnId.trim()
       : undefined;
   const content = typeof source.content === "string" ? source.content : "";
+  const images = parseChildInputImages(source.images);
+  const attachments = parseChildInputAttachments(source.attachments);
   const messageId =
     typeof source.messageId === "string" && source.messageId.trim()
       ? source.messageId.trim()
       : undefined;
-  if (!sessionId || !delegationId.trim() || !content.trim()) {
+  // An image-only continuation is valid: the user sent a picture with no words.
+  if (!sessionId || !delegationId.trim() || (!content.trim() && images.length === 0)) {
     throw codedError("delegationId and content required", "INVALID_ARGUMENT");
   }
   if (delegationId.length > 128 || (expectedTurnId && expectedTurnId.length > 128) || content.length > 20_000) {
@@ -384,8 +425,64 @@ export function parseContinueSidecarParams(params: unknown): {
     delegationId,
     ...(expectedTurnId ? { expectedTurnId } : {}),
     content,
+    ...(images.length ? { images } : {}),
+    ...(attachments.length ? { attachments } : {}),
     ...(messageId ? { messageId } : {}),
   };
+}
+
+/**
+ * Image blocks one child input carries over the sidecar transport.
+ *
+ * Electron main already resolved every path against the session roots,
+ * enforced the size and count bounds, and coded each refusal; this parses the
+ * transport form and re-checks the count so a hand-written sidecar call cannot
+ * exceed what main allows. Malformed entries are dropped, never trusted.
+ */
+export function parseChildInputImages(value: unknown): ImageContent[] {
+  if (!Array.isArray(value) || value.length === 0) return [];
+  if (value.length > MAX_CHILD_INPUT_IMAGES) {
+    throw codedError("A subagent input carries too many images", "INVALID_ARGUMENT");
+  }
+  return value.flatMap((entry) => {
+    const record = (entry ?? {}) as Record<string, unknown>;
+    const data = typeof record.data === "string" ? record.data.trim() : "";
+    const mimeType = typeof record.mimeType === "string" ? record.mimeType.trim().toLowerCase() : "";
+    if (!data || !mimeType.startsWith("image/")) return [];
+    return [{ type: "image" as const, data, mimeType }];
+  });
+}
+
+/**
+ * Durable refs one child input keeps on its own transcript row.
+ *
+ * `data` is deliberately dropped: the row renders from the content-addressed
+ * ref, and base64 never belongs in persisted transcript state.
+ */
+export function parseChildInputAttachments(value: unknown): MessageAttachment[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const record = (entry ?? {}) as Record<string, unknown>;
+    const kind =
+      record.kind === "image" ? "image" : record.kind === "file" ? "file" : undefined;
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    const ref = typeof record.ref === "string" ? record.ref.trim() : "";
+    if (!kind || !name || !ref) return [];
+    const mimeType = typeof record.mimeType === "string" ? record.mimeType.trim() : "";
+    const inlinePath = typeof record.inlinePath === "string" ? record.inlinePath.trim() : "";
+    return [
+      {
+        kind,
+        name,
+        ref,
+        ...(mimeType ? { mimeType } : {}),
+        ...(typeof record.size === "number" && Number.isFinite(record.size)
+          ? { size: record.size }
+          : {}),
+        ...(inlinePath ? { inlinePath } : {}),
+      },
+    ];
+  });
 }
 
 /**
@@ -451,6 +548,8 @@ export function prepareSubagentContinue(
     text: unknown;
     messageId?: unknown;
     expectedParentTurnId?: unknown;
+    attachments?: MessageAttachment[];
+    images?: ImageContent[];
   },
   state: ContinueHostState,
 ): PreparedSubagentContinue {
@@ -461,7 +560,13 @@ export function prepareSubagentContinue(
     !state.disposed && !state.runCancelled && !state.turnHadError && state.isRunning;
   const validated = validateSubagentContinue(
     chain,
-    { delegationId: request.delegationId, text: request.text, messageId: request.messageId },
+    {
+      delegationId: request.delegationId,
+      text: request.text,
+      messageId: request.messageId,
+      ...(request.attachments?.length ? { attachments: request.attachments } : {}),
+      ...(request.images?.length ? { images: request.images } : {}),
+    },
     {
       expectedParentTurnId: request.expectedParentTurnId,
       currentTurnId: state.turnId,
@@ -550,25 +655,25 @@ export function buildContinueSpawnEmissions(options: {
   followupEnd: AgentEventEnvelope;
 } {
   const { validated, newDelegationId } = options;
+  // The marker is the run's parent ledger row, so it names the run's own
+  // execution turn: a tab reopened later reads it back from the persisted row
+  // instead of guessing which turn owns the continuation's steering.
+  const details = {
+    delegationId: newDelegationId,
+    agent: options.agentName,
+    status: "running",
+    resumedFrom: validated.delegationId,
+    executionTurnId: options.executionTurnId,
+  };
   const taskMessage: UiMessage = {
     ...validated.taskMessage,
     content: JSON.stringify({
       content: [{ type: "text", text: `Delegation continued by the user.` }],
-      details: {
-        delegationId: newDelegationId,
-        agent: options.agentName,
-        status: "running",
-        resumedFrom: validated.delegationId,
-      },
+      details,
     }),
     toolResult: {
       content: [{ type: "text", text: `Delegation continued by the user.` }],
-      details: {
-        delegationId: newDelegationId,
-        agent: options.agentName,
-        status: "running",
-        resumedFrom: validated.delegationId,
-      },
+      details,
     },
   };
   const emissions = continueEmissions({

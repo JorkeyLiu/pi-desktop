@@ -107,14 +107,22 @@ export function canContinueSubagent(
   return isSubagentSettled(outcome);
 }
 
+/**
+ * Whether the tab offers the continuation composer.
+ *
+ * A tab represents its whole resume chain, and its actions always target the
+ * chain's newest run, so every tab of one chain is the same action surface.
+ * No tab is "stale": a run continued from another tab or card keeps the
+ * original tab operable, which is what lets the user keep working in the
+ * window they already have. Concurrent sends are the backend's serial
+ * admission to reject, not a local per-tab guess.
+ */
 export function shouldShowSubagentContinue(input: {
   outcome: SubagentOutcome | string | null | undefined;
   hasInstance: boolean;
   canPromptParent: boolean;
   readOnlySession: boolean;
-  isStaleTab: boolean;
 }): boolean {
-  if (input.isStaleTab) return false;
   if (!input.canPromptParent || input.readOnlySession) return false;
   return canContinueSubagent(input.outcome, input.hasInstance);
 }
@@ -155,21 +163,35 @@ export function subagentDeliveryOwner(input: {
 }
 
 /**
- * Resolve the owner turn for one child steer: a response-kept execution
- * turn for this delegation wins (covers the status-lag window after a
- * detached continue), otherwise the status's current turn — which the host
- * already points at the runtime's turn (the live parent turn when attached,
- * the adopted execution turn when detached).
+ * Resolve the owner turn for one child steer, in one priority order:
+ *
+ * 1. the execution turn kept from an accepted steer/continue response (covers
+ *    the status-lag window right after a continuation),
+ * 2. the run's own execution turn read back from its `Task` result
+ *    (`details.executionTurnId`) — the only authority that survives a closed
+ *    tab or a rebuilt renderer, and the exact id a detached continuation's
+ *    steering must name,
+ * 3. the status's current turn, which the host points at the runtime's turn.
+ *
+ * Parent status is a fallback, never the authority for a user-owned run: a
+ * detached child outlives the parent turn, so its parent-side turn id would
+ * both go stale and name the wrong owner. The backend validates whichever id
+ * is used here and rejects a mismatch with the draft preserved.
  */
 export function resolveSteerOwnerTurn(input: {
   keptTurnId?: string;
+  runTurnId?: string;
   currentTurnId?: string;
 }): string | undefined {
   const kept = input.keptTurnId?.trim();
   if (kept) return kept;
+  const run = input.runTurnId?.trim();
+  if (run) return run;
   const current = input.currentTurnId?.trim();
   return current || undefined;
-}/**
+}
+
+/**
  * Capture continue identity before the `await`: the session is pinned, and
  * the parent turn travels only when it is live. An idle parent omits
  * `expectedTurnId`; a read-only session or a session without prompt rights
@@ -201,11 +223,16 @@ export function captureContinueIdentity(input: {
 /**
  * Whether a steer/follow-up draft may be cleared after the send `await`.
  *
- * The tab clears only on success and only when the composer still targets the
- * same session *and* the same chain-latest delegation it sent to. A tab or
- * session switch, or a chain continuation (d1 -> d2) arriving mid-dispatch,
- * moves the composer to a different target, so the (possibly retyped) draft
- * is preserved. Failures never clear — the caller owns clearing on success.
+ * The tab clears only on success, only while the composer still belongs to the
+ * session it sent to, and only while it still holds exactly the text that was
+ * sent — text the user typed after the capture is never wiped.
+ *
+ * The chain target may legitimately move during an accepted send: a
+ * continuation opens the chain's next run, so the composer starts targeting the
+ * delegation the send itself handed back. That is the same action surface, not
+ * a different conversation, so it still clears. A target that is neither the
+ * captured run nor the one this send opened was moved by something else, and
+ * the text stays. Failures never clear — the caller owns clearing on success.
  */
 export function shouldClearSteerDraft(input: {
   sendSucceeded: boolean;
@@ -213,10 +240,19 @@ export function shouldClearSteerDraft(input: {
   currentSessionId?: string;
   capturedDelegationId: string;
   currentDelegationId: string;
+  /**
+   * The delegation the accepted send reported for the run it opened (a
+   * continuation) or steered (a live run). Absent when the reply carried none.
+   */
+  sendDelegationId?: string;
+  /** Whether the composer still holds exactly the text that was sent. */
+  draftUnchanged: boolean;
 }): boolean {
   if (!input.sendSucceeded) return false;
   if (!input.capturedSessionId || input.currentSessionId !== input.capturedSessionId) {
     return false;
   }
-  return input.currentDelegationId === input.capturedDelegationId;
+  if (!input.draftUnchanged) return false;
+  if (input.currentDelegationId === input.capturedDelegationId) return true;
+  return !!input.sendDelegationId && input.currentDelegationId === input.sendDelegationId;
 }

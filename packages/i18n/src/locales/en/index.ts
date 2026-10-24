@@ -707,12 +707,14 @@ export const en = {
     subagentContinuePlaceholder: "Send a follow-up — continues this subagent…",
     subagentContinueSend: "Send",
     subagentContinueSending: "Sending…",
-    subagentContinueHelp: "Continues this subagent as a new run.",
     subagentSteerPlaceholder: "Message the running subagent…",
     subagentSteerSend: "Send to subagent",
     subagentSteerSending: "Sending…",
     subagentSteerUnavailable: "Steering is available only while this subagent is running.",
     subagentSteerReadOnly: "Subagent steering is unavailable for remote or native sessions.",
+    subagentImagesOnly: "Only images can be attached here",
+    subagentAttachUnavailable: "Attaching is unavailable for this session",
+    addImages: "Add images",
     subagentDeliveryParent: "Parent-owned",
     subagentDeliveryUser: "User-owned",
     subagentDeliveryParentHelp: "Report goes to the main agent when it finishes. Your message waits until then.",
@@ -2095,7 +2097,6 @@ sklm: {
     subagentTask: "Task",
     subagentTaskEmpty: "No task description.",
     subagentReadOnly: "Subagents are driven by the main agent — input is unavailable.",
-    subagentStale: "This run was continued elsewhere — use the latest run.",
     // A delegation with no backend instance (a denied never-started call, or a
     // tab whose Task chain is missing). Every instantiated settled child can
     // continue, so this is the only reason a settled composer stays read-only.

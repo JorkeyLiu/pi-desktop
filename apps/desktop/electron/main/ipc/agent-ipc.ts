@@ -2,7 +2,14 @@ import { expandMcpInvocation } from "../composer-mcp";
 import { IPC, ErrorCodes, compactionRecordId, findSkillMentions, isGlobalPermissionMode, isRpcTimeoutError, type AgentContinueSubagentRequest, type AgentContinueSubagentResponse, type AgentEventEnvelope, type AgentPromptRequest, type AgentSteerRequest, type AgentSteerSubagentRequest, type AgentSteerSubagentResponse, type UiMessage, type AgentQueuePushRequest, type AgentStopRequest, type AgentStopSubagentsRequest, type AskToolResolution, type GlobalPermissionMode, type MessageUsage, type PendingInteractiveRequests, type PlanExecutionFinishStatus, type PlanResolutionResult, type PlanResolveRequest, type VoiceOrigin } from "@pi-desktop/shared";
 import type { FinishTurn } from "../runtime/plans";
 import { expandSlashInvocation, visionFromModelConfig, type ComposerTemplate } from "@pi-desktop/agent-runtime";
-import { appendPromptFallbackPaths, durableUserMessageId, preparePromptAttachments, type PreparedPromptAttachment } from "../prompt-attachments";
+import {
+  appendPromptFallbackPaths,
+  durableUserMessageId,
+  preparePromptAttachments,
+  prepareSubagentPromptAttachments,
+  type PreparedPromptAttachment,
+  type PreparedSubagentAttachment,
+} from "../prompt-attachments";
 import { resolveSessionReferences } from "../session-references";
 import { executionFromResponse, resolveSessionMessageInput } from "@pi-desktop/host-runtime";
 import type { AgentExtensionBridge } from "../agent-extensions";
@@ -117,6 +124,29 @@ export function registerAgentIpc({
       return fn(...args);
     });
   };
+  /**
+   * The session's project root: one of the roots a child input may name.
+   *
+   * A remote workspace has no local root, so its paths stay confined to the
+   * session scratch and the content-addressed attachments directory.
+   */
+  const childAttachmentProjectPath = async (sessionId: string): Promise<string | undefined> => {
+    if (!host) return undefined;
+    const detail = await host.call<{
+      session?: { projectPath?: string; remoteWorkspace?: unknown };
+    }>("session.get", { id: sessionId, messageLimit: 1 });
+    const session = detail?.session;
+    if (!session || session.remoteWorkspace) return undefined;
+    const projectPath = typeof session.projectPath === "string" ? session.projectPath.trim() : "";
+    return projectPath || undefined;
+  };
+  /** Image blocks for one child dispatch, built from the prepared bytes. */
+  const childInputImages = (prepared: PreparedSubagentAttachment[]) =>
+    prepared.map((attachment) => ({
+      type: "image" as const,
+      data: attachment.data,
+      mimeType: attachment.message.mimeType ?? "image/png",
+    }));
   handle(IPC.invoke.agentSteer, async (req: AgentSteerRequest) => {
     if (!host || !sidecar) throw new Error("backend unavailable");
     if (
@@ -184,9 +214,13 @@ export function registerAgentIpc({
   handle(IPC.invoke.agentSteerSubagent, async (req: AgentSteerSubagentRequest) => {
     if (!sidecar) throw new Error("sidecar unavailable");
     rejectNativeAgentOperation(req.sessionId);
+    // An image-only steer is valid: the user attached a picture and wrote
+    // nothing, and the child still has to receive it.
+    const requested = Array.isArray(req?.attachments) ? req.attachments : [];
     if (
       !req?.sessionId || typeof req.delegationId !== "string" || !req.delegationId.trim() ||
-      !req.expectedTurnId || typeof req.content !== "string" || !req.content.trim()
+      !req.expectedTurnId || typeof req.content !== "string" ||
+      (!req.content.trim() && requested.length === 0)
     ) {
       throw Object.assign(new Error("delegationId, expectedTurnId and content required"), {
         errorCode: ErrorCodes.INVALID_ARGUMENT,
@@ -206,14 +240,37 @@ export function registerAgentIpc({
         errorCode: ErrorCodes.TURN_NOT_FOUND,
       });
     }
-    // Text only: attachments ride the parent turn. The child echo is emitted
-    // by the runtime and persisted through the normal event pipeline with
-    // parentToolCallId/agentName attribution.
+    // Resolve the child's own images against the session roots. This host does
+    // not ask what the child model's capability metadata claims: every image is
+    // inlined for the child endpoint, and a refusal is a provider error rather
+    // than a silent text-only steer.
+    const prepared = await prepareSubagentPromptAttachments(
+      dataDir,
+      req.sessionId,
+      await childAttachmentProjectPath(req.sessionId),
+      requested,
+      req.content,
+    );
+    // The file IO above awaited: a turn that ended meanwhile must not receive
+    // this steer, so ownership is checked again on the far side.
+    if (!isTurnDispatchable(req.sessionId, req.expectedTurnId)) {
+      throw Object.assign(new Error("The target turn has ended"), {
+        errorCode: ErrorCodes.TURN_NOT_FOUND,
+      });
+    }
+    // The echo row keeps refs only; the base64 travels in `images` for this
+    // dispatch and never reaches the transcript or a log line.
     return sidecar.call<AgentSteerSubagentResponse>("agent.steerSubagent", {
       sessionId: req.sessionId,
       delegationId: req.delegationId.trim(),
       expectedTurnId: req.expectedTurnId,
       content: req.content,
+      ...(prepared.length
+        ? {
+            images: childInputImages(prepared),
+            attachments: prepared.map((attachment) => attachment.message),
+          }
+        : {}),
       ...(typeof req.messageId === "string" && req.messageId.trim() ? { messageId: req.messageId.trim() } : {}),
     });
   });
@@ -226,10 +283,13 @@ export function registerAgentIpc({
     const expectedTurnId = typeof req.expectedTurnId === "string" && req.expectedTurnId.trim()
       ? req.expectedTurnId.trim()
       : undefined;
+    const requested = Array.isArray(req?.attachments) ? req.attachments : [];
     const messageId = typeof req.messageId === "string" && req.messageId.trim()
       ? req.messageId.trim()
       : undefined;
-    if (!req?.sessionId || !delegationId || !content.trim()) {
+    // An image-only continuation is valid; requiring text would drop the user's
+    // picture instead of continuing the chain from it.
+    if (!req?.sessionId || !delegationId || (!content.trim() && requested.length === 0)) {
       throw Object.assign(new Error("delegationId and content required"), {
         errorCode: ErrorCodes.INVALID_ARGUMENT,
       });
@@ -239,6 +299,24 @@ export function registerAgentIpc({
         errorCode: ErrorCodes.INVALID_ARGUMENT,
       });
     }
+    // Resolve the continuation's own images against the session roots before
+    // any turn accounting: an input this host cannot deliver is refused here
+    // rather than turned into a text-only continuation. The child endpoint is
+    // the authority on what it accepts, never the model's capability label.
+    const prepared = await prepareSubagentPromptAttachments(
+      dataDir,
+      req.sessionId,
+      await childAttachmentProjectPath(req.sessionId),
+      requested,
+      content,
+    );
+    // Refs for the echoed child row, bytes for this dispatch only.
+    const childImages = prepared.length
+      ? {
+          images: childInputImages(prepared),
+          attachments: prepared.map((attachment) => attachment.message),
+        }
+      : {};
     // Serial admission with prompts: a parent prompt racing a detached
     // execution meets the one-turn busy guard instead of aborting it.
     const releaseSessionOperation = await acquireSessionOperation(req.sessionId);
@@ -259,6 +337,7 @@ export function registerAgentIpc({
           delegationId,
           expectedTurnId,
           content,
+          ...childImages,
           ...(messageId ? { messageId } : {}),
         });
       }
@@ -313,6 +392,7 @@ export function registerAgentIpc({
           delegationId,
           expectedTurnId: durableTurnId,
           content,
+          ...childImages,
           ...(messageId ? { messageId } : {}),
         });
       } catch (error) {

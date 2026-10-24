@@ -57,7 +57,7 @@ test("composer send/stop button follows draft content and the visible session's 
   // the switching policy lives in one shared primitive used by both composers.
   assert.match(
     primaryActionModule,
-    /export function composerPrimaryAction\([\s\S]*?return running && !hasDraft \? "stop" : "send";/,
+    /export function composerPrimaryAction\([\s\S]*?return running && \(!hasDraft \|\| !canSend\) \? "stop" : "send";/,
   );
   const submitSlot =
     composerRight.match(

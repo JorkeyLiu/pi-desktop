@@ -28,7 +28,12 @@ import {
 } from "./sidecar-config.js";
 import { matchesExpectedTurnId } from "./turn-target.js";
 import { applySubagentWakeupConfigure } from "./sidecar-subagent-wakeup.js";
-import { parseContinueSidecarParams, continueHydrationSource } from "./subagent-continue.js";
+import {
+  continueHydrationSource,
+  parseChildInputAttachments,
+  parseChildInputImages,
+  parseContinueSidecarParams,
+} from "./subagent-continue.js";
 import { applyNodeNetworkProxy } from "./node-proxy.js";
 import { applyAdditiveDefaultCaCertificates } from "./system-ca.js";
 import { NATIVE_PI_SESSION_PREFIX } from "./native-pi-session-id.js";
@@ -319,6 +324,7 @@ async function runtimeFor(
     jevApiKey: params.jevApiKey,
     history,
     compaction,
+    attachmentsDir: params.attachmentsDir,
     compactionSettings: params.compactionSettings,
     subagentWakeup: params.subagentWakeup,
     pluginTools,
@@ -584,10 +590,13 @@ async function handle(method: string, params: any): Promise<unknown> {
       const delegationId = String(params.delegationId ?? "");
       const expectedTurnId = String(params.expectedTurnId ?? "");
       const content = String(params.content ?? "");
+      const images = parseChildInputImages(params.images);
+      const attachments = parseChildInputAttachments(params.attachments);
       const messageId = typeof params.messageId === "string" && params.messageId.trim()
         ? params.messageId.trim()
         : undefined;
-      if (!delegationId.trim() || !expectedTurnId.trim() || !content.trim()) {
+      // An image-only steer is a real input; requiring text would drop it.
+      if (!delegationId.trim() || !expectedTurnId.trim() || (!content.trim() && images.length === 0)) {
         throw Object.assign(new Error("delegationId, expectedTurnId and content required"), { errorCode: "INVALID_ARGUMENT" });
       }
       if (delegationId.length > 128 || expectedTurnId.length > 128 || content.length > 20_000) {
@@ -595,7 +604,14 @@ async function handle(method: string, params: any): Promise<unknown> {
       }
       // The runtime revalidates turn ownership after this dispatch, so a
       // stale target fails there rather than steering the wrong turn.
-      return runtime.steerSubagent({ delegationId, expectedParentTurnId: expectedTurnId, text: content, ...(messageId ? { messageId } : {}) });
+      return runtime.steerSubagent({
+        delegationId,
+        expectedParentTurnId: expectedTurnId,
+        text: content,
+        ...(images.length ? { images } : {}),
+        ...(attachments.length ? { attachments } : {}),
+        ...(messageId ? { messageId } : {}),
+      });
     }
     case "agent.continueSubagent": {
       const parsed = parseContinueSidecarParams(params);
@@ -620,6 +636,8 @@ async function handle(method: string, params: any): Promise<unknown> {
         delegationId: parsed.delegationId,
         ...(parsed.expectedTurnId ? { expectedParentTurnId: parsed.expectedTurnId } : {}),
         text: parsed.content,
+        ...(parsed.images?.length ? { images: parsed.images } : {}),
+        ...(parsed.attachments?.length ? { attachments: parsed.attachments } : {}),
         ...(parsed.messageId ? { messageId: parsed.messageId } : {}),
       });
     }

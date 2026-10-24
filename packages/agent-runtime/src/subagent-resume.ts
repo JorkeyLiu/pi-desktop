@@ -9,6 +9,7 @@
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SubagentDefinition, UiMessage } from "@pi-desktop/shared";
+import { hydrateAttachmentHistory } from "./attachment-history.js";
 import type { DelegationChainRegistry } from "./delegation-chain.js";
 import {
   originalTaskFromTranscript,
@@ -151,26 +152,82 @@ export async function resumedChainProvider(
 }
 
 /**
+ * Roots a replayed delegate input may read an attachment from. Same
+ * roots the session history uses; the attachment directory is the
+ * host's content-addressed blob store for this session.
+ */
+export type ResumeAttachmentRoots = {
+  scratchDir?: string;
+  projectPath?: string;
+  attachmentsDir?: string;
+};
+
+/** True when a hydrated row still carries image bytes the child can send. */
+function rowCarriesImage(row: UiMessage): boolean {
+  return (
+    row.role === "user" &&
+    (row.attachments ?? []).some(
+      (attachment) =>
+        attachment.kind === "image" &&
+        typeof attachment.data === "string" &&
+        attachment.data.length > 0,
+    )
+  );
+}
+
+/**
+ * Re-read a delegate's persisted image inputs before replay.
+ *
+ * Older/refused refs and missing blobs degrade to the path text the row
+ * recorded, matching restored session history. Capability metadata is not
+ * consulted: a delegate input is images only, the host validated the bytes
+ * when the user attached them, and the child endpoint decides what it can
+ * read.
+ */
+async function hydrateResumedRows(
+  rows: readonly UiMessage[],
+  roots: ResumeAttachmentRoots,
+): Promise<UiMessage[]> {
+  if (!rows.some((row) => row.attachments?.length)) return [...rows];
+  return hydrateAttachmentHistory([...rows], {
+    scratchDir: roots.scratchDir,
+    projectPath: roots.projectPath,
+    attachmentsDir: roots.attachmentsDir,
+    supportsVision: true,
+  });
+}
+
+/**
  * Rebuild the delegate's prior conversation from its transcript rows. The
  * rows carry `parentToolCallId` for exactly the chain's `Task` calls, so the
  * replay never picks up the parent's own rows or a sibling delegate's.
  *
  * A run stopped before it emitted a single child event leaves no rows, but the
  * chain's original brief still seeds the continued run: the seed is that
- * brief alone, with no fabricated history. Only a chain whose brief is gone
- * (a truncated or malformed transcript) has nothing to continue from, and
- * returns `undefined`.
+ * brief alone, with no fabricated history. A chain that began with an
+ * image-only input has no brief at all, so its hydrated image row is the
+ * seed. Only a chain with neither text nor a recoverable image has nothing to
+ * continue from, and returns `undefined`.
  */
-export function seedResumedDelegate(
+export async function seedResumedDelegate(
   transcriptHistory: readonly UiMessage[],
   chain: DelegationChain,
   provider: RuntimeProviderConfig,
-): AgentMessage[] | undefined {
-  const originalTask =
+  roots: ResumeAttachmentRoots = {},
+): Promise<AgentMessage[] | undefined> {
+  // A chain begun with an image-only input has no text brief in either the
+  // live chain or its `Task` row. The hydrated rows are then the whole seed;
+  // only a chain with no text and no recoverable image has nothing to resume.
+  const originalTask = (
     chain.originalTask ??
-    originalTaskFromTranscript(transcriptHistory, chain);
-  if (!originalTask) return undefined;
-  const rows = selectChainRows(transcriptHistory, chain);
+    originalTaskFromTranscript(transcriptHistory, chain) ??
+    ""
+  ).trim();
+  const rows = await hydrateResumedRows(
+    selectChainRows(transcriptHistory, chain),
+    roots,
+  );
+  if (!originalTask && !rows.some(rowCarriesImage)) return undefined;
   // The seed is truncated against the delegate's own budget (ADR 0299 §7),
   // derived from the same model the resumed run will use, so the first
   // request fits the window instead of overflowing on arrival.

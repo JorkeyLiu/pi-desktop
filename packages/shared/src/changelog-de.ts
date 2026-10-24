@@ -23,6 +23,7 @@ export const deEntries: ChangelogEntry[] = [
       "Neue lokale Sitzungen erhalten sofort einen Titel aus der ersten Eingabe; optional kann ein global konfiguriertes schnelles Modell ihn asynchron verfeinern.",
       "Tool-Zeilen behalten während der Ausführung den Namen des Tools und zeigen das Ergebnis rechts an. Ein Aufruf wechselt nicht mehr zwischen Verben. Befehle mit einem Exit-Code ungleich null gelten als abgeschlossen und zeigen den Exit-Code; Befehl und Ausgabe lassen sich im aufgeklappten Terminal getrennt kopieren.",
       "Der Tab eines Subagents zeigt neben Kontext, Kosten und Zuganzahl die durchschnittliche Ausgabe pro Sekunde in Tokens an; bei unterbrochenen Antworten wird der Wert als Schätzung markiert.",
+      "Der Tab eines gestoppten Subagents bleibt nutzbar, wenn Sie ihn fortsetzen: die Fortsetzung erscheint einmal, Stopp bleibt während des Laufs verfügbar, und derselbe Tab setzt die Kette erneut fort. Der Verlauf behält die Karte, mit der die Arbeit delegiert wurde, und fügt für eine Fortsetzung keine weitere hinzu. Der Editor nimmt Bilder jetzt wie der Haupteditor über Auswahl und Einfügen an, zeigt sie als Vorschau, erlaubt das Entfernen und folgt derselben IME-Regel: ein Enter, das einen Kandidaten bestätigt, sendet nie. Die Kontextanzeige behält den zuletzt gemeldeten Wert des Subagents, bis der fortgesetzte Lauf einen eigenen meldet.",
     ],
   },
   {

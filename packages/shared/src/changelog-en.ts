@@ -23,6 +23,7 @@ export const enEntries: ChangelogEntry[] = [
       "New local sessions get an immediate first-prompt title, with optional asynchronous refinement using a globally configured fast model.",
       "Tool rows keep the tool's own name while they run and state their result on the right, so the sum of ten steps reads as one fixed identity instead of a flickering verb. A command that exits non-zero now reads as done with its exit code beside it, and its command and output are copied from the expanded terminal.",
       "A subagent's tab reports average output tokens per second alongside its context, spend, and turn counts, with an estimate marked when a response was interrupted.",
+      "A stopped subagent's tab keeps working when you continue it: the follow-up appears once, Stop stays available while it runs, and the same tab continues the chain again. The conversation keeps the card the work was dispatched from and adds none for a continuation. Its composer now attaches, pastes, previews and removes images like the main one, and follows the same IME rule — Enter that confirms a candidate never sends. Its context figure keeps the last value the subagent reported until the continued run reports its own.",
     ],
   },
   {

@@ -366,8 +366,18 @@ export type AgentSteerSubagentRequest = {
    * Refused once that owner ends.
    */
   expectedTurnId: string;
-  /** The user's text for the child. Attachments ride the parent turn. */
+  /**
+   * The user's text for the child. Empty is allowed when `attachments` carries
+   * at least one image: an image-only steer still reaches the child model.
+   */
   content: string;
+  /**
+   * Images the user attached to the child's own input. Electron main resolves
+   * every path against the session roots and inlines the bytes for the child
+   * provider; they never enter the parent turn's context. Optional and
+   * additive: a caller that sends text only keeps the previous behavior.
+   */
+  attachments?: AgentPromptAttachment[];
   /** Renderer-chosen id for the echoed user row (D288-style dedup). */
   messageId?: string;
 };
@@ -416,8 +426,18 @@ export type AgentContinueSubagentRequest = {
   sessionId: string;
   /** Any `delegationId` on the chain to continue. */
   delegationId: string;
-  /** The user's followup text for the child. */
+  /**
+   * The user's followup text for the child. Empty is allowed when
+   * `attachments` carries at least one image.
+   */
   content: string;
+  /**
+   * Images the user attached to the continuation. Same resolution and limits
+   * as a child steer: Electron main confines every path to the session roots
+   * and inlines the bytes for the child provider; nothing enters the parent
+   * turn's context and no base64 is persisted in the transcript.
+   */
+  attachments?: AgentPromptAttachment[];
   /** Renderer-chosen id for idempotent retries (D288-style dedup). */
   messageId?: string;
   /**

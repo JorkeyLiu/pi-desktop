@@ -24,6 +24,7 @@
 import { estimateTokens } from "./pi-runtime-estimates.js";
 import type {
   AssistantMessage,
+  ImageContent,
   Message,
   Model,
   Api,
@@ -34,6 +35,7 @@ import type {
 import {
   MAX_RESUMABLE_LISTED_FILES,
   normalizeSubagentName,
+  splitInlineContent,
   type UiMessage,
 } from "@pi-desktop/shared";
 import { isRecord, timestampMs, toJsonObject, toJsonValue, usageToPi } from "./agent-messages.js";
@@ -222,6 +224,78 @@ export function taskObjectiveFromArgs(args: unknown): string {
  * makes pi-ai treat same-model reasoning as foreign and empty
  * `reasoning_content` on Task(resume).
  */
+/** A hydrated image attachment on a delegate row, with its bytes in memory. */
+type RowImage = {
+  path: string;
+  name: string;
+  kind: "image";
+  mimeType?: string;
+  size?: number;
+  inlinePath?: string;
+  data: string;
+};
+
+function rowImages(row: UiMessage): RowImage[] {
+  return (row.attachments ?? []).flatMap((attachment): RowImage[] => {
+    if (
+      attachment.kind !== "image" ||
+      typeof attachment.data !== "string" ||
+      attachment.data.length === 0
+    ) {
+      return [];
+    }
+    return [
+      {
+        path: attachment.ref,
+        name: attachment.name,
+        kind: "image",
+        ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+        ...(attachment.size !== undefined ? { size: attachment.size } : {}),
+        ...(attachment.inlinePath ? { inlinePath: attachment.inlinePath } : {}),
+        data: attachment.data,
+      },
+    ];
+  });
+}
+
+/**
+ * A user row's provider content: the text with each image at the position the
+ * user placed it, or the images alone when the user sent no words. Returns
+ * `undefined` for a row with neither, which has nothing to replay.
+ */
+function delegateUserContent(row: UiMessage): UserMessage["content"] | undefined {
+  const text = row.content ?? "";
+  const images = rowImages(row);
+  if (!images.length) {
+    return text.trim() ? [{ type: "text", text }] : undefined;
+  }
+  const { parts, trailing } = splitInlineContent(text, images);
+  const blocks: Array<{ type: "text"; text: string } | ImageContent> = parts.flatMap(
+    (part): Array<{ type: "text"; text: string } | ImageContent> =>
+      part.kind === "text"
+        ? part.text
+          ? [{ type: "text" as const, text: part.text }]
+          : []
+        : [
+            {
+              type: "image" as const,
+              data: part.attachment.data,
+              mimeType: part.attachment.mimeType || "image/png",
+            },
+          ],
+  );
+  blocks.push(
+    ...trailing.map(
+      (image): ImageContent => ({
+        type: "image",
+        data: image.data,
+        mimeType: image.mimeType || "image/png",
+      }),
+    ),
+  );
+  return blocks;
+}
+
 export function chainRowsToMessages(
   rows: readonly UiMessage[],
   provider: RuntimeProviderConfig,
@@ -243,12 +317,9 @@ export function chainRowsToMessages(
     const timestamp = timestampMs(row.createdAt) || Date.now();
     if (row.role === "user") {
       toolCarrier = undefined;
-      if (!(row.content || "").trim()) continue;
-      const userMessage: UserMessage = {
-        role: "user",
-        content: [{ type: "text", text: row.content }],
-        timestamp,
-      };
+      const content = delegateUserContent(row);
+      if (!content) continue;
+      const userMessage: UserMessage = { role: "user", content, timestamp };
       messages.push(userMessage);
     } else if (row.role === "assistant") {
       toolCarrier = undefined;
@@ -317,7 +388,9 @@ export function chainRowsToMessages(
 /**
  * Seed a resumed run: original task as the first user turn, then history.
  *
- * The seed is truncated against the delegate's budget (ADR 0299 §7) so a
+ * An empty `originalTask` means the chain began with an image-only user input;
+ * its hydrated first row is then the opening turn and no synthetic text turn is
+ * added. The seed is truncated against the delegate's budget (ADR 0299 §7) so a
  * resumed run's first request fits its own window instead of overflowing on
  * arrival. Truncation drops the oldest tool results first and never splits a
  * call from its result; the task brief itself is always kept.
@@ -330,6 +403,14 @@ export function seedDelegateMessages(options: {
   budget: ContextBudgetLimits;
 }): Message[] {
   const history = chainRowsToMessages(options.rows, options.provider, options.model);
+  // A chain that began with an image-only user input has no text brief: its
+  // first user row is the picture, and fabricating an empty text turn ahead
+  // of it would both lose the brief and break providers that reject empty
+  // text blocks.
+  const brief = options.originalTask.trim();
+  if (!brief) {
+    return truncateSeededMessages(history, options.budget.hardLimit);
+  }
   const first: UserMessage = {
     role: "user",
     content: [{ type: "text", text: options.originalTask }],

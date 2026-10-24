@@ -88,6 +88,14 @@ vi.mock("./subagent.js", async (importOriginal) => {
   };
 });
 
+/** The `details` record a tool result carries, without assuming its shape. */
+function toolDetailsOf(message: { toolResult?: unknown } | undefined): Record<string, unknown> | undefined {
+  const result = message?.toolResult;
+  if (!result || typeof result !== "object") return undefined;
+  const details = (result as { details?: unknown }).details;
+  return details && typeof details === "object" ? (details as Record<string, unknown>) : undefined;
+}
+
 const provider: RuntimeProviderConfig = {
   id: "local",
   name: "Local",
@@ -341,6 +349,27 @@ describe("detached user continuation", () => {
       for (const envelope of followupEnd) {
         expect(envelope.parentToolCallId).toBe(echo[0].parentToolCallId);
       }
+      // The marker names the run's OWN execution turn, so a surface that
+      // outlives this process (a reopened tab, a rebuilt renderer) can steer
+      // the detached run without inferring an owner from parent state.
+      expect(toolDetailsOf(marker[0])).toMatchObject({
+        delegationId: continued.delegationId,
+        executionTurnId: continued.turnId,
+      });
+      // The live progress snapshot republishes the same identity.
+      const snapshot = seen.find(
+        (envelope) =>
+          envelope.event.type === "message_end" &&
+          envelope.event.message?.role === "tool" &&
+          envelope.event.message?.toolName === "Task" &&
+          (toolDetailsOf(envelope.event.message)?.delegationId === continued.delegationId) &&
+          toolDetailsOf(envelope.event.message)?.status === "running",
+      );
+      expect(
+        toolDetailsOf(
+          (snapshot?.event as { message?: UiMessage } | undefined)?.message,
+        ),
+      ).toMatchObject({ executionTurnId: continued.turnId });
 
       // The first parent-owned run's spend stays where it settled.
       const parentUsageBefore = JSON.stringify((runtime as any).turnSubagentUsage);

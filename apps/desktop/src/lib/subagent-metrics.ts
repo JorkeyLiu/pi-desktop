@@ -33,12 +33,14 @@ export type SubagentMetrics = {
   /** Cumulative billed spend, ledger-deduped by operation identity. */
   usage?: MessageUsage;
   /**
-   * Where the occupancy figure came from. `snapshot` is a Task result's own
-   * `contextTokens`; `lifecycle` is a TaskWait/TaskList/TaskStop roster entry
-   * for the same delegation; `child` is the latest valid child assistant
+   * Where the chain's occupancy figure came from. `snapshot` is a Task result's
+   * own `contextTokens`; `lifecycle` is a TaskWait/TaskList/TaskStop roster
+   * entry for the same delegation; `child` is the latest valid child assistant
    * provider usage reported through the renderer's own occupancy semantics
-   * (an honest estimate, flagged below); `unknown` means no valid historical
-   * estimate exists and callers must render `—`, never invent 0.
+   * (an honest estimate, flagged below). It always describes the figure that is
+   * present: a later segment that reported no occupancy never relabels the
+   * earlier figure it left standing. `unknown` means no segment of the chain
+   * ever reported one, and callers must render `—`, never invent 0.
    */
   contextProvenance?: SubagentContextProvenance;
   /** True when the occupancy is an estimate rather than a runtime report. */
@@ -100,11 +102,51 @@ export function parseSubagentMetrics(payload: unknown): SubagentMetrics | null {
 }
 
 /**
+ * One chain's context gauge: the last figure a segment actually reported, with
+ * the provenance that figure came from.
+ */
+type ChainContextGauge = {
+  tokens?: number;
+  provenance: SubagentContextProvenance;
+  estimated?: boolean;
+};
+
+/** A chain no segment has measured yet. */
+const UNMEASURED_CONTEXT: ChainContextGauge = { provenance: "unknown" };
+
+/**
+ * Fold one segment's occupancy into the chain's gauge.
+ *
+ * Occupancy is a gauge, never a sum: the latest segment that actually reported
+ * a figure wins, and every reported figure wins — a decrease and a real `0`
+ * included. A segment that reported none leaves the chain's last known figure,
+ * and that figure's own provenance, in place: an absent field is not a
+ * measurement. The marker of a `Task(resume …)` continuation, and the progress
+ * snapshots before its reply, carry no window of their own, and the child's
+ * window does not empty because one report did not restate it. Only a chain no
+ * segment ever measured stays `unknown`; a figure is never derived from spend
+ * and never borrowed from another chain.
+ *
+ * Both folds — over a chain's entries and over its messages — go through this
+ * helper so the two cannot drift into different answers for the same chain.
+ */
+function foldChainContextGauge(
+  gauge: ChainContextGauge,
+  tokens: number | undefined,
+  provenance: SubagentContextProvenance,
+  estimated?: boolean,
+): ChainContextGauge {
+  if (tokens === undefined) return gauge;
+  return { tokens, provenance, ...(estimated ? { estimated: true } : {}) };
+}
+
+/**
  * Aggregate one resume chain (initial Task + its `Task(resume …)` follow-ups).
  * Spend merges by physical operation identity via the shared ledger, so a
- * re-report or replay never double-charges. Occupancy is the latest segment's
- * own value (a gauge, not a sum): when the latest entry carries no occupancy,
- * the chain reports unknown rather than masking it with an older segment.
+ * re-report or replay never double-charges. Occupancy is the chain's gauge (the
+ * latest figure a segment reported), never a sum: a segment that reported none
+ * leaves the last known figure standing until a newer one replaces it, and a
+ * chain no segment measured reports unknown rather than an invented zero.
  *
  * Tool calls and turns accumulate across the chain, but only over the segments
  * that reported them: a counter no segment reported stays absent (the surfaces
@@ -119,9 +161,7 @@ export function aggregateSubagentChainMetrics(
   let turns: number | undefined;
   let seen = false;
   let usage: MessageUsage | undefined;
-  let contextTokens: number | undefined;
-  let contextProvenance: SubagentContextProvenance | undefined;
-  let contextEstimated: boolean | undefined;
+  let gauge = UNMEASURED_CONTEXT;
   for (const entry of entries) {
     if (!entry) continue;
     seen = true;
@@ -134,23 +174,22 @@ export function aggregateSubagentChainMetrics(
       turns = (turns ?? 0) + entry.turns;
     }
     usage = addUsage(usage, entry.usage);
-    // Latest segment wins, even when it reports no occupancy: an older
-    // gauge must not mask a latest segment that went unmeasured.
-    contextTokens = entry.contextTokens;
-    contextProvenance = entry.contextProvenance ?? (entry.contextTokens !== undefined ? "snapshot" : undefined);
-    contextEstimated = entry.contextEstimated;
+    // A segment without an occupancy is not a measurement of an empty window.
+    gauge = foldChainContextGauge(
+      gauge,
+      entry.contextTokens,
+      entry.contextProvenance ?? "snapshot",
+      entry.contextEstimated,
+    );
   }
   if (!seen) return null;
-  // Latest segment decides provenance too: an honest `unknown` when it
-  // reports no occupancy, never an absent field callers must re-derive.
-  const provenance: SubagentContextProvenance = contextProvenance ?? "unknown";
   return {
     ...(toolCalls !== undefined ? { toolCalls } : {}),
     ...(turns !== undefined ? { turns } : {}),
-    ...(contextTokens !== undefined ? { contextTokens } : {}),
+    ...(gauge.tokens !== undefined ? { contextTokens: gauge.tokens } : {}),
     ...(usage ? { usage } : {}),
-    contextProvenance: provenance,
-    ...(contextEstimated ? { contextEstimated: true } : {}),
+    contextProvenance: gauge.provenance,
+    ...(gauge.estimated ? { contextEstimated: true } : {}),
   };
 }
 
@@ -237,14 +276,16 @@ function collectLifecycleMetrics(
  * with lifecycle and child-usage fallback for legacy rows that never
  * reported tokens.
  *
- * Preference per segment, latest segment deciding occupancy:
+ * Preference for occupancy, per segment:
  * 1. the Task snapshot's own `contextTokens` (`snapshot`);
  * 2. the matching TaskWait/TaskList/TaskStop roster entry for the same
  *    `delegationId` (`lifecycle`);
  * 3. the segment's latest valid child assistant provider usage, reported
  *    through the same occupancy semantics as the renderer's context-usage
  *    utilities (`child`, estimated);
- * 4. otherwise unknown — legacy rows with no token carrier render `—`.
+ * 4. otherwise nothing: that segment measured no window, so the chain keeps the
+ *    last figure one of its segments did report, with that figure's own
+ *    provenance. Only a chain no segment measured is unknown and renders `—`.
  *
  * Spend folds Task, lifecycle, and child assistant usage through the shared
  * operation ledger so re-reports collapse by `operationId`; legacy child
@@ -282,9 +323,7 @@ export function aggregateChainMetricsFromMessages(
   const entries: SubagentMetrics[] = [];
   let snapshotSpend: MessageUsage | undefined;
   let childSpend: MessageUsage | undefined;
-  let latestOccupancy: number | undefined;
-  let latestProvenance: SubagentContextProvenance = "unknown";
-  let latestEstimated = false;
+  let gauge = UNMEASURED_CONTEXT;
 
   for (const call of calls) {
     const callId = call.toolCallId as string;
@@ -313,11 +352,14 @@ export function aggregateChainMetricsFromMessages(
           : childUsage
             ? "child"
             : "unknown";
-    // Latest segment decides: assign on every segment so the final value is
-    // the latest segment's own occupancy, even when it is unknown.
-    latestOccupancy = segmentOccupancy;
-    latestProvenance = segmentProvenance;
-    latestEstimated = segmentProvenance === "child";
+    // A segment without a window leaves the chain's last known figure — and
+    // its own provenance — standing until a newer report replaces it.
+    gauge = foldChainContextGauge(
+      gauge,
+      segmentOccupancy,
+      segmentProvenance,
+      segmentProvenance === "child",
+    );
   }
 
   // Spend: snapshots first; fold child spend through the ledger when it
@@ -334,16 +376,16 @@ export function aggregateChainMetricsFromMessages(
   }
 
   const base = aggregateSubagentChainMetrics(entries);
-  if (!base && !usage && latestOccupancy === undefined) return null;
+  if (!base && !usage && gauge.tokens === undefined) return null;
   return {
     // A counter no segment reported stays absent: the surfaces state the
     // labelled dash, never an invented zero.
     ...(base?.toolCalls !== undefined ? { toolCalls: base.toolCalls } : {}),
     ...(base?.turns !== undefined ? { turns: base.turns } : {}),
-    ...(latestOccupancy !== undefined ? { contextTokens: latestOccupancy } : {}),
+    ...(gauge.tokens !== undefined ? { contextTokens: gauge.tokens } : {}),
     ...(usage ? { usage } : {}),
-    contextProvenance: latestProvenance,
-    ...(latestEstimated ? { contextEstimated: true } : {}),
+    contextProvenance: gauge.provenance,
+    ...(gauge.estimated ? { contextEstimated: true } : {}),
   };
 }
 

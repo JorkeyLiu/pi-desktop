@@ -960,6 +960,9 @@ export type AgentRuntimeOptions = {
    * Advertised to the model in the system prompt; host-core enforces it as
    * a second containment root. */
   scratchDir?: string;
+  /** Content-addressed attachment blobs the host stored for this session.
+   * Read only to replay a delegate's own image input; no new file boundary. */
+  attachmentsDir?: string;
   onEvent: (envelope: AgentEventEnvelope) => void;
   /** Bounded diagnostics routed to the Electron logger, never the transcript. */
   onDiagnostic?: (diagnostic: AgentRuntimeDiagnostic) => void;
@@ -1774,6 +1777,12 @@ export class DesktopAgentRuntime {
     string,
     { delivery: SubagentDeliveryOwner; executionTurnId: string }
   >();
+  /**
+   * Image blocks claimed by `continueSubagent`, keyed by its `Task(resume)`
+   * call. The bytes never travel through tool arguments or a tool result, so
+   * the model-visible and persisted forms stay refs only.
+   */
+  private readonly continueImagesByToolCall = new Map<string, ImageContent[]>();
   /** Name and arguments of a delegate's in-flight call: `tool_end` carries the
    * result only, and the row a resume replays needs both. */
   private readonly delegateToolCalls = new Map<
@@ -1809,6 +1818,7 @@ export class DesktopAgentRuntime {
   private activationHydrated = false;
   private scratchDir?: string;
   private projectPath?: string;
+  private attachmentsDir?: string;
   private remoteWorkspace?: { hostKey: string; path: string };
   /** Set only for an isolated session; see `RuntimeConfig.workspaceRoot`. */
   private workspaceRoot?: string;
@@ -2008,6 +2018,7 @@ export class DesktopAgentRuntime {
     this.remoteWorkspace = opts.remoteWorkspace;
     this.scratchDir = opts.remoteWorkspace ? undefined : opts.scratchDir;
     this.projectPath = opts.remoteWorkspace?.path ?? (opts.projectPath?.trim() || undefined);
+    this.attachmentsDir = opts.attachmentsDir;
     // Remote workspaces are never isolated (ADR 0329).
     this.workspaceRoot = opts.remoteWorkspace ? undefined : opts.workspaceRoot?.trim() || undefined;
     this.customSystemPrompt = opts.customSystemPrompt;
@@ -4533,7 +4544,12 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             `Resuming a subagent cannot change its model. Omit \`model\` to continue ${resume}, or start a new delegation to pick a different model.`,
           );
         }
-        if (!task) {
+        // A user continuation may be images only. Its claim was placed by the
+        // same tool call id just before this spawn, so an empty brief is legal
+        // exactly when that claim carries an image; a model-issued Task still
+        // needs words.
+        const claimedInputImages = this.continueImagesByToolCall.get(toolCallId);
+        if (!task && !claimedInputImages?.length) {
           return this.subagentToolError(
             toolCallId,
             `Delegating to ${definition.name} needs a non-empty \`task\` brief.`,
@@ -4648,7 +4664,11 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             ? resumedChain.latestModelId
             : undefined;
         const initialMessages = resumedChain
-          ? seedResumedDelegate(this.transcriptHistory, resumedChain, provider)
+          ? await seedResumedDelegate(this.transcriptHistory, resumedChain, provider, {
+              scratchDir: this.scratchDir,
+              projectPath: this.remoteWorkspace ? undefined : this.projectPath,
+              attachmentsDir: this.attachmentsDir,
+            })
           : undefined;
         if (resume && !initialMessages) {
           // The chain resolved but its original brief is gone from the
@@ -4668,6 +4688,19 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
               resume,
             ),
           );
+        }
+        // Seeding a resumed chain reads persisted rows and can yield. A
+        // parallel `Task(resume)` on the same chain may have registered its
+        // run while this one was reading, so the chain is re-resolved once
+        // more before the spawn that would make it a second live run.
+        if (resume) {
+          const current = resolveResumeChain(
+            this.delegationChains,
+            this.runningDelegationIds(),
+            resume,
+            definition.name,
+          );
+          if (!current.ok) return this.subagentToolError(toolCallId, current.message);
         }
         const delegationId = randomUUID();
         // ADR 0329: in an isolated session a delegate that can write files gets
@@ -4731,6 +4764,10 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         // record is tagged at creation — a fast settle cannot beat the claim.
         const claimed = this.continueDeliveryByToolCall.get(toolCallId);
         if (claimed) this.continueDeliveryByToolCall.delete(toolCallId);
+        // Same claim discipline for the continuation's own images: read once per
+        // spawn, so a stale entry can never attach to a later run.
+        const claimedImages = this.continueImagesByToolCall.get(toolCallId);
+        if (claimedImages) this.continueImagesByToolCall.delete(toolCallId);
         const record: DelegationRecord = {
           delegationId,
           parentToolCallId: toolCallId,
@@ -4805,8 +4842,10 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             // through the same bookkeeping the parent uses.
             resolveToolOutcome: (context) => this.resolveOwnToolOutcome(context),
             signal: abortSignal,
-            // A resumed run replays its chain before this turn's `task` (ADR 0276).
             ...(initialMessages ? { initialMessages } : {}),
+            // A user continuation's own images open the new run's turn; the
+            // parent's `Task` brief never carries attachments.
+            ...(claimedImages?.length ? { initialImages: claimedImages } : {}),
           });
         } catch {
           // A constructor/scope failure happens after registry allocation. Make
@@ -4881,6 +4920,11 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             thinkingLevel,
             toolCalls: 0,
             turns: 0,
+            // The turn that owns this run's steering: the parent turn while
+            // attached, the child-only execution turn when the user continued
+            // the chain themselves. Published so a surface that outlives this
+            // process can name it without inferring from parent state.
+            executionTurnId: record.executionTurnId ?? this.turnId,
             ...(resumedChain ? { resumedFrom: resume } : {}),
           },
         };
@@ -5476,12 +5520,19 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
   /**
    * Steer one live delegate with user text. Attached runs steer through the
    * live parent turn; detached user runs through their own execution turn.
-   * The text enters only the child's conversation, never parent context.
+   * The input enters only the child's conversation, never parent context.
+   * Images reach the child's endpoint as blocks; no capability label gates
+   * them, and a refusal surfaces as a provider error rather than a text-only
+   * turn the user did not ask for.
    */
   steerSubagent(request: {
     delegationId: string;
     expectedParentTurnId: string;
     text: string;
+    /** Image blocks for the child's own endpoint; this call carries no refs. */
+    images?: ImageContent[];
+    /** Durable refs the echoed child row keeps (the renderer's transcript). */
+    attachments?: MessageAttachment[];
     messageId?: string;
   }): { accepted: true; delegationId: string; turnId: string } {
     const delegationId =
@@ -5512,6 +5563,8 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         delegationId: request.delegationId,
         text: request.text,
         messageId: request.messageId,
+        ...(request.images?.length ? { images: request.images } : {}),
+        ...(request.attachments?.length ? { attachments: request.attachments } : {}),
       },
       {
         expectedParentTurnId: request.expectedParentTurnId,
@@ -5538,7 +5591,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       ownerTurnId: ownerTurnId!,
       parentToolCallId: target.parentToolCallId,
       agentName: target.agentName,
-      steerLoop: (text) => target.run!.steer(text),
+      steerLoop: (text, images) => target.run!.steer(text, images),
       markSteered: (id) => {
         (target.steeredMessageIds as Set<string>).add(id);
       },
@@ -5562,6 +5615,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     delegationId: string;
     expectedParentTurnId?: string;
     text: string;
+    /**
+     * Image blocks for the continued run's opening turn. Claimed internally by
+     * `toolCallId`, so they never appear in tool arguments or a tool result.
+     */
+    images?: ImageContent[];
+    /** Durable refs the echoed child row keeps for the transcript. */
+    attachments?: MessageAttachment[];
     messageId?: string;
   }): Promise<{
     accepted: true;
@@ -5575,6 +5635,8 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         text: request.text,
         messageId: request.messageId,
         expectedParentTurnId: request.expectedParentTurnId,
+        ...(request.images?.length ? { images: request.images } : {}),
+        ...(request.attachments?.length ? { attachments: request.attachments } : {}),
       },
       {
         turnId: this.turnId,
@@ -5612,6 +5674,11 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     // Claim delivery before spawning: the spawn reads and consumes the claim
     // when it creates the record, so a fast settle is tagged in time.
     this.continueDeliveryByToolCall.set(validated.toolCallId, { delivery, executionTurnId });
+    // The continuation's images ride the same claim: the spawn reads them by
+    // tool call id, so no byte enters tool arguments or the tool result.
+    if (validated.images.length) {
+      this.continueImagesByToolCall.set(validated.toolCallId, validated.images);
+    }
     let outcome: unknown;
     try {
       outcome = await taskTool.execute(validated.toolCallId, {
@@ -5621,6 +5688,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       });
     } catch (error) {
       this.continueDeliveryByToolCall.delete(validated.toolCallId);
+      this.continueImagesByToolCall.delete(validated.toolCallId);
       throw error;
     }
     const details = (outcome as { details?: Record<string, unknown> })?.details;
@@ -5630,6 +5698,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         : "";
     if (!newDelegationId) {
       this.continueDeliveryByToolCall.delete(validated.toolCallId);
+      this.continueImagesByToolCall.delete(validated.toolCallId);
       const toolError =
         details && typeof (details as { error?: unknown }).error === "string"
           ? String((details as { error?: unknown }).error)

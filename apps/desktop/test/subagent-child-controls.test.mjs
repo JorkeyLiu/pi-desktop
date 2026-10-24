@@ -105,14 +105,17 @@ test("resume-chain metrics aggregate spend once and keep latest occupancy", asyn
     assert.equal(aggregated.turns, 4);
     assert.equal(aggregated.usage.totalTokens, 4500);
     assert.equal(aggregated.contextTokens, 18000);
-    // Latest segment decides occupancy: an older gauge never masks a latest
-    // segment that went unmeasured.
-    const masked = metrics.aggregateSubagentChainMetrics([
+    // Occupancy is a gauge: a segment that reported none leaves the chain's
+    // last known figure — and that figure's own provenance — in place instead
+    // of erasing it. The marker of a resumed run carries no snapshot, and that
+    // absence is not a measurement of an empty window.
+    const retained = metrics.aggregateSubagentChainMetrics([
       { toolCalls: 3, turns: 2, contextTokens: 12000, usage: usageA },
       { toolCalls: 1, turns: 1, usage: usageB },
     ]);
-    assert.equal(masked.contextTokens, undefined);
-    assert.equal(masked.contextProvenance, "unknown");
+    assert.equal(retained.contextTokens, 12000);
+    assert.equal(retained.contextProvenance, "snapshot");
+    assert.equal(retained.toolCalls, 4);
     // Metric-only payloads (no counters) are accepted, never dropped.
     assert.ok(metrics.parseSubagentMetrics({ contextTokens: 9000 }));
     assert.ok(metrics.parseSubagentMetrics({ usage: usageA }));
@@ -153,6 +156,101 @@ test("resume-chain metrics aggregate spend once and keep latest occupancy", asyn
     assert.doesNotMatch(counterlessLine, /0 tool call|0 turn/);
     assert.match(counterlessLine, /ctx 12\.0k tokens/);
     assert.match(counterlessLine, /spent 1\.5k tokens/);
+  } finally { await vite.close(); }
+});
+
+/**
+ * The chain's context gauge over its whole evolution: the last reported figure
+ * stands until a newer one replaces it, every newer figure wins (a decrease and
+ * a real zero included), and only a chain that never reported one is unknown.
+ * Counters and spend keep accumulating independently of the gauge.
+ */
+test("a chain keeps its last reported occupancy until a newer figure replaces it", async () => {
+  const vite = await createServer({
+    root, configFile: false,
+    server: { middlewareMode: true, hmr: false, ws: false },
+    esbuild: { jsx: "automatic" }, appType: "custom",
+    optimizeDeps: { noDiscovery: true, include: [] },
+  });
+  try {
+    const metrics = await vite.ssrLoadModule("/src/lib/subagent-metrics.ts");
+    const spend = (id, total) => ({
+      inputTokens: total, outputTokens: 0, totalTokens: total,
+      operationId: id, aggregation: "operation",
+    });
+    // First run reported its window; the continuation's marker reports none.
+    const afterMarker = metrics.aggregateSubagentChainMetrics([
+      { toolCalls: 2, turns: 1, contextTokens: 12000, usage: spend("op-1", 1000) },
+      { toolCalls: 0, turns: 0 },
+    ]);
+    assert.equal(afterMarker.contextTokens, 12000);
+    assert.equal(afterMarker.contextProvenance, "snapshot");
+    assert.equal(afterMarker.contextEstimated, undefined);
+    // Repeated progress snapshots that still carry no occupancy change nothing.
+    const afterProgress = metrics.aggregateSubagentChainMetrics([
+      { toolCalls: 2, turns: 1, contextTokens: 12000, usage: spend("op-1", 1000) },
+      { toolCalls: 0, turns: 0 },
+      { toolCalls: 3, turns: 2 },
+      { toolCalls: 4, turns: 3 },
+    ]);
+    assert.equal(afterProgress.contextTokens, 12000);
+    assert.equal(afterProgress.contextProvenance, "snapshot");
+    assert.equal(afterProgress.toolCalls, 9);
+    assert.equal(afterProgress.turns, 6);
+    // The reply's own snapshot replaces it.
+    const updated = metrics.aggregateSubagentChainMetrics([
+      { contextTokens: 12000 },
+      {},
+      { contextTokens: 14000 },
+    ]);
+    assert.equal(updated.contextTokens, 14000);
+    assert.equal(updated.contextProvenance, "snapshot");
+    // A smaller reported figure is the child's newer window, not a stale high.
+    const shrunk = metrics.aggregateSubagentChainMetrics([
+      { contextTokens: 12000 },
+      { contextTokens: 3000 },
+      {},
+    ]);
+    assert.equal(shrunk.contextTokens, 3000);
+    // A reported zero is a report and replaces the gauge like any other figure.
+    const emptied = metrics.aggregateSubagentChainMetrics([
+      { contextTokens: 12000 },
+      {},
+      { contextTokens: 0 },
+    ]);
+    assert.equal(emptied.contextTokens, 0);
+    assert.equal(emptied.contextProvenance, "snapshot");
+    assert.match(metrics.formatSubagentMetricsLine(emptied), /ctx 0 tokens/);
+    // Never reported: unknown, never an invented zero and never a borrowed one.
+    const never = metrics.aggregateSubagentChainMetrics([
+      { toolCalls: 1, turns: 1 },
+      { toolCalls: 1 },
+    ]);
+    assert.equal(never.contextTokens, undefined);
+    assert.equal(never.contextProvenance, "unknown");
+    // The retained figure keeps the provenance it actually came from.
+    const lifecycle = metrics.aggregateSubagentChainMetrics([
+      { contextTokens: 9000, contextProvenance: "lifecycle" },
+      {},
+    ]);
+    assert.equal(lifecycle.contextTokens, 9000);
+    assert.equal(lifecycle.contextProvenance, "lifecycle");
+    const child = metrics.aggregateSubagentChainMetrics([
+      { contextTokens: 10000, contextProvenance: "child", contextEstimated: true },
+      {},
+    ]);
+    assert.equal(child.contextTokens, 10000);
+    assert.equal(child.contextProvenance, "child");
+    assert.equal(child.contextEstimated, true);
+    // A later lifecycle report replaces a snapshot figure and leaves no
+    // estimated flag from an older child estimate behind.
+    const replaced = metrics.aggregateSubagentChainMetrics([
+      { contextTokens: 10000, contextProvenance: "child", contextEstimated: true },
+      { contextTokens: 11000, contextProvenance: "lifecycle" },
+    ]);
+    assert.equal(replaced.contextTokens, 11000);
+    assert.equal(replaced.contextProvenance, "lifecycle");
+    assert.equal(replaced.contextEstimated, undefined);
   } finally { await vite.close(); }
 });
 
@@ -486,7 +584,7 @@ test("F4 bare call-id resume shares one chain and keeps spend plus occupancy", a
   } finally { await vite.close(); }
 });
 
-test("F5 chain-latest owns status and continue, stale tab never duplicates", async () => {
+test("F5 chain-latest owns status and every tab of the chain continues it", async () => {
   const vite = await createServer({
     root, configFile: false,
     server: { middlewareMode: true, hmr: false, ws: false },
@@ -505,22 +603,22 @@ test("F5 chain-latest owns status and continue, stale tab never duplicates", asy
     const all = [first, resumeCall];
     assert.equal(chain.subagentChainLatestDelegationId(all, "d1"), "d2");
     assert.equal(chain.subagentChainLatestDelegationId(all, "d2"), "d2");
-    assert.equal(chain.isStaleSubagentTab(all, "d1"), true);
-    assert.equal(chain.isStaleSubagentTab(all, "d2"), false);
-    // Old tab after continuation is running via the latest id, so it never
-    // offers a duplicate continue; the latest tab owns the action when settled.
+    // The same chain resolves to one action surface from either entry point:
+    // a continuation opened from a new card never strands the tab the user
+    // already had. Concurrent sends are the backend's serial admission.
     assert.equal(actions.shouldShowSubagentContinue({
-      outcome: "running", hasInstance: true, canPromptParent: true, readOnlySession: false, isStaleTab: true,
-    }), false);
+      outcome: "completed", hasInstance: true, canPromptParent: true, readOnlySession: false,
+    }), true);
+    // A live run steers instead of continuing; a missing instance never does.
     assert.equal(actions.shouldShowSubagentContinue({
-      outcome: "completed", hasInstance: true, canPromptParent: true, readOnlySession: false, isStaleTab: true,
+      outcome: "running", hasInstance: true, canPromptParent: true, readOnlySession: false,
     }), false);
     // A stopped settled child is continuable; a missing instance is not.
     assert.equal(actions.shouldShowSubagentContinue({
-      outcome: "stopped", hasInstance: true, canPromptParent: true, readOnlySession: false, isStaleTab: false,
+      outcome: "stopped", hasInstance: true, canPromptParent: true, readOnlySession: false,
     }), true);
     assert.equal(actions.shouldShowSubagentContinue({
-      outcome: "completed", hasInstance: false, canPromptParent: true, readOnlySession: false, isStaleTab: false,
+      outcome: "completed", hasInstance: false, canPromptParent: true, readOnlySession: false,
     }), false);
     // Disabled matrix: permission, remote, settled, and a missing owner turn
     // all block. The parent session's generic running flag is not consulted:

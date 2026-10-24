@@ -471,3 +471,33 @@ export function insertClipboardText(editor: HTMLElement, text: string): boolean 
   if (inserted) setEditorCaret(editor, start + normalized.length);
   return inserted;
 }
+
+/**
+ * Insert one draft-model newline at the caret: a bare "\n" text node instead
+ * of a block wrapper, so `readEditorValue` round-trips it and the offsets a
+ * caller keeps stay valid. Returns false when the caret is outside `editor`.
+ */
+export function insertNewlineAtCaret(editor: HTMLElement): boolean {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return false;
+  const range = selection.getRangeAt(0);
+  if (!editor.contains(range.startContainer) || !editor.contains(range.endContainer)) {
+    return false;
+  }
+  range.deleteContents();
+  const node = document.createTextNode("\n");
+  range.insertNode(node);
+  const after = document.createRange();
+  after.setStart(node, 1);
+  after.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(after);
+  return true;
+}
+
+/** Paint a chip-less editor from plain draft text (no attachment references). */
+export function paintEditorText(editor: HTMLElement, value: string): void {
+  const noReferences = new Map<string, ComposerFileReference>();
+  const noop = () => undefined;
+  paintEditorValue(editor, value, noReferences, () => "", noop, noop, noop, noop);
+}

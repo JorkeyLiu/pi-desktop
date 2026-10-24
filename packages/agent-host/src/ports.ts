@@ -79,8 +79,14 @@ export interface RuntimePort {
     delegationId: string;
     turnId: string;
     content: string;
+    /**
+     * Images the user attached to the child's own input, as paths a host with
+     * file access resolves. A host without that access refuses the request
+     * with `UNSUPPORTED`; it never drops them into a text-only steer.
+     */
+    attachments?: AgentPromptAttachment[];
     sessionMessageId?: string;
-  }): Promise<{ accepted: boolean }>;
+  }): Promise<{ accepted: boolean; errorCode?: string }>;
   /**
    * Continue one settled delegate as a new run of the same chain, authorized
    * directly by the user. The runtime decides `parent` vs `user` delivery
