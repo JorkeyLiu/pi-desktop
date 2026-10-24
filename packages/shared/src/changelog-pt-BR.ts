@@ -24,6 +24,8 @@ export const ptBREntries: ChangelogEntry[] = [
       "As linhas de ferramentas mantêm o nome da ferramenta durante a execução e mostram o resultado à direita, sem alternar entre verbos na mesma chamada. Comandos com código de saída diferente de zero aparecem como concluídos com o código ao lado; comando e saída podem ser copiados separadamente no terminal expandido.",
       "A aba do subagente mostra a média de tokens de saída por segundo junto com contexto, gastos e turnos; respostas interrompidas são marcadas como estimativas.",
       "A aba de um subagente interrompido continua utilizável ao continuá-lo: a continuação aparece uma única vez, Parar permanece disponível durante a execução e a mesma aba continua a cadeia novamente. A conversa mantém o cartão com que o trabalho foi delegado e não acrescenta nenhum por uma continuação. O editor agora anexa, cola, pré-visualiza e remove imagens como o principal, e segue a mesma regra de IME: Enter que confirma um candidato nunca envia. A cifra de contexto mantém o último valor informado pelo subagente até que a continuação informe o seu.",
+      "Uma chamada de ferramenta agora aparece no lugar dela na conversa assim que começa a ser transmitida, antes de os argumentos terminarem, com um pulso discreto no ícone e no nome em vez de um indicador giratório.",
+      "A transcrição de um subagente mostra o indicador de trabalho enquanto o filho trabalha, em vez de uma lista que fica parada entre atualizações.",
     ],
   },
   {

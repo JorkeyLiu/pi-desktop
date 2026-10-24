@@ -9,6 +9,7 @@ import {
   getCurrentSystemMessage,
   toToolDeclaration,
   type AssistantMessage,
+  type AssistantMessageEvent,
 } from "@earendil-works/pi-ai";
 import { formatSessionMessage, type SessionMessageOrigin } from "@pi-desktop/shared";
 import { estimateContextTokens as estimateTranscriptTokens } from "@earendil-works/pi-ai/utils/estimate";
@@ -13846,5 +13847,86 @@ describe("isolated-session subagent worktrees (ADR 0329)", () => {
     expect(delegateWorktreeNote({ result: "noChanges" }, resume)).toContain("no file changes");
     expect(delegateWorktreeNote({ result: "notMerged", reason: "busy" }, resume)).toContain("busy");
     expect(delegateWorktreeNote({ result: "none" }, resume)).toBe("");
+  });
+});
+
+describe("DesktopAgentRuntime tool argument preparation", () => {
+  const assistant = (content: unknown[]) => ({ role: "assistant", content });
+  const toolCallBlock = (id: string, name: string, args: Record<string, unknown>) => ({
+    type: "toolCall",
+    id,
+    name,
+    arguments: args,
+  });
+
+  it("names a call before it runs and once only", async () => {
+    const onEvent = vi.fn();
+    const runtime = createRuntime({ onEvent });
+    const handleAgentEvent = (runtime as any).handleAgentEvent.bind(runtime);
+    const emitUpdate = (content: unknown[], frame: Record<string, unknown>) =>
+      handleAgentEvent({
+        type: "message_update",
+        message: assistant(content),
+        assistantMessageEvent: {
+          ...frame,
+          partial: assistant(content),
+        } as unknown as AssistantMessageEvent,
+      });
+
+    await handleAgentEvent({ type: "message_start", message: assistant([]) });
+    // A provider that starts the call with an empty id and name and backfills
+    // both through argument deltas.
+    await emitUpdate([toolCallBlock("", "", {})], {
+      type: "toolcall_start",
+      contentIndex: 0,
+    });
+    expect(
+      onEvent.mock.calls.filter(([envelope]) => envelope.event.type === "tool_prepare"),
+    ).toHaveLength(0);
+    await emitUpdate([toolCallBlock("", "Read", {})], {
+      type: "toolcall_delta",
+      contentIndex: 0,
+      delta: "",
+    });
+    expect(
+      onEvent.mock.calls.filter(([envelope]) => envelope.event.type === "tool_prepare"),
+    ).toHaveLength(0);
+    await emitUpdate([toolCallBlock("call-1", "Read", { file_path: "/tmp/a" })], {
+      type: "toolcall_delta",
+      contentIndex: 0,
+      delta: '{"file_path"',
+    });
+    await emitUpdate([toolCallBlock("call-1", "Read", { file_path: "/tmp/a" })], {
+      type: "toolcall_delta",
+      contentIndex: 0,
+      delta: ':"/tmp/a"}',
+    });
+    await emitUpdate([toolCallBlock("call-1", "Read", { file_path: "/tmp/a" })], {
+      type: "toolcall_end",
+      contentIndex: 0,
+      toolCall: toolCallBlock("call-1", "Read", { file_path: "/tmp/a" }),
+    });
+
+    const prepared = onEvent.mock.calls
+      .map(([envelope]) => envelope.event)
+      .filter((event: any) => event.type === "tool_prepare");
+    expect(prepared).toEqual([
+      { type: "tool_prepare", toolCallId: "call-1", toolName: "Read" },
+      // The end of argument generation is its own frame, independent of the
+      // execution event that follows.
+      { type: "tool_prepare", toolCallId: "call-1", toolName: "Read", ready: true },
+    ]);
+    // It names the call, never its streamed arguments.
+    expect(JSON.stringify(prepared)).not.toContain("file_path");
+
+    await handleAgentEvent({
+      type: "tool_execution_start",
+      toolCallId: "call-1",
+      toolName: "Read",
+      args: { file_path: "/tmp/a" },
+    });
+    const types = onEvent.mock.calls.map(([envelope]) => envelope.event.type);
+    expect(types.indexOf("tool_prepare")).toBeLessThan(types.indexOf("tool_start"));
+    await runtime.dispose();
   });
 });

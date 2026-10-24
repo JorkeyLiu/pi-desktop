@@ -288,6 +288,31 @@ export type AgentEvent =
   | { type: "message_end"; message: UiMessage; precedingAssistant?: UiMessage; replacesMessageId?: string }
   | { type: "user_message_persisted"; optimisticMessageId: string; message: UiMessage }
   | { type: "tool_start"; toolCallId: string; toolName: string; args: unknown }
+  /**
+   * A transient, non-persisted report of one call's preparation: the model has
+   * settled its identity, and possibly finished writing its arguments, while
+   * nothing has run. The first frame for a call lets a renderer place its row at
+   * the call's chronological position; the frame with `ready` ends argument
+   * generation. `tool_start` follows once the call actually executes and carries
+   * the real arguments, replacing that row in place.
+   */
+  | {
+      type: "tool_prepare";
+      toolCallId: string;
+      toolName: string;
+      /**
+       * Bounded, whitespace-collapsed `description` parsed from the partial
+       * arguments of a delegation start call, so its card can name the work
+       * before the call executes. Never the raw streamed arguments.
+       */
+      taskTitle?: string;
+      /**
+       * The model finished writing this call's arguments. The call is fully
+       * prepared but has not executed: the row stops its preparing pulse and
+       * states no execution outcome. Omitted on the first frame.
+       */
+      ready?: boolean;
+    }
   | { type: "tool_update"; toolCallId: string; partialResult?: unknown }
   | {
       type: "tool_end";

@@ -547,6 +547,9 @@ export function subagentOutcome(
     const status = asDelegationStatus(payload.status);
     if (status) return status;
   }
+  // A call whose arguments are still streaming has not returned its handle
+  // yet: the delegate exists only as the work the model is naming.
+  if (message.toolStatus === "preparing") return "running";
   if (message.toolStatus === "running") return "running";
   if (message.toolStatus === "error") return "failed";
   if (message.toolStatus === "denied") return "denied";
@@ -565,7 +568,11 @@ export function subagentOutcome(
  * keeps the transcript from reading as frozen while the create happens.
  */
 export function delegationIsCreating(message: UiMessage): boolean {
-  if (message.toolStatus !== "running") return false;
+  // Still being prepared is the earliest part of "being created": the call has
+  // not run, so no delegation handle can exist yet.
+  if (message.toolStatus !== "running" && message.toolStatus !== "preparing") {
+    return false;
+  }
   const payload = asRecord(toolResultPayload(message));
   if (payload && typeof payload.delegationId === "string") return false;
   return true;

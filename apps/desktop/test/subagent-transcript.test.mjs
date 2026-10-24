@@ -236,11 +236,12 @@ test("a Task card is titled by its task and named by its role", () => {
     taskCardSource,
     /const title = chainTitle \|\| agentName \|\| t\("chat\.subagentUnnamed"\)/,
   );
-  // The title row holds the title and the child's inline state; the role that
-  // ran it reads on its own line beneath, before the child's own figures.
+  // The title row holds the title and the child's inline state (which a
+  // preparing call omits entirely); the role that ran it reads on its own line
+  // beneath, before the child's own figures.
   assert.match(
     taskCardSource,
-    /<span className="subagent-task-title" title=\{title\}>[\s\S]*?className="subagent-task-state"[\s\S]*?<\/span>\s*<\/span>[\s\S]*?className="subagent-task-role"[\s\S]*?className="subagent-task-metrics"/,
+    /<span className="subagent-task-title" title=\{title\}>[\s\S]*?className="subagent-task-state"[\s\S]*?<\/span>[\s\S]*?<\/span>[\s\S]*?className="subagent-task-role"[\s\S]*?className="subagent-task-metrics"/,
   );
   assert.match(taskCardSource, /const role = chainTitle \? agentName : ""/);
   // Nothing on the card states the model or the reasoning level: they describe
@@ -260,7 +261,9 @@ test("the description is the title, so the card never prints it twice", () => {
   // The card has one headline: no summary line, no second description, and the
   // brief is never a title (the child's transcript holds it).
   assert.doesNotMatch(taskCardSource, /subagent-task-summary/);
-  assert.doesNotMatch(taskCardSource, /toolArgs/);
+  // Its own preparation flag is not an argument read: the card never touches
+  // the call's raw arguments.
+  assert.doesNotMatch(taskCardSource, /message\.toolArgs\b/);
   // A long title clamps in the card and keeps the whole value in its hover.
   assert.match(messagesCss, /\.subagent-task-title \{[^}]*-webkit-line-clamp: 2/);
   // The title is the only headline: the unnamed label is what an older log

@@ -6917,6 +6917,34 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   and offline, not an incident replay or a claim about production-session root
   cause.
 
+#### E2E-TOOL-PREPARING: A named call waits for its arguments without claiming execution
+
+- **Preconditions**: Isolated Electron window with the production transcript
+  components, the production events slice, and the built app stylesheet.
+  Synthetic `AgentEvent` frames only; no provider, Host, production session, or
+  user data is used.
+- **Steps**: Send `message_start`, then `tool_prepare` for a `Bash` call; insert
+  an optimistic steering message; send the `ready` frame; send `tool_start` and
+  `tool_end`. Repeat for a `Task` delegation card. Open the child tab while the
+  child runs and while it waits on a permission or a question. Re-run the
+  preparing row with `prefers-reduced-motion: reduce`.
+- **Expected**: The preparing row shows only its icon and localized name, both
+  breathing with the 1.4s opacity loop while the model writes arguments; it
+  shows no summary, chips, caret, spinner, status wording, preview, or raw
+  arguments, and the delegation card shows no child state, clock, metric
+  placeholders, or stop handle. The steering message stays after the preparing
+  row. The `ready` frame stops the breath without claiming an outcome, and
+  `tool_start` takes the same row over in place — same id, position, and
+  creation time, the existing running state — without a duplicate row. Reduced
+  motion keeps the identical static row. The child tab shows the transcript's
+  working indicator only while the child runs, and hides it while the child
+  waits on the user.
+- **Specs linked**: `03-runtime/01-ipc-protocol.md` §6,
+  `04-ux/07-ui-design-system.md` §8.8, `04-ux/08-component-spec.md` §5.7, §9.2,
+  §9.5, §9.7, §9.9.
+- **Status**: Automated by `pnpm test:e2e:tool-preparation`
+  (`scripts/e2e-tool-preparation.mjs`).
+
 #### E2E-STREAM-long-turn-keeps-realtime
 
 - **Preconditions**: Provider configured; an Agent session can run a long

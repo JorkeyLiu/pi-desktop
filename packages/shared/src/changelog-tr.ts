@@ -24,6 +24,8 @@ export const trEntries: ChangelogEntry[] = [
       "Araç satırları çalışırken aracın kendi adını korur ve sonucu sağda belirtir; aynı çağrı fiiller arasında değişip durmaz. Sıfırdan farklı çıkış kodlu komutlar artık yanında çıkış koduyla tamamlandı olarak gösterilir; komut ve çıktı, genişletilmiş terminalden ayrı ayrı kopyalanabilir.",
       "Alt ajanın sekmesi bağlam, harcama ve tur sayılarının yanında saniyedeki ortalama çıktı token sayısını da gösterir; yanıt kesintiye uğradığında tahmin olduğu belirtilir.",
       "Durdurulmuş bir alt ajanı sürdürdüğünüzde özgün sekmesi kullanılabilir kalır: devam iletisi bir kez görünür, çalışma sırasında Durdur kullanılabilir ve aynı sekme zinciri yeniden sürdürebilir. Konuşma, işin devredildiği kartı korur ve bir devam için yeni kart eklemez. Düzenleyici artık görselleri ana düzenleyici gibi ekler, yapıştırır, önizler ve kaldırır; adayı onaylayan Enter hiçbir zaman göndermez. Bağlam değeri, sürdürülen çalışma kendi değerini bildirene kadar alt ajanın en son bildirdiği değeri korur.",
+      "Bir araç çağrısı, bağımsız değişkenleri tamamlanmadan akış başlar başlamaz konuşmadaki yerinde görünür; dönen bir simge yerine simgesi ve adı hafifçe nabız atar.",
+      "Bir alt ajanın dökümü, alt ajan çalışırken çalışma göstergesini gösterir; güncellemeler arasında hareketsiz kalan bir satır listesi kalmaz.",
     ],
   },
   {

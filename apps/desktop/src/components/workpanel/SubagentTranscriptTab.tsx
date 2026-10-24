@@ -54,6 +54,7 @@ import {
 } from "../../features/chat/transcript/shared";
 import { useOpenChatFileRef } from "../../hooks/use-preview-target";
 import { ToolRow } from "../../features/chat/transcript/ToolRow";
+import { WorkingIndicator } from "../../features/chat/transcript/ActivityGroup";
 import { Markdown } from "../Markdown";
 import type { MessageAttachment } from "@pi-desktop/shared";
 import { delegateModelId, delegateThinkingLevel } from "../../features/chat/transcript/model";
@@ -198,6 +199,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     return direct ?? "aborted";
   }, [messages, activeDelegationId, statuses]);
   const running = outcome === "running";
+
   // Backend-owned report routing for the chain-latest run: `parent` when the
   // parent still expects this delegate, `user` once the user took over the
   // chain. Read from persisted Task fields, never from parent UI state.
@@ -222,6 +224,35 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     () => buildSubagentTranscript(messages, activeDelegationId),
     [messages, activeDelegationId],
   );
+
+  // A child that is genuinely working shows the transcript's own working
+  // indicator at the end of its rows. It is suppressed while the child waits on
+  // the user — a permission card or a question elsewhere in the app owns that
+  // state, and claiming the child is working would hide the wait.
+  const pendingPermissions = useAppStore((state) => state.pendingPermissions);
+  const pendingAsks = useAppStore((state) => state.pendingAsks);
+  const childToolCallIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const turn of transcriptResult?.turns ?? []) {
+      for (const row of turn.rows) {
+        if (row.kind === "tool" && row.message.toolCallId) {
+          ids.add(row.message.toolCallId);
+        }
+      }
+    }
+    return ids;
+  }, [transcriptResult]);
+  const waitingOnUser = useMemo(() => {
+    if (!activeSessionId || childToolCallIds.size === 0) return false;
+    for (const permission of pendingPermissions[activeSessionId] ?? []) {
+      if (childToolCallIds.has(permission.toolCallId)) return true;
+    }
+    for (const ask of pendingAsks[activeSessionId] ?? []) {
+      if (childToolCallIds.has(ask.toolCallId)) return true;
+    }
+    return false;
+  }, [activeSessionId, childToolCallIds, pendingAsks, pendingPermissions]);
+  const showWorking = running && !waitingOnUser;
   const chainMetrics = useMemo(
     () => aggregateChainMetricsFromMessages(messages, activeDelegationId),
     [messages, activeDelegationId],
@@ -809,6 +840,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                 {t("panel.subagentEmpty")}
               </div>
             )}
+            {showWorking ? <WorkingIndicator /> : null}
           </div>
         </div>
         {showJump ? (

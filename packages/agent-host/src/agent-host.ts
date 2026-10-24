@@ -360,6 +360,12 @@ export class AgentHost {
         this.emit(state, "turn.activity", { event }, meta2);
         return;
       }
+      case "tool_prepare":
+        // Transient by contract: the call is named but nothing has run, so the
+        // Host forwards the update without opening a durable item. Its
+        // `tool_start` still opens the item the item.completed later closes.
+        this.emit(state, mapping.kind, { event }, meta2);
+        return;
       case "usage":
       case "turn_start":
       case "turn_end":

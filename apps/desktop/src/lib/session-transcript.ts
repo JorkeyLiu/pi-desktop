@@ -1,6 +1,12 @@
 import { preservePlanHistory } from "./plan-history";
 import type { AgentEvent, MessageAttachment, UiMessage } from "@pi-desktop/shared";
-import { formatPromptPathText, locateInlinePromptPaths } from "@pi-desktop/shared";
+import type { ToolPreparationScope } from "@pi-desktop/shared";
+import {
+  formatPromptPathText,
+  isUnexecutedTool,
+  locateInlinePromptPaths,
+  toolPreparationMatches,
+} from "@pi-desktop/shared";
 import {
   getSessionMessageSnapshot,
   registerSessionMessageAppend,
@@ -142,6 +148,94 @@ export function upsertLiveSessionMessage(
   const next = normalized.slice();
   next[index] = preservePlanHistory(message, normalized[index]);
   return registerSessionMessageReplacement(normalized, next, index);
+}
+
+/**
+ * Show a call the model has named but not finished writing.
+ *
+ * The row is keyed by the call id, exactly like its executing row, so the same
+ * row is edited in place when `tool_start` arrives. A call that already
+ * started — or finished — keeps its own state: a late prepare frame never
+ * downgrades an executing row.
+ */
+export function applyPreparingTool(
+  messages: UiMessage[],
+  prepared: UiMessage,
+): UiMessage[] {
+  const normalized = dedupeSessionMessages(messages);
+  const index = getSessionMessageSnapshot(normalized).positions.get(prepared.id);
+  if (index === undefined) return upsertLiveSessionMessage(normalized, prepared);
+  const existing = normalized[index];
+  if (existing.toolCallId !== prepared.toolCallId) {
+    return upsertLiveSessionMessage(normalized, prepared);
+  }
+  if (!isUnexecutedTool(existing)) return normalized;
+  const next = normalized.slice();
+  next[index] = preservePlanHistory(
+    { ...existing, ...prepared, createdAt: existing.createdAt || prepared.createdAt },
+    existing,
+  );
+  return registerSessionMessageReplacement(normalized, next, index);
+}
+
+/**
+ * Start executing a call where its preparing row already stands.
+ *
+ * The call keeps the preparing row's id, position, and creation time, so the
+ * preparing UI becomes the executing row in place instead of a second row
+ * appended after whatever arrived while the arguments streamed — a steering
+ * message, or another call of the same batch. A call that was never prepared
+ * appends, as before.
+ */
+export function beginLiveToolExecution(
+  messages: UiMessage[],
+  executed: UiMessage,
+): UiMessage[] {
+  const normalized = dedupeSessionMessages(messages);
+  const index = getSessionMessageSnapshot(normalized).positions.get(executed.id);
+  if (index === undefined) return upsertLiveSessionMessage(normalized, executed);
+  const existing = normalized[index];
+  if (existing.toolCallId !== executed.toolCallId) {
+    return upsertLiveSessionMessage(normalized, executed);
+  }
+  const next = normalized.slice();
+  next[index] = preservePlanHistory(
+    {
+      ...existing,
+      ...executed,
+      // Execution owns the row from here on: the prepared-only marker never
+      // survives into a running call.
+      toolArgsComplete: undefined,
+      createdAt: existing.createdAt || executed.createdAt,
+    },
+    existing,
+  );
+  return registerSessionMessageReplacement(normalized, next, index);
+}
+
+/**
+ * Drop preparing rows that will never execute.
+ *
+ * Arguments can stop arriving without a call ever running: the model aborted,
+ * the provider failed, the turn ended, or a retry replaced the attempt. Those
+ * rows are not history — only executed calls are persisted — so they leave the
+ * transcript with the attempt that produced them. Rows of another execution
+ * (a parallel delegate, another turn) are untouched.
+ */
+export function clearLivePreparedTools(
+  messages: UiMessage[],
+  scope: ToolPreparationScope,
+): UiMessage[] {
+  const normalized = dedupeSessionMessages(messages);
+  let dropped = false;
+  const next = normalized.filter((message) => {
+    if (!isUnexecutedTool(message) || !toolPreparationMatches(message, scope)) {
+      return true;
+    }
+    dropped = true;
+    return false;
+  });
+  return dropped ? registerSessionMessageRewrite(normalized, next) : normalized;
 }
 
 /** Replace only the acknowledged submission identity, never an equal-text row. */

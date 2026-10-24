@@ -30,6 +30,7 @@ import {
   type AgentSessionEvent,
   type SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent";
+import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type {
   AgentEvent,
   AgentEventEnvelope,
@@ -46,6 +47,7 @@ import {
   type NativePiSnapshot,
 } from "./native-pi-session-lease.js";
 import { NATIVE_PI_SESSION_PREFIX } from "./native-pi-session-id.js";
+import { createToolArgsPreparation } from "./tool-args-preparation.js";
 
 export { NATIVE_PI_SESSION_PREFIX };
 
@@ -324,6 +326,8 @@ class NativePiRuntime {
   private turnId?: string;
   private userMessageId?: string;
   private currentAssistant?: UiMessage;
+  /** Calls whose identity settled while their arguments were still streaming. */
+  private readonly toolArgsPreparation = createToolArgsPreparation();
 
   constructor(
     readonly id: string,
@@ -392,6 +396,26 @@ class NativePiRuntime {
     this.lease.release();
   }
 
+  /**
+   * Surface a call the model has named but not finished writing. The native
+   * session's own store persists the durable message; this event only places
+   * the call's row before execution starts.
+   */
+  private prepareToolCalls(event: AssistantMessageEvent | undefined): void {
+    // A synthetic or truncated update carries no provider frame: there is
+    // nothing to learn from it, and nothing to prepare.
+    if (!event) return;
+    for (const call of this.toolArgsPreparation.observe(event)) {
+      this.emit({
+        type: "tool_prepare",
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        ...(call.taskTitle ? { taskTitle: call.taskTitle } : {}),
+        ...(call.ready ? { ready: true } : {}),
+      });
+    }
+  }
+
   private emit(event: AgentEvent): void {
     this.notify({ sessionId: this.id, turnId: this.turnId, ts: Date.now(), event });
   }
@@ -405,6 +429,7 @@ class NativePiRuntime {
       // replaces on `message_end`.
       if (event.message.role === "assistant") {
         const content = textContent((event.message as { content?: unknown }).content);
+        this.toolArgsPreparation.reset();
         this.currentAssistant = {
           id: randomUUID(),
           role: "assistant",
@@ -417,6 +442,7 @@ class NativePiRuntime {
       }
     } else if (event.type === "message_update") {
       if (this.currentAssistant && event.message.role === "assistant") {
+        this.prepareToolCalls(event.assistantMessageEvent);
         const content = textContent((event.message as { content?: unknown }).content);
         this.currentAssistant = {
           ...this.currentAssistant,

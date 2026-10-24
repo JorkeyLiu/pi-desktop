@@ -61,8 +61,12 @@ test("lifecycle reaches the row only through its right-hand status", () => {
   // in the right-hand cluster, so the left side never carries lifecycle.
   assert.match(
     transcript,
-    /const statusBadge = !runHead && !lifecycle && status === "running" \? \( <span className="tool-spinner" aria-label=\{t\("chat\.running"\)\} \/> \)/,
+    /const statusBadge = preparing \? null : !runHead && !lifecycle && status === "running" \? \( <span className="tool-spinner" aria-label=\{t\("chat\.running"\)\} \/> \)/,
   );
+  // A call whose arguments are still streaming carries no right-hand state at
+  // all: no spinner, no state text. Its only motion is the icon/name breath.
+  assert.match(transcript, /const preparing = status === "preparing";/);
+  assert.match(transcript, /const statusBadge = preparing \? null :/);
   assert.match(
     transcript,
     /className=\{`tool-row-state \$\{statusTone\}`\} role="status" aria-live="polite"> <span className="tool-row-state-dot" aria-hidden \/> \{statusLabel\}/,

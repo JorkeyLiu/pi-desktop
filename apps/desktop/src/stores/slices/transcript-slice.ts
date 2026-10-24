@@ -14,6 +14,7 @@ import {
   mergeLiveSessionMessages,
 } from "../../lib/session-transcript";
 import { optimisticUserMessage } from "../../lib/session-transcript";
+import { isUnexecutedTool } from "@pi-desktop/shared";
 import {
   reviewChangeFromMessage,
   withReviewChangeState,
@@ -636,8 +637,11 @@ export function createTranscriptSlice({
       }
       submittedDraft?.resolveAbort?.(false);
       runtime.submittedComposerDrafts.delete(sessionId);
+      // Stop ends the whole session, delegates included, so no call is still
+      // being prepared: those rows are not history. A call that already
+      // started keeps its own failure.
       const stoppedRows = (rows: UiMessage[]) =>
-        rows.map((message) => {
+        rows.filter((message) => !isUnexecutedTool(message)).map((message) => {
           if (message.role === "assistant" && message.status === "streaming") {
             return {
               ...settleStoppedAssistantMetrics(message, stoppedAtMs),

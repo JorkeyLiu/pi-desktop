@@ -650,6 +650,8 @@ type AgentEvent =
      deltaText?: string; deltaThinking?: string }
  | { type: "message_end"; message: UiMessage }
  | { type: "tool_start"; toolCallId: string; toolName: string; args: unknown }
+ | { type: "tool_prepare"; toolCallId: string; toolName: string;
+     taskTitle?: string; ready?: boolean }
  | { type: "tool_update"; toolCallId: string; partialResult?: unknown }
   | { type: "tool_end"; toolCallId: string; result: unknown; isError?: boolean;
       toolUsage?: ToolTokenUsage }
@@ -672,6 +674,8 @@ type AgentEvent =
 
 > 这些是 **UI 标准化事件**，而不是原始 pi 事件的传递。
 > `packages/agent-runtime` 负责将 pi 事件映射到此模型。
+
+`tool_prepare` 是瞬态且从不持久化的事件：当模型仍在流式写入参数、但已确定调用身份时上报该调用，其 `ready` 帧表示参数生成结束。渲染器仅用它把该调用的行放到按时间顺序的位置，并结束准备脉冲；`tool_start` 仍携带完整参数并原地替换该行，从未执行的调用不会留下任何行。
 
 `planning_state` 是代理运行时的本地规划投影。其可选的
 提案和执行字段镜像共享 `PlanningStateEvent` 形状

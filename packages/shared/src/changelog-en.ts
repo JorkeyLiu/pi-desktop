@@ -24,6 +24,8 @@ export const enEntries: ChangelogEntry[] = [
       "Tool rows keep the tool's own name while they run and state their result on the right, so the sum of ten steps reads as one fixed identity instead of a flickering verb. A command that exits non-zero now reads as done with its exit code beside it, and its command and output are copied from the expanded terminal.",
       "A subagent's tab reports average output tokens per second alongside its context, spend, and turn counts, with an estimate marked when a response was interrupted.",
       "A stopped subagent's tab keeps working when you continue it: the follow-up appears once, Stop stays available while it runs, and the same tab continues the chain again. The conversation keeps the card the work was dispatched from and adds none for a continuation. Its composer now attaches, pastes, previews and removes images like the main one, and follows the same IME rule — Enter that confirms a candidate never sends. Its context figure keeps the last value the subagent reported until the continued run reports its own.",
+      "A tool call takes its place in the conversation as soon as it starts streaming, before its arguments finish, with a subtle pulse on its icon and name instead of a spinner.",
+      "A subagent's transcript shows the working indicator while the child is working, instead of a list of rows that sits still between updates.",
     ],
   },
   {

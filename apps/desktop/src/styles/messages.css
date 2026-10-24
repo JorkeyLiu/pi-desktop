@@ -2524,6 +2524,47 @@
   color: var(--ds-text-primary);
 }
 
+/*
+ * A call the model has named but is still writing arguments for. The row states
+ * only the call's identity — the icon and its localized name — and those two
+ * breathe together as one synchronized opacity change. Nothing in the row
+ * spins, slides, or claims a state in words; the delegation card keeps its
+ * shell and breathes on its avatar and title the same way, so a call reads the
+ * same on either surface. Reduced motion keeps the identical row, static.
+ */
+.tool-row.is-preparing .tool-row-icon,
+.tool-row.is-preparing .tool-row-name,
+.subagent-task.is-preparing .subagent-task-avatar,
+.subagent-task.is-preparing .subagent-task-title {
+  animation: tool-preparing-breath 1.4s var(--motion-ease-standard) infinite;
+}
+
+/* One moving thing per card: while the arguments stream, the avatar and title
+   carry the motion and the corner badge stays still (its own creating pulse
+   speaks for the later spawn phase, which has no preparing row). */
+.subagent-task.is-preparing .subagent-task-status-icon {
+  animation: none;
+}
+
+@keyframes tool-preparing-breath {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-row.is-preparing .tool-row-icon,
+  .tool-row.is-preparing .tool-row-name,
+  .subagent-task.is-preparing .subagent-task-avatar,
+  .subagent-task.is-preparing .subagent-task-title {
+    animation: none;
+  }
+}
+
 /* Which delegate a `Task` row handed the work to (ADR 0060). */
 .tool-row-agent {
   flex: none;

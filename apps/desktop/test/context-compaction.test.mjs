@@ -91,8 +91,12 @@ test("turn_end remains a per-tool-turn boundary rather than a terminal run state
     store,
     /event\.type === "agent_end" \|\|\s*event\.type === "turn_end"/,
   );
-  assert.match(store, /case "agent_end":[\s\S]*?set\(\{ isRunning: false \}\)/);
-  assert.match(store, /case "turn_end":\s*break/);
+  assert.match(store, /case "agent_end":[\s\S]*?isRunning: false/);
+  // turn_end only drops the calls the turn never ran; it still never ends the
+  // session's run state.
+  assert.match(store, /case "turn_end":[\s\S]{0,600}?clearLivePreparedTools/);
+  assert.doesNotMatch(store, /case "turn_end":\s*break/);
+  assert.doesNotMatch(store, /case "turn_end":[^}]{0,200}isRunning: false/);
 });
 
 test("the hard boundary is enforced by the host, with a model-side escape hatch", () => {

@@ -46,6 +46,7 @@ import {
   Type,
   type Api,
   type AssistantMessage,
+  type AssistantMessageEvent,
   type ImageContent,
   type Model,
   type Models,
@@ -128,6 +129,7 @@ import {
   type SubagentWakeupSettings,
 } from "@pi-desktop/shared";
 import { createStreamCoalescer, type StreamCoalescer } from "./stream-coalescer.js";
+import { createToolArgsPreparation } from "./tool-args-preparation.js";
 import type { RuntimeHost } from "./host-client.js";
 import { classifyAgentError } from "./agent-errors.js";
 import {
@@ -1742,6 +1744,8 @@ export class DesktopAgentRuntime {
   private planningState: PlanningState;
   private pendingPlanId?: string;
   private currentAssistant?: UiMessage;
+  /** Calls whose identity settled while their arguments were still streaming. */
+  private readonly toolArgsPreparation = createToolArgsPreparation();
   private pluginTools: PluginToolDef[];
   private pluginSkills: PluginSkillDef[];
   private trustedExtensionSpecs: TrustedExtensionSpec[];
@@ -7982,6 +7986,27 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     this.emit({ type: "message_update", message: this.currentAssistant });
   }
 
+  /**
+   * Hand the renderer the identity of every call the model has named but not
+   * finished writing. Nothing executes here: the row exists only so the call
+   * appears at its chronological position, and `tool_start` replaces it in
+   * place once the arguments are complete.
+   */
+  private prepareToolCalls(event: AssistantMessageEvent | undefined): void {
+    // A synthetic or truncated update carries no provider frame: there is
+    // nothing to learn from it, and nothing to prepare.
+    if (!event) return;
+    for (const call of this.toolArgsPreparation.observe(event)) {
+      this.emit({
+        type: "tool_prepare",
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        ...(call.taskTitle ? { taskTitle: call.taskTitle } : {}),
+        ...(call.ready ? { ready: true } : {}),
+      });
+    }
+  }
+
   private async handleAgentEvent(event: AgentEvent) {
     this.forwardAgentEventToExtensions(event);
     switch (event.type) {
@@ -8035,6 +8060,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
               : this.progressTurnRerunInProgress || this.overflowRecoveryInProgress
                 ? retryingAssistant?.content ?? ""
                 : content.text;
+          this.toolArgsPreparation.reset();
           this.currentAssistant = {
             id: retryingAssistant?.id ?? randomUUID(),
             role: "assistant",
@@ -8075,6 +8101,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       }
       case "message_update": {
         if (this.currentAssistant && event.message.role === "assistant") {
+          this.prepareToolCalls(event.assistantMessageEvent);
           this.applyHostedSearch(event.message);
           const content = assistantContent((event.message as any).content);
           const previousText = this.currentAssistant.content;

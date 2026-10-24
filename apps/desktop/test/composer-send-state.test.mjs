@@ -238,7 +238,9 @@ test("cross-session agent_end cannot clear the active session's running flag", (
   )?.[0] ?? "";
   assert.ok(crossSession.length > 0);
   assert.match(crossSession, /return;/);
-  const agentEnd = handleEvents.match(/case "agent_end":\s*set\(\{ isRunning: false \}\)/);
+  const agentEnd = handleEvents.match(
+    /case "agent_end":\s*set\(\(state\) => \(\{\s*isRunning: false,/,
+  );
   assert.ok(agentEnd, "active-session agent_end clears isRunning");
 });
 

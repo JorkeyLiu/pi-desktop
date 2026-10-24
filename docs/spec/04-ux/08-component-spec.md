@@ -1398,6 +1398,11 @@ work panel. The dock is an inset side sheet holding the child's own conversation
 the task brief it was given, and the delegate's live process.
 It does not render separate Details or Output tabs.
 
+A child that is actually running ends its rows with the transcript's own working
+indicator. The indicator is suppressed while the child waits on the user — a
+permission card or an asktool question opened for one of its calls — so the wait,
+not a working claim, is what the reader sees.
+
 - The selection is renderer-local and session-scoped: it stores only the
   `sessionId` and delegation id, then re-finds the current Task and its
   `parentToolCallId` rows from the live/retained transcript. The header and
@@ -2549,6 +2554,12 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
   label, and a generic, plugin, or MCP tool keeps its formatted raw name
   (`Issue Tracker Create`), never a generic "Using". The localized generic word
   is used only when the call carries no name at all.
+- A call the model has named but is still writing arguments for shows only that
+  identity — its icon and localized name — breathing softly together. It states
+  no summary, chips, caret, spinner, status wording, or preview until the call
+  executes, and once its arguments are complete the same row waits still, still
+  claiming no outcome. Execution then takes the row over in place: same id, same
+  position, same creation time, the existing running/success states.
 - Lifecycle is stated once, on the right, and nowhere else: a live row shows the
   row spinner, a settled row names its state beside a toned dot (`Done`,
   `Failed`, `Denied`), and the identity on the left carries no running colour or
@@ -2702,6 +2713,7 @@ twice.
 
 | State | Header treatment | Expanded content |
 |---|---|---|
+| Preparing | The call's icon and localized name breathe softly while the model writes its arguments; no summary, chips, caret, spinner, or status wording. When the arguments are complete the row waits still, still claiming no outcome | Nothing is disclosed before execution; the executing row opens its own payload |
 | Running | Progressive action with readable text and a pulsing marker; a `run` row also shows its spinner and pulses the status dot beside `Working…` | Detailed opens the active multi-item group; no item payload opens itself. Compact payloads stay closed; live thinking follows its own indicator/disclosure policy |
 | Success | Past-tense action + result chips; no green success badge, except a `run` row's dot and `Done` | Result blocks, then arguments if not already shown; an untouched active group closes on completion, while manual group and item choices are retained |
 | Error | Past-tense action + compact danger status; details remain collapsed by default and open only on user request. A `run` row is in this state whenever its command exited nonzero, whatever the call reported (D227) | Error note first, then arguments |
@@ -2752,6 +2764,9 @@ twice.
 
 - `role="region"` with `aria-label="Tool call: {toolName}"`
 - Status announced through localized `aria-label` text
+- A preparing row is `aria-busy`, and its accessible name states the localized
+  running state, so a screen reader hears progress while the row shows no
+  visible state copy
 - Expand/collapse: `aria-expanded` + `aria-controls`
 - Expanded-content left-rule collapse controls are native buttons with a
   localized accessible name and a visible keyboard focus ring.
@@ -2775,6 +2790,13 @@ the rows it produced or, before any arrived, from the call's own `agent`
 argument — reads on the line under the title, in the place the step count used
 to occupy. A card therefore states no model id, no reasoning level and no step
 count; the child's own runtime is stated once, in its transcript tab.
+
+While the model is still writing a `Task` call's arguments, its card keeps the
+same shell and breathes on the avatar and title only. It carries no child state,
+clock, metric line, stop handle, or status wording until the call executes; the
+call's parsed `description` may name the work as soon as it is available. Once
+the arguments are complete the card waits still, and execution replaces it in
+place.
 
 The headline of a resumed delegation is the chain's original description: the
 earliest `Task` call of the resume chain that carries one, so a later

@@ -734,6 +734,10 @@ export function racpKindForAgentEvent(
       return { kind: "item.completed", durable: true, itemType: "message" };
     case "tool_start":
       return { kind: "item.started", durable: true, itemType: "tool" };
+    case "tool_prepare":
+      // Transient by contract: the call's row exists in the live transcript
+      // before it runs, but nothing durable is recorded until `tool_end`.
+      return { kind: "tool.progress", durable: false, itemType: "tool" };
     case "tool_update":
       return { kind: "tool.progress", durable: false, itemType: "tool" };
     case "tool_end":
@@ -767,6 +771,7 @@ export const LOCAL_AGENT_EVENT_TYPES: readonly AgentEvent["type"][] = [
   "message_end",
   "user_message_persisted",
   "tool_start",
+  "tool_prepare",
   "tool_update",
   "tool_end",
   "planning_state",

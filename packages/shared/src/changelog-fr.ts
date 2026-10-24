@@ -24,6 +24,8 @@ export const frEntries: ChangelogEntry[] = [
       "Les lignes d’outil conservent le nom de l’outil pendant son exécution et indiquent le résultat à droite, sans changer de verbe au cours d’un même appel. Les commandes dont le code de sortie est différent de zéro sont marquées comme terminées avec ce code ; la commande et la sortie peuvent être copiées séparément depuis le terminal développé.",
       "L’onglet d’un sous-agent affiche le nombre moyen de tokens générés par seconde, en plus du contexte, des coûts et des tours ; une réponse interrompue est signalée comme estimation.",
       "L’onglet d’un sous-agent arrêté reste utilisable lorsque vous le poursuivez : la relance n’apparaît qu’une fois, Arrêter reste disponible pendant l’exécution et le même onglet relance encore la chaîne. La conversation conserve la carte avec laquelle le travail a été délégué et n’en ajoute aucune pour une relance. Son éditeur joint, colle, prévisualise et supprime désormais des images comme l’éditeur principal, et suit la même règle IME : une touche Entrée qui valide un candidat n’envoie jamais. Le chiffre de contexte conserve la dernière valeur rapportée par le sous-agent jusqu’à ce que la relance rapporte la sienne.",
+      "Un appel d’outil apparaît désormais à sa place dans la conversation dès qu’il commence à être diffusé, avant la fin de ses arguments, avec une pulsation discrète sur son icône et son nom au lieu d’un indicateur rotatif.",
+      "La transcription d’un sous-agent affiche l’indicateur de travail tant que l’enfant travaille, au lieu d’une liste figée entre deux mises à jour.",
     ],
   },
   {

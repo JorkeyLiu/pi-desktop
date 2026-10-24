@@ -830,6 +830,17 @@ High-frequency workstation feedback must remain compositor-friendly and bounded:
   near-zero animation durations and instant rather than smooth programmatic
   scrolling.
 
+### 8.8 Tool-call preparation breath
+
+While the model is still writing a tool call's arguments, the call's standard
+row (or its delegation card) breathes on its icon/avatar and its name/title
+only: one synchronized `opacity` loop from `1` to `0.45` over 1.4s with
+`--motion-ease-standard`. Nothing else in the row moves — no spinner, caret,
+status dot, or whole-row effect — and the loop ends when argument generation
+completes, before execution starts. Reduced motion keeps the identical row,
+static. The breath is state feedback for a call that has not run, so it is the
+only motion the row carries in that phase.
+
 ## 8.0 Home empty stack and bottom composer (D111/D204/D206)
 
 Empty composer placeholder guidance is scoped to the current page and session:
