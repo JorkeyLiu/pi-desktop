@@ -533,12 +533,17 @@ deletes per 60 seconds. P2/P3 methods are not present in protocol v11.
   replaces the complete ordered checklist. The host trims content, defaults
   priority to `medium`, truncates overlong Unicode content at 500 characters
   with a warning, demotes later `in_progress` items to `pending`, and rejects
-  more than 50 items or malformed values. The owner session and running turn
-  come from the trusted transport fields, never from tool arguments.
-- TodoWrite is allowed only for an Agent session's own running turn. Plan/Goal,
+  more than 50 items or malformed values. The owner session and turn come from
+  the trusted transport fields, never from tool arguments.
+- TodoWrite is allowed only for an Agent session's own turn. Plan/Goal,
   delegated, plugin, and MCP calls receive a tool result error and do not mutate
-  storage. A successful replacement advances the session revision even when
-  storage. A successful replacement advances the session revision even when
+  storage; so does a call whose session is unknown or soft-deleted, that carries
+  no `turnId`, or whose `turnId` names no turn of that session. The turn's own
+  state is not part of the rule: a call still in flight when its turn settled —
+  completed, aborted, or left `aborted` by a restart — commits, because the
+  checklist describes the session and a refused call would drop work the user
+  asked for. That write never reopens the turn, settles it again, or creates a
+  turn. A successful replacement advances the session revision even when
   `todos` is empty and emits `todos.changed` after the transaction commits.
   The event payload is the same complete snapshot returned by `todos.get`.
 - The successful TodoWrite result carries the committed list in `todos` beside

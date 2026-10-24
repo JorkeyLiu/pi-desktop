@@ -2,7 +2,7 @@
 
 - Status: Accepted for implementation
 - Date: 2026-09-29
-- Amended: 2026-10-19
+- Amended: 2026-10-23
 - Deciders: PI-Desktop maintainers
 - Related: Issue #1177
 
@@ -21,11 +21,19 @@ SQLite schema v21: `session_todo` stores the rows, while `sessions.todo_revision
 and `sessions.todo_updated_at` order both populated and empty snapshots. Each
 write replaces the rows and increments the revision in one transaction.
 
-The tool call is authorized against the calling session and its running turn
-inside that transaction. The host emits `todos.changed` only after commit and
+The tool call is authorized against the calling session and the ownership of its
+turn inside that transaction. The host emits `todos.changed` only after commit and
 serves the complete committed snapshot through `todos.get`. Electron Main
 forwards the notification through the existing IPC bridge, and the renderer
 keeps snapshots keyed by session id while rejecting stale revisions.
+
+Amended (2026-10-23): the turn's own state is not part of that authorization. A
+call that was valid when the model issued it may still be in flight when the
+round ends, and the checklist describes the session rather than the turn, so a
+settled turn of the same session — completed, aborted, or left `aborted` by a
+restart — still writes. That write does not reopen, re-settle, or create a turn.
+Missing, unknown, and foreign turns stay refused, as do Plan/Goal, delegated,
+plugin, and MCP calls.
 
 The original Composer TodoDock was a non-focusing, session-aware presentation
 surface (since retired; see Current status).

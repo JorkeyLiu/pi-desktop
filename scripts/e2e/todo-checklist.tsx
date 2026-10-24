@@ -290,7 +290,7 @@ window.todoChecklistProbe = async () => {
   await until(() => Boolean(header(refusedCard)), "the refused row renders");
   assert(rows(refusedCard).length === 0, "a refused write shows no checklist rows");
   assert(
-    body(refusedCard)!.textContent!.includes("no longer running"),
+    body(refusedCard)!.textContent!.includes("does not belong to this session"),
     `the refusal stays diagnosable (${body(refusedCard)!.textContent})`,
   );
   assert(!body(refusedCard)!.textContent!.includes('"todos"'), "a refusal never prints the raw argument");
@@ -299,6 +299,27 @@ window.todoChecklistProbe = async () => {
     "the refused write committed nothing",
   );
   checks.push("refusal-shows-the-error-and-no-uncommitted-list");
+
+  // ── A write from a turn that already ended still commits ──
+  // The call was valid when the model issued it; the round ending before the
+  // host wrote it must not drop the checklist, and the write must not reopen the
+  // turn or leave a running one behind (the next write begins its own turn).
+  const settledWrite = (await action("write-settled", {
+    sessionId: second,
+    todos: [{ content: "Written after the round ended", status: "in_progress", priority: "medium" }],
+  })) as Omit<Written, "snapshot">;
+  assert(!settledWrite.isError, `an ended turn of the session still writes (${JSON.stringify(settledWrite.toolResult)})`);
+  const settledCard = append(toolMessage("call-todo-8", settledWrite));
+  await until(() => rows(settledCard).length === 1, "the settled turn's write renders its committed row");
+  assert(
+    rows(settledCard)[0]!.textContent!.includes("Written after the round ended"),
+    "the card shows the list the settled turn committed",
+  );
+  assert(
+    (await snapshot(second)).todos.some((todo) => todo.content === "Written after the round ended"),
+    "the settled turn's write reached the host",
+  );
+  checks.push("an-ended-turn-of-the-session-still-writes");
 
   // ── A row persisted before the result carried a list keeps its argument ──
   const legacy = append(

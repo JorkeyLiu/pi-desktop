@@ -81,9 +81,11 @@ pub enum TodoRefusal {
     SessionNotAgent,
     /// The call carried no `turnId`.
     TurnMissing,
-    /// The turn is unknown, belongs to another session, or is no longer
-    /// running.
-    TurnNotRunning,
+    /// The turn is unknown or belongs to another session, so the caller
+    /// cannot attribute its checklist to one of this session's own turns.
+    /// A turn of this session stays writable after it settles: see
+    /// [`replace_for_turn`].
+    TurnNotOwned,
 }
 
 #[derive(Debug)]
@@ -281,12 +283,21 @@ fn read_tx(tx: &Transaction<'_>, session_id: &str) -> Result<Option<TodoSnapshot
 
 /// Replace a session's checklist from one `TodoWrite` call.
 ///
-/// The session's live state, its durable `agent` mode, and the owning running
-/// turn are re-read *inside* the writing transaction. Permission evaluation,
-/// the user's approval, and tool admission all await between the RPC entry
-/// point and this call, so anything that authorized the call may have moved
-/// on: a soft-deleted session, a switched mode, or an ended turn must not
-/// still be able to write.
+/// The session's live state, its durable `agent` mode, and the ownership of the
+/// calling turn are re-read *inside* the writing transaction. Permission
+/// evaluation, the user's approval, and tool admission all await between the RPC
+/// entry point and this call, so anything that authorized the call may have
+/// moved on: a soft-deleted session or a switched mode must not still be able to
+/// write, and a turn that is not this session's own must not be attributed to
+/// it.
+///
+/// The turn's own state is deliberately not part of that gate. A `TodoWrite`
+/// that is still in flight when its turn settles — a settled approval, a slow
+/// permission prompt, a turn that ended while the call waited — is still a valid
+/// call about this session's work, and refusing it only because the original
+/// round is over would drop a checklist the user asked for. The write records a
+/// fact about the session, not about the turn: it settles nothing, revives
+/// nothing, and never creates a turn.
 ///
 /// The item replacement and the `todo_revision` / `todo_updated_at` bump share
 /// one transaction, so a failed write cannot advance the revision.
@@ -328,15 +339,15 @@ fn replace_tx(
     let Some(turn_id) = turn_id else {
         return Err(TodoWriteError::Refused(TodoRefusal::TurnMissing));
     };
-    let turn_status: Option<String> = tx
+    let owned: Option<i64> = tx
         .query_row(
-            "SELECT status FROM turns WHERE id = ?1 AND session_id = ?2",
+            "SELECT 1 FROM turns WHERE id = ?1 AND session_id = ?2",
             params![turn_id, session_id],
             |row| row.get(0),
         )
         .optional()?;
-    if turn_status.as_deref() != Some("running") {
-        return Err(TodoWriteError::Refused(TodoRefusal::TurnNotRunning));
+    if owned.is_none() {
+        return Err(TodoWriteError::Refused(TodoRefusal::TurnNotOwned));
     }
 
     let now = now_ms();
@@ -684,25 +695,21 @@ mod tests {
                 TodoRefusal::SessionNotAgent
             );
         }
-        // Missing, unknown, foreign, and ended turns are all refusals.
+        // A missing, unknown, or foreign turn stays a refusal: the call cannot
+        // be attributed to one of this session's own turns.
         assert_eq!(
             refusal(replace_for_turn(&db, &agent, None, &payload).unwrap_err()),
             TodoRefusal::TurnMissing
         );
         assert_eq!(
             refusal(replace_for_turn(&db, &agent, Some("unknown-turn"), &payload).unwrap_err()),
-            TodoRefusal::TurnNotRunning
+            TodoRefusal::TurnNotOwned
         );
         let other = session(&db);
         let other_turn = sessions::begin_turn(&db, &other, None, None).unwrap();
         assert_eq!(
             refusal(replace_for_turn(&db, &agent, Some(&other_turn), &payload).unwrap_err()),
-            TodoRefusal::TurnNotRunning
-        );
-        sessions::end_turn(&db, &turn, "completed", None, None, false).unwrap();
-        assert_eq!(
-            refusal(replace_for_turn(&db, &agent, Some(&turn), &payload).unwrap_err()),
-            TodoRefusal::TurnNotRunning
+            TodoRefusal::TurnNotOwned
         );
         // Nothing above mutated anything.
         assert!(get(&db, &agent).unwrap().unwrap().todos.is_empty());
@@ -720,6 +727,129 @@ mod tests {
             refusal(replace_for_turn(&db, &other, Some(&other_turn), &payload).unwrap_err()),
             TodoRefusal::SessionNotFound
         );
+    }
+
+    /// A `TodoWrite` that is still in flight when its own turn settles is not a
+    /// stale authorization: the checklist belongs to the session, so the call
+    /// lands whether its turn is still running or already finished. Nothing here
+    /// reopens, re-creates, or re-settles the turn.
+    #[test]
+    fn a_settled_turn_of_the_same_session_still_writes_without_reopening() {
+        let db = db();
+        let session_id = session(&db);
+
+        let mut expected_revision = 0;
+        for status in ["completed", "aborted", "error"] {
+            let turn = sessions::begin_turn(&db, &session_id, None, None).unwrap();
+            sessions::end_turn(&db, &turn, status, None, None, false).unwrap();
+            let settled: (String, Option<i64>) = db
+                .conn()
+                .query_row(
+                    "SELECT status, ended_at FROM turns WHERE id = ?1",
+                    params![turn],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(settled.0, status);
+
+            let snapshot = replace_for_turn(
+                &db,
+                &session_id,
+                Some(&turn),
+                &normalized(json!({"todos": [{"content": status, "status": "pending"}]})),
+            )
+            .unwrap_or_else(|error| panic!("a {status} turn of the session must write: {error}"));
+            expected_revision += 1;
+            assert_eq!(snapshot.revision, expected_revision);
+            assert_eq!(snapshot.todos[0].content, status);
+            assert_eq!(
+                get(&db, &session_id).unwrap().unwrap().todos[0].content,
+                status
+            );
+
+            // The write is a fact about the checklist, not a turn transition.
+            let after: (String, Option<i64>) = db
+                .conn()
+                .query_row(
+                    "SELECT status, ended_at FROM turns WHERE id = ?1",
+                    params![turn],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(after, settled, "a checklist write leaves the turn alone");
+        }
+
+        // Three settled turns wrote; the writes never added a turn or a running
+        // one that would keep the session busy.
+        let (turns, running): (i64, i64) = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*), SUM(status = 'running') FROM turns WHERE session_id = ?1",
+                params![session_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((turns, running), (3, 0));
+    }
+
+    /// The restart shape of the same rule: host-core settles every turn the
+    /// previous process left `running` while it boots, so the run that owned one
+    /// finds it `aborted` afterwards. Its next `TodoWrite` still lands on this
+    /// session's checklist instead of being lost with the process.
+    #[test]
+    fn a_turn_settled_by_a_restart_still_writes_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pi.sqlite");
+        let (session_id, turn) = {
+            let db = Database::open(&path).unwrap();
+            let session_id = session(&db);
+            let turn = sessions::begin_turn(&db, &session_id, None, None).unwrap();
+            // The turn is left running: the next `Database::open` is what
+            // settles it, exactly as a host restart does.
+            replace_for_turn(
+                &db,
+                &session_id,
+                Some(&turn),
+                &normalized(
+                    json!({"todos": [{"content": "before the crash", "status": "in_progress"}]}),
+                ),
+            )
+            .unwrap();
+            (session_id, turn)
+        };
+
+        let reopened = Database::open(&path).unwrap();
+        let settled: String = reopened
+            .conn()
+            .query_row(
+                "SELECT status FROM turns WHERE id = ?1",
+                params![turn],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(settled, "aborted", "the boot sweep settled the turn");
+
+        let snapshot = replace_for_turn(
+            &reopened,
+            &session_id,
+            Some(&turn),
+            &normalized(
+                json!({"todos": [{"content": "after the restart", "status": "completed"}]}),
+            ),
+        )
+        .unwrap_or_else(|error| panic!("the restarted host must accept its own turn: {error}"));
+        assert_eq!(snapshot.revision, 2);
+        assert_eq!(snapshot.todos[0].content, "after the restart");
+        assert_eq!(get(&reopened, &session_id).unwrap().unwrap().revision, 2);
+        let turns: i64 = reopened
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM turns WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(turns, 1, "the write created no turn of its own");
     }
 
     #[test]

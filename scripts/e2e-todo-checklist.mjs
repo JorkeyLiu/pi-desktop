@@ -130,16 +130,36 @@ app.whenReady().then(async () => {
           }
         }
         case "refuse": {
-          // A write against a turn that already ended: the host refuses it, and
-          // nothing is committed or announced.
-          const { turnId } = await host.call("session.beginTurn", { sessionId: input.sessionId }, 10000);
-          await host.call("session.endTurn", { turnId, status: "completed", createNotification: false }, 10000);
+          // A write against a turn that belongs to another session: the host
+          // refuses it because the call cannot be attributed to this session,
+          // and nothing is committed or announced. A turn of this session that
+          // already ended is deliberately not used here — that write commits.
+          const other = (await host.call("session.create", { title: "todo-refusal", mode: "agent" }, 10000)).session.id;
+          const { turnId } = await host.call("session.beginTurn", { sessionId: other }, 10000);
           const result = await host.call("tools.execute", {
             sessionId: input.sessionId, turnId, toolCallId: "refused-todos", toolName: "TodoWrite",
             args: todoArgs(input.todos), mode: "agent" }, 10000);
+          // The throwaway turn and session are cleaned up so the scenario leaves
+          // no extra session behind.
+          await host.call("session.endTurn", { turnId, status: "completed", createNotification: false }, 10000);
+          await host.call("session.delete", { id: other }, 10000);
           return { toolArgs: todoArgs(input.todos), isError: true,
             toolResult: { content: [{ type: "text", text: String(result.content?.error ?? result.errorCode) }],
               details: result.content, isError: true } };
+        }
+        case "write-settled": {
+          // The same host write, issued from a turn that has already ended: the
+          // round is over but the call is still this session's own, so it
+          // commits. Nothing is reopened and no turn is left running.
+          const { turnId } = await host.call("session.beginTurn", { sessionId: input.sessionId }, 10000);
+          await host.call("session.endTurn", { turnId, status: "completed", createNotification: false }, 10000);
+          const result = await host.call("tools.execute", {
+            sessionId: input.sessionId, turnId, toolCallId: "settled-todos", toolName: "TodoWrite",
+            args: todoArgs(input.todos), mode: "agent" }, 10000);
+          const isError = result.ok === false;
+          return { toolArgs: todoArgs(input.todos), isError,
+            toolResult: { content: [{ type: "text", text: String(result.content?.text ?? result.content?.error ?? result.errorCode) }],
+              details: result.content, isError } };
         }
         case "restart": await host.restart(); forwardNotifications(); return;
         case "event": win.webContents.send(channels.changed, input); return;

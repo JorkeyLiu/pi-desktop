@@ -2,13 +2,14 @@
  * Host restart against a live agent turn (integration, real host-core process).
  *
  * host-core marks every turn that was running when the previous process died
- * `aborted` while it boots (`boot_maintenance`), so the replacement host refuses
- * anything that turn-scopes: a `TodoWrite` from the run that was live during the
- * crash comes back `TOOL_TURN_CANCELLED`. The agent run itself lives in the
+ * `aborted` while it boots (`boot_maintenance`). That settlement is what a
+ * turn-scoped write used to be refused on, but the checklist belongs to the
+ * session, so a `TodoWrite` the dead run had already issued still commits: it
+ * neither reopens the turn nor creates one. The agent run itself lives in the
  * sidecar, which stays up across a host restart — so whoever owns the host
- * process also owes that interrupted turn a decision: stop the run and settle the
- * turn, or leave an agent that looks alive writing into a turn the host no longer
- * has.
+ * process still owes that interrupted turn a decision: stop the run and settle
+ * the turn, or leave an agent that looks alive writing into a turn the host no
+ * longer has.
  *
  * These cases drive the real host-core child (spawned, SIGKILLed, respawned by
  * the real supervisor) through the real host runtime, turn coordination and turn
@@ -270,13 +271,24 @@ test("a host restart stops the run that owned the interrupted turn and settles i
     "the sidecar is told to abort the turn the host lost",
   );
 
-  // The replacement host has already refused that turn since it booted, so a run
-  // left alive would keep writing into it and see every turn-scoped tool fail.
+  // The replacement host settled that turn while it booted, but the checklist
+  // belongs to the session: a write the run had already issued still lands,
+  // instead of disappearing with the process that died. The write must not
+  // reopen the settled turn or start one of its own.
   const after = await restarted.call("tools.execute", todoWrite(sessionId, turnId, "after the restart"));
-  assert.equal(after.ok, false);
-  assert.equal(after.errorCode, "TOOL_TURN_CANCELLED");
+  assert.equal(after.ok, true, JSON.stringify(after));
+  assert.equal(after.content?.todos?.[0]?.content, "after the restart");
+  // The revision advances on the surviving checklist, so the committed list is
+  // the one the crashed run was building rather than a fresh one.
+  const stored = await restarted.call("todos.get", { sessionId });
+  assert.equal(stored.revision, 2, JSON.stringify(stored));
+  assert.deepEqual(stored.todos.map((todo) => todo.content), ["after the restart"]);
+  // Nothing is running after that write (a write never creates a turn), and the
+  // settled turn is announced exactly once below, so it was neither reopened nor
+  // settled a second time.
 
-  // A new turn on the restarted host works: the session is not left busy.
+  // A new turn on the restarted host still starts: the write left the session
+  // with no turn holding it.
   const next = await restarted.call("session.beginTurn", { sessionId });
   assert.notEqual(next.turnId, turnId);
   harness.activeTurns.set(sessionId, next.turnId);

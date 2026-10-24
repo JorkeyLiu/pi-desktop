@@ -353,10 +353,13 @@ ids 和非负 `tokensBefore`；它不会插入 message/search 行
 - `tools.execute` 的 `toolName: "TodoWrite"` 只接受 `{ todos }`，并替换整个有序清单。
   主机会裁剪内容、将 priority 默认设为 `medium`，把超长 Unicode 内容限制在 500 个字符并
   返回警告，把后续 `in_progress` 降级为 `pending`，并拒绝超过 50 项或格式错误的值。
-  所属 session 和运行中的 turn 来自可信传输字段，不来自工具参数。
-- TodoWrite 只允许 Agent 会话自己的运行 turn。Plan/Goal、委托、插件和 MCP 调用会返回工具错误，
-  不会修改存储。成功替换即使 `todos` 为空也会推进 revision，并且只在事务提交后发出
-  `todos.changed`；事件负载与 `todos.get` 返回的完整快照一致。
+  所属 session 和 turn 来自可信传输字段，不来自工具参数。
+- TodoWrite 只允许 Agent 会话自己的 turn。Plan/Goal、委托、插件和 MCP 调用会返回工具错误，
+  不会修改存储；未知或软删除会话、缺少 `turnId`、或 `turnId` 不属于该会话同样被拒绝。
+  turn 自身状态不属于该规则：turn 已收尾（completed、aborted，或重启后遗留的 `aborted`）时，
+  仍在进行中的调用照样提交，因为清单描述的是会话，拒绝只会丢掉用户已经要的工作；该写入不会
+  重开或重新收尾 turn，也不会创建 turn。成功替换即使 `todos` 为空也会推进 revision，并且只在
+  事务提交后发出 `todos.changed`；事件负载与 `todos.get` 返回的完整快照一致。
 - SQLite 只由 host-core 拥有。渲染器通过 Electron Main IPC 接收快照，按 session id 保存并忽略
   更旧或相同 revision。远程 RACP 会话在这条垂直切片中保持 local-only，因为 RACP v1 尚无 Todo 快照操作。
 
