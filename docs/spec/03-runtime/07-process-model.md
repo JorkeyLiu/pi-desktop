@@ -179,15 +179,18 @@ renderer-facing status):
   generation; stale generation requests and notifications are rejected before
   they reach the current bridge.
 - A restarted host boots with every turn the previous process left `running`
-  already aborted, so a turn-scoped write from that turn can only be refused
-  (`TodoWrite` answers `TOOL_TURN_CANCELLED`). The agent run that owned such a
-  turn lives in the sidecar, which survives the restart: at host exit each live
-  turn's identity is captured, the run is aborted in the sidecar with that
-  identity, and the turn is settled as `aborted` / `TURN_ABORTED` through the
-  same finalizer a Stop uses. A run that ended on its own, and a turn that moved
-  on, are refused by the sidecar's own identity check, so a newer turn is never
-  stopped; nothing is replayed, revived, or retried, and an idle restart settles
-  nothing.
+  already aborted. That settlement decides the turn, not the checklist: a
+  `TodoWrite` the interrupted run had already issued still commits against its
+  session's checklist whenever the call belongs to that session's own turn, and
+  the write neither reopens the turn nor creates one. The agent run that owned
+  such a turn lives in the sidecar, which survives the restart: at
+  host exit each live turn's identity is captured, the run is aborted in the
+  sidecar with that identity, and the turn is settled as `aborted` /
+  `TURN_ABORTED` through the same finalizer a Stop uses — otherwise it would
+  keep spending tokens on a turn the host no longer has and hold the session
+  busy. A run that ended on its own, and a turn that moved on, are refused by
+  the sidecar's own identity check, so a newer turn is never stopped; nothing is
+  replayed, revived, or retried, and an idle restart settles nothing.
 - Host persistence appends are buffered in an Electron-main-owned outbox while
   the host is unavailable and flushed sequentially after a new handshake. A
   missing sessions row is restored from the live transcript (or created as a

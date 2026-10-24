@@ -77,15 +77,15 @@ export function createHostRuntime({
   /**
    * Stop the agent runs whose turn belonged to the host process that just died.
    *
-   * host-core gives up every running turn when it boots, so the turn each of
-   * these runs holds can no longer write through the replacement host: a
-   * `TodoWrite` from it already comes back `TOOL_TURN_CANCELLED`. The run itself
-   * lives in the sidecar, which survives a host restart, and nothing else would
-   * ever tell it to stop — it keeps executing a turn the host no longer has, and
-   * its session stays busy so the next prompt is refused. The owner of the host
-   * process therefore settles it here, the way the sidecar crash path settles its
-   * own dead runs, with the identity captured before the first await because a
-   * newer turn may own the session by the time this unwinds.
+   * host-core gives up every running turn when it boots. A checklist write from
+   * such a turn still lands, but the run itself lives in the sidecar, which
+   * survives a host restart, and nothing else would ever tell it to stop — it
+   * keeps executing a turn the host no longer has, spending tokens on a round
+   * nobody is reading, and its session stays busy so the next prompt is refused.
+   * The owner of the host process therefore settles it here, the way the sidecar
+   * crash path settles its own dead runs, with the identity captured before the
+   * first await because a newer turn may own the session by the time this
+   * unwinds.
    *
    * The settlement is claimed before the stop request leaves: the stop makes the
    * run emit its own terminal event, and that event must join this abort instead

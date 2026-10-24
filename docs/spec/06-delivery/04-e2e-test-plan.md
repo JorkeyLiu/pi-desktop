@@ -892,10 +892,11 @@ validation still needed.
   drives a real host-core child through an unexpected exit and supervised
   respawn: the agent run that owned the interrupted turn is stopped with that
   turn's identity, the turn settles once as `aborted` and is released, the
-  replacement host refuses the dead turn with `TOOL_TURN_CANCELLED`, a turn
-  started after the restart still writes, an idle restart settles nothing, a
-  repeated restart stops only the turn it interrupted, and a restart that never
-  comes back still settles the turn. It needs a built host-core
+  replacement host settles the dead turn, yet a checklist write the interrupted
+  run had already issued still commits without reopening or adding a turn, a
+  turn started after the restart still writes, an idle restart settles nothing,
+  a repeated restart stops only the turn it interrupted, and a restart that
+  never comes back still settles the turn. It needs a built host-core
   (`cargo build -p host-core`) or `PI_DESKTOP_HOST_BIN`.
 
 ### Release & Packaging
@@ -10317,9 +10318,11 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   committed list survives.
   Send an overlong item and a second `in_progress` item and confirm the row
   shows what the host stored — truncated content and the demoted state — not the
-  argument as written. Refuse a write (a turn that already ended) and confirm the
-  row states the error, lists no rows, and never prints the raw `todos`
-  argument. Reach a row persisted before results carried the committed list and
+  argument as written. Refuse a write (a turn that belongs to another session)
+  and confirm the row states the error, lists no rows, and never prints the raw
+  `todos` argument; then write again from a turn that has already ended and
+  confirm the host commits it, the row shows that list, and no turn was
+  reopened. Reach a row persisted before results carried the committed list and
   confirm it stays readable from its own argument.
   Deliver an out-of-order older `todos.changed` event and confirm it cannot
   replace the newer snapshot. Confirm no Composer surface renders a checklist.
@@ -10352,7 +10355,8 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   an update, a second write leaving the first card intact, the mixed cancelled
   count, the all-cancelled label, the cleared state and its disclosure target,
   truncation
-  and single-active-item normalization as rendered, a refused write, a legacy
+  and single-active-item normalization as rendered, a refused write against
+  another session's turn, a write from a turn that already ended, a legacy
   row without a committed list, stale-event rejection through the production
   store, and host-restart durability. Renderer contracts are also covered by
   `apps/desktop/test/tool-presentation.test.mjs` and

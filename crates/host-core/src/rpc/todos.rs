@@ -144,12 +144,12 @@ fn refusal_wire(refusal: TodoRefusal) -> (&'static str, &'static str, bool) {
         ),
         TodoRefusal::TurnMissing => (
             "TOOL_TURN_CANCELLED",
-            "TodoWrite requires the running turn of the calling session",
+            "TodoWrite requires the calling turn of the session",
             false,
         ),
-        TodoRefusal::TurnNotRunning => (
+        TodoRefusal::TurnNotOwned => (
             "TOOL_TURN_CANCELLED",
-            "the calling turn is no longer running for this session",
+            "the calling turn does not belong to this session",
             false,
         ),
     }
@@ -605,12 +605,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_checklist_requires_agent_mode_and_an_owned_running_turn() {
+    async fn the_checklist_requires_agent_mode_and_an_owned_turn() {
         let mut harness = Harness::new();
         let session_id = harness.session("agent").await;
         let turn_id = harness.begin_turn(&session_id).await;
 
-        // A missing, unknown, foreign, or ended turn is refused.
+        // A missing, unknown, or foreign turn is refused: the call cannot be
+        // attributed to a turn of this session.
         let mut missing = write_call(&session_id, "", items(&["x"]));
         missing.as_object_mut().unwrap().remove("turnId");
         assert_refused(
@@ -629,22 +630,6 @@ mod tests {
                 "TOOL_TURN_CANCELLED",
             );
         }
-        let ended = harness.session("agent").await;
-        let ended_turn = harness.begin_turn(&ended).await;
-        {
-            let st = harness.state.lock().await;
-            sessions::end_turn(&st.db, &ended_turn, "completed", None, None, false).unwrap();
-        }
-        assert_refused(
-            &harness
-                .call(
-                    "tools.execute",
-                    write_call(&ended, &ended_turn, items(&["x"])),
-                )
-                .await
-                .unwrap(),
-            "TOOL_TURN_CANCELLED",
-        );
         // Another session's running turn cannot be borrowed.
         let other = harness.session("agent").await;
         let other_turn = harness.begin_turn(&other).await;
@@ -722,6 +707,66 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(committed["ok"], json!(true), "{committed}");
+
+        // A turn that already settled still commits. The call was valid when the
+        // model issued it and the checklist belongs to the session, so refusing it
+        // only because the round ended would drop work the user asked for. The
+        // write neither reopens the turn nor creates a new one.
+        {
+            let st = harness.state.lock().await;
+            sessions::end_turn(&st.db, &turn_id, "completed", None, None, false).unwrap();
+        }
+        assert_eq!(
+            harness.events().len(),
+            1,
+            "the running write announces itself"
+        );
+        let settled = harness
+            .call(
+                "tools.execute",
+                write_call(&session_id, &turn_id, items(&["after the turn ended"])),
+            )
+            .await
+            .unwrap();
+        assert_eq!(settled["ok"], json!(true), "{settled}");
+        assert!(settled.get("isError").is_none(), "{settled}");
+        assert_eq!(
+            settled["content"]["todos"][0]["content"],
+            json!("after the turn ended")
+        );
+        let emitted = harness.events();
+        assert_eq!(emitted.len(), 1, "the committed write announces itself");
+        assert_eq!(
+            emitted[0]["params"]["todos"][0]["content"],
+            json!("after the turn ended")
+        );
+        assert_eq!(
+            harness.snapshot(&session_id).await["todos"][0]["content"],
+            json!("after the turn ended")
+        );
+        {
+            let st = harness.state.lock().await;
+            let status: String = st
+                .db
+                .conn()
+                .query_row(
+                    "SELECT status FROM turns WHERE id = ?1",
+                    [turn_id.as_str()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(status, "completed", "the write does not reopen the turn");
+            let turns: i64 = st
+                .db
+                .conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM turns WHERE session_id = ?1",
+                    [session_id.as_str()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(turns, 1, "the write creates no turn of its own");
+        }
     }
 
     #[tokio::test]
