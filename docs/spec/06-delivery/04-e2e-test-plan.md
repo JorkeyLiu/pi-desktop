@@ -7658,6 +7658,38 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 - **Milestone**: M6
 - **Status**: Automated
 
+#### E2E-1178: The delegation tab's jump control floats above its composer, not on it
+
+- **Preconditions**: No provider, paid API, or user desktop instance is used. The
+  fixture mounts the production `SubagentTranscriptTab` inside the work panel's
+  own `.work-panel-body`/`.work-panel-tabpane` shape, with the real app store,
+  i18n, shared composer and the built application stylesheet in an isolated
+  Electron window; the transcript overflows its pane.
+- **Steps**:
+  1. Scroll the pane up with a real wheel gesture and measure the control's
+     rect against the transcript viewport, the composer's top edge and the
+     pane's horizontal centre.
+  2. Grow the composer with a multi-line draft, then stage an image through the
+     production paste path, measuring after each step.
+  3. Change the panel width (340px ↔ 620px) and measure again.
+  4. Click the control; then append a new row after it.
+- **Expected**: The control appears only after the upward gesture, floats
+  horizontally centred a fixed ~8px above the transcript viewport's bottom edge
+  — the composer's own top edge — and never overlaps the composer at any
+  composer height (empty draft, multi-line draft, staged image) or panel width,
+  with no composer height measured or guessed. The pane keeps exactly one
+  follow scroll owner and the control never scrolls with the content. Clicking
+  it reaches the newest row and hides it, and a following new row stays in view.
+- **Automation**: `node scripts/e2e-subagent-transcript-jump.mjs` (isolated
+  Electron renderer; the same assertions run against a pre-fix tree via
+  `PI_SUBAGENT_JUMP_ROOT` and report the overlap as failures). Static contract:
+  `apps/desktop/test/subagent-panel.test.mjs`.
+- **Specs linked**: `04-ux/08-component-spec.md` (delegation tab),
+  `04-ux/09-interaction-patterns.md` (scroll-to-bottom button, work panel tabs).
+- **Acceptance**: Quality
+- **Milestone**: M6
+- **Status**: Automated
+
 #### E2E-149: Recover provider rate limits (429) silently in place
 
 - **Preconditions**: A project-bound Agent session uses deterministic provider

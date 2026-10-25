@@ -1567,7 +1567,8 @@ Project drag/drop follows these patterns:
   nested scroller consumes is not the outer scroller's gesture. Arrow keys still
   scroll and Space still activates a focused title.
 - User send / retry / regenerate: re-pins, hides the jump control, and positions the latest content in the layout phase so the new turn is visible without a top-of-history flash; subsequent persisted and streamed rows continue to follow the bottom
-- Scroll-to-bottom button: position fixed at bottom-right of transcript area, offset 12px
+- Scroll-to-bottom button: horizontally centred 8px above the bottom edge of its
+  own transcript viewport, so it floats just above the composer and never on it
 - Button appears as soon as upward scrolling releases follow mode
 - Click button: scrolls to bottom, resumes auto-scroll
 - Button disappears when at bottom
@@ -1576,9 +1577,11 @@ Project drag/drop follows these patterns:
   row followed by the delegate's live thinking, tool, and answer rows — in
   normal content flow; it does not mount a nested `.subagent-run-rows`
   workflow scrollbar. While the panel is pinned, new rows stay in view; a real
-  upward gesture pauses follow and shows the standard jump-to-latest control.
-  This keeps the conversation readable without a second scrollbar or an empty
-  tail.
+  upward gesture pauses follow and shows the standard jump-to-latest control,
+  which anchors to that tab's own transcript viewport — horizontally centred a
+  fixed gap above the composer's top edge, at any composer height — because the
+  composer is outside the control's containing block. This keeps the
+  conversation readable without a second scrollbar or an empty tail.
 - Clicking a delegation topology node opens (or activates) a dedicated
   `subagent` tab in the work panel instead of expanding the transcript or
   replacing the tab strip. Multiple delegations coexist as independent tabs —

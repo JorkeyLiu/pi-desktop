@@ -161,6 +161,29 @@ test("the tab owns one scroll surface and pins to the latest output", () => {
   assert.match(tabSource, /useTranscriptSearchFocus\(\{/);
 });
 
+test("the jump control anchors to the transcript viewport, not the composer", () => {
+  // The control shares one containing block with the scrollport and nothing
+  // else: its `bottom` is a fixed gap above that viewport, which is the
+  // composer's own top edge, so no composer height has to be guessed. The
+  // panel body it used to be positioned against also contains the composer,
+  // which is why a guessed offset could land the control inside the box.
+  assert.match(workPanelCss, /\.subagent-transcript-viewport \{[^}]*position: relative/);
+  assert.match(workPanelCss, /\.subagent-transcript-viewport \{[^}]*flex: 1/);
+  assert.match(workPanelCss, /\.subagent-transcript-jump \{\s*bottom: 8px;/);
+  assert.doesNotMatch(workPanelCss, /--st-composer-dock-height/);
+  // The wrapper is the scrollport's parent and the control's sibling, and it
+  // closes before the composer, so the composer is outside the containing
+  // block and the scrollport stays the tab's only scroll owner.
+  assert.match(
+    tabSource,
+    /<div className="subagent-transcript-viewport">\s*<div\s+data-scroll-owner="follow"/,
+  );
+  assert.match(
+    tabSource,
+    /<\/TooltipButton>\s*\) : null\}\s*<\/div>\s*<footer className="subagent-transcript-composer"/,
+  );
+});
+
 test("composer copy names the driver and lives in the field, per locale", () => {
   for (const [locale, source] of [
     ["en", englishCatalogSource],

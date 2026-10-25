@@ -757,103 +757,108 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
             </div>
           ) : null}
         </div>
-        <div
-          data-scroll-owner="follow"
-          ref={scrollRef}
-          className="subagent-transcript-scroll"
-          onScroll={handleScroll}
-          role="log"
-          aria-live="polite"
-          aria-label={t("panel.subagent")}
-          tabIndex={0}
-        >
-          <div ref={contentRef} className="subagent-transcript-list">
-            {transcriptResult ? (
-              transcriptResult.turns.map((turn, turnIndex) => (
-                <Fragment key={`turn-${turnIndex}`}>
-                  <div className="message-row user">
-                    <div className="message-col">
-                      <div className="message-bubble">
-                        {turn.task || !turn.attachments?.length ? (
-                          <div className="message-user-text selectable">
-                            {turn.task || t("panel.subagentTaskEmpty")}
-                          </div>
-                        ) : null}
-                        <SubagentUserAttachments attachments={turn.attachments} />
+        {/* The scroll area and its jump control share one containing block:
+          the control anchors to this transcript viewport, so it sits just
+          above the composer at any composer height instead of guessing it. */}
+        <div className="subagent-transcript-viewport">
+          <div
+            data-scroll-owner="follow"
+            ref={scrollRef}
+            className="subagent-transcript-scroll"
+            onScroll={handleScroll}
+            role="log"
+            aria-live="polite"
+            aria-label={t("panel.subagent")}
+            tabIndex={0}
+          >
+            <div ref={contentRef} className="subagent-transcript-list">
+              {transcriptResult ? (
+                transcriptResult.turns.map((turn, turnIndex) => (
+                  <Fragment key={`turn-${turnIndex}`}>
+                    <div className="message-row user">
+                      <div className="message-col">
+                        <div className="message-bubble">
+                          {turn.task || !turn.attachments?.length ? (
+                            <div className="message-user-text selectable">
+                              {turn.task || t("panel.subagentTaskEmpty")}
+                            </div>
+                          ) : null}
+                          <SubagentUserAttachments attachments={turn.attachments} />
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  {turn.rows.map((row) =>
-                    row.kind === "tool" ? (
-                      <ToolRow key={row.message.id} message={row.message} />
-                    ) : row.kind === "thinking" ? (
-                      <ThinkingRow
-                        key={`thinking-${row.message.id}`}
-                        message={row.message}
-                        streaming={isRunning && row.message.status === "streaming"}
-                      />
-                    ) : row.kind === "steering-user" ? (
-                      <div
-                        className="message-row user"
-                        data-message-id={row.message.id}
-                        key={`steering-${row.message.id}`}
-                      >
-                        <div className="message-col">
-                          <div className="message-bubble">
-                            {row.message.content ? (
-                              <div className="message-user-text selectable">
-                                {row.message.content}
-                              </div>
-                            ) : null}
-                            <SubagentUserAttachments attachments={row.message.attachments} />
-                            {row.message.error ? (
-                              <AssistantErrorMessage message={row.message} />
-                            ) : null}
+                    {turn.rows.map((row) =>
+                      row.kind === "tool" ? (
+                        <ToolRow key={row.message.id} message={row.message} />
+                      ) : row.kind === "thinking" ? (
+                        <ThinkingRow
+                          key={`thinking-${row.message.id}`}
+                          message={row.message}
+                          streaming={isRunning && row.message.status === "streaming"}
+                        />
+                      ) : row.kind === "steering-user" ? (
+                        <div
+                          className="message-row user"
+                          data-message-id={row.message.id}
+                          key={`steering-${row.message.id}`}
+                        >
+                          <div className="message-col">
+                            <div className="message-bubble">
+                              {row.message.content ? (
+                                <div className="message-user-text selectable">
+                                  {row.message.content}
+                                </div>
+                              ) : null}
+                              <SubagentUserAttachments attachments={row.message.attachments} />
+                              {row.message.error ? (
+                                <AssistantErrorMessage message={row.message} />
+                              ) : null}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ) : (
-                      <div
-                        className="message-row assistant"
-                        data-message-id={row.message.id}
-                        key={`answer-${row.message.id}`}
-                      >
-                        <div className="message-col">
-                          <div className="message-bubble">
-                            {row.message.content ? (
-                              <div className="prose-chat selectable">
-                                <Markdown source={row.message.content} />
-                              </div>
-                            ) : null}
-                            {row.message.error ? (
-                              <AssistantErrorMessage message={row.message} />
-                            ) : null}
+                      ) : (
+                        <div
+                          className="message-row assistant"
+                          data-message-id={row.message.id}
+                          key={`answer-${row.message.id}`}
+                        >
+                          <div className="message-col">
+                            <div className="message-bubble">
+                              {row.message.content ? (
+                                <div className="prose-chat selectable">
+                                  <Markdown source={row.message.content} />
+                                </div>
+                              ) : null}
+                              {row.message.error ? (
+                                <AssistantErrorMessage message={row.message} />
+                              ) : null}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ),
-                  )}
-                </Fragment>
-              ))
-            ) : (
-              <div className="subagent-transcript-empty" role="status">
-                {t("panel.subagentEmpty")}
-              </div>
-            )}
-            {showWorking ? <WorkingIndicator /> : null}
+                      ),
+                    )}
+                  </Fragment>
+                ))
+              ) : (
+                <div className="subagent-transcript-empty" role="status">
+                  {t("panel.subagentEmpty")}
+                </div>
+              )}
+              {showWorking ? <WorkingIndicator /> : null}
+            </div>
           </div>
+          {showJump ? (
+            <TooltipButton
+              type="button"
+              className="jump-latest-btn subagent-transcript-jump"
+              tooltip={t("chat.scrollToBottom")}
+              ariaLabel={t("chat.scrollToBottom")}
+              onClick={jumpToLatest}
+            >
+              <IconArrowDown size={14} />
+            </TooltipButton>
+          ) : null}
         </div>
-        {showJump ? (
-          <TooltipButton
-            type="button"
-            className="jump-latest-btn subagent-transcript-jump"
-            tooltip={t("chat.scrollToBottom")}
-            ariaLabel={t("chat.scrollToBottom")}
-            onClick={jumpToLatest}
-          >
-            <IconArrowDown size={14} />
-          </TooltipButton>
-        ) : null}
         <footer className="subagent-transcript-composer" data-testid="subagent-panel-footer">
           {/* The panel reuses the main composer's editor, box, and tokens; it
             only owns what the panel decides, which is what to send. */}

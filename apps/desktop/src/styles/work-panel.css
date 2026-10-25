@@ -508,6 +508,21 @@ body:has(> .context-menu) .work-panel-header {
   flex: none;
 }
 
+/* The transcript's own containing block: the scrollport plus the floating
+   jump control, and nothing else. The composer stays outside it, so the
+   control anchors to the transcript viewport's bottom edge — a fixed gap above
+   whatever height the composer has — instead of approximating that height in
+   the panel's own coordinate space. The scrollport still owns the only
+   scrollbar, and the wrapper only re-parents it. */
+.subagent-transcript-viewport {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
 /* The tab's scroll area is the pane's only scrollbar, and it reserves that
    gutter whether or not the rows overflow: expanding a long command detail
    never narrows the scrollport, so every row keeps its width and its left and
@@ -544,8 +559,11 @@ body:has(> .context-menu) .work-panel-header {
   text-align: center;
 }
 
+/* The shared jump control centres itself on its containing block; here that is
+   the transcript viewport, so it lands horizontally centred just above the
+   composer whatever its height. */
 .subagent-transcript-jump {
-  bottom: calc(var(--st-composer-dock-height, 68px) + 8px);
+  bottom: 8px;
   z-index: 6;
 }
 
