@@ -78,6 +78,7 @@ function Fixture({ sessionId, t, workspacePath }: { sessionId: string; t: TFunct
     thinkingLevel: "off", modelReady: true, sendBlocked: false, pasting: false,
     activeFileReferences: draft.activeFileReferences, t, draft,
     recordHistory: inputHistory.record,
+    invalidateComposerTransforms: noop,
     sendPrompt: (...args) => historySendPrompt(...args),
     steerPrompt: async () => false, showToast: noop,
   });

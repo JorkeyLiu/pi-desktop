@@ -35,6 +35,7 @@ import {
 import {
   editorSelectionRange,
   createFileReference,
+  insertNewlineAtCaret,
   isEditableTextReference,
   isPersistedScratchReference,
   isPluginMark,
@@ -375,22 +376,12 @@ export function useComposerDraft({
     updateCursor(start);
   };
 
-  /** Enter inserts a bare newline text node so the draft round-trips. */
+  /** Enter inserts one draft newline at the caret; the editor helper keeps the
+   * empty line and the caret in the same model the draft string uses. */
   const insertNewlineInEditor = () => {
     const element = ref.current;
     if (!element) return;
-    const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0) return;
-    const range = selection.getRangeAt(0);
-    if (!element.contains(range.startContainer) || !element.contains(range.endContainer)) return;
-    range.deleteContents();
-    const node = document.createTextNode("\n");
-    range.insertNode(node);
-    const after = document.createRange();
-    after.setStart(node, 1);
-    after.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(after);
+    if (!insertNewlineAtCaret(element)) return;
     commitEditorDom();
   };
 

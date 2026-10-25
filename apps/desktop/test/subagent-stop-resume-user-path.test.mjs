@@ -37,6 +37,7 @@ import { initReactI18next } from "react-i18next";
 import { catalogs, flattenCatalog } from "@pi-desktop/i18n";
 import { IPC } from "@pi-desktop/shared";
 import { SubagentTranscriptTab } from "../../apps/desktop/src/components/workpanel/SubagentTranscriptTab";
+import { readEditorValue } from "../../apps/desktop/src/features/chat/composer/editor";
 import { SlotSessionProvider } from "../../apps/desktop/src/plugins/renderer-slots/use-slots";
 import { useAppStore } from "../../apps/desktop/src/stores/app-store";
 
@@ -188,8 +189,9 @@ const contextMetric = () =>
 // BR line breaks mapped back to "\n", and "disabled" is the editor refusing
 // input (aria-readonly / contentEditable="false").
 const editor = () => tab()?.querySelector('[data-testid="subagent-panel-footer"] [role="textbox"]');
-const readDraft = (node) =>
-  [...node.childNodes].map((child) => (child.nodeName === "BR" ? "\n" : child.textContent ?? "")).join("");
+// The app's own serializer is the draft truth: a break the editor keeps only
+// for caret placement must not read back as a newline here either.
+const readDraft = (node) => readEditorValue(node);
 const textarea = () => {
   const node = editor();
   if (!node) return null;
@@ -675,12 +677,16 @@ window.subagentComposerImeProbe = async () => {
   // Shift+Enter is a newline, never a send — before and after the composition.
   const afterComposition = sendRequests().length;
   await type("multi line");
-  check(press({ shiftKey: true }) === false, "Shift+Enter was consumed as a send");
+  placeCaretAtEnd();
+  press({ shiftKey: true });
+  await frame();
   check(sendRequests().length === afterComposition, "Shift+Enter sent the draft");
-  // The browser inserts a Shift+Enter break itself; the editor must read it
-  // back as a newline instead of an unreadable block, and the send must keep it.
+  check(textarea().value === "multi line\n", "Shift+Enter did not insert one newline: " + JSON.stringify(textarea().value));
+  // A break the browser inserts itself must read back as one newline instead of
+  // an unreadable block, and the send must keep it.
   flushSync(() => {
     const node = editor();
+    node.textContent = "multi line";
     node.appendChild(document.createElement("br"));
     node.appendChild(document.createTextNode("second line"));
     placeCaretAtEnd();
@@ -703,9 +709,12 @@ window.subagentComposerImeProbe = async () => {
   await frame();
   const beforePreference = sendRequests().length;
   await type("prefer newline");
-  check(press({}) === false, "Enter sent while enter-to-send was off");
+  placeCaretAtEnd();
+  press({});
   await frame();
   check(sendRequests().length === beforePreference, "Enter sent while enter-to-send was off");
+  check(textarea().value === "prefer newline\n",
+    "Enter with enter-to-send off did not insert one newline: " + JSON.stringify(textarea().value));
   check(press({ metaKey: true }) === true, "modifier Enter did not send with enter-to-send off");
   await until(() => sendRequests().length === beforePreference + 1,
     "modifier Enter did not send exactly once with enter-to-send off: " + JSON.stringify(sendRequests()));

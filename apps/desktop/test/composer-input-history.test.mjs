@@ -252,8 +252,8 @@ test("keydown order: IME guard < autocomplete < history < send (AC5)", async () 
   const start = source.indexOf("onKeyDown={(event: ReactKeyboardEvent");
   const handler = source.slice(start, source.indexOf("        />", start));
   const ime = handler.indexOf("event.nativeEvent.isComposing");
-  const autocomplete = handler.indexOf("composerAc.hasItems");
-  const history = handler.indexOf("onHistoryNavigate(");
+  const autocomplete = handler.indexOf("composerAc?.hasItems");
+  const history = handler.indexOf("onHistoryNavigate?.(");
   const send = handler.search(
     /event\.key === "Enter"\s*&&\s*!event\.shiftKey\s*&&\s*\(enterToSend/,
   );

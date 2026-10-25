@@ -173,6 +173,15 @@ export function ComposerInput({
             ) {
               event.preventDefault();
               onSubmit();
+              return;
+            }
+            // Every other Enter is a draft newline: Enter with Enter-to-send
+            // off, and Shift+Enter always. Chromium's own paragraph insertion
+            // would create block wrappers the draft model cannot carry, so the
+            // newline is inserted at the draft's own offsets.
+            if (event.key === "Enter" && !event.altKey && !event.metaKey && !event.ctrlKey) {
+              event.preventDefault();
+              onInsertNewline();
             }
           }}
         />

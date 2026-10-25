@@ -814,6 +814,8 @@ The minimum selection is:
 - Settings/composer/plugin search theme surfaces: `pnpm build:js` followed by
   `pnpm test:e2e:theme-surfaces`.
 - Composer clipboard representation and text insertion: `pnpm test:e2e:composer-paste`.
+- Composer newlines, empty last line, caret placement, and the draft/DOM
+  serialization agreement: `pnpm test:e2e:composer-caret`.
 - Composer slash-menu name/description layout: `pnpm build:js` followed by
   `pnpm test:e2e:composer-autocomplete`.
 - Transcript render boundaries and cross-part delegation display: `pnpm test:e2e:transcript`.
@@ -1677,8 +1679,46 @@ validation still needed.
   `04-ux/09-interaction-patterns.md` §1.2
 - **Acceptance**: C (composer send)
 - **Milestone**: M2
-- **Status**: Source-level regression (`composer-ime.test.mjs`); full UI
-  keyboard journey remains Draft. Protocol smoke does not dispatch key events.
+- **Status**: Composer newlines and their caret behavior are automated by
+  `pnpm test:e2e:composer-caret` (real Chromium keys); the send/no-send journey
+  itself remains source-level (`composer-ime.test.mjs`) because protocol smoke
+  does not dispatch key events.
+
+#### E2E-008f: Composer empty last line keeps the caret and the typed text
+
+- **Preconditions**: A draft with two lines whose second line holds one
+  character (`暂不配置。` then `非`).
+- **Steps**: 1) Put the caret at the end of the second line and press Backspace
+  so that line becomes empty. 2) Type a character. 3) Press Enter, then type;
+  press Shift+Enter, then type. 4) From an empty draft press Enter twice and
+  type. 5) Select the whole draft and delete it. 6) Repeat the second-line case
+  forward-deleting the character, after an IME commit, with a file-reference
+  chip, and after pasting text that ends with a newline. 7) Paste multiline text
+  in the middle of a newline-terminated draft, twice in a row; paste text ending
+  with a newline after one and after two existing trailing newlines, and at the
+  draft end, including into an empty draft. 8) Put the caret inside a chip's
+  label by a real click, and by a drag from the label to the chip's remove
+  button.
+- **Expected**: The caret stays on the now-empty second line, the typed
+  character lands there (`暂不配置。` newline `a`), and no phantom character or
+  extra newline appears. Every step keeps the draft and the editor's DOM
+  serialization identical, so a caret offset is never read from a different
+  layout than the one rendered. Enter and Shift+Enter each add exactly one
+  newline and the next keystroke lands on the new empty line. Deleting
+  everything leaves an empty draft rather than a newline. A paste adds exactly
+  the newlines it carries, and neither the caret-only break nor a stray empty
+  one becomes content, so a draft's trailing newlines are the same before and
+  after a paste that does not end with one. A caret the browser puts inside a
+  chip's markup is stored and used at that chip's boundary, not at the end of
+  the draft, so the text after the chip keeps its place. Chips, native undo,
+  pasted text, selection deletion, and IME composition keep their behavior.
+- **Specs linked**: `04-ux/08-component-spec.md` §11.3 (composer draft model),
+  `04-ux/09-interaction-patterns.md` §1
+- **Acceptance**: C (composer send)
+- **Milestone**: M2
+- **Status**: Automated by `pnpm test:e2e:composer-caret` (real Chromium key
+  events against the real `ComposerInput` + `useComposerDraft`, with rendered
+  line geometry of the typed text). A real OS IME remains manual.
 
 #### E2E-008e: Host speech transcribe and speak
 

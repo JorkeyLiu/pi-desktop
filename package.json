@@ -39,6 +39,7 @@
     "test:e2e:composer-ime-slash": "node scripts/e2e-composer-ime-stack.mjs",
     "test:e2e:composer-model-selection": "node scripts/e2e-composer-model-selection.mjs",
     "test:e2e:composer-paste": "node scripts/e2e-composer-paste.mjs",
+    "test:e2e:composer-caret": "node scripts/e2e-composer-caret.mjs",
     "test:e2e:transcript": "node scripts/e2e-transcript-render.mjs",
     "test:e2e:thinking-row": "node scripts/e2e-thinking-row.mjs",
     "test:e2e:tool-path-name": "node scripts/e2e-tool-path-name.mjs",

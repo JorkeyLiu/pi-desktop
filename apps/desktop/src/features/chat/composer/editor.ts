@@ -107,39 +107,145 @@ function editorNodeLength(node: Node): number {
   return 0;
 }
 
+/**
+ * The editable's final BR is Chromium's caret-only slot for the empty last
+ * line: it renders no line of its own and takes no draft character. A draft
+ * newline therefore always keeps a companion BR after it (`paintEditorValue`,
+ * `insertNewlineAtCaret`, `insertClipboardText`), which is what makes the
+ * empty line real and the caret stay on it. Reading, indexing and painting all
+ * agree on this node, so DOM serialization and draft offsets cannot drift.
+ */
+function isTrailingPlaceholderBreak(editor: HTMLElement, node: Node): boolean {
+  return node.nodeName === "BR" && node.parentNode === editor && editor.lastChild === node;
+}
+
+type EditorPoint = { node: Node; offset: number };
+
+/**
+ * Give the editable exactly the caret slot an empty last line needs, measured
+ * against the value the caller intends: the final break of a trailing run is
+ * Chromium's caret-only slot, so the run reads as (trailing newlines) breaks
+ * plus that slot. Completing against the intended value keeps arbitrarily many
+ * meaningful trailing newlines, adds none, and never turns an existing caret
+ * slot into content — a paste in the middle of a newline-terminated draft ends
+ * on a break run that is already correct and is left alone.
+ */
+function completeTrailingBreaks(editor: HTMLElement, expected: string): void {
+  // Chromium leaves an empty text node after insertHTML; it carries no draft
+  // character and would hide the caret slot from this count, so it never
+  // survives a completion.
+  let tail = editor.lastChild;
+  while (tail && tail.nodeType === Node.TEXT_NODE && (tail.nodeValue ?? "") === "") {
+    const previous = tail.previousSibling;
+    tail.remove();
+    tail = previous;
+  }
+  const trailingNewlines = /\n*$/.exec(expected)?.[0].length ?? 0;
+  let run = 0;
+  for (let node = editor.lastChild; node?.nodeName === "BR"; node = node.previousSibling) {
+    run += 1;
+  }
+  const desired = trailingNewlines + 1;
+  if (run > desired) {
+    // Only breaks beyond the intended run are scaffolding the draft rejects.
+    for (let extra = run - desired; extra > 0; extra -= 1) editor.lastChild?.remove();
+    return;
+  }
+  // A value with no trailing newline needs no slot of its own.
+  if (trailingNewlines === 0) return;
+  for (; run < desired; run += 1) editor.appendChild(document.createElement("br"));
+}
+
+/**
+ * A selection endpoint inside a chip's markup is not a draft position, and an
+ * insertion there would split an atom chip. Collapse such a selection to the
+ * chip's boundary before an edit touches the DOM.
+ */
+function collapseChipSelection(editor: HTMLElement): void {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return;
+  const range = selection.getRangeAt(0);
+  const chipOf = (node: Node): Element | null => {
+    const element = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+    return element?.closest(".composer-chip") ?? null;
+  };
+  if (!chipOf(range.startContainer) && !chipOf(range.endContainer)) return;
+  setEditorCaret(editor, editorIndexAt(editor, range.endContainer, range.endOffset));
+}
+
+/**
+ * Walk the editable's DOM into the plain draft string, optionally stopping at a
+ * DOM point. `editorIndexAt` is the length of that prefix, so one algorithm
+ * owns both directions instead of two walks that can disagree about chips,
+ * breaks, or block wrappers reintroduced by native undo.
+ */
+function walkEditorValue(
+  el: HTMLElement,
+  stop?: EditorPoint,
+): { value: string; reached: boolean } {
+  let out = "";
+  let reached = stop === undefined;
+  const visitChildren = (parent: Node, blockStart: boolean): boolean => {
+    const children = Array.from(parent.childNodes);
+    for (let index = 0; index < children.length; index += 1) {
+      if (stop && stop.node === parent && stop.offset === index) {
+        reached = true;
+        return false;
+      }
+      const child = children[index];
+      const element = child.nodeType === Node.ELEMENT_NODE ? (child as HTMLElement) : null;
+      if (isTrailingPlaceholderBreak(el, child)) continue;
+      if (child.nodeType === Node.TEXT_NODE) {
+        const text = child.nodeValue ?? "";
+        if (stop && stop.node === child) {
+          out += text.slice(0, stop.offset);
+          reached = true;
+          return false;
+        }
+        out += text;
+        continue;
+      }
+      if (!element) continue;
+      if (isChipElement(element)) {
+        const token = element.dataset.token ?? "";
+        out += isChipTokenChar(token) ? token : "";
+        // A chip is one draft character, so a point inside its own markup (a
+        // click on its label, an assistive caret, a drag endpoint on its
+        // remove button) is that character's end — the same span the browser's
+        // own clone of the chip covers. Points before and after the chip keep
+        // their sibling boundary.
+        if (stop && element.contains(stop.node)) {
+          reached = true;
+          return false;
+        }
+        continue;
+      }
+      if (element.tagName === "BR") {
+        out += "\n";
+        continue;
+      }
+      if (element.tagName === "DIV" || element.tagName === "P") {
+        // Native undo can reintroduce block wrappers; normalize them back
+        // to newline-separated text so the value round-trips.
+        if (!blockStart && out.length > 0 && !out.endsWith("\n")) out += "\n";
+        if (!visitChildren(element, out.length === 0)) return false;
+        continue;
+      }
+      if (!visitChildren(element, blockStart && out.length === 0)) return false;
+    }
+    if (stop && stop.node === parent && stop.offset === children.length) {
+      reached = true;
+      return false;
+    }
+    return true;
+  };
+  visitChildren(el, true);
+  return { value: out, reached };
+}
+
 /** Read the editable's DOM back into the plain draft string. */
 export function readEditorValue(el: HTMLElement): string {
-  let out = "";
-  const walk = (node: Node, blockStart: boolean): void => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      out += node.nodeValue ?? "";
-      return;
-    }
-    if (node.nodeType !== Node.ELEMENT_NODE) return;
-    const element = node as HTMLElement;
-    if (isChipElement(element)) {
-      const token = element.dataset.token ?? "";
-      out += isChipTokenChar(token) ? token : "";
-      return;
-    }
-    if (element.tagName === "BR") {
-      out += "\n";
-      return;
-    }
-    if (
-      element !== el &&
-      (element.tagName === "DIV" || element.tagName === "P")
-    ) {
-      // Native undo can reintroduce block wrappers; normalize them back
-      // to newline-separated text so the value round-trips.
-      if (!blockStart && out.length > 0 && !out.endsWith("\n")) out += "\n";
-      for (const child of Array.from(element.childNodes)) walk(child, out.length === 0);
-      return;
-    }
-    for (const child of Array.from(element.childNodes)) walk(child, blockStart && out.length === 0);
-  };
-  for (const child of Array.from(el.childNodes)) walk(child, true);
-  return out;
+  return walkEditorValue(el).value;
 }
 
 /** Map a DOM point inside the editable to a draft-string index. */
@@ -149,24 +255,10 @@ export function editorIndexAt(
   offset: number,
 ): number {
   try {
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    range.setEnd(node, offset);
-    const fragment = range.cloneContents();
-    let total = 0;
-    const walk = (parent: DocumentFragment | HTMLElement): void => {
-      for (const child of Array.from(parent.childNodes)) {
-        if (child.nodeType === Node.TEXT_NODE) {
-          total += (child.nodeValue ?? "").length;
-        } else if (isChipElement(child) || (child as HTMLElement).tagName === "BR") {
-          total += 1;
-        } else if (child.nodeType === Node.ELEMENT_NODE) {
-          walk(child as HTMLElement);
-        }
-      }
-    };
-    walk(fragment);
-    return total;
+    const { value, reached } = walkEditorValue(el, { node, offset });
+    // A point the draft model cannot address (inside a chip's own markup)
+    // counts as the end of the value, never as a partial chip.
+    return reached ? value.length : readEditorValue(el).length;
   } catch {
     return 0;
   }
@@ -197,6 +289,14 @@ function editorCaretPoint(el: HTMLElement, target: number): { node: Node; offset
     const children = Array.from(parent.childNodes);
     for (let index = 0; index < children.length; index += 1) {
       const child = children[index];
+      if (isTrailingPlaceholderBreak(el, child)) {
+        // Zero-width: the end of the value caret sits before this node.
+        if (point === null && remaining === 0) {
+          point = { node: parent, offset: index };
+          return true;
+        }
+        continue;
+      }
       const length = editorNodeLength(child);
       if (child.nodeType === Node.TEXT_NODE) {
         if (point === null && remaining <= length) {
@@ -412,6 +512,7 @@ export function paintEditorValue(
     textBuffer += char;
   }
   flush();
+  completeTrailingBreaks(el, value);
   if (el.childNodes.length === 0) {
     // Chromium needs at least one node for reliable caret placement.
     el.appendChild(document.createTextNode(""));
@@ -454,8 +555,10 @@ export function normalizeClipboardLineEndings(text: string): string {
 /** Keep native undo while inserting multiline text into the editor's Text/BR
  * model. insertText creates block wrappers whose offsets differ from the draft. */
 export function insertClipboardText(editor: HTMLElement, text: string): boolean {
+  collapseChipSelection(editor);
   if (!/[\r\n]/.test(text)) return document.execCommand("insertText", false, text);
-  const { start } = editorSelectionRange(editor);
+  const before = readEditorValue(editor);
+  const { start, end } = editorSelectionRange(editor);
   const normalized = normalizeClipboardLineEndings(text);
   const escaped = document.createElement("div");
   escaped.textContent = normalized;
@@ -466,29 +569,48 @@ export function insertClipboardText(editor: HTMLElement, text: string): boolean 
     false,
     escaped.innerHTML.replace(/\n/g, "<br>"),
   );
-  // Chromium can leave the caret before a final BR in an otherwise empty
-  // editor. Use the same draft offsets as chip insertion without changing undo.
-  if (inserted) setEditorCaret(editor, start + normalized.length);
+  // A pasted trailing break is a draft newline and needs the caret slot after
+  // it; completing against the value this paste means to produce leaves a
+  // mid-draft paste's existing break run — and every trailing newline it
+  // already had — untouched. Use the draft offsets for the caret, as chip
+  // insertion does, without changing undo.
+  if (inserted) {
+    completeTrailingBreaks(editor, before.slice(0, start) + normalized + before.slice(end));
+    setEditorCaret(editor, start + normalized.length);
+  }
   return inserted;
 }
 
 /**
- * Insert one draft-model newline at the caret: a bare "\n" text node instead
- * of a block wrapper, so `readEditorValue` round-trips it and the offsets a
- * caller keeps stay valid. Returns false when the caret is outside `editor`.
+ * Insert one draft-model newline at the caret as a break pair: the inserted BR
+ * opens the new line and, when it ends the editable, a companion BR keeps the
+ * caret insertable on the empty line. No block wrapper and no literal "\n" text
+ * node enters the DOM, so `readEditorValue` and the offsets a caller keeps stay
+ * valid. Returns false when the caret is outside `editor`.
  */
 export function insertNewlineAtCaret(editor: HTMLElement): boolean {
+  collapseChipSelection(editor);
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0) return false;
   const range = selection.getRangeAt(0);
   if (!editor.contains(range.startContainer) || !editor.contains(range.endContainer)) {
     return false;
   }
+  const before = readEditorValue(editor);
+  const { start, end } = editorSelectionRange(editor);
   range.deleteContents();
-  const node = document.createTextNode("\n");
-  range.insertNode(node);
+  const lineBreak = document.createElement("br");
+  range.insertNode(lineBreak);
+  // Splitting a text node at either end leaves an empty half beside the break;
+  // it carries no draft character and would hide the break from the caret model
+  // (a break with an empty text node after it is no longer the editable's last
+  // child), so drop the halves the split just created.
+  for (const sibling of [lineBreak.previousSibling, lineBreak.nextSibling]) {
+    if (sibling?.nodeType === Node.TEXT_NODE && (sibling.nodeValue ?? "") === "") sibling.remove();
+  }
+  completeTrailingBreaks(editor, `${before.slice(0, start)}\n${before.slice(end)}`);
   const after = document.createRange();
-  after.setStart(node, 1);
+  after.setStartAfter(lineBreak);
   after.collapse(true);
   selection.removeAllRanges();
   selection.addRange(after);

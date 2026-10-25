@@ -4891,6 +4891,33 @@ as well as its DOM, so submission and draft caching retain the path. Deleted
 reference history is local to the current draft/workspace and is cleared on send;
 pasting a private-use character alone must not restore an attachment. The input owns and disposes the native event listeners.
 
+### Composer empty last line and the draft model
+
+The draft string is the editor's only model: each newline is one break and each
+file-reference chip is one private-use character. The break that ends the
+editable is Chromium's caret slot for an empty last line — it renders no line of
+its own — so a draft newline never ends on it: painting a draft that ends with a
+newline, Enter/Shift+Enter, and pasted text ending with a newline all keep one
+caret-only break after it. That pairing is what lets the caret stay on the empty
+line and the next keystroke land there. The trailing break run is completed
+against the value the edit means to produce, so any number of meaningful
+trailing newlines survives, and a paste into a newline-terminated draft neither
+gains nor loses one. Reading the DOM into the draft, mapping a DOM point to a
+draft offset, and placing a draft offset back into the DOM use one walk, so a
+break, a chip, or a block wrapper reintroduced by native undo cannot shift
+offsets. A point inside a chip's own markup — a click on its label, an assistive
+caret, a drag endpoint on its remove button — is that chip's end, because a chip
+is one draft character; the points before and after a chip keep their boundary.
+The scaffolding break never serializes: submission, draft caching, copy, and
+undo see the draft string alone.
+
+Enter is inserted from the keydown handler. Chromium's own paragraph insertion
+would create block wrappers the draft model cannot carry, and React does not
+deliver that `beforeinput` to the component; the `beforeinput` guard stays as a
+fallback for an engine that reports it. Autocomplete acceptance, IME
+composition, Enter-to-send, and Alt+Enter steer keep their precedence over the
+newline. A single Backspace on an empty line removes the newline that opened it.
+
 ### Dialog long-text containment
 
 Extension prompts keep the 420px rename-dialog width. Their heading column
