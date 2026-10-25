@@ -41,7 +41,8 @@ import { SubagentStopButton } from "./SubagentStopButton";
  * is not a disclosure: the brief, the report and the child's rows belong to the
  * child's transcript, which the card opens in the work panel. Nothing here
  * prints the delegate's resolved model or reasoning level; its transcript
- * states those once.
+ * states those once. Until the call's arguments are final the card holds that
+ * shape as a skeleton instead of printing a name it does not have yet.
  */
 export function SubagentTaskCard({
   message,
@@ -89,12 +90,17 @@ export function SubagentTaskCard({
   // itself, and the title keeps its whole width for the work's own name.
   const role = chainTitle ? agentName : "";
   const outcome = subagentOutcome(message, delegationStatuses);
-  // The parent is still writing this call's arguments: the card keeps its
-  // shell and breathes on its avatar and title instead of claiming the child
-  // is executing. Once the arguments are complete but execution has not started
-  // the same shell waits, static, still claiming nothing.
   const preparing = message.toolStatus === "preparing";
   const pulsing = preparing && message.toolArgsComplete !== true;
+  // The card's own text is not yet something a reader may rely on. Pi reports
+  // the call's parsed `description` once, when the call first becomes
+  // identifiable, so while the arguments are still being written that title can
+  // be a half-written prefix that changes; without one the card would fall back
+  // to the localized unnamed label. Neither is real text, so the whole card
+  // waits as one skeleton — its own outline, avatar box and the three copy slots
+  // its title, role and figures occupy — and states nothing in words. It takes
+  // its real title, role and state at the same ready frame that stops the pulse.
+  const skeleton = pulsing;
   // A bare `running` Task call is still being created: the delegate runtime is
   // spawning and no structured snapshot exists yet. That is not a delegation a
   // reader can act on, so the card says so instead of claiming it is running,
@@ -168,7 +174,9 @@ export function SubagentTaskCard({
     openSubagentTab(panelSelectionId, title);
   }, [canOpen, onUserInteraction, openSubagentTab, panelSelectionId, title]);
   // Before execution the card names the work only: no child state, no clock,
-  // and no metric placeholders, so hovering adds no status copy either.
+  // and no metric placeholders, so hovering adds no status copy either. A card
+  // that has no name yet states the wait instead, never the fallback or a
+  // half-written title.
   const tooltip = preparing
     ? joinSubagentInfo([title, role])
     : joinSubagentInfo([title, role, ...metricsParts, ...stateParts]);
@@ -184,63 +192,108 @@ export function SubagentTaskCard({
       <button
         type="button"
         className="subagent-task-card"
-        title={tooltip}
+        title={skeleton ? undefined : tooltip}
+        aria-busy={skeleton ? true : undefined}
+        aria-label={skeleton ? t("chat.subagentPreparing") : undefined}
         disabled={!canOpen}
         onClick={openPanel}
       >
-        <span className="subagent-task-avatar" aria-hidden>
-          <IconBot size={15} />
-          <span className="subagent-task-status-icon">
-            {outcome === "completed" ? (
-              <IconCheck size={8} />
-            ) : outcome === "aborted" ? (
-              <IconStop size={7} />
-            ) : outcome === "running" ? (
-              <span />
-            ) : (
-              <IconCircleAlert size={8} />
-            )}
+        {skeleton ? (
+          <span className="subagent-task-skeleton-avatar" aria-hidden="true" />
+        ) : (
+          <span className="subagent-task-avatar" aria-hidden>
+            <IconBot size={15} />
+            <span className="subagent-task-status-icon">
+              {outcome === "completed" ? (
+                <IconCheck size={8} />
+              ) : outcome === "aborted" ? (
+                <IconStop size={7} />
+              ) : outcome === "running" ? (
+                <span />
+              ) : (
+                <IconCircleAlert size={8} />
+              )}
+            </span>
           </span>
-        </span>
+        )}
         <span className="subagent-task-copy">
-          <span className="subagent-task-title-row">
-            <span className="subagent-task-title" title={title}>
-              {title}
-            </span>
-            {/* The child's state sits inline at the right of the title: the
-                running mark, then the localized outcome, then its runtime,
-                every boundary the shared separator. The mark keeps its slot in
-                every state, so the status text never shifts as a child starts
-                or settles. A call whose arguments are still being written, or
-                that has not started yet, states no child state at all. */}
-            {preparing ? null : (
-              <span className="subagent-task-state">
-                <span
-                  className="subagent-task-spinner"
-                  data-active={running ? "true" : "false"}
-                  aria-hidden="true"
-                />
-                <span
-                  className="subagent-task-status"
-                  role="status"
-                  aria-live="polite"
-                >
-                  {statusLabel}
-                </span>
-                {duration ? (
-                  <>
-                    <span className="subagent-sep" aria-hidden="true">{" · "}</span>
-                    <span className="subagent-task-duration">{duration}</span>
-                  </>
-                ) : null}
+          {skeleton ? (
+            /* One bar in each of the three line slots the real card fills: the
+               title's line box, then the role's, then the figures'. The slot
+               takes its height from the same type tokens the real line does, so
+               the waiting card is the height of the card that replaces it. The
+               third slot is a generic line, never a metric placeholder. They are
+               the whole of the card's pending copy, so they stay out of the
+               accessibility tree: the card's own accessible name and busy state
+               carry the wait. */
+            <>
+              <span
+                className="subagent-task-skeleton-line is-title"
+                aria-hidden="true"
+              >
+                <span className="subagent-task-skeleton-bar" />
               </span>
-            )}
-          </span>
-          {role ? (
-            <span className="subagent-task-role" title={t("chat.subagentAgent")}>
-              {role}
-            </span>
-          ) : null}
+              <span
+                className="subagent-task-skeleton-line is-role"
+                aria-hidden="true"
+              >
+                <span className="subagent-task-skeleton-bar" />
+              </span>
+              <span
+                className="subagent-task-skeleton-line is-metrics"
+                aria-hidden="true"
+              >
+                <span className="subagent-task-skeleton-bar" />
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="subagent-task-title-row">
+                <span className="subagent-task-title" title={title}>
+                  {title}
+                </span>
+                {/* The child's state sits inline at the right of the title: the
+                    running mark, then the localized outcome, then its runtime,
+                    every boundary the shared separator. The mark keeps its slot
+                    in every state, so the status text never shifts as a child
+                    starts or settles. A call whose arguments are still being
+                    written, or that has not started yet, states no child state
+                    at all. */}
+                {preparing ? null : (
+                  <span className="subagent-task-state">
+                    <span
+                      className="subagent-task-spinner"
+                      data-active={running ? "true" : "false"}
+                      aria-hidden="true"
+                    />
+                    <span
+                      className="subagent-task-status"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      {statusLabel}
+                    </span>
+                    {duration ? (
+                      <>
+                        <span className="subagent-sep" aria-hidden="true">
+                          {" · "}
+                        </span>
+                        <span className="subagent-task-duration">{duration}</span>
+                      </>
+                    ) : null}
+                  </span>
+                )}
+              </span>
+              {role ? (
+                <span
+                  className="subagent-task-role"
+                  title={t("chat.subagentAgent")}
+                >
+                  {role}
+                </span>
+              ) : null}
+            </>
+          )}
           {preparing ? null : (
             <span
               className="subagent-task-metrics"

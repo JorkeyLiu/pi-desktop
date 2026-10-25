@@ -634,6 +634,7 @@ export const zhTW = {
     subagentCount_other: "{{count}} 個 Subagent",
     subagentFinishedCount: "已完成 {{finished}}/{{total}}",
     subagentCreating: "正在建立子智能體…",
+    subagentPreparing: "正在準備子智慧體…",
     subagentDock: {
       header: "正在運行的子代理：{{summary}}",
       summary_one: "{{count}} 個子代理執行中 · {{title}}",

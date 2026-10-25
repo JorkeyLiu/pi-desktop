@@ -2791,12 +2791,28 @@ argument — reads on the line under the title, in the place the step count used
 to occupy. A card therefore states no model id, no reasoning level and no step
 count; the child's own runtime is stated once, in its transcript tab.
 
-While the model is still writing a `Task` call's arguments, its card keeps the
-same shell and breathes on the avatar and title only. It carries no child state,
-clock, metric line, stop handle, or status wording until the call executes; the
-call's parsed `description` may name the work as soon as it is available. Once
-the arguments are complete the card waits still, and execution replaces it in
-place.
+While the model is still writing a `Task` call's arguments, the card is not the
+child's card yet: neither the localized unnamed label nor a half-written
+`description` is a name for its work. It therefore keeps its own outline,
+padding, avatar box and the three copy slots its title, role and figures occupy,
+and waits as one integrated skeleton — an avatar placeholder and one bar in each
+of those three line slots, the third a generic line and never a metric badge,
+dash or figure. Each slot takes the height of the line it stands in (that line's
+`font-size × leading`), so the waiting card is the same height as the card that
+replaces it whenever the real title and figures stay on one line; a narrower
+column wraps the real text onto further lines the skeleton cannot predict, and
+the skeleton holds its unwrapped height there. The bars carry a single subtle
+highlight sweep on a 1s loop, timed linearly so the band crosses the whole bar
+each cycle instead of flicking at one end. The card is disabled — there is
+nothing to open yet — but keeps full opacity and the fill of the real card,
+where the shared `button:disabled` dimming would halve it.
+The bars are decoration and stay out of the accessibility tree; the card itself
+carries the localized loading name (`chat.subagentPreparing`) and `aria-busy`,
+and offers no hover copy. It carries no child state, clock, metric line, stop
+handle, or status wording until the call executes, and it states no temporary
+text of any kind. Once the arguments are complete the same card takes its real
+title, role and state in place, and execution replaces that in place in turn.
+Reduced motion keeps the identical skeleton, static.
 
 The headline of a resumed delegation is the chain's original description: the
 earliest `Task` call of the resume chain that carries one, so a later

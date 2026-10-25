@@ -628,6 +628,7 @@ export const ptBR = {
     subagentCount_other: "{{count}} subagentes",
     subagentFinishedCount: "{{finished}}/{{total}} finalizados",
     subagentCreating: "Iniciando subagente…",
+    subagentPreparing: "Preparando subagente…",
     subagentDock: {
       header: "Subagentes em execução: {{summary}}",
       summary_one: "{{count}} subagente em execução · {{title}}",

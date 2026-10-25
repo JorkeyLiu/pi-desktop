@@ -641,6 +641,7 @@ export const en = {
     subagentCount_other: "{{count}} subagents",
     subagentFinishedCount: "{{finished}}/{{total}} finished",
     subagentCreating: "Starting subagent…",
+    subagentPreparing: "Preparing subagent…",
     subagentDock: {
       header: "Running subagents: {{summary}}",
       summary_one: "{{count}} subagent running · {{title}}",

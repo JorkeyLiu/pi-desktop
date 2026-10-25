@@ -2139,6 +2139,15 @@
   cursor: default;
 }
 
+/* A pending card is a disabled button only because it has nothing to open yet.
+   The wait is stated by its own skeleton, not by a dimmed card, and the fill it
+   shows is the fill the real card shows, so the hand-off at the ready frame
+   changes the copy and not the surface. Every other card keeps the shared
+   disabled treatment. */
+.subagent-task.is-preparing > .subagent-task-card:disabled {
+  opacity: 1;
+}
+
 .subagent-task-card:focus-visible {
   outline: 2px solid color-mix(in oklab, var(--ds-accent) 58%, transparent);
   outline-offset: -2px;
@@ -2346,6 +2355,104 @@
   white-space: normal;
 }
 
+/*
+ * A delegation card whose call is still being written. Nothing on it is the
+ * child's own text yet: the title the model is writing is a half-written
+ * argument, and without one the card would fall back to the localized unnamed
+ * label. So the card keeps its own outline, padding and slot geometry and waits
+ * as one skeleton: an avatar placeholder in the avatar's 28px box and one bar
+ * per line of the card that replaces it — the title's line, the role's, and a
+ * third generic line for the figures. The skeleton must not claim ground its
+ * successor takes: it is the same height, and it prints no badge, dash or
+ * figure, so no reader and no layout sees a metric before the child reports
+ * one.
+ *
+ * Each line slot takes its height from the same type tokens the real line does
+ * (font-size × leading for that line), so the card is exactly as tall as the
+ * card that replaces it at any font scale, and the copy column's own 2px gap
+ * keeps the spacing identical. A narrow transcript wraps the real title and
+ * figures onto further natural lines; the skeleton cannot know where those
+ * breaks fall, so it holds the unwrapped height there.
+ */
+.subagent-task-skeleton-avatar {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-round);
+  background: color-mix(in oklab, var(--ds-text-primary) 9%, transparent);
+}
+
+/* One line slot: the line box the real line occupies, with a text-weight bar
+   painted inside it. */
+.subagent-task-skeleton-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.subagent-task-skeleton-line.is-title {
+  width: min(58%, 240px);
+  height: calc(var(--text-sm-plus) * var(--leading-body));
+}
+
+.subagent-task-skeleton-line.is-role {
+  width: min(34%, 140px);
+  height: calc(var(--text-2xs) * var(--leading-normal));
+}
+
+.subagent-task-skeleton-line.is-metrics {
+  width: min(46%, 190px);
+  height: calc(var(--text-2xs) * var(--leading-normal));
+}
+
+.subagent-task-skeleton-bar {
+  display: block;
+  width: 100%;
+  height: calc(var(--text-2xs) * 0.72);
+  border-radius: var(--radius-sm);
+  background-color: color-mix(in oklab, var(--ds-text-primary) 8%, transparent);
+  /* One soft highlight, a little narrower than the bar it crosses: the band is
+     half the bar wide inside a 300%-wide image, so the whole cycle is the band
+     entering, crossing and leaving — no stretch of the loop where nothing
+     moves. Its peak is measured over the bar's own fill, not over the card, so
+     the sweep is unmistakable in both themes without ever reaching the ink of
+     real text. */
+  background-image: linear-gradient(
+    90deg,
+    transparent 40%,
+    color-mix(in oklab, var(--ds-text-primary) 20%, transparent) 50%,
+    transparent 60%
+  );
+  background-repeat: repeat-x;
+  background-size: 300% 100%;
+  /* Linear timing keeps the crossing at one speed, so the highlight reads as a
+     sweep rather than a flick at the head of an ease curve. */
+  animation: subagent-task-skeleton-shimmer 1s linear infinite;
+}
+
+.subagent-task-skeleton-line.is-title .subagent-task-skeleton-bar {
+  height: calc(var(--text-2xs) * 1);
+}
+
+/* The band's centre travels from just before the bar's left edge to just past
+   its right edge across the 1s loop: `background-position` 90% → 10% on a
+   300%-wide image moves it by 1.6 bar widths, so it is on the bar for the
+   whole cycle. */
+@keyframes subagent-task-skeleton-shimmer {
+  from {
+    background-position: 90% 0;
+  }
+  to {
+    background-position: 10% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .subagent-task-skeleton-bar {
+    animation: none;
+  }
+}
+
 /* One centred dot between two pieces of child information, on the card and in
    the dock. The boundary is an element rather than whitespace: a flex row drops
    whitespace-only text nodes, and that is how an inline list loses its dot. Its
@@ -2528,20 +2635,18 @@
  * A call the model has named but is still writing arguments for. The row states
  * only the call's identity — the icon and its localized name — and those two
  * breathe together as one synchronized opacity change. Nothing in the row
- * spins, slides, or claims a state in words; the delegation card keeps its
- * shell and breathes on its avatar and title the same way, so a call reads the
- * same on either surface. Reduced motion keeps the identical row, static.
+ * spins, slides, or claims a state in words. A delegation card has no identity
+ * to breathe on yet — its own copy is the argument being written — so it holds
+ * a shimmering skeleton instead (see `.subagent-task-skeleton-bar`). Reduced
+ * motion keeps the identical row, static.
  */
 .tool-row.is-preparing .tool-row-icon,
-.tool-row.is-preparing .tool-row-name,
-.subagent-task.is-preparing .subagent-task-avatar,
-.subagent-task.is-preparing .subagent-task-title {
+.tool-row.is-preparing .tool-row-name {
   animation: tool-preparing-breath 1.4s var(--motion-ease-standard) infinite;
 }
 
-/* One moving thing per card: while the arguments stream, the avatar and title
-   carry the motion and the corner badge stays still (its own creating pulse
-   speaks for the later spawn phase, which has no preparing row). */
+/* The corner badge keeps still while the arguments stream: its own creating
+   pulse speaks for the later spawn phase, which has no preparing row. */
 .subagent-task.is-preparing .subagent-task-status-icon {
   animation: none;
 }
@@ -2558,9 +2663,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .tool-row.is-preparing .tool-row-icon,
-  .tool-row.is-preparing .tool-row-name,
-  .subagent-task.is-preparing .subagent-task-avatar,
-  .subagent-task.is-preparing .subagent-task-title {
+  .tool-row.is-preparing .tool-row-name {
     animation: none;
   }
 }

@@ -832,14 +832,27 @@ High-frequency workstation feedback must remain compositor-friendly and bounded:
 
 ### 8.8 Tool-call preparation breath
 
-While the model is still writing a tool call's arguments, the call's standard
-row (or its delegation card) breathes on its icon/avatar and its name/title
-only: one synchronized `opacity` loop from `1` to `0.45` over 1.4s with
-`--motion-ease-standard`. Nothing else in the row moves — no spinner, caret,
-status dot, or whole-row effect — and the loop ends when argument generation
-completes, before execution starts. Reduced motion keeps the identical row,
-static. The breath is state feedback for a call that has not run, so it is the
-only motion the row carries in that phase.
+While the model is still writing a tool call's arguments, a standard row breathes
+on its icon and its name only: one synchronized `opacity` loop from `1` to
+`0.45` over 1.4s with `--motion-ease-standard`. Nothing else in the row moves —
+no spinner, caret, status dot, or whole-row effect — and the loop ends when
+argument generation completes, before execution starts.
+
+A delegation card holds no such identity in that phase: its own title is the
+argument being written, and without one it would print the localized unnamed
+fallback. It therefore carries no breathing text at all and waits as a skeleton
+(§9.9 of `08-component-spec.md`): one avatar placeholder and one copy bar per
+line of the card that replaces it — the title's line, the role's, and a third
+generic line for the figures — in token-derived ink and radii, each bar sitting
+in a slot whose height is that line's own `font-size × leading`, so the waiting
+card is the height of the card that arrives. A pending card is a disabled button
+only for want of anything to open, so it keeps full opacity and the fill of the
+real card while every other disabled control keeps the shared dimming. The bars
+carry a single highlight sweep on a 1s loop — the prohibited-motion ceiling for
+skeleton animation above — timed linearly so the band enters, crosses and leaves
+the bar across the whole cycle. Both phases end at the same boundary
+(`toolArgsComplete`), and reduced motion keeps the identical row or skeleton,
+static, so state is never carried by motion alone.
 
 ## 8.0 Home empty stack and bottom composer (D111/D204/D206)
 

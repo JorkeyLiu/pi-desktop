@@ -74,22 +74,33 @@ try {
   assert(css.length, "Build the app with pnpm build:js before running this check");
   await cp(join(renderer, "assets"), join(temp, "assets"), { recursive: true });
 
-  // The breath and its reduced-motion suppression live only in the built
-  // stylesheet, so a stale build has to fail here instead of passing.
+  // The breath, the card's skeleton shimmer and their reduced-motion
+  // suppression live only in the built stylesheet, so a stale build has to
+  // fail here instead of passing.
   const builtCss = (
     await Promise.all(css.map((path) => readFile(join(renderer, path), "utf8")))
   )
     .join("\n")
     .replace(/\s+/g, "");
+  const staleCss = [];
   for (const rule of [
-    "@keyframestool-preparing-breath{0%,to{opacity:1}50%{opacity:.45}}",
-    "animation:tool-preparing-breath1.4svar(--motion-ease-standard)infinite",
+    "@keyframessubagent-task-skeleton-shimmer{0%{background-position:90%0}to{background-position:10%0}",
+    "animation:1slinearinfinitesubagent-task-skeleton-shimmer",
+    ".subagent-task-skeleton-line.is-title{width:min(58%,240px);height:calc(var(--text-sm-plus)*var(--leading-body))}",
+    ".subagent-task-skeleton-line.is-role{width:min(34%,140px);height:calc(var(--text-2xs)*var(--leading-normal))}",
+    ".subagent-task-skeleton-line.is-metrics{width:min(46%,190px);height:calc(var(--text-2xs)*var(--leading-normal))}",
+    "is-preparing>.subagent-task-card:disabled{opacity:1}",
     "@media(prefers-reduced-motion:reduce){.tool-row.is-preparing",
+    "@media(prefers-reduced-motion:reduce){.subagent-task-skeleton-bar{animation:none",
   ]) {
-    assert(
-      builtCss.includes(rule),
-      `the built stylesheet is stale (missing ${rule.slice(0, 60)}…); build with pnpm build:js`,
-    );
+    // A stale build is reported beside the renderer's own findings instead of
+    // aborting the run: a stale stylesheet is exactly the failure that would
+    // otherwise hide the geometry it broke.
+    if (!builtCss.includes(rule)) {
+      staleCss.push(
+        `the built stylesheet is stale (missing ${rule.slice(0, 60)}…); build with pnpm build:js`,
+      );
+    }
   }
 
   await writeFile(
@@ -123,7 +134,13 @@ app.whenReady().then(async () => {
     });
     const reducedMotion = await window.webContents.executeJavaScript("globalThis.toolPreparationReducedMotionProbe()");
     window.webContents.debugger.detach();
-    const result = { ...preparation, reducedMotion, screenshot, ok: preparation.ok && reducedMotion.ok };
+    const result = {
+      ...preparation,
+      failures: [...${JSON.stringify(staleCss)}, ...(preparation.failures ?? [])],
+      reducedMotion,
+      screenshot,
+      ok: preparation.ok && reducedMotion.ok && ${staleCss.length} === 0,
+    };
     console.log("TOOL_PREPARATION_PROBE " + JSON.stringify(result));
     app.quit();
   } catch (error) {

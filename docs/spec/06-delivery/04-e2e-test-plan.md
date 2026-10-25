@@ -6965,25 +6965,46 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   user data is used.
 - **Steps**: Send `message_start`, then `tool_prepare` for a `Bash` call; insert
   an optimistic steering message; send the `ready` frame; send `tool_start` and
-  `tool_end`. Repeat for a `Task` delegation card. Open the child tab while the
-  child runs and while it waits on a permission or a question. Re-run the
-  preparing row with `prefers-reduced-motion: reduce`.
+  `tool_end`. Repeat for a `Task` delegation card, beginning with a prepare frame
+  that carries no parseable `taskTitle`, then a second delegation call whose
+  description is already parseable while it still streams, then the `ready`
+  frame and `tool_start`. Open the child tab while the child runs and while it
+  waits on a permission or a question. Re-run the preparing row and the
+  delegation card with `prefers-reduced-motion: reduce`.
 - **Expected**: The preparing row shows only its icon and localized name, both
   breathing with the 1.4s opacity loop while the model writes arguments; it
   shows no summary, chips, caret, spinner, status wording, preview, or raw
-  arguments, and the delegation card shows no child state, clock, metric
-  placeholders, or stop handle. The steering message stays after the preparing
-  row. The `ready` frame stops the breath without claiming an outcome, and
-  `tool_start` takes the same row over in place — same id, position, and
-  creation time, the existing running state — without a duplicate row. Reduced
-  motion keeps the identical static row. The child tab shows the transcript's
-  working indicator only while the child runs, and hides it while the child
-  waits on the user.
+  arguments. The preparing delegation card shows no text at all — no localized
+  unnamed fallback and no half-written description — and waits as one integrated
+  skeleton instead: its own card outline and padding, an avatar placeholder, and
+  one bar in each of the three line slots the real card fills (title, role,
+  figures — the third a generic line, never a metric placeholder), each carrying
+  the 1s highlight sweep. It is the height of the card that replaces it (within
+  1px at the same width, and only taller than the skeleton once a narrow column
+  wraps the real title or figures), it keeps full opacity while every other
+  disabled card keeps the shared dimming, and the sweep crosses the bar for
+  essentially the whole cycle. Its bars are `aria-hidden`, the card itself
+  exposes the localized loading name and `aria-busy`, and it offers no child
+  state, clock, metric placeholders, stop handle, or hover copy. The steering message stays after the
+  preparing row. The `ready` frame ends the skeleton (or the breath) without
+  claiming an outcome and the same card takes its real title, role and state in
+  place; `tool_start` then takes the same row over in place — same id, position,
+  and creation time, the existing running state — without a duplicate row.
+  Reduced motion keeps the identical static row and skeleton. The child tab
+  shows the transcript's working indicator only while the child runs, and hides
+  it while the child waits on the user.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md` §6,
   `04-ux/07-ui-design-system.md` §8.8, `04-ux/08-component-spec.md` §5.7, §9.2,
   §9.5, §9.7, §9.9.
 - **Status**: Automated by `pnpm test:e2e:tool-preparation`
-  (`scripts/e2e-tool-preparation.mjs`).
+  (`scripts/e2e-tool-preparation.mjs`). The probe measures the rendered
+  geometry: the three line slots and their bars, the pending card's height
+  against the full card that replaces it in the same column (and its full
+  opacity against the shared disabled dimming kept by the real card), the sweep's
+  phases and travel, the card's localized loading name and `aria-busy`, the
+  in-place hand-off to the real card and then to the running card, and the
+  reduced-motion suppression of both the breath and the shimmer with the
+  skeleton's geometry intact.
 
 #### E2E-STREAM-long-turn-keeps-realtime
 
