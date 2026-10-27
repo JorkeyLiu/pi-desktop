@@ -224,6 +224,14 @@ function LocalWorkPanel({
   const closeTabs = useAppStore((s) => s.closeWorkPanelTabs);
   const { contextMenu, openContextMenu, closeContextMenu } = useContextMenu();
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
+  /**
+   * A native `WebContentsView` composites above every renderer layer, a
+   * portaled menu included, so the dock's own tab menu has to detach the
+   * active surface for as long as it is up. Closing the menu re-attaches the
+   * same page at the same bounds, exactly like the panel-wide overlays above.
+   */
+  const nativeSurfaceBlocked =
+    exiting || panelBlocked || blockingOverlayActive || contextMenu !== null;
   const tools = workPanelTools(t, pluginViews);
   const tabSignature = JSON.stringify(
     tabs.map(({ id, kind, resource, location }) => [id, kind, resource, location]),
@@ -1188,7 +1196,7 @@ function LocalWorkPanel({
                     location={activeTab.location}
                     tabId={activeTab.id}
                     // Native WebContentsViews composite above renderer content.
-                    blocked={exiting || panelBlocked || blockingOverlayActive}
+                    blocked={nativeSurfaceBlocked}
                   />
                 </div>
               );

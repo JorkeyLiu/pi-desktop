@@ -97,7 +97,18 @@ test("plugin views reach the panel body and the empty state", () => {
 });
 
 test("the native surface keeps its full and current bounds while the launcher is active", () => {
-  assert.match(panelSource, /blocked=\{\s*exiting \|\| panelBlocked \|\| blockingOverlayActive\s*\}/s);
+  /*
+    Attachment is the only way to keep a `WebContentsView` out of a renderer
+    layer's way, so every term here is a reason the active surface is detached.
+    The dock's own tab menu is one of them: `ContextMenu` portals to the body,
+    and a menu opened from the header lands over the dock body, which is where
+    the page composites.
+  */
+  assert.match(panelSource, /blocked=\{nativeSurfaceBlocked\}/s);
+  assert.match(
+    panelSource,
+    /const nativeSurfaceBlocked =\s*exiting \|\| panelBlocked \|\| blockingOverlayActive \|\| contextMenu !== null;/s,
+  );
   assert.doesNotMatch(panelSource, /avoid: pluginSurface/);
   assert.doesNotMatch(panelSource, /menuOpen|work-panel-new-menu|placeWorkPanelMenu/);
   assert.doesNotMatch(viewTabSource, /occludedById/);

@@ -4788,6 +4788,9 @@ window; opening a normal panel afterward must still work.
   prompt). 4) Open global search, then rename a session from the left sidebar;
   close it and open Settings. Return to chat
   and trigger an inline tool permission card. 5) Switch to another panel tab
+  and back; close the panel. Right-click a work-panel tab while the Browser
+  page is the active docked view, use a row of the tab menu, and reopen it to
+  dismiss it with Escape. 6) Use open-external. 7) From both an existing page
   and back; close the panel. 6) Use open-external. 7) From both an existing page
   and a blank Browser tab, enter an existing HTML file inside the workspace by
   platform-appropriate `file:` URL and absolute path. Then enter an existing
@@ -4809,9 +4812,11 @@ window; opening a normal panel afterward must still work.
   dialog and every other blocking overlay, and while
   unmounted, reappearing with correct bounds afterwards. An inline permission
   card does not hide or remount the preview; resize/drag keeps the native view
-  visible and aligned with the placeholder rect without a black flash. Opening
-  the work-panel context dropdown moves beside the native view; the view keeps
-  its full surface rect and the plugin body does not shift down.
+  visible and aligned with the placeholder rect without a black flash. The
+  work-panel tab menu is never painted under the docked page: the page is
+  released for the menu's lifetime and comes back at the same rect when the
+  menu closes, so the menu keeps its full surface rect and the plugin body
+  does not shift down.
   Open-external launches an http(s) page in the default browser and any loaded
   local file via `openPath`. The view uses an isolated persist partition
   (no session bleed from the app shell). Both inside and outside forms load;
@@ -4821,7 +4826,7 @@ window; opening a normal panel afterward must still work.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md` §13a, `04-ux/08-component-spec.md`, `05-security/01-security.md`, ADR 0019, ADR 0168, ADR 0328
 - **Acceptance**: Quality, Security
 - **Milestone**: M5
-- **Status**: Partial automation: `scripts/e2e-browser-local-file-access.mjs` covers native local-file navigation; the address-bar and overlay workflow remains manual.
+- **Status**: Partial automation: `scripts/e2e-browser-local-file-access.mjs` covers native local-file navigation and `scripts/e2e-work-panel-tabs.mjs` covers releasing the docked page for the work-panel tab menu and restoring it on close; the address-bar workflow remains manual.
 
 #### E2E-CHAT-html-artifacts: Open generated pages from ordinary and project conversations
 

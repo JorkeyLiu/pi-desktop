@@ -21,6 +21,7 @@ import {
   type WorkPanelTab,
   browserPluginTab,
   fileWorkPanelTab,
+  pluginWorkPanelTab,
   subagentWorkPanelTab,
   toolWorkPanelTab,
 } from "../../apps/desktop/src/lib/work-panel-tabs";
@@ -58,11 +59,44 @@ const invokes: Array<{ channel: string; payload: unknown }> = [];
 /** New Task creations this probe's bridge has answered. */
 let createdSessions = 0;
 
+/**
+ * The runner owns the window's real child view, so the visibility contract
+ * asserted below is the one that decides whether a docked page is on screen.
+ * Without a runner-injected surface (nothing to observe) the probe reports an
+ * absent surface instead of silently passing.
+ */
+type NativeSurfaceState = {
+  attached: boolean;
+  bounds: { x: number; y: number; width: number; height: number } | null;
+};
+const viewProbe = async (
+  op: "state" | "bounds" | "visible",
+  payload?: unknown,
+): Promise<NativeSurfaceState> => {
+  const probe = (
+    globalThis as unknown as {
+      probeView?: (op: string, payload?: unknown) => Promise<NativeSurfaceState>;
+    }
+  ).probeView;
+  assert(probe, "runner did not inject the native surface probe");
+  return probe(op, payload);
+};
+
 function installBridge() {
   (window as unknown as Record<string, unknown>).piDesktop = {
     platform: "darwin",
     invoke: async (channel: string, payload: unknown) => {
       invokes.push({ channel, payload });
+      // A docked view's own visibility path: the renderer is the authority on
+      // whether its native page is attached, so the runner mirrors it.
+      if (channel === "pi-desktop/plugin/view/setVisible") {
+        await viewProbe("visible", payload);
+        return { ok: true, data: null };
+      }
+      if (channel === "pi-desktop/plugin/view/setBounds") {
+        await viewProbe("bounds", payload);
+        return { ok: true, data: null };
+      }
       // A topic switch reads the durable session it selects, and New Task
       // creates one. Answering those two keeps both a real store action instead
       // of a state poke.
@@ -657,9 +691,112 @@ globalThis.workPanelTabsProbe = async () => {
     `the header action did not run exactly once (before=${tabsBeforeAction.length}, after=${tabsAfterAction.length}, active=${activeTabId()})`,
   );
   check("band beside the strip, outside press, and action toolbar all dismiss");
-  root.unmount();
 
-  // 16. Visibility is shell state. The dock below is gated exactly like the
+  // 16. A menu opened from the header must not be painted under the docked
+  // page. A docked plugin view is a `WebContentsView` child of the window, so
+  // it composites above the renderer and above a body-portaled menu; the
+  // renderer therefore releases the surface for the menu's lifetime and puts
+  // the same page back, at the same bounds, when the menu closes.
+  const nativeTab = pluginWorkPanelTab("pi.browser", "browser");
+  useAppStore.setState({
+    workPanelOpen: true,
+    workPanelTabs: [nativeTab, toolWorkPanelTab("review")],
+    activeWorkPanelTabId: nativeTab.id,
+  } as never);
+  await settle();
+  const surfaceElement = panel.querySelector<HTMLElement>(".work-plugin-view-surface");
+  assert(surfaceElement, "the docked plugin tab did not render its native surface placeholder");
+  const pageRect = surfaceElement.getBoundingClientRect();
+  const shownSurface = await viewProbe("state");
+  assert(
+    shownSurface.attached && shownSurface.bounds,
+    `the renderer never showed the docked page: ${JSON.stringify(shownSurface)}`,
+  );
+  const pageBounds = shownSurface.bounds;
+  const sameBounds = (
+    left: NativeSurfaceState["bounds"],
+    right: NativeSurfaceState["bounds"],
+  ) =>
+    !!left &&
+    !!right &&
+    Math.abs(left.x - right.x) <= 1 &&
+    Math.abs(left.y - right.y) <= 1 &&
+    Math.abs(left.width - right.width) <= 1 &&
+    Math.abs(left.height - right.height) <= 1;
+  assert(
+    sameBounds(pageBounds, pageRect),
+    `the docked page does not follow the measured placeholder: ${JSON.stringify(pageBounds)} vs ${JSON.stringify(pageRect)}`,
+  );
+
+  openMenuOn(nativeTab.id, menuSpot());
+  await settle();
+  const pageMenu = openMenu();
+  assert(pageMenu, "right click did not open the tab menu over the docked page");
+  const pageMenuRect = pageMenu.getBoundingClientRect();
+  assert(
+    pageMenuRect.right > pageRect.left &&
+      pageMenuRect.left < pageRect.right &&
+      pageMenuRect.bottom > pageRect.top &&
+      pageMenuRect.top < pageRect.bottom,
+    `the tab menu does not overlap the docked page, so this check would prove nothing (menu=${JSON.stringify(pageMenuRect)}, page=${JSON.stringify(pageRect)})`,
+  );
+  const coveredSurface = await viewProbe("state");
+  assert(
+    !coveredSurface.attached,
+    `the docked page stays composited above the tab menu: ${JSON.stringify(coveredSurface)}`,
+  );
+  // Usable, not merely painted: a native press on the menu row runs it.
+  const pageMenuItem = pageMenu.querySelector<HTMLButtonElement>(
+    '[data-context-menu-item="close-others"]',
+  );
+  assert(
+    pageMenuItem && !pageMenuItem.disabled,
+    "the tab menu lost its enabled close-others item",
+  );
+  const pageMenuItemRect = pageMenuItem.getBoundingClientRect();
+  await pressAt(
+    pageMenuItemRect.left + pageMenuItemRect.width / 2,
+    pageMenuItemRect.top + pageMenuItemRect.height / 2,
+  );
+  assert(!openMenu(), "a native press on the tab menu item did not run it");
+  assert(
+    JSON.stringify(tabIds()) === JSON.stringify([nativeTab.id]),
+    `the menu item closed the wrong tabs: ${JSON.stringify(tabIds())}`,
+  );
+  const restoredSurface = await viewProbe("state");
+  assert(
+    restoredSurface.attached,
+    `closing the tab menu did not put the docked page back: ${JSON.stringify(restoredSurface)}`,
+  );
+  assert(
+    sameBounds(restoredSurface.bounds, pageBounds),
+    `the restored page moved: ${JSON.stringify(restoredSurface.bounds)} vs ${JSON.stringify(pageBounds)}`,
+  );
+
+  // Keyboard dismissal is the other way out, and it restores the same page.
+  openMenuOn(nativeTab.id, menuSpot());
+  await settle();
+  assert(
+    !(await viewProbe("state")).attached,
+    "the second tab menu did not release the docked page",
+  );
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await settle();
+  assert(!openMenu(), "Escape did not close the tab menu");
+  const escapedSurface = await viewProbe("state");
+  assert(
+    escapedSurface.attached && sameBounds(escapedSurface.bounds, pageBounds),
+    `Escape did not restore the docked page at its own bounds: ${JSON.stringify(escapedSurface)}`,
+  );
+  check("the dock's tab menu releases the docked page and restores it on close");
+  root.unmount();
+  await settle();
+  assert(
+    !(await viewProbe("state")).attached,
+    "unmounting the dock left the native page composited over the shell",
+  );
+
+  // 17. Visibility is shell state. The dock below is gated exactly like the
   // AppShell route (`presentedWorkPanelOpen && <WorkPanel/>`), so a topic
   // switch, a New Task creation, a user close, and a return to a topic whose
   // panel was open are observed through real store actions and real renders.

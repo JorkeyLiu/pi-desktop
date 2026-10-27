@@ -59,12 +59,15 @@ try {
     `
 const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("probeClickAt", (x, y) => ipcRenderer.invoke("probe:click", x, y));
+// The docked page is a real child view owned by this runner; the renderer's
+// visibility contract drives it here exactly as the shipped host does.
+contextBridge.exposeInMainWorld("probeView", (op, payload) => ipcRenderer.invoke("probe:view", op, payload));
 `,
   );
   await writeFile(
     join(temp, "main.cjs"),
     `
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, WebContentsView, ipcMain } = require("electron");
 const path = require("node:path");
 app.setPath("userData", path.join(__dirname, "profile"));
 // Showing the window activates it and floating it above the desktop changes
@@ -76,6 +79,32 @@ app.whenReady().then(async () => {
   // that topology.
   const window = new BrowserWindow({ show: INTERACTIVE, frame: false, width: 1000, height: 800, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false, preload: path.join(__dirname, "preload.cjs") } });
   window.webContents.on("console-message", (event) => console.error(event.message));
+  // A docked plugin view is a real child view of this window, so it composites
+  // above every renderer layer exactly like the shipped one. The renderer's
+  // own visibility contract attaches and detaches it, and a re-attach restores
+  // the last measured bounds, which is what the shipped host does as well.
+  const surface = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  surface.webContents.loadURL("data:text/html,<body style='background:%23112233;color:%23fff;font:16px sans-serif'>docked plugin page</body>");
+  let attached = false;
+  let surfaceBounds = null;
+  ipcMain.handle("probe:view", async (event, op, payload) => {
+    if (op === "bounds" && payload) {
+      surfaceBounds = { x: payload.x, y: payload.y, width: payload.width, height: payload.height };
+      if (attached) surface.setBounds(surfaceBounds);
+    } else if (op === "visible") {
+      if (payload && payload.visible === true) {
+        if (!attached) {
+          window.contentView.addChildView(surface);
+          attached = true;
+        }
+        surface.setBounds(surfaceBounds ?? { x: 0, y: 0, width: 0, height: 0 });
+      } else if (attached) {
+        window.contentView.removeChildView(surface);
+        attached = false;
+      }
+    }
+    return { attached, bounds: surfaceBounds };
+  });
   // Real window-level mouse input, not a synthesized DOM event: this is the
   // path where a native drag rectangle can withhold the press.
   ipcMain.handle("probe:click", async (event, x, y) => {

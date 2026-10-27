@@ -219,9 +219,10 @@ test("work panel uses the fixed-window internal dock", () => {
   assert.match(appSource, /finishWorkPanelExit\(workPanelExitGeneration\.current\)/);
   // Native surfaces hide via `blocked` before work-panel-out starts, so the
   // guest clamped to the plugin view is gone before the dock CSS animation.
+  assert.match(panelSource, /blocked=\{nativeSurfaceBlocked\}/);
   assert.match(
     panelSource,
-    /blocked=\{\s*exiting \|\| panelBlocked \|\| blockingOverlayActive\s*\}/,
+    /const nativeSurfaceBlocked =\s*exiting \|\| panelBlocked \|\| blockingOverlayActive \|\| contextMenu !== null;/s,
   );
   assert.match(panelSource, /nativeSurfaceReadyForExit/);
   assert.match(panelSource, /is-exit-pending/);
@@ -292,15 +293,13 @@ test("work panel header exposes a scrollable tab strip and direct new-page actio
   assert.doesNotMatch(panelSource, /work-panel-toolbar-collapse/);
   assert.match(panelSource, /panel\.tabs\.file/);
   // Every native surface in the panel — the preview browser and each plugin
-  // view — composites above the renderer. Exit and panel-wide overlays hide
-  // it; the launcher is rendered in the panel body and needs no floating layer.
+  // view — composites above the renderer. Exit, panel-wide overlays, and the
+  // dock's own tab menu (a body-portaled layer over the panel body) hide it;
+  // the launcher is rendered in the panel body and needs no floating layer.
   const pluginSurfaceStart = panelSource.indexOf("<PluginViewTab");
   const pluginSurfaceEnd = panelSource.indexOf("/>", pluginSurfaceStart);
   const pluginSurface = panelSource.slice(pluginSurfaceStart, pluginSurfaceEnd);
-  assert.match(
-    pluginSurface,
-    /blocked=\{\s*exiting \|\| panelBlocked \|\| blockingOverlayActive\s*\}/s,
-  );
+  assert.match(pluginSurface, /blocked=\{nativeSurfaceBlocked\}/);
   assert.doesNotMatch(pluginSurface, /isResizing/);
   assert.doesNotMatch(panelSource, /createPortal|newTabMenuRef|menuOpen/);
   // The strip menu is the shared pointer-anchored primitive, not a private
