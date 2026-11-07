@@ -12672,7 +12672,6 @@ This test plan spec is accepted when:
   `0 turns · 0 calls` and `—` average TPS; the
   child's model and reasoning level sit on the
   footer's static model chip. The throughput figure is the summed output tokens
-  footer's static model chip. The throughput figure is the summed output tokens
   of the chain's settled direct-child model responses over their summed model
   stream durations: wait, tool, and whole-response time never move it, a nested
   delegate or another child's row never joins it, an in-flight row is not a
