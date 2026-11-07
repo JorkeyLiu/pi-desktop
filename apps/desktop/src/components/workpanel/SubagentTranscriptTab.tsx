@@ -32,7 +32,7 @@ import { useFollowScroll } from "../../hooks/use-follow-scroll";
 import { useTranscriptView } from "../../hooks/use-transcript-view";
 import { useTranscriptSearchFocus } from "../../hooks/use-transcript-search-focus";
 import { IconArrowDown, IconBot, IconImage } from "../icons";
-import { HelpIcon, TooltipButton } from "../ui";
+import { TooltipButton } from "../ui";
 import { ComposerInput } from "../../features/chat/composer/ComposerInput";
 import { ComposerShell } from "../../features/chat/composer/ComposerShell";
 import { useComposerAutosize } from "../../features/chat/composer/hooks/useComposerAutosize";
@@ -605,11 +605,14 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
   const contextValue = contextKnown
     ? formatCompactTokens(chainMetrics.contextTokens as number, language)
     : "—";
+  // The metrics group's slots are fixed: a figure no segment of the chain
+  // reported keeps its labelled dash, so the header never grows a slot as a
+  // run starts reporting and never explains the dash with a helper.
   const spendTokens = chainMetrics?.usage?.totalTokens;
   const spendValue =
     typeof spendTokens === "number" && Number.isFinite(spendTokens)
       ? formatCompactTokens(spendTokens, language)
-      : null;
+      : "—";
   // Only counters the chain actually reported are stated: a Task result that
   // carried context/spend alone states no activity figure at all instead of
   // inventing `0 turns · 0 calls`, while a reported zero is stated as zero.
@@ -626,18 +629,15 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
   const modelLabel = [delegateSettings.modelId, delegateSettings.thinkingLevel]
     .filter(Boolean)
     .join(" · ");
-  // Concise report routing while live: who receives this run's report — the
-  // parent model (`parent`, still expected by the program) or only the user
-  // (`user`, taken over after the parent stopped expecting the chain, e.g. a
-  // detached continuation owning its own execution turn). Settled runs omit
-  // it; their report already landed where it belongs.
-  const ownerLabel = running
-    ? t(deliveryOwner === "user" ? "chat.subagentDeliveryUser" : "chat.subagentDeliveryParent")
+  // Concise report routing while live: only the takeover case is stated — the
+  // user took the chain over after the parent stopped expecting it, e.g. a
+  // detached continuation owning its own execution turn. A parent-owned run is
+  // the expected default and states nothing beside the outcome; settled runs
+  // omit it too, because their report already landed where it belongs.
+  const ownerLabel = running && deliveryOwner === "user"
+    ? t("chat.subagentDeliveryUser")
     : null;
-  const ownerTitle =
-    deliveryOwner === "user"
-      ? t("chat.subagentDeliveryUserHelp")
-      : t("chat.subagentDeliveryParentHelp");
+  const ownerTitle = t("chat.subagentDeliveryUserHelp");
   // Explicit capability reasons: every blocked composer names its own cause
   // without exposing harness internals. A delegation with no backend instance
   // — a denied never-started call, or a tab whose Task chain is missing —
@@ -720,25 +720,20 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                   {contextValue}
                 </span>
               </span>
-              {spendValue !== null ? (
-                <span className="subagent-transcript-metric">
-                  <span className="subagent-transcript-metric-label">
-                    {t("chat.subagentMetricsSpendLabel")}
-                  </span>
-                  <span className="subagent-transcript-metric-value" data-testid="subagent-metrics-spend">
-                    {spendValue}
-                  </span>
+              <span className="subagent-transcript-metric">
+                <span className="subagent-transcript-metric-label">
+                  {t("chat.subagentMetricsSpendLabel")}
                 </span>
-              ) : null}
+                <span className="subagent-transcript-metric-value" data-testid="subagent-metrics-spend">
+                  {spendValue}
+                </span>
+              </span>
               {activityLabel ? (
                 <span className="subagent-transcript-metric">
                   <span className="subagent-transcript-metric-value" data-testid="subagent-metrics-activity">
                     {activityLabel}
                   </span>
                 </span>
-              ) : null}
-              {!contextKnown ? (
-                <HelpIcon label={t("chat.subagentMetricsContextUnknownHelp")} />
               ) : null}
               <span
                 className="subagent-transcript-metric"

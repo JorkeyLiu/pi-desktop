@@ -1440,8 +1440,11 @@ not a working claim, is what the reader sees.
   chain reported it: an unreported counter leaves the turns/calls figure out
   rather than printing `0`, an occupancy no segment of the chain has reported
   keeps its `—` (a segment that reports none leaves the last known figure
-  standing), and an unreported spend states no spend, while a reported zero is
-  stated as zero.
+  standing), and an unreported spend keeps its own labelled `—`, while a
+  reported zero is stated as zero. The context and spend slots never appear or
+  disappear as a live run starts reporting — a just-started delegate with no
+  window and no spend yet reads `Context —` beside `Spent —` — and no dash in
+  the group is explained by a helper icon.
   Long paths, commands, and tool summaries in the live process wrap inside the
   dock instead of becoming one-line ellipses.
 - The metrics group ends with average output throughput (`TPS`). It is the sum of

@@ -325,7 +325,7 @@ test("the child tab header keeps its known context across a resumed marker", asy
     assert.equal(context(render("d1")), "14K");
   } finally { await vite.close(); }
 });
-test("single metrics region separates context from spend with unknown helper", async () => {
+test("single metrics region separates context from spend without an unknown helper", async () => {
   const { vite, render, useAppStore } = await setup();
   try {
     seed(useAppStore, {
@@ -399,15 +399,17 @@ test("single metrics region separates context from spend with unknown helper", a
     const otherHtml = render("d2");
     assert.match(otherHtml, /subagent-transcript-metric-value">100</);
     assert.doesNotMatch(otherHtml, /42\.3/);
-    // Unknown context renders — with a helper, never 0 and never hidden.
+    // Unknown context renders — without a helper, never 0 and never hidden,
+    // and the spend slot keeps its labelled dash beside it.
     const legacyTask = taskMessage("t1", "call-1", "d9", "completed");
     seed(useAppStore, { messages: [legacyTask], running: false });
     const unknownHtml = render("d9");
     assert.match(unknownHtml, /subagent-metrics-context">—/);
-    assert.match(unknownHtml, /ui-help-icon/);
+    assert.doesNotMatch(unknownHtml, /ui-help-icon/);
+    assert.match(unknownHtml, /subagent-metrics-spend">—/);
     // The header never fabricates a counter. A Task result that reported only
-    // context and spend states no activity figure at all, exactly as it states
-    // no spend figure when there is none — never `0 turns · 0 calls`.
+    // context and spend states no activity figure at all — never
+    // `0 turns · 0 calls` — while both figures it did report are stated.
     const metricOnly = taskMessage("t1", "call-1", "d10", "completed", {
       contextTokens: 9000,
       usage: opUsage("op-10", 1200),
@@ -430,6 +432,78 @@ test("single metrics region separates context from spend with unknown helper", a
     const zeroedHtml = render("d11");
     assert.match(zeroedHtml, /title="0 turns · 0 calls"/);
     assert.doesNotMatch(zeroedHtml, /NaN|undefined/);
+  } finally { await vite.close(); }
+});
+
+/**
+ * The header's first frame of a live run. A delegate that only just started
+ * reports zero counters and no window or spend yet; the metrics group keeps
+ * its fixed shape anyway — Context `—`, Spent `—`, the reported zero counters,
+ * and average TPS `—` — and explains nothing about the dash with a helper. A
+ * reported zero window is a figure and keeps its `0`, and every reported
+ * figure survives the placeholders untouched.
+ */
+test("a running child with no usage yet states dashes, not a missing slot or helper", async () => {
+  const { vite, render, useAppStore } = await setup();
+  try {
+    const slot = (html, testid) =>
+      html.match(new RegExp(`data-testid="${testid}"[^>]*>([^<]*)<`))?.[1] ?? null;
+    const throughput = (html) =>
+      html.match(/Average TPS<\/span>\s*<span class="subagent-transcript-metric-value">([^<]*)</)?.[1] ?? null;
+    seed(useAppStore, {
+      messages: [taskMessage("t1", "call-1", "d1", "running", { turns: 0, toolCalls: 0 })],
+      running: true,
+    });
+    const html = render("d1");
+    assert.match(html, /Running/);
+    assert.equal(slot(html, "subagent-metrics-context"), "—");
+    assert.equal(slot(html, "subagent-metrics-spend"), "—");
+    assert.equal(slot(html, "subagent-metrics-activity"), "0 turns · 0 calls");
+    assert.equal(throughput(html), "—");
+    assert.doesNotMatch(html, /ui-help-icon/);
+    assert.doesNotMatch(html, /NaN|undefined/);
+    // A reported zero window is a report: it keeps its 0 while the spend slot
+    // keeps its labelled dash instead of disappearing.
+    seed(useAppStore, {
+      messages: [taskMessage("t1", "call-1", "d1", "running", { turns: 0, toolCalls: 0, contextTokens: 0 })],
+      running: true,
+    });
+    const zeroed = render("d1");
+    assert.equal(slot(zeroed, "subagent-metrics-context"), "0");
+    assert.equal(slot(zeroed, "subagent-metrics-spend"), "—");
+    assert.doesNotMatch(zeroed, /ui-help-icon/);
+    // Reported figures are untouched by the placeholders.
+    seed(useAppStore, {
+      messages: [
+        taskMessage("t1", "call-1", "d1", "running", {
+          turns: 2,
+          toolCalls: 3,
+          contextTokens: 12000,
+          usage: opUsage("op-1", 1500),
+        }),
+      ],
+      running: true,
+    });
+    const populated = render("d1");
+    assert.equal(slot(populated, "subagent-metrics-context"), "12K");
+    assert.equal(slot(populated, "subagent-metrics-spend"), "1.5K");
+    assert.equal(slot(populated, "subagent-metrics-activity"), "2 turns · 3 calls");
+    assert.doesNotMatch(populated, /ui-help-icon/);
+    assert.doesNotMatch(populated, /NaN|undefined/);
+    // The same first frame in the Chinese catalog: the spend slot is labelled
+    // and dashed on the reader's language, never absent.
+    const zh = await setup("zh-CN");
+    try {
+      seed(zh.useAppStore, {
+        messages: [taskMessage("t1", "call-1", "d1", "running", { turns: 0, toolCalls: 0 })],
+        running: true,
+      });
+      const zhHtml = zh.render("d1");
+      assert.match(zhHtml, /累计消耗/);
+      assert.equal(slot(zhHtml, "subagent-metrics-spend"), "—");
+      assert.equal(slot(zhHtml, "subagent-metrics-context"), "—");
+      assert.doesNotMatch(zhHtml, /ui-help-icon/);
+    } finally { await zh.vite.close(); }
   } finally { await vite.close(); }
 });
 
@@ -468,17 +542,18 @@ test("the header states an estimated occupancy as a plain context figure", async
   }
 });
 
-test("header names the live report owner from backend fields, settled stays bare", async () => {
+test("header states the owner only for a user-owned live run, settled stays bare", async () => {
   const { vite, render, useAppStore } = await setup();
   try {
-    // Attached running run: parent still expects the report.
+    // Attached running run: parent still expects the report, and that default
+    // carries no owner label.
     seed(useAppStore, {
       messages: [taskMessage("t1", "call-1", "d1", "running")],
       running: true,
     });
     const attached = render("d1");
-    assert.match(attached, /data-testid="subagent-delivery-owner"/);
-    assert.match(attached, /Parent-owned/);
+    assert.doesNotMatch(attached, /subagent-delivery-owner/);
+    assert.doesNotMatch(attached, /Parent-owned/);
     assert.doesNotMatch(attached, /User-owned/);
     // Detached running run: a recorded `delivery: "user"` summary (or a
     // user-origin marker's `toolArgs.source`) names the user owner even

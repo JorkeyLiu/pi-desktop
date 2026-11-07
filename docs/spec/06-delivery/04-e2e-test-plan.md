@@ -12665,9 +12665,13 @@ This test plan spec is accepted when:
   the main conversation. The tab header carries only the outcome, the delivery
   owner while the child runs, and one localized metrics group (context occupancy
   as one plain figure — no `(est.)` marker when the figure came from the child's
-  own usage — with the labelled dash and its helper when unknown, billed spend
-  when the child reported it, turns/calls, and average output throughput); the
+  own usage — keeping the labelled dash when unknown with no helper beside it,
+  billed spend or its own labelled dash when the child reported none, turns/calls
+  when reported, and average output throughput); a just-started running delegate
+  that has reported only zero counters therefore reads `Context —`, `Spent —`,
+  `0 turns · 0 calls` and `—` average TPS; the
   child's model and reasoning level sit on the
+  footer's static model chip. The throughput figure is the summed output tokens
   footer's static model chip. The throughput figure is the summed output tokens
   of the chain's settled direct-child model responses over their summed model
   stream durations: wait, tool, and whole-response time never move it, a nested
@@ -12707,7 +12711,8 @@ This test plan spec is accepted when:
   covered by `subagent-throughput.test.mjs` (weighting, exclusions, repeated
   ids, provider zero versus estimate) and by the rendered tab header in
   `subagent-continue-user-path.test.mjs` (rounded rate, `≈` estimate, `—` with
-  no sample, per-chain isolation, sample count in the help).
+  no sample, per-chain isolation, sample count in the help, and the running
+  first frame that states `Context —` beside `Spent —` with no helper icon).
 
 #### E2E-SUBAGENT-settlement-updates-before-parent-poll
 

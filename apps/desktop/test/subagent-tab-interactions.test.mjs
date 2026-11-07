@@ -249,16 +249,14 @@ test("every tab of a continued chain continues it while remote tabs stay read-on
 test("owner chip and blocked composers name their own capability reason", async () => {
   const { vite, render, useAppStore } = await setup();
   try {
-    // Attached live run: parent-owned with the busy hint in the title.
+    // Attached live run: parent-owned is the default and states no owner label.
     seed(useAppStore, {
       messages: [taskMessage("t1", "call-1", "d1", "running")],
       running: true,
     });
     const attached = render("d1");
-    assert.match(attached, /data-testid="subagent-delivery-owner"/);
-    assert.match(attached, /Parent-owned/);
-    // The flattened catalog resolves the owner hint to its copy in SSR.
-    assert.match(attached, /goes to the main agent when it finishes/);
+    assert.doesNotMatch(attached, /subagent-delivery-owner/);
+    assert.doesNotMatch(attached, /Parent-owned/);
     // Detached live run: user-owned, report stays local.
     seed(useAppStore, {
       messages: [taskMessage("t1", "call-1", "d2", "running", { delivery: "user" })],
