@@ -38,6 +38,14 @@ export type ComposerPasteFile = {
   mimeType?: string;
   /** Set for generated large-text pastes so history can retain the text. */
   recordHistory?: boolean;
+  /**
+   * Who produced these bytes. `auto-text` is a `text/plain` payload the
+   * Composer generated from one oversized clipboard text paste: main stores it
+   * in the session's owned auto-text directory, which is the provenance the
+   * send and history paths trust when they read the paste back as prompt text.
+   * A picked, dropped, or pasted file never sets it.
+   */
+  origin?: "auto-text";
   data: ArrayBuffer;
 };
 

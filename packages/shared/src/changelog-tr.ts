@@ -26,6 +26,7 @@ export const trEntries: ChangelogEntry[] = [
       "Durdurulmuş bir alt ajanı sürdürdüğünüzde özgün sekmesi kullanılabilir kalır: devam iletisi bir kez görünür, çalışma sırasında Durdur kullanılabilir ve aynı sekme zinciri yeniden sürdürebilir. Konuşma, işin devredildiği kartı korur ve bir devam için yeni kart eklemez. Düzenleyici artık görselleri ana düzenleyici gibi ekler, yapıştırır, önizler ve kaldırır; adayı onaylayan Enter hiçbir zaman göndermez. Bağlam değeri, sürdürülen çalışma kendi değerini bildirene kadar alt ajanın en son bildirdiği değeri korur.",
       "Bir araç çağrısı, bağımsız değişkenleri tamamlanmadan akış başlar başlamaz konuşmadaki yerinde görünür; dönen bir simge yerine simgesi ve adı hafifçe nabız atar.",
       "Bir alt ajanın dökümü, alt ajan çalışırken çalışma göstergesini gösterir; güncellemeler arasında hareketsiz kalan bir satır listesi kalmaz.",
+      "Uzun bir yapıştırma artık modele açması gereken bir dosya yolu yerine, yapıştırdığınız konumda yapıştırdığınız metnin kendisi olarak ulaşıyor. Taslak ve geçmiş kompakt çipi korur; yeniden deneme, kuyruktaki mesaj ve yeniden açılan sohbet dahil her gönderim yolu aynı metni taşır.",
     ],
   },
   {

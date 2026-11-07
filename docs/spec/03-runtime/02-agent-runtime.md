@@ -801,6 +801,17 @@ when the history fits, while over-budget or oversized images become safe
 spliced back into the prompt at that position, so a restored turn keeps the
 order the user wrote. Reads are bounded by the admitted file size. Base64 is
 transient and never restored into durable UI messages or transcript records.
+A restored user message that names an automatically pasted text file gets that
+file's exact text back in place of the `@path` marker, so a resumed conversation
+carries the pasted words the turn that sent them carried. The owned
+`scratch/<sessionId>/pasted/text/` directory is the only provenance: a file
+there is an automatic paste by construction, and a picked, dropped, or pasted
+file one level up — whatever its name — a typed `@path`, another session's
+paste, and a paste saved before that directory existed all stay references.
+Restore is best-effort, matching the surrounding history contract: a swept
+scratch directory, a deleted file, or a file over the byte bound leaves the
+compact text the persisted message already holds. The send path is where a paste
+that cannot be carried fails visibly.
 - Failed assistant messages remain durable diagnostic transcript entries but
   are never restored into pi model context on a later turn.
 - A tool-call id is unique in every request. The transcript is an append-only

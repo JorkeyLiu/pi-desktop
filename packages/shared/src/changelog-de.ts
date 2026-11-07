@@ -26,6 +26,7 @@ export const deEntries: ChangelogEntry[] = [
       "Der Tab eines gestoppten Subagents bleibt nutzbar, wenn Sie ihn fortsetzen: die Fortsetzung erscheint einmal, Stopp bleibt während des Laufs verfügbar, und derselbe Tab setzt die Kette erneut fort. Der Verlauf behält die Karte, mit der die Arbeit delegiert wurde, und fügt für eine Fortsetzung keine weitere hinzu. Der Editor nimmt Bilder jetzt wie der Haupteditor über Auswahl und Einfügen an, zeigt sie als Vorschau, erlaubt das Entfernen und folgt derselben IME-Regel: ein Enter, das einen Kandidaten bestätigt, sendet nie. Die Kontextanzeige behält den zuletzt gemeldeten Wert des Subagents, bis der fortgesetzte Lauf einen eigenen meldet.",
       "Ein Tool-Aufruf erscheint jetzt an seiner Stelle im Gespräch, sobald er zu streamen beginnt, noch bevor seine Argumente fertig sind; Symbol und Name pulsieren dezent statt eines Spinners.",
       "Das Transcript eines Subagents zeigt den Arbeitsindikator, solange das Kind arbeitet, statt einer Liste, die zwischen Aktualisierungen stillsteht.",
+      "Ein langer eingefügter Text erreicht das Modell jetzt an der eingefügten Stelle als der eingefügte Text statt als Dateipfad, den es erst öffnen müsste. Entwurf und Verlauf behalten den kompakten Chip, und jeder Sendeweg – Wiederholen, eine eingereihte Nachricht oder eine erneut geöffnete Unterhaltung – trägt denselben Text.",
     ],
   },
   {

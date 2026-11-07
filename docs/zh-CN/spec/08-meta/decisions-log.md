@@ -5418,3 +5418,29 @@ Markdown 源码，不是 `text/html` 负载；对禁用行内 HTML 的外部编�
 - 由 `packages/agent-runtime/src/session-affinity.test.ts` 与
   E2E-PROVIDER-custom-endpoint-session-identity 覆盖。见 issue #1634、
   `03-runtime/02-agent-runtime.md` §6.3 与 `03-runtime/11-provider-model-system.md`。
+
+## 2026-11-07 — 长文本粘贴以提示正文进入模型（D663）
+
+- D663 修订 ADR 0131 与 D262。规范暂存文件仍是自动转换文本粘贴的持久展示形态，但发送它的
+  回合会携带正文本身：Electron 主进程在交给 `agent/prompt` 的内容中，用该文件完整的 UTF-8
+  文本替换解析到会话专属粘贴目录内的纯文本标记，随后照旧持久化紧凑的 `@path`。因此第一条
+  模型可见的用户消息即包含粘贴内容，无需 Read 步骤。
+- 归属由存储位置决定，而不是文件名。Composer 用新增的可选传输字段
+  `ComposerPasteFile.origin = "auto-text"` 标记超阈值文本载荷，主进程把它写入
+  `<data_dir>/scratch/<sessionId>/pasted/text/`；选择、拖入或剪贴板文件无法设置该字段，
+  保留用户自己的文件名位于 `pasted/`，因此名字类似粘贴的手动文件仍只是引用。该改动不涉及
+  数据库迁移、新的公开契约或新的子系统。
+- 该规则只覆盖这个专属目录，并受 64 MiB 粘贴上限约束。用户输入的 `@path`、手动附件、同名的
+  工作区文件、其他会话的粘贴，以及指向该目录之外的符号链接都不会被读取。所有发送路径（新回合、
+  steer、排队投递、重试）都适用，恢复历史时通过同一目录判定从持久化标记重建文本。
+- 无法读取、在准备过程中发生变化或超过字节上限的粘贴文件会让发送以带错误码的方式失败，而
+  不是把路径发出去；被保留期清理掉的会话暂存目录也属于同样的可见失败。不做静默截断。由于
+  先裁剪用户输入周围的空白再还原粘贴正文，粘贴内容自身的起始空行、缩进与结尾换行保持原样。
+- 旧版本限制：在该决定之前保存的粘贴直接位于 `pasted/`，其名字与手动文件可能相同，归属无法
+  安全确定，因此这些引用仍只作为引用保留；优先保证手动文件的行为不变。
+- 由 `apps/desktop/test/auto-pasted-text-context.test.mjs`、
+  `apps/desktop/test/composer-paste-files.test.mjs`、
+  `packages/shared/src/auto-pasted-text.test.ts`
+  与 `packages/agent-runtime/src/attachment-history.test.ts` 覆盖。见
+  `04-ux/08-component-spec.md` §11.7、`04-ux/09-interaction-patterns.md` §8a、
+  `03-runtime/01-ipc-protocol.md` §8、`03-runtime/02-agent-runtime.md` §6 与 E2E-102g。

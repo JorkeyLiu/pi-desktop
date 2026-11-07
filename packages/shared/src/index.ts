@@ -9,6 +9,7 @@ export * from "./keyboard-shortcuts.js";
 export * from "./changelog.js";
 export * from "./composer-trigger.js";
 export * from "./inline-attachments.js";
+export * from "./auto-pasted-text.js";
 export * from "./session-link.js";
 export * from "./fuzzy.js";
 export * from "./mcp-import.js";

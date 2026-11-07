@@ -2380,6 +2380,12 @@ type ComposerPasteFile = {
   mimeType?: string;
   /** Set for generated large-text pastes so host-owned clipboard history can retain the text. */
   recordHistory?: boolean;
+  /**
+   * `auto-text` marks the UTF-8 text the Composer generated from one oversized
+   * clipboard text paste. Additive and optional: main files it in the session's
+   * owned `pasted/text/` directory instead of `pasted/`.
+   */
+  origin?: "auto-text";
   data: ArrayBuffer;
 };
 
@@ -2401,6 +2407,19 @@ displays `name`, and submits them through `AgentPromptRequest.attachments`.
 Main persists image bytes by SHA-256 and adds a path fallback only when the
 selected model cannot receive that image as a visual block. Clipboard bytes
 never enter the persisted prompt or host agent message as base64.
+An automatically converted long text paste is the one path-shaped reference that
+does not stay a path. Main stores a payload carrying `origin: "auto-text"` in
+`<data_dir>/scratch/<sessionId>/pasted/text/`; a picked, dropped, or clipboard
+file keeps the user's own name under `pasted/`. When the submitted prompt text
+names a file inside that owned directory, main replaces the marker with the
+file's exact UTF-8 text in the content sent to `pi-desktop/agent/prompt`,
+bounded by the same 64 MiB paste limit; a missing file, a swept directory, or an
+oversized file fails the send with a coded error. That directory is the only
+provenance — the file name never decides — so a manual file named like a paste
+stays a reference, and pastes saved before the directory existed stay
+reference-only. The persisted `UiMessage` keeps the compact `@path`, so the
+transcript and history are unchanged, and every send path (new turn, steer,
+queued delivery, retry) applies the same rule.
 Invalid sessions and malformed/oversized payloads fail with an IPC error, and
 the operation cannot write to the workspace.
 

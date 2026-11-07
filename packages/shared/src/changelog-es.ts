@@ -26,6 +26,7 @@ export const esEntries: ChangelogEntry[] = [
       "La pestaña de un subagente detenido sigue siendo utilizable al continuarlo: la continuación aparece una sola vez, Detener sigue disponible mientras se ejecuta y la misma pestaña vuelve a continuar la cadena. La conversación conserva la tarjeta con la que se delegó el trabajo y no añade ninguna por una continuación. Su editor ahora adjunta, pega, previsualiza y elimina imágenes como el principal, y sigue la misma regla de IME: Intro que confirma un candidato nunca envía. La cifra de contexto conserva el último valor que informó el subagente hasta que la continuación informe el suyo.",
       "Una llamada de herramienta aparece ahora en su lugar de la conversación en cuanto empieza a transmitirse, antes de que terminen sus argumentos, con un pulso sutil en su icono y su nombre en lugar de un indicador giratorio.",
       "La transcripción de un subagente muestra el indicador de trabajo mientras el hijo trabaja, en vez de una lista que se queda quieta entre actualizaciones.",
+      "Un texto largo pegado llega ahora al modelo como el texto que pegaste, en el punto donde lo pegaste, en lugar de una ruta de archivo que debía abrir. El borrador y el historial conservan el chip compacto, y cada vía de envío —reintentar, un mensaje en cola o una conversación reabierta— lleva el mismo texto.",
     ],
   },
   {

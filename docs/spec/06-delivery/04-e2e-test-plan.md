@@ -9310,11 +9310,12 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
      the text is editable, the caret lands after it, and subsequent send uses
      the edited text. While a read is pending, switch drafts or remove the chip
      and confirm a stale response does not change the current draft.
-  5. Inspect the session `scratch/<sessionId>/pasted/` file bytes, send a mixed
-     draft that still contains a chip, and inspect the renderer request,
-     persisted user message, and agent-readable path. Switch projects and
-     sessions before sending a cached draft, then remove the chip and confirm it
-     is no longer dispatched.
+  5. Inspect the session `scratch/<sessionId>/pasted/text/` file bytes, send a mixed
+     draft that still contains a chip, and inspect the prompt content handed to
+     `agent/prompt` together with the persisted user message. Retry that turn,
+     deliver a queued copy of the same draft, and reopen the session after a
+     restart. Switch projects and sessions before sending a cached draft, then
+     remove the chip and confirm it is no longer dispatched.
   6. Delete the owning session and confirm its temporary paste files are
      removed.
 - **Expected**:
@@ -9328,6 +9329,20 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
     Space expands it to editable exact text and removes its reference; edits
     made afterward are what dispatch sends. A failed, binary, image, or
     oversized read leaves the chip and mapping intact.
+  - The generated `text/plain` payload is the only one filed under
+    `scratch/<sessionId>/pasted/text/`; a picked, dropped, or copied file keeps
+    its own name under `pasted/`.
+  - The prompt content sent to `agent/prompt` holds the pasted text itself, in
+    the paste's position and byte for byte (head, middle, tail, Unicode,
+    leading blank lines, indentation, trailing newline), with no `@` path the
+    model would have to open. The persisted user message keeps the compact
+    `@path` chip text, so the transcript is unchanged. A retry, a queued
+    delivery, and a reopened session carry the same text exactly once, never
+    duplicated and never truncated.
+  - A picked or dropped file named like a paste stays a reference, an `@path`
+    the user typed stays a reference, and a paste whose file or directory is
+    gone (including a swept session scratch directory) fails the send with a
+    coded error instead of sending its path.
   - Any remaining chip is resolved to its canonical path in place exactly once;
     it is neither appended as a basename nor duplicated as an attachment.
     Removing the chip removes that mapping.
@@ -9343,8 +9358,11 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   F (persistence), Quality
 - **Milestone**: M5
 - **Status**: Unit-covered (`composer-trigger.test.ts`,
-  `apps/desktop/test/composer-paste-files.test.mjs`); full UI journey Draft
-  (run only in a capable environment when this surface changes)
+  `apps/desktop/test/composer-paste-files.test.mjs`,
+  `apps/desktop/test/auto-pasted-text-context.test.mjs`,
+  `packages/shared/src/auto-pasted-text.test.ts`,
+  `packages/agent-runtime/src/attachment-history.test.ts`); full UI journey
+  Draft (run only in a capable environment when this surface changes)
 
 #### E2E-103: Settings Agent pages manage file-backed capabilities
 

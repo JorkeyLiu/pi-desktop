@@ -3,10 +3,11 @@ import { IPC, ErrorCodes, compactionRecordId, findSkillMentions, isGlobalPermiss
 import type { FinishTurn } from "../runtime/plans";
 import { expandSlashInvocation, visionFromModelConfig, type ComposerTemplate } from "@pi-desktop/agent-runtime";
 import {
-  appendPromptFallbackPaths,
+  assembleTurnPrompt,
   durableUserMessageId,
   preparePromptAttachments,
   prepareSubagentPromptAttachments,
+  promptContentForModel,
   type PreparedPromptAttachment,
   type PreparedSubagentAttachment,
 } from "../prompt-attachments";
@@ -197,11 +198,19 @@ export function registerAgentIpc({
       ...(prepared.length ? { attachments: prepared.map((attachment) => attachment.message) } : {}),
       ...(voiceOrigin ? { voiceOrigin } : {}),
     };
+    // The prompt the model receives: an auto-pasted text travels as its own
+    // words, while the durable steering row above keeps the compact chip text.
+    const steerModelContent = await promptContentForModel(
+      dataDir,
+      req.sessionId,
+      steerContent,
+      prepared,
+    );
     // Revalidate inside the runtime after all file/host IO. A stale target must
     // never turn into a normal prompt or alter the next turn's configuration.
     return sidecar.call<{ accepted: boolean; turnId: string }>("agent.steer", {
       sessionId: req.sessionId, expectedTurnId: req.expectedTurnId, message,
-      content: appendPromptFallbackPaths(steerContent, prepared),
+      content: steerModelContent,
       ...(mcpExpansion ? { mcpServerIds: mcpExpansion.mcpServerIds, mcpToolNames: mcpExpansion.mcpToolNames } : {}),
       attachments: prepared.filter((attachment) => attachment.inlineData).map((attachment) => ({
         path: attachment.message.ref, name: attachment.message.name, kind: attachment.message.kind,
@@ -635,19 +644,24 @@ export function registerAgentIpc({
       launch.sidecarParams.provider.modelConfig,
     );
     let preparedAttachments: PreparedPromptAttachment[];
+    let modelContent: string;
     try {
-      preparedAttachments = await preparePromptAttachments(
-        dataDir,
-        req.sessionId,
-        !session.remoteWorkspace && typeof session.projectPath === "string" && session.projectPath.trim()
-          ? session.projectPath.trim()
-          : undefined,
-        req.attachments ?? [],
+      const turnPrompt = await assembleTurnPrompt({
+        dataRoot: dataDir,
+        sessionId: req.sessionId,
+        projectPath:
+          !session.remoteWorkspace && typeof session.projectPath === "string" && session.projectPath.trim()
+            ? session.projectPath.trim()
+            : undefined,
+        attachments: req.attachments ?? [],
         supportsVision,
         // The text the durable message will hold: an image chip the Composer
-        // left inline keeps its place in the prompt and in the transcript.
+        // left inline keeps its place in the prompt and in the transcript, and
+        // a long paste reaches the model as its text, not as a file path.
         promptContent,
-      );
+      });
+      preparedAttachments = turnPrompt.preparedAttachments;
+      modelContent = turnPrompt.modelContent;
     } catch (error) {
       await finishTurn(req.sessionId, "error", (error as any)?.errorCode, {
         turnId: durableTurnId,
@@ -667,11 +681,6 @@ export function registerAgentIpc({
           : undefined,
       content: req.content,
     });
-    const modelContent = appendPromptFallbackPaths(
-      promptContent,
-      preparedAttachments,
-    );
-
     // Persist user message
     const revisionMeta = (req as any).__revisionMeta as
       | {

@@ -4,10 +4,14 @@ import { constants as fsConstants } from "node:fs";
 import { copyFile, mkdir, open, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import {
+  AUTO_PASTED_TEXT_DIR,
+  findPromptPathMarkers,
   formatFileInsert,
   isSvgAttachment,
+  MAX_AUTO_PASTED_TEXT_BYTES,
   MAX_INLINE_IMAGE_BYTES,
   MAX_INLINED_IMAGE_HISTORY_BYTES,
+  replacePromptPathMarkers,
   SVG_MIME_TYPE,
   type MessageAttachment,
   type UiMessage,
@@ -89,6 +93,59 @@ async function readFileAtRecordedSize(
   } finally {
     await file.close();
   }
+}
+
+/**
+ * The compact text a restored message was saved with names the file one
+ * automatic long paste was written to. Put that file's text back so a resumed
+ * conversation carries the user's own words, exactly as the turn that sent them
+ * did.
+ *
+ * The owned `pasted/text/` directory is the provenance, not the file name: a
+ * picked, dropped, or pasted file keeps its own name under `pasted/`, so it is
+ * never read back here even when it is named like a paste. Restore stays
+ * best-effort like the rest of history hydration — a swept session scratch
+ * directory, a deleted file, an oversized file, or a failed read leaves the
+ * compact text the transcript already holds. The send path is where a paste
+ * that cannot be carried fails visibly.
+ */
+async function restoreAutoPastedText(
+  params: AttachmentHistoryContext,
+  content: string,
+): Promise<string> {
+  if (!params.scratchDir) return content;
+  const root = resolve(params.scratchDir, AUTO_PASTED_TEXT_DIR);
+  const markers = findPromptPathMarkers(content).filter((marker) => {
+    if (!isAbsolute(marker.path)) return false;
+    // Ownership is decided by the unresolved path: a typed `@path` or a manual
+    // attachment outside the owned directory stays the reference it was.
+    return pathInside(root, resolve(marker.path));
+  });
+  if (!markers.length) return content;
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = await realpath(root);
+  } catch {
+    return content;
+  }
+  const restored = new Map<string, string>();
+  for (const marker of markers) {
+    if (restored.has(marker.path)) continue;
+    try {
+      const canonical = await realpath(resolve(marker.path));
+      if (!pathInside(canonicalRoot, canonical)) continue;
+      const size = (await stat(canonical)).size;
+      if (size > MAX_AUTO_PASTED_TEXT_BYTES) continue;
+      const bytes = await readFileAtRecordedSize(canonical, size);
+      if (!bytes) continue;
+      restored.set(marker.path, bytes.toString("utf8"));
+    } catch {
+      // The compact text stays when the paste file cannot be read back.
+    }
+  }
+  return replacePromptPathMarkers(content, markers, (marker) =>
+    restored.get(marker.path),
+  );
 }
 
 export async function hydrateAttachmentHistory(
@@ -237,29 +294,40 @@ export async function hydrateAttachmentHistory(
   }
   await Promise.all(fallbackTasks);
 
-  return history.map((message, index) => {
-    const resolved = resolvedHistory[index];
-    if (!resolved) return message;
-    const fallbackPaths = resolved
-      .filter(
-        (item) =>
-          Boolean(item.fallbackPath) &&
-          // A path the message already names at the user's own position needs no
-          // second copy at the end; a rewritten replay copy still travels.
-          formatFileInsert(item.fallbackPath!, "file").trim() !== item.attachment.inlinePath,
-      )
-      .map((item) => formatFileInsert(item.fallbackPath!, "file"))
-      .join("")
-      .trim();
-    const content = message.content.trim()
-      ? fallbackPaths
-        ? `${message.content}\n${fallbackPaths}`
-        : message.content
-      : fallbackPaths;
-    return {
-      ...message,
-      content,
-      attachments: resolved.map((item) => item.attachment),
-    };
-  });
+  return Promise.all(
+    history.map(async (message, index) => {
+      // A pasted text travels as prompt content, not as an attachment, so its
+      // message restores its text whether or not it carried one.
+      const restored =
+        message.role === "user"
+          ? {
+              ...message,
+              content: await restoreAutoPastedText(params, message.content),
+            }
+          : message;
+      const resolved = resolvedHistory[index];
+      if (!resolved) return restored;
+      const fallbackPaths = resolved
+        .filter(
+          (item) =>
+            Boolean(item.fallbackPath) &&
+            // A path the message already names at the user's own position needs no
+            // second copy at the end; a rewritten replay copy still travels.
+            formatFileInsert(item.fallbackPath!, "file").trim() !== item.attachment.inlinePath,
+        )
+        .map((item) => formatFileInsert(item.fallbackPath!, "file"))
+        .join("")
+        .trim();
+      const content = restored.content.trim()
+        ? fallbackPaths
+          ? `${restored.content}\n${fallbackPaths}`
+          : restored.content
+        : fallbackPaths;
+      return {
+        ...restored,
+        content,
+        attachments: resolved.map((item) => item.attachment),
+      };
+    }),
+  );
 }

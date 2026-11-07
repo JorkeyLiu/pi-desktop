@@ -3985,7 +3985,21 @@ Anatomy:
   or activating it with Enter/Space reads the bounded text file, replaces the
   sentinel with editable text at that position, removes the reference, and
   places the caret after the inserted content; a failed or unsupported read
-  leaves the chip unchanged. The default threshold is 600 characters and is
+  leaves the chip unchanged. The turn that sends such a draft carries the file's
+  text rather than the path. Only this payload is marked `origin: "auto-text"`,
+  so Electron main files it under the session's owned
+  `<data_dir>/scratch/<sessionId>/pasted/text/` directory, and it replaces the
+  plain-text marker that resolves inside that directory with the file's exact
+  UTF-8 text in the prompt handed to the model. The first model-visible user
+  message therefore holds the pasted words, exactly as copied — leading blank
+  lines, indentation, and a trailing newline included — with no Read step. The
+  draft, the transcript, and the persisted message keep the compact chip. The
+  owned directory is the only provenance: an `@path` the user typed, a picked,
+  dropped, or pasted file (which keeps its own name one level up under
+  `pasted/`), and a paste saved before that directory existed all stay
+  references, and a paste file that cannot be read, a swept session scratch
+  directory, or a file over the paste byte bound fails the send with a coded
+  error instead of sending the path. The default threshold is 600 characters and is
   persisted in app settings. Pasting either files or oversized text counts as
   input, so the home composer materializes the startup-only home draft into a
   durable session before saving when no active session is available. The scratch

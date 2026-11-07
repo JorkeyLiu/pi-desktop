@@ -7828,3 +7828,43 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   stages of `scripts/e2e-sidebar-relaunch.mjs`. See
   `04-ux/08-component-spec.md` §5.4, `04-ux/09-interaction-patterns.md` §1.8,
   and E2E-UX-workspace-session-survive-relaunch.
+
+## 2026-11-07 — A long paste travels as prompt text (D663)
+
+- D663 amends ADR 0131 and D262. The canonical scratch file stays the durable,
+  display-facing form of an automatically converted text paste, but the turn
+  that sends it carries the text itself: Electron main replaces a plain-text
+  marker that resolves inside the session's owned auto-paste directory with that
+  file's exact UTF-8 text in the content it hands `agent/prompt`, then persists
+  the compact `@path` as before. The first model-visible user message therefore
+  holds the pasted words with no Read step.
+- Provenance is the storage location, never the file name. The Composer marks its
+  oversized-text payload with the additive, optional
+  `ComposerPasteFile.origin = "auto-text"` transport field, and main files such a
+  payload in `<data_dir>/scratch/<sessionId>/pasted/text/`. A picked, dropped, or
+  clipboard file cannot set that field and keeps the user's own leaf name under
+  `pasted/`, so a manual file named like a paste stays a reference. No database
+  migration, new public contract, or new subsystem is involved.
+- The rule is bounded by that directory and by the 64 MiB paste limit. A typed
+  `@path`, a manual attachment, a same-named workspace file, another session's
+  paste, and a symlink leaving the owned directory are never read. Every send
+  path applies it — new turn, steer, queued delivery, retry — and restored
+  history rebuilds the text from the persisted marker through the same
+  directory predicate.
+- A paste file that cannot be read, changed while prepared, or exceeds the byte
+  bound fails the send with a coded error instead of sending the path; a session
+  scratch directory removed by the retention sweep is the same visible failure.
+  Nothing is silently truncated. The pasted bytes keep their own leading blank
+  lines, indentation, and trailing newline because the draft's surrounding
+  whitespace is trimmed before the text is restored.
+- Legacy limitation: a paste saved before this decision sits directly in
+  `pasted/` with only a name shared by manual files. Its reference stays
+  reference-only because origin cannot be established safely; preserving manual
+  file behavior takes precedence.
+- Covered by `apps/desktop/test/auto-pasted-text-context.test.mjs`,
+  `apps/desktop/test/composer-paste-files.test.mjs`,
+  `packages/shared/src/auto-pasted-text.test.ts`, and
+  `packages/agent-runtime/src/attachment-history.test.ts`. See
+  `04-ux/08-component-spec.md` §11.7, `04-ux/09-interaction-patterns.md` §8a,
+  `03-runtime/01-ipc-protocol.md` §8, `03-runtime/02-agent-runtime.md` §6, and
+  E2E-102g.

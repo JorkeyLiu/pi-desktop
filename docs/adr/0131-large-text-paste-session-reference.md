@@ -72,3 +72,51 @@ carries `image/*` copies, which is what Word supplies for a copied selection.
 That selected text uses this decision's `largePasteThreshold`, so short text
 stays editable inline and larger text spills into session scratch as before. The
 clipboard-file and image flows of decision 5 are unchanged.
+
+## Amendment (2026-11-07): the paste travels as prompt text, not as a path to read
+
+Decision 3's canonical path stays the durable, display-facing form of an
+automatically converted paste, but the turn that sends it now carries the text
+itself. The reference-only model is replaced for these files:
+
+- Storage states the provenance. The Composer marks its oversized-text payload
+  with the optional `origin: "auto-text"` transport field, and Electron main
+  writes such a payload into the session's dedicated
+  `<data_dir>/scratch/<sessionId>/pasted/text/` directory instead of
+  `pasted/`. A picked, dropped, or clipboard file never sets that field and
+  keeps the user's own leaf name under `pasted/`, so no file name can make a
+  manual file look like an automatic paste. The field is additive and optional;
+  a peer that does not send it simply stores an ordinary file.
+- Electron main replaces every plain-text marker that resolves inside that
+  owned directory with the file's exact UTF-8 text in the content it hands the
+  agent runtime. The first model-visible user message therefore holds the pasted
+  words with no Read step and no dependency on a tool the runtime may refuse to
+  run outside the workspace.
+- The persisted user message, the transcript, and the draft keep the compact
+  chip and `@<path>` text. Only the prompt built for the model is rewritten, so
+  history does not turn into a paste blob and the display is unchanged.
+- The same rule applies to every send path: a new turn, a steer, a queued
+  delivery, and a retry. Restored history rebuilds the text from the persisted
+  `@path` through the same directory predicate, so a resumed conversation keeps
+  the words.
+- The rule is scoped to that directory. An `@path` the user typed, a picked,
+  dropped, or pasted file, a workspace file, another session's paste, and a
+  symlink that leaves the owned directory are never read.
+- A paste file that cannot be read, changed while the turn was prepared, or
+  exceeds the paste byte bound fails the send with a coded error instead of
+  sending a path in place of the words. Nothing is silently truncated. A session
+  scratch directory removed by the retention sweep is the same visible failure,
+  not a quiet fall back to the path.
+- The pasted text is restored after the draft's own surrounding whitespace is
+  trimmed, so the pasted bytes keep their leading blank lines, indentation, and
+  trailing newline while the established treatment of what the user typed is
+  unchanged.
+
+### Legacy limitation
+
+A paste saved before this amendment sits directly in
+`<data_dir>/scratch/<sessionId>/pasted/` with nothing but its name to identify
+it, and that name is shared with files the picker, drag-and-drop, and clipboard
+files can produce. Those references stay reference-only: origin cannot be
+established safely, and preserving the behavior of user-selected files takes
+precedence over hydrating an older paste by guessing from its name.

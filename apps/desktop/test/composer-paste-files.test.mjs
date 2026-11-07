@@ -27,6 +27,9 @@ test("composer converts oversized text paste and materializes clipboard files", 
   assert.match(composer, /pasted-text-\$\{crypto\.randomUUID\(\)\.slice\(0, 8\)\}\.txt/);
   assert.match(composer, /mimeType: "text\/plain"/);
   assert.match(composer, /recordHistory: true/);
+  // The automatic text paste is the only payload that claims the provenance
+  // main files in the session's owned auto-text directory.
+  assert.match(composer, /origin: "auto-text" as const/);
   assert.match(composer, /api\.recordClipboardPaste\(text\)/);
   // Oversized pastes attach as atomic inline chips: one sentinel character
   // inserted at the caret inside an editable draft, never an editable
@@ -169,12 +172,36 @@ test("composer ignores repeated picker clicks while selection is in flight", () 
 });
 
 test("pasted bytes stay in the session scratch directory", () => {
-  assert.match(saver, /join\(dataDir, "scratch", sessionId, "pasted"\)/);
+  assert.match(saver, /join\(dataDir, "scratch", sessionId, PASTED_FILES_DIR\)/);
   assert.match(saver, /basename\(normalized\)/);
   assert.match(saver, /writeFile\(path, bytes, \{ flag: "wx" \}\)/);
   assert.match(saver, /MAX_TOTAL_BYTES/);
   assert.match(saver, /kind: isImageFile\(name, mimeType\) \? "image" : "file"/);
   assert.match(saver, /size: bytes\.byteLength/);
+});
+
+test("only an automatic text paste is filed in the auto-text directory", async () => {
+  const { saveComposerPasteFiles } = await import("../electron/main/composer-paste.ts");
+  const dataRoot = await mkdtemp(join(tmpdir(), "pi-composer-paste-origin-"));
+  try {
+    const bytes = () => new TextEncoder().encode("pasted body").buffer;
+    const [autoText] = await saveComposerPasteFiles(dataRoot, "session-origin", [
+      { name: "pasted-text-1a2b3c4d.txt", mimeType: "text/plain", origin: "auto-text", data: bytes() },
+    ]);
+    // A clipboard file keeps the user's own name one level up, and an image
+    // cannot claim the provenance the send path reads back as prompt text.
+    const [manual] = await saveComposerPasteFiles(dataRoot, "session-origin", [
+      { name: "pasted-text-1a2b3c4d.txt", mimeType: "text/plain", data: bytes() },
+    ]);
+    const [image] = await saveComposerPasteFiles(dataRoot, "session-origin", [
+      { name: "shot.png", mimeType: "image/png", origin: "auto-text", data: bytes() },
+    ]);
+    assert.match(autoText.path, /scratch[\\/]session-origin[\\/]pasted[\\/]text[\\/]pasted-.+-pasted-text-1a2b3c4d\.txt$/);
+    assert.match(manual.path, /scratch[\\/]session-origin[\\/]pasted[\\/]pasted-.+-pasted-text-1a2b3c4d\.txt$/);
+    assert.match(image.path, /scratch[\\/]session-origin[\\/]pasted[\\/]pasted-.+-shot\.png$/);
+  } finally {
+    await rm(dataRoot, { recursive: true, force: true });
+  }
 });
 
 test("picker imports are copied into the owning session scratch directory", async () => {

@@ -257,6 +257,10 @@ export function useComposerAttachments({
                   name: `pasted-text-${crypto.randomUUID().slice(0, 8)}.txt`,
                   mimeType: "text/plain",
                   recordHistory: true,
+                  // The paste is the user's own words: main files it in the
+                  // session's owned auto-text directory, which is what lets the
+                  // send and history paths carry its text instead of a path.
+                  origin: "auto-text" as const,
                   data: bytes.buffer.slice(
                     bytes.byteOffset,
                     bytes.byteOffset + bytes.byteLength,

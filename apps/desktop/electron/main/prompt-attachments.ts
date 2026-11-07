@@ -30,6 +30,7 @@ import {
   type AgentPromptAttachment,
   type MessageAttachment,
 } from "@pi-desktop/shared";
+import { hydrateAutoPastedText } from "./auto-pasted-text.ts";
 
 export { MAX_INLINE_IMAGE_BYTES } from "@pi-desktop/shared";
 
@@ -390,6 +391,77 @@ export function appendPromptFallbackPaths(
   const text = content.trim();
   if (!text) return paths;
   return paths ? `${text}\n${paths}` : text;
+}
+
+/**
+ * What one turn hands the model: the user's prompt with any auto-pasted text
+ * restored, plus the fallback paths of the attachments this turn could not
+ * inline.
+ *
+ * The start of a new turn and a steer both send content here, so a paste the
+ * Composer converted to a file reaches the model as text on either path.
+ *
+ * Order matters: `appendPromptFallbackPaths` trims the draft's own surrounding
+ * whitespace, which is the established treatment of what the user typed. Doing
+ * that on the compact text and restoring the paste afterwards keeps the pasted
+ * bytes untouched — a body that starts with an indented line, ends with a
+ * newline, or is the whole prompt arrives exactly as it was copied.
+ */
+export async function promptContentForModel(
+  dataRoot: string,
+  sessionId: string,
+  promptContent: string,
+  attachments: readonly PreparedPromptAttachment[],
+): Promise<string> {
+  return hydrateAutoPastedText(
+    dataRoot,
+    sessionId,
+    appendPromptFallbackPaths(promptContent, attachments),
+  );
+}
+
+export type TurnPromptInput = {
+  dataRoot: string;
+  sessionId: string;
+  projectPath: string | undefined;
+  /** The renderer's prompt text, with attachment chips serialized in place. */
+  promptContent: string;
+  attachments: readonly AgentPromptAttachment[];
+  supportsVision: boolean;
+};
+
+export type TurnPrompt = {
+  preparedAttachments: PreparedPromptAttachment[];
+  /** The prompt the provider receives for this turn. */
+  modelContent: string;
+};
+
+/**
+ * Send preparation for one user turn: resolve the attachments the renderer
+ * named against the session roots, then build the prompt the model receives.
+ * The persisted message keeps the renderer's compact text; only this prompt
+ * carries the restored paste.
+ */
+export async function assembleTurnPrompt(
+  input: TurnPromptInput,
+): Promise<TurnPrompt> {
+  const preparedAttachments = await preparePromptAttachments(
+    input.dataRoot,
+    input.sessionId,
+    input.projectPath,
+    input.attachments,
+    input.supportsVision,
+    input.promptContent,
+  );
+  return {
+    preparedAttachments,
+    modelContent: await promptContentForModel(
+      input.dataRoot,
+      input.sessionId,
+      input.promptContent,
+      preparedAttachments,
+    ),
+  };
 }
 
 /**

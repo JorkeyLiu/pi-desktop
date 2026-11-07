@@ -1415,6 +1415,20 @@ Project drag/drop follows these patterns:
   with editable text, removing the reference and placing the caret after the
   inserted content. A failed or unsupported read leaves the chip intact.
   Pasting in the middle of a draft keeps both the prefix and suffix intact.
+- Sending such a draft does not make the model open the file. The payload alone
+  is marked `origin: "auto-text"`, so it is stored under the session's owned
+  `<data_dir>/scratch/<sessionId>/pasted/text/` directory, and the plain-text
+  marker that resolves inside that directory is replaced by the file's exact
+  UTF-8 text in the prompt handed to the model, while the draft, the transcript,
+  and the persisted message keep the compact chip. Surrounding whitespace the
+  user typed is still trimmed; the pasted bytes keep their own leading blank
+  lines, indentation, and trailing newline. The owned directory is the only
+  provenance: an `@path` the user typed, a picked or dropped file that keeps its
+  own name under `pasted/`, a same-named workspace file, another session's
+  paste, and a paste saved before that directory existed stay references. A
+  paste file that cannot be read, a swept session scratch directory, or a file
+  over the paste byte bound fails the send with a coded error instead of sending
+  the path.
 - If the home composer has no active session, it creates or reuses one before
   writing. Failure leaves the existing draft unchanged and shows the error in
   the normal toast surface.

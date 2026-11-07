@@ -9,7 +9,9 @@ import {
 import { constants as fsConstants } from "node:fs";
 import { basename, extname, isAbsolute, join } from "node:path";
 import {
+  AUTO_PASTED_TEXT_SUBDIR,
   isSvgAttachment,
+  PASTED_FILES_DIR,
   SVG_MIME_TYPE,
   type ComposerPasteFile,
   type ComposerPastedFile,
@@ -92,7 +94,18 @@ function mimeTypeForPath(path: string): string {
 }
 
 function scratchPasteRoot(dataDir: string, sessionId: string): string {
-  return join(dataDir, "scratch", sessionId, "pasted");
+  return join(dataDir, "scratch", sessionId, PASTED_FILES_DIR);
+}
+
+/**
+ * Where one paste's bytes are stored. An automatic long-text paste is the only
+ * prompt reference that is later read back as its own text, so it gets its own
+ * subdirectory: that location is the provenance the send and history paths
+ * trust, instead of a file name that a picked, dropped, or pasted file could
+ * share.
+ */
+function pastedOutputRoot(root: string, autoText: boolean): string {
+  return autoText ? join(root, AUTO_PASTED_TEXT_SUBDIR) : root;
 }
 
 function pastedOutputPath(root: string, name: string): string {
@@ -137,18 +150,24 @@ export async function saveComposerPasteFiles(
     const mimeType = isSvgAttachment(suppliedMimeType, file.name)
       ? SVG_MIME_TYPE
       : suppliedMimeType;
+    // Provenance is claimed only by a text paste: a caller cannot route other
+    // bytes into the directory the send path reads back as prompt text.
+    const autoText = file.origin === "auto-text" && mimeType === "text/plain";
     return {
       bytes,
       mimeType,
       name: fileNameOf(file.name, mimeType, index),
+      autoText,
     };
   });
 
   const root = scratchPasteRoot(dataDir, sessionId);
   await mkdir(root, { recursive: true });
   return Promise.all(
-    prepared.map(async ({ bytes, mimeType, name }) => {
-      const path = pastedOutputPath(root, name);
+    prepared.map(async ({ bytes, mimeType, name, autoText }) => {
+      const outputRoot = pastedOutputRoot(root, autoText);
+      if (autoText) await mkdir(outputRoot, { recursive: true });
+      const path = pastedOutputPath(outputRoot, name);
       await writeFile(path, bytes, { flag: "wx" });
       return {
         path,

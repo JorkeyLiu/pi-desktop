@@ -5294,18 +5294,21 @@ eleven-tool-round desktop paths are verified by
   2. 粘贴刚好达到阈值的文本，确认仍使用原生文本区域；在草稿开头、中间和末尾粘贴多一个字符的文本，包括多行和 Unicode 内容。
   3. 检查每次超阈值粘贴：确认前后文本保持不变，原始选择处出现生成的 `pasted-text-*.txt` 芯片，编辑器没有临时文件绝对路径，传输期间显示正确的忙碌/错误状态。
   4. 点击生成的 TXT 芯片，再用键盘聚焦并按 Enter、Space 重复测试。确认准确的 UTF-8 内容在原位置替换芯片，文本可以继续编辑，插入符号位于内容末尾，随后发送使用修改后的文本。读取等待期间切换草稿或删除芯片，确认过期响应不会修改当前草稿。
-  5. 检查会话 `scratch/<sessionId>/pasted/` 文件字节，发送仍含芯片的混合草稿并检查渲染器请求、持久化用户消息和代理可读取的路径。发送前切换项目和会话以检查缓存草稿，再删除芯片并确认它不再发送。
+  5. 检查会话 `scratch/<sessionId>/pasted/text/` 文件字节，发送仍含芯片的混合草稿，并检查交给 `agent/prompt` 的提示内容与持久化用户消息。重试该回合、投递同一草稿的排队副本，并在重启后重新打开该会话来核对。发送前切换项目和会话以检查缓存草稿，再删除芯片并确认它不再发送。
   6. 删除所属会话，确认临时粘贴文件被删除。
 - **预期**：
   - 阈值持久化在 AI 默认项中；旧设置默认使用 600，且只接受 1 至 1,000,000 的整数。
   - 不超过阈值的文本仍走原生路径；超过阈值的文本以 UTF-8 `text/plain` 原样保存到所属会话的临时 `pasted/` 目录，不修改项目或创建工件。
   - 由哨兵支持的 TXT 芯片插入在准确的粘贴位置，包括多行草稿中间。点击或按 Enter/Space 会将其展开为准确的可编辑文本并移除引用；之后的修改就是发送内容。读取失败、二进制、图像或过大时保留芯片和映射。
+  - 生成的 `text/plain` 载荷是唯一被写入 `scratch/<sessionId>/pasted/text/` 的文件；选择、拖入或复制的文件保留自身文件名存放在 `pasted/`。
+  - 送往 `agent/prompt` 的提示内容本身包含粘贴文本，位置与字节一致（开头、中间、结尾、Unicode、起始空行、缩进、结尾换行），不留下需要模型打开的 `@` 路径。持久化用户消息仍保留紧凑的 `@path` 芯片文本，因此转录不变。重试、排队投递以及重新打开的会话都会原样携带同一文本一次，既不会重复也不会被截断。
+  - 名字类似粘贴的选择或拖入文件仍是引用，用户输入的 `@path` 仍是引用；粘贴文件或其目录已不存在（包括被清理的会话暂存目录）时，发送以带错误码的方式失败，而不是把路径发出去。
   - 仍存在的芯片会在原位置只解析一次为规范路径，不追加 basename，也不作为重复附件发送。删除芯片后会移除映射。
   - 会话切换、项目切换、未答复 Stop 恢复以及会话删除遵循现有会话归属和清理规则。
 - **链接规格**：`04-ux/06-settings-ia.md`、`04-ux/07-ui-design-system.md` §8.1、`04-ux/08-component-spec.md` §11.7–11.8、`04-ux/09-interaction-patterns.md` §8a、`03-runtime/01-ipc-protocol.md` §8、`03-runtime/04-data-storage.md` §7、`08-meta/decisions-log.md`（D262）、ADR 0059、ADR 0070、ADR 0131
 - **接受**：C（对话和流）、E（工具和权限）、F（持久）、质量
 - **里程碑**：M5
-- **状态**：单位覆盖（`composer-trigger.test.ts`、`apps/desktop/test/composer-paste-files.test.mjs`）；完整 UI 旅程草稿（适用变更合入前需在具备条件的环境中运行 E2E）
+- **状态**：单位覆盖（`composer-trigger.test.ts`、`apps/desktop/test/composer-paste-files.test.mjs`、`apps/desktop/test/auto-pasted-text-context.test.mjs`、`packages/shared/src/auto-pasted-text.test.ts`、`packages/agent-runtime/src/attachment-history.test.ts`）；完整 UI 旅程草稿（适用变更合入前需在具备条件的环境中运行 E2E）
 
 #### E2E-103：设置 > 智能体管理文件能力
 

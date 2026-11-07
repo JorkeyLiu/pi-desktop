@@ -26,6 +26,7 @@ export const enEntries: ChangelogEntry[] = [
       "A stopped subagent's tab keeps working when you continue it: the follow-up appears once, Stop stays available while it runs, and the same tab continues the chain again. The conversation keeps the card the work was dispatched from and adds none for a continuation. Its composer now attaches, pastes, previews and removes images like the main one, and follows the same IME rule — Enter that confirms a candidate never sends. Its context figure keeps the last value the subagent reported until the continued run reports its own.",
       "A tool call takes its place in the conversation as soon as it starts streaming, before its arguments finish, with a subtle pulse on its icon and name instead of a spinner.",
       "A subagent's transcript shows the working indicator while the child is working, instead of a list of rows that sits still between updates.",
+      "A long paste you send now reaches the model as the text you pasted, at the point you pasted it, instead of a file path the model had to open. The draft and the transcript keep the compact chip, and every send path — retry, a queued message, or a reopened conversation — carries the same text.",
     ],
   },
   {

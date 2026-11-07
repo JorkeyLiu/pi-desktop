@@ -26,6 +26,7 @@ export const ptBREntries: ChangelogEntry[] = [
       "A aba de um subagente interrompido continua utilizável ao continuá-lo: a continuação aparece uma única vez, Parar permanece disponível durante a execução e a mesma aba continua a cadeia novamente. A conversa mantém o cartão com que o trabalho foi delegado e não acrescenta nenhum por uma continuação. O editor agora anexa, cola, pré-visualiza e remove imagens como o principal, e segue a mesma regra de IME: Enter que confirma um candidato nunca envia. A cifra de contexto mantém o último valor informado pelo subagente até que a continuação informe o seu.",
       "Uma chamada de ferramenta agora aparece no lugar dela na conversa assim que começa a ser transmitida, antes de os argumentos terminarem, com um pulso discreto no ícone e no nome em vez de um indicador giratório.",
       "A transcrição de um subagente mostra o indicador de trabalho enquanto o filho trabalha, em vez de uma lista que fica parada entre atualizações.",
+      "Um texto longo colado agora chega ao modelo como o próprio texto colado, no ponto em que você colou, em vez de um caminho de arquivo que ele precisaria abrir. O rascunho e o histórico mantêm o chip compacto, e todo caminho de envio — repetir, uma mensagem na fila ou uma conversa reaberta — leva o mesmo texto.",
     ],
   },
   {
