@@ -99,6 +99,15 @@ window.piDesktop = { platform: "darwin", channels: IPC,
       data = { entries: [] };
     } else if (channel === IPC.invoke.agentGetStatus) {
       data = { sessionId: "s1", isRunning: sessionRunning, pendingToolConfirmations: 0 };
+    } else if (channel === IPC.invoke.composerPasteFiles) {
+      // The host stages pasted image bytes; the panel only ever learns the
+      // staged reference, so the stub states exactly what staging returns.
+      data = { files: (input?.files ?? []).map((file, index) => ({
+        path: "/tmp/staged-" + index + ".png",
+        name: file.name || "pasted.png",
+        mimeType: file.mimeType || "image/png",
+        kind: "image",
+      })) };
     }
     return { ok: true, data };
   },
@@ -788,6 +797,105 @@ window.subagentContextGaugeProbe = async () => {
   // the reader saw at each step rather than only that nothing threw.
   return { passed: true, seen: [lastKnown, afterMarker, afterProgress, afterReply, afterAgain] };
 };
+
+window.subagentAliasTabProbe = async () => {
+  // The user path under test: the panel is already showing a stopped child, the
+  // user has typed a follow-up and staged an image in that tab, and the parent
+  // model then resumes the same child under a new delegation id. Clicking the
+  // resume card and then the original card must land in the tab the user is
+  // already in — one tab, same identity — so the draft, the staged image and
+  // the scrolled surface survive, while the tab shows the resumed run.
+  seed();
+  store.setState({
+    workPanelOpen: true,
+    workPanelTabs: [{ id: "subagent:d1", kind: "subagent", resource: "d1", label: "Investigate the cache layer." }],
+    activeWorkPanelTabId: "subagent:d1",
+    workPanelContexts: {},
+  });
+  // The work panel mounts a subagent pane on the tab's own identity
+  // (components/workpanel/WorkPanel.tsx: key=activeTab.id and
+  // delegationId=activeTab.resource), so this host mirrors that pair: a
+  // stable tab identity is a stable surface, and a retargeted one is a rebuild.
+  const Host = () => {
+    const open = store((state) =>
+      state.workPanelTabs.find((item) => item.id === state.activeWorkPanelTabId && item.kind === "subagent"));
+    if (!open) return null;
+    return React.createElement(SubagentTranscriptTab, { key: open.id, delegationId: open.resource });
+  };
+  view = createRoot(document.getElementById("root"));
+  flushSync(() => view.render(React.createElement(React.StrictMode, null,
+    React.createElement(SlotSessionProvider, { sessionId: "s1" }, React.createElement(Host)))));
+  await until(() => textarea(), "panel tab did not mount");
+
+  // What the user has in this tab before the parent resumes anything.
+  await pushDraft("Keep this draft with its image");
+  const file = new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" });
+  const clipboard = new DataTransfer();
+  clipboard.items.add(file);
+  const paste = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(paste, "clipboardData", { value: clipboard });
+  editor().dispatchEvent(paste);
+  const tiles = () => [...(tab()?.querySelectorAll(".composer-attachment-tile") ?? [])];
+  await until(() => tiles().length === 1, "the pasted image was never staged: " + tiles().length);
+  const surfaceBefore = tab();
+  const stagedBefore = tiles().length;
+  check(textarea().value === "Keep this draft with its image",
+    "the draft never landed: " + JSON.stringify(textarea().value));
+
+  // The parent resumes the stopped chain itself: a new Task(resume d1) whose
+  // own handle is d2, then the resumed run's first row.
+  const resumedCall = taskRow({ id: "call-task-2", callId: "call-task-2", delegationId: "d2",
+    status: "running", at: 10, turnId: "turn-parent-2",
+    taskArgs: { agent: "explorer", task: "Continue the review yourself.", resume: "d1" } });
+  await deliver([envelope({ type: "message_end", message: resumedCall }, "turn-parent-2")]);
+  await deliver([envelope({ type: "message_end",
+    message: { id: "child-a2", role: "assistant", content: "Continuing the cache work.", createdAt: iso(20),
+      parentToolCallId: "call-task-2", agentName: "explorer", status: "complete" } },
+    "turn-parent-2", { parentToolCallId: "call-task-2", agentName: "explorer" })]);
+  check(userTexts().filter((text) => text === "Continue the review yourself.").length === 1,
+    "the open tab did not follow the parent's resume: " + JSON.stringify(userTexts()));
+
+  const subagentTabs = () => store.getState().workPanelTabs.filter((item) => item.kind === "subagent");
+  const openTabIdentity = () => {
+    const tabs = subagentTabs();
+    return { count: tabs.length, id: tabs[0]?.id, resource: tabs[0]?.resource,
+      active: store.getState().activeWorkPanelTabId };
+  };
+
+  // The user clicks the resume card: its identity is the new delegation.
+  flushSync(() => store.getState().openSubagentTab("d2", "Continue the review yourself."));
+  await frame();
+  const afterResumeCard = openTabIdentity();
+  check(afterResumeCard.count === 1 && afterResumeCard.id === "subagent:d1" && afterResumeCard.resource === "d1",
+    "the resume card did not land in the open tab: " + JSON.stringify(afterResumeCard));
+  check(afterResumeCard.active === "subagent:d1",
+    "the open tab was not focused: " + JSON.stringify(afterResumeCard));
+  check(tab() === surfaceBefore, "the panel surface was rebuilt under the user");
+  check(textarea().value === "Keep this draft with its image",
+    "the draft did not survive the resume card: " + JSON.stringify(textarea().value));
+  check(tiles().length === stagedBefore,
+    "the staged image did not survive the resume card: " + tiles().length);
+  check(userTexts().filter((text) => text === "Continue the review yourself.").length === 1,
+    "the focused tab lost the resumed prompt: " + JSON.stringify(userTexts()));
+
+  // The user then clicks the original card: the same tab, the same draft.
+  flushSync(() => store.getState().openSubagentTab("d1", "Investigate the cache layer."));
+  await frame();
+  const afterOriginalCard = openTabIdentity();
+  check(afterOriginalCard.count === 1 && afterOriginalCard.id === "subagent:d1",
+    "the original card opened a second tab: " + JSON.stringify(afterOriginalCard));
+  check(tab() === surfaceBefore, "the panel surface was rebuilt by the original card");
+  check(textarea().value === "Keep this draft with its image",
+    "the draft did not survive the original card: " + JSON.stringify(textarea().value));
+  check(tiles().length === stagedBefore,
+    "the staged image did not survive the original card: " + tiles().length);
+  check(subagentTabs()[0].label === "Investigate the cache layer.",
+    "the resume prompt renamed the tab: " + JSON.stringify(subagentTabs()[0].label));
+
+  flushSync(() => view.unmount());
+  store.setState({ workPanelTabs: [], activeWorkPanelTabId: null, workPanelContexts: {} });
+  return { passed: true };
+};
 `;
 
 test("a stopped subagent chain follows its continued run in the original tab", {
@@ -829,6 +937,7 @@ app.whenReady().then(async () => {
     console.log("CONTINUE_DRAFT_PROBE " + JSON.stringify(await win.webContents.executeJavaScript("window.subagentContinueDraftProbe()")));
     console.log("COMPOSER_IME_PROBE " + JSON.stringify(await win.webContents.executeJavaScript("window.subagentComposerImeProbe()")));
     console.log("CONTEXT_GAUGE_PROBE " + JSON.stringify(await win.webContents.executeJavaScript("window.subagentContextGaugeProbe()")));
+    console.log("ALIAS_TAB_PROBE " + JSON.stringify(await win.webContents.executeJavaScript("window.subagentAliasTabProbe()")));
     app.exit(0);
   } catch (error) { console.error(error?.stack ?? error); app.exit(1); }
 });`);
@@ -858,6 +967,9 @@ app.whenReady().then(async () => {
     // The observed figure at each step: the known one survives the resumed
     // marker and repeated progress, the reply's own window replaces it, and a
     // later marker keeps the newer figure.
+    // The tab the user is already in survives both cards of the chain: one tab,
+    // same identity, draft and staged image intact, resumed run shown.
+    assert.match(output, /ALIAS_TAB_PROBE \{"passed":true\}/);
     assert.match(output, /CONTEXT_GAUGE_PROBE \{"passed":true,"seen":\["12K","12K","12K","14K","14K"\]\}/);
     assert.match(output, /CREATING_TAB_PROBE \{"passed":true\}/);
   } finally {

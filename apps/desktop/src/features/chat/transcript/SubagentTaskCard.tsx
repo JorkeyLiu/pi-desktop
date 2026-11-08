@@ -29,6 +29,7 @@ import { delegateTaskTitle } from "../../../lib/subagent-title";
 import { useSubagentTaskTitles } from "../../../lib/subagent-title-provider";
 import { useSubagentChainMetrics } from "../../../lib/subagent-metrics-provider";
 import { delegateAgentName } from "./model";
+import { useSubagentChainKeys } from "../../../lib/subagent-chain-provider";
 import { SubagentStopButton } from "./SubagentStopButton";
 
 /**
@@ -61,6 +62,15 @@ export function SubagentTaskCard({
   const localToolsAllowed = useChatSessionCapability("canUseLocalTools");
   const openSubagentTab = useAppStore((state) => state.openSubagentTab);
   const activeWorkPanelTabId = useAppStore((state) => state.activeWorkPanelTabId);
+  // The open panel's own subagent identity, and the conversation-wide chain map
+  // that says whether this card's child is that one. Both are primitives or a
+  // shared map, so a streaming transcript does not re-render the card for them.
+  const openSubagentResource = useAppStore((state) =>
+    state.workPanelTabs.find(
+      (tab) => tab.id === state.activeWorkPanelTabId && tab.kind === "subagent",
+    )?.resource,
+  );
+  const chainKeys = useSubagentChainKeys();
   const conversationTitles = useSubagentTaskTitles();
   const payload = toolResultPayload(message);
   const rawDelegationId =
@@ -163,7 +173,18 @@ export function SubagentTaskCard({
     status: statusLabel,
     duration,
   });
-  const panelOpen = activeWorkPanelTabId === `subagent:${panelSelectionId}`;
+  // The panel is the child's, not the call's: a resume continuation carries a
+  // new delegation id while the strip keeps the tab its chain already had, so
+  // the card reports the panel open by chain identity rather than by the id it
+  // would open with. A surface without the conversation-wide chain map falls
+  // back to the exact identity.
+  const chainKey = chainKeys?.get(panelSelectionId);
+  const openChainKey = openSubagentResource
+    ? chainKeys?.get(openSubagentResource)
+    : undefined;
+  const panelOpen =
+    activeWorkPanelTabId === `subagent:${panelSelectionId}` ||
+    (chainKey !== undefined && chainKey === openChainKey);
   // There is nothing to read until the call reports the delegation it started.
   const canOpen =
     localToolsAllowed &&

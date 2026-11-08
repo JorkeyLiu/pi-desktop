@@ -10,6 +10,8 @@ const {
   closeWorkPanelTabsState,
   createWorkPanelFileRequest,
   emptyWorkPanelContext,
+  existingSubagentWorkPanelTab,
+  focusWorkPanelTabState,
   fileWorkPanelTab,
   hasPluginView,
   isKnownWorkPanelTab,
@@ -344,6 +346,111 @@ test("subagent tabs reopen in place and close like any resource tab", () => {
     ["subagent:del-2"],
   );
   assert.equal(closed.activeTabId, "subagent:del-2");
+});
+
+test("a continuation reuses the tab its chain already has", () => {
+  const chain = new Map([
+    ["del-1", "chain-a"],
+    ["del-2", "chain-a"],
+    ["call-1", "chain-a"],
+    ["del-9", "chain-b"],
+  ]);
+  const sameDelegate = (left, right) =>
+    chain.has(left) && chain.has(right) && chain.get(left) === chain.get(right);
+  const tabs = [
+    toolWorkPanelTab("review"),
+    subagentWorkPanelTab("del-1", "explorer"),
+    subagentWorkPanelTab("del-9", "reviewer"),
+  ];
+
+  // Any identity of an open chain resolves to that chain's tab, in strip order,
+  // and a different chain or a non-subagent tab never matches.
+  assert.equal(existingSubagentWorkPanelTab(tabs, "del-2", sameDelegate)?.id, "subagent:del-1");
+  assert.equal(existingSubagentWorkPanelTab(tabs, "call-1", sameDelegate)?.id, "subagent:del-1");
+  assert.equal(existingSubagentWorkPanelTab(tabs, "del-1", sameDelegate)?.id, "subagent:del-1");
+  assert.equal(existingSubagentWorkPanelTab(tabs, "del-9", sameDelegate)?.id, "subagent:del-9");
+  assert.equal(existingSubagentWorkPanelTab(tabs, "", sameDelegate), undefined);
+  assert.equal(existingSubagentWorkPanelTab(tabs, undefined, sameDelegate), undefined);
+  assert.equal(
+    existingSubagentWorkPanelTab(
+      [toolWorkPanelTab("review")],
+      "del-1",
+      () => true,
+    ),
+    undefined,
+  );
+});
+
+test("focusing an open tab keeps its identity and only improves its label", () => {
+  const opened = openWorkPanelTabState(
+    openWorkPanelTabState(
+      { tabs: [toolWorkPanelTab("review")], activeTabId: "review" },
+      subagentWorkPanelTab("del-1", "Investigate the cache layer."),
+    ),
+    subagentWorkPanelTab("del-9", "Check the write path."),
+  );
+  const strip = { tabs: opened.tabs, activeTabId: "review" };
+
+  // Re-focusing an open tab activates it in place: the same tab objects stay in
+  // the same order, so the surface mounted for that tab is not rebuilt.
+  const focused = focusWorkPanelTabState(strip, "subagent:del-1");
+  assert.equal(focused.activeTabId, "subagent:del-1");
+  assert.equal(focused.tabs, strip.tabs);
+  assert.deepEqual(focused.tabs.map((tab) => tab.id), [
+    "review",
+    "subagent:del-1",
+    "subagent:del-9",
+  ]);
+
+  // A different identity of the same chain focuses the tab the chain already
+  // has, and its own later prompt does not rename that tab's work.
+  const alias = focusWorkPanelTabState(
+    strip,
+    "subagent:del-1",
+    subagentWorkPanelTab("del-2", "Continue the review yourself."),
+  );
+  assert.equal(alias.activeTabId, "subagent:del-1");
+  assert.deepEqual(alias.tabs.map((tab) => tab.id), [
+    "review",
+    "subagent:del-1",
+    "subagent:del-9",
+  ]);
+  assert.equal(alias.tabs[1].resource, "del-1");
+  assert.equal(alias.tabs[1].label, "Investigate the cache layer.");
+
+  // A title the tab never captured is filled, whichever identity supplies it.
+  const unnamed = {
+    tabs: [toolWorkPanelTab("review"), subagentWorkPanelTab("del-1")],
+    activeTabId: "review",
+  };
+  const filled = focusWorkPanelTabState(
+    unnamed,
+    "subagent:del-1",
+    subagentWorkPanelTab("del-2", "Continue the review yourself."),
+  );
+  assert.equal(filled.tabs[1].label, "Continue the review yourself.");
+  assert.equal(filled.tabs[1].id, "subagent:del-1");
+
+  // The same identity opened again carries that card's newest title.
+  const retitled = focusWorkPanelTabState(
+    unnamed,
+    "subagent:del-1",
+    subagentWorkPanelTab("del-1", "Investigate the cache layer."),
+  );
+  assert.equal(retitled.tabs[1].label, "Investigate the cache layer.");
+});
+
+test("focusing a tab the strip does not have falls back to opening it", () => {
+  const strip = { tabs: [toolWorkPanelTab("review")], activeTabId: "review" };
+  const opened = focusWorkPanelTabState(
+    strip,
+    "subagent:del-1",
+    subagentWorkPanelTab("del-1", "explorer"),
+  );
+  assert.deepEqual(opened.tabs.map((tab) => tab.id), ["review", "subagent:del-1"]);
+  assert.equal(opened.activeTabId, "subagent:del-1");
+  // Without a tab to open there is nothing to focus.
+  assert.equal(focusWorkPanelTabState(strip, "subagent:del-1"), strip);
 });
 
 test("the sanitizer keeps subagent tabs across session switches", () => {

@@ -149,8 +149,10 @@ export function pluginWorkPanelTab(pluginId: string, viewId: string): WorkPanelT
 /**
  * A subagent transcript tab (ADR 0062 delegations).
  *
- * Keyed by the delegation id, so re-opening the same delegate reuses its tab
- * and parallel delegates coexist as independent tabs. The task title is
+ * Keyed by the delegation id, so re-opening the same delegate reuses its tab;
+ * the store opens through `existingSubagentWorkPanelTab`, so a continuation's
+ * own delegation id reuses its chain's tab too, while parallel delegates
+ * coexist as independent tabs. The task title is
  * captured at open time so the strip can label the tab before the delegate
  * produced any row; a delegation without one is labelled by the role that ran
  * it, and the strip falls back to its own localized name after that.
@@ -165,6 +167,65 @@ export function subagentWorkPanelTab(
     resource: delegationId,
     ...(title ? { label: title } : {}),
   };
+}
+
+/**
+ * An already-open tab of the same logical subagent, if the strip has one.
+ *
+ * One delegation chain reaches the strip under several identities: the
+ * dispatch's delegation id, each `Task(resume …)` continuation's own id, and
+ * the bare call id a card carries before its handle lands. They are one child,
+ * so an open request for any of them reuses the tab the chain already has
+ * instead of stacking a second tab that would show the same conversation.
+ * `sameDelegate` is the caller's chain resolution — this stays a tab-strip
+ * rule, not a transcript read.
+ */
+export function existingSubagentWorkPanelTab(
+  tabs: readonly WorkPanelTab[],
+  resource: string | undefined,
+  sameDelegate: (left: string, right: string) => boolean,
+): WorkPanelTab | undefined {
+  const target = resource?.trim();
+  if (!target) return undefined;
+  return tabs.find((tab) => {
+    const held = tab.kind === "subagent" ? tab.resource?.trim() : undefined;
+    return held ? sameDelegate(held, target) : false;
+  });
+}
+
+/**
+ * Focus a tab the user asked for that is already open.
+ *
+ * The tab keeps its own identity — id, resource, and strip position — because
+ * the surface mounted for it is that tab's surface: retargeting the tab to the
+ * identity just opened would remount the view and drop its local state (an
+ * unsent draft, staged images, scroll position) for a conversation the strip
+ * was already showing.
+ *
+ * The captured label is display metadata a later open can improve, so it is
+ * filled when the tab never got one and refreshed when the same identity is
+ * opened again and carries a newer title. A different identity of the same
+ * chain states that chain's later prompt, which is not what the tab is named
+ * for, so it never renames the work the chain already named.
+ */
+export function focusWorkPanelTabState(
+  state: WorkPanelTabsState,
+  tabId: string,
+  fresh?: WorkPanelTab,
+): WorkPanelTabsState {
+  const index = state.tabs.findIndex((item) => item.id === tabId);
+  if (index < 0) return fresh ? openWorkPanelTabState(state, fresh) : state;
+  const existing = state.tabs[index];
+  const label =
+    fresh?.label && (!existing.label || fresh.id === existing.id)
+      ? fresh.label
+      : existing.label;
+  if (label === existing.label) {
+    return state.activeTabId === tabId ? state : { ...state, activeTabId: tabId };
+  }
+  const tabs = [...state.tabs];
+  tabs[index] = { ...existing, ...(label === undefined ? {} : { label }) };
+  return { tabs, activeTabId: tabId };
 }
 
 export const BROWSER_PLUGIN_TAB = {

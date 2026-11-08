@@ -154,6 +154,67 @@ function subagentChainLatestCall(
 }
 
 /**
+ * The transcripts one conversation's delegation chains are resolved over.
+ *
+ * A reader can be looking at a frozen range while the live tail keeps growing,
+ * and the two hold different `Task` rows: the range carries calls the live
+ * array has already dropped, the tail carries resume links issued after the
+ * range was taken. Identity resolution needs both, so callers hand over every
+ * view of the same conversation instead of picking one.
+ */
+export type SubagentChainEvidence = readonly (readonly UiMessage[])[];
+
+/** Every `Task` call id of `delegationId`'s chain, across all evidence views. */
+export function subagentChainCallIdsIn(
+  evidence: SubagentChainEvidence,
+  delegationId: string,
+): Set<string> {
+  const chain = new Set<string>();
+  for (const messages of evidence) {
+    for (const callId of subagentChainCallIds(messages, delegationId)) {
+      chain.add(callId);
+    }
+  }
+  return chain;
+}
+
+/**
+ * Whether two subagent identities name one logical subagent.
+ *
+ * A delegation chain is one child session however many `Task` rows opened it:
+ * the original dispatch, a parent-issued `Task(resume …)`, a user
+ * continuation, and the bare call id a card still carries before its handle
+ * lands all resolve to the same connected component. Callers that key work by
+ * identity — the work panel's tabs, for one — use this instead of comparing
+ * strings, so the same child is never represented twice.
+ */
+export function subagentChainSameDelegate(
+  messages: readonly UiMessage[],
+  left: string,
+  right: string,
+): boolean {
+  return subagentChainSameDelegateIn([messages], left, right);
+}
+
+/** `subagentChainSameDelegate` over several views of one conversation. */
+export function subagentChainSameDelegateIn(
+  evidence: SubagentChainEvidence,
+  left: string,
+  right: string,
+): boolean {
+  const target = left.trim();
+  const other = right.trim();
+  if (!target || !other) return false;
+  if (target === other) return true;
+  const chain = subagentChainCallIdsIn(evidence, target);
+  if (chain.size === 0) return false;
+  for (const callId of subagentChainCallIdsIn(evidence, other)) {
+    if (chain.has(callId)) return true;
+  }
+  return false;
+}
+
+/**
  * Whether the delegation chain names a backend instance: at least one `Task`
  * call of the chain carries a backend-owned `delegationId`.
  *

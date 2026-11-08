@@ -1,5 +1,11 @@
+import type { UiMessage } from "@pi-desktop/shared";
 import { api } from "../../lib/api";
 import { isRemoteSession } from "../../lib/remote-session-safety";
+import { EMPTY_TRANSCRIPT, transcriptViewMessages } from "../../lib/transcript-reading";
+import {
+  subagentChainSameDelegateIn,
+  type SubagentChainEvidence,
+} from "../../lib/subagent-chain";
 import {
   activateWorkPanelTabState,
   browserPluginTab,
@@ -8,7 +14,9 @@ import {
   closeWorkPanelTabsState,
   createWorkPanelFileRequest,
   emptyWorkPanelContext,
+  existingSubagentWorkPanelTab,
   fileWorkPanelTab,
+  focusWorkPanelTabState,
   newWorkPanelTab,
   nextWorkPanelFileRequestSeq,
   openWorkPanelTabState,
@@ -35,6 +43,42 @@ export function currentWorkPanelContext(state: AppState): WorkPanelContext {
     activeTabId: tabs.activeTabId,
     fileRequest: state.workPanelFileRequest,
   };
+}
+
+/**
+ * The transcript evidence a session's delegation identities resolve over.
+ *
+ * The panel and the cards read the session's *effective* transcript — the
+ * reading view when one is open, its merge with the live tail otherwise — so
+ * identity resolution reads the same rows instead of an unrelated array.
+ *
+ * Only one array in the store holds a conversation's rows: `messages` belongs
+ * to `activeSessionId`, and every update that moves `activeSessionId` moves
+ * `messages` with it (selection commit, fork, create, clear), so an equal id is
+ * proof of ownership. Any other conversation — including one whose selection is
+ * still loading — is read from its own retained pane, never from the rows the
+ * outgoing conversation left behind. That is what keeps two conversations'
+ * delegation chains from merging into one tab.
+ *
+ * A focused or restored reading view freezes its snapshot. A resume link issued
+ * after that snapshot was taken exists only in the live tail, and a `Task` row
+ * the tail has already dropped exists only in the snapshot. Neither may replace
+ * the other, so both stay evidence.
+ */
+function subagentChainEvidence(
+  state: AppState,
+  sessionId: string,
+): SubagentChainEvidence {
+  const view = state.transcriptViews[sessionId];
+  const live =
+    state.activeSessionId === sessionId
+      ? state.messages
+      : state.retainedTranscripts[sessionId] ?? EMPTY_TRANSCRIPT;
+  const evidence: UiMessage[][] = [];
+  const displayed = transcriptViewMessages(live, view);
+  if (displayed.length) evidence.push(displayed);
+  if (live.length && (view?.focus || view?.restored)) evidence.push(live);
+  return evidence;
 }
 
 /**
@@ -201,13 +245,24 @@ export function createWorkPanelSlice({
       const context = affectsVisibleSession
         ? currentWorkPanelContext(state)
         : state.workPanelContexts[sessionId] ?? emptyWorkPanelContext();
-      const next = openWorkPanelTabState(
-        {
-          tabs: context.tabs,
-          activeTabId: context.activeTabId,
-        },
-        tab,
+      const evidence = subagentChainEvidence(state, sessionId);
+      // One child session reaches the strip under several delegation ids, so an
+      // open request for any identity of a chain already open lands in that
+      // tab. The tab keeps its own id and resource: the surface mounted for it
+      // is the same conversation, and retargeting it would remount the view and
+      // discard the user's unsent draft, staged images, and scroll position.
+      const existing = existingSubagentWorkPanelTab(
+        context.tabs,
+        tab.kind === "subagent" ? tab.resource : undefined,
+        (left, right) => subagentChainSameDelegateIn(evidence, left, right),
       );
+      const strip = {
+        tabs: context.tabs,
+        activeTabId: context.activeTabId,
+      };
+      const next = existing
+        ? focusWorkPanelTabState(strip, existing.id, tab)
+        : openWorkPanelTabState(strip, tab);
       const fileRequest = nextFileRequest(tab) ?? context.fileRequest;
       const nextContext: WorkPanelContext = {
         tabs: next.tabs,

@@ -35,6 +35,7 @@ import { conversationMenuItems } from "./menu-items";
 import { SlotSessionProvider } from "../../../plugins/renderer-slots/use-slots";
 import { SubagentTitleProvider } from "../../../lib/subagent-title-provider";
 import { SubagentChainMetricsProvider } from "../../../lib/subagent-metrics-provider";
+import { SubagentChainKeyProvider } from "../../../lib/subagent-chain-provider";
 
 type ChatTranscriptProps = {
   sessionId: string | undefined;
@@ -249,6 +250,7 @@ function TranscriptBody({
   return (
     <SubagentTitleProvider messages={messages}>
     <SubagentChainMetricsProvider messages={messages}>
+    <SubagentChainKeyProvider messages={messages}>
     <TranscriptSearchContext.Provider value={searchTarget}>
     <DisclosureAnchorContext.Provider value={disclosureAnchorNotifier}>
     <SlotSessionProvider sessionId={sessionId ?? ""}>
@@ -415,6 +417,7 @@ function TranscriptBody({
     </SlotSessionProvider>
     </DisclosureAnchorContext.Provider>
     </TranscriptSearchContext.Provider>
+    </SubagentChainKeyProvider>
     </SubagentChainMetricsProvider>
     </SubagentTitleProvider>
   );

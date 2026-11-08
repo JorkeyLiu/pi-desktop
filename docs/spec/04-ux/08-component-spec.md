@@ -1470,18 +1470,26 @@ not a working claim, is what the reader sees.
   The disclosure control sits in the card's heading so it stays reachable while
   the details are collapsed, and the card follows a **non-success** terminal
   outcome, so a completed or still-running delegate never shows one.
-- The view is the work panel's `subagent` tab, one per delegation, in the same
-  tab strip that hosts Review, files, and plugin views. Closing it returns to
-  the previously active tab, if any; `Cmd/Ctrl + J` hides the whole panel.
-  Opening another child's card activates its own tab without changing panel
-  width or the conversation scroll position.
-- A tab represents its whole resume chain, never a single run of it. Every tab
-  of that chain — the one the first `Task` opened and any tab a later card
-  opened — resolves the chain's newest run for its transcript, header outcome,
-  Stop, and Send, so a continuation presented in a new card never strands the
-  tab the user already had. No tab is treated as stale and there is no
-  "continued elsewhere" state; a concurrent send is the backend's serial
-  admission to refuse, not a local guess.
+- The view is the work panel's `subagent` tab, one per delegation chain, in the
+  same tab strip that hosts Review, files, and plugin views. A card of a chain
+  that already has a tab focuses that tab in place: the original dispatch's id,
+  a parent-issued `Task(resume …)` call's id, and the call id a card carries
+  before its handle lands are one child, so one child is never two tabs and the
+  strip never re-points the tab at the identity just opened. The tab therefore
+  keeps the surface it already mounted, and with it the child's unsent draft,
+  staged images, and scroll position; only a title captured after the tab
+  opened is filled in, and a later prompt of the same chain never renames the
+  work its chain already named. Closing it returns to the previously active
+  tab, if any; `Cmd/Ctrl + J` hides the whole panel. Opening another child's
+  card activates its own tab without changing panel width or the conversation
+  scroll position.
+- A tab represents its whole resume chain, never a single run of it. The tab
+  resolves the chain's newest run for its transcript, header outcome, Stop, and
+  Send, so a continuation presented in a new card — or resumed by the parent
+  itself — never strands the tab the user already had and needs no second tab.
+  No tab is treated as stale and there is no "continued elsewhere" state; a
+  concurrent send is the backend's serial admission to refuse, not a local
+  guess.
 - A user continuation's prompt is stated once: the turn's own user row carries
   it, and the seeded child row that repeats the same text is that message, so
   it never renders a second time. Later steering echoes in the same run are

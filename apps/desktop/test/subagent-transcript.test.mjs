@@ -374,11 +374,17 @@ test("every Task call renders as one accessible card", () => {
   assert.doesNotMatch(taskCardSource, /aria-expanded/);
   assert.doesNotMatch(taskCardSource, /tool-row-caret/);
   assert.doesNotMatch(taskCardSource, /tool-row-body/);
-  // The card opens the child's transcript, and reports the tab it has open.
+  // The card opens the child's transcript, and reports the tab it has open by
+  // the child it names: a resume card of a chain whose tab is already open
+  // reports that panel too, so no alias card looks closed while its tab is up.
   assert.match(taskCardSource, /openSubagentTab\(panelSelectionId, title\)/);
   assert.match(
     taskCardSource,
-    /const panelOpen = activeWorkPanelTabId === `subagent:\$\{panelSelectionId\}`/,
+    /const chainKey = chainKeys\?\.get\(panelSelectionId\);/,
+  );
+  assert.match(
+    taskCardSource,
+    /const panelOpen =\s*\n\s*activeWorkPanelTabId === `subagent:\$\{panelSelectionId\}` \|\|\s*\n\s*\(chainKey !== undefined && chainKey === openChainKey\);/,
   );
   assert.match(storeSource, /openWorkPanelTab\(subagentWorkPanelTab\(id, title \|\| undefined\)\)/);
 });

@@ -7558,6 +7558,12 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
      identity without being rebuilt, and stays stoppable and continuable.
   6. Click Stop, then deliver the settled `Task` snapshot and the execution
      turn's own terminal event; then send a second follow-up from the same tab.
+  7. With a draft typed and an image staged in the panel's composer, let the
+     parent model resume the stopped delegation itself (a `Task(resume …)` call
+     whose own handle is a new delegation id), then click that new card and
+     then the original card: the strip keeps one tab for the child, focused,
+     the mounted panel element is unchanged, the draft and the staged image
+     survive, and that tab renders the resumed run.
 - **Expected**: The follow-up renders exactly once (the run's own user row, not
   the `Task` marker's task argument plus the child echo). The tab keeps
   following the chain-latest run through the same tab element — no rebuild, no
@@ -7570,6 +7576,10 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   its own is reported `Completed` by the same path.
 - **Automation**: `apps/desktop/test/subagent-stop-resume-user-path.test.mjs`
   (`node --test`) with the production tab, store, i18n catalogs and stylesheet;
+  `apps/desktop/test/subagent-panel-chain-identity.test.mjs` drives the same
+  production tab and store through a parent-issued resume and the original
+  card's reopen, asserting one focused tab for the child and the resumed run
+  rendered in it;
   `pnpm test:e2e:subagent-lifecycle` asserts the same identity end to end (phase
   3 reads the persisted user marker's `details.executionTurnId`, phase 5 covers
   stop, then direct continuation as a `user`-owned run).
