@@ -1,14 +1,14 @@
 # AGENTS.md
 
-Policy-Sync: 2026-10-18.2
+Policy-Sync: 2026-10-18.3
 
 Mandatory rules for AI coding agents working in PI-Desktop.
 
-`CLAUDE.md` is the Claude Code / Claude Cowork entry point and a condensed
-mirror of the non-negotiables in this file. This file is authoritative.
-When you change either file, update the other so the non-negotiables stay
-aligned, and set the same `Policy-Sync:` token in both. The gate is
-`pnpm check:agent-policy` (`scripts/check-agent-policy-sync.mjs`).
+This file is the single source of truth. `CLAUDE.md` is only the Claude Code /
+Claude Cowork compatibility entry: a relative symlink to this file, so it holds
+no rules and no revision token of its own. Never copy policy text into
+`CLAUDE.md`. The gate is `pnpm check:agent-policy`
+(`scripts/check-agent-policy-sync.mjs`).
 
 PI-Desktop is released software with real users. Treat every change as
 production maintenance, not prototype work.
@@ -608,6 +608,16 @@ artifacts — isolated. Install or rebuild dependencies only when the host
 environment is missing or incompatible, and record that reason. Clean CI
 and release runners may install from lockfiles.
 
+### Worktree dependency isolation
+
+Parallel git worktrees of this repository must not share a writable
+`node_modules` or its `.bin`. A shared link tree lets an installer, native
+build, or launcher write absolute paths that belong to another worktree, so
+the next run boots the wrong binary or rewrites a sibling checkout. Reusing
+the pnpm content-addressed store is fine; give every worktree its own
+`node_modules` link tree (`pnpm install` against the shared store), never a
+copied or symlinked directory at the worktree root.
+
 ---
 
 ## 13. Specs Stay Synchronized
@@ -803,5 +813,6 @@ not actually executed.
 * Periodically remove rules that the model already infers from code,
   that have never influenced a decision, or that are obsolete —
   otherwise the critical constraints get diluted.
-* Every change here bumps `Policy-Sync` in both this file and
-  `CLAUDE.md`, and passes `pnpm check:agent-policy`.
+* Every change here bumps `Policy-Sync` in this file and passes
+  `pnpm check:agent-policy`. `CLAUDE.md` carries no rules and no token of
+  its own; it only links here.

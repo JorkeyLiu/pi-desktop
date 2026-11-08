@@ -1,43 +1,34 @@
 #!/usr/bin/env node
 /**
- * Agent policy mirror check: AGENTS.md and CLAUDE.md must stay in sync.
+ * Agent policy single-source check.
+ *
+ * `AGENTS.md` is the one authoritative AI-agent policy. `CLAUDE.md` exists only
+ * as a Claude Code / Cowork compatibility entry: it must resolve to
+ * `AGENTS.md` instead of carrying a second copy of the rules.
  *
  * Usage:
  *   node scripts/check-agent-policy-sync.mjs
  *   pnpm check:agent-policy
  *
- * AGENTS.md is the authoritative AI-agent policy. CLAUDE.md is the Claude Code
- * / Cowork entry point and a condensed mirror of the non-negotiables. Changing
- * one without the other is documentation drift and fails this gate.
- *
  * Enforced:
- *   1. Both files exist at the repository root.
- *   2. Both declare the same `Policy-Sync: <token>` revision near the top.
- *   3. CLAUDE.md names AGENTS.md as authoritative; AGENTS.md names CLAUDE.md
- *      as the Claude Code mirror that must stay synchronized.
- *   4. Shared non-negotiable policy anchors appear in both files (normalized
- *      whitespace, case-insensitive).
+ *   1. AGENTS.md exists and declares a `Policy-Sync: <token>` revision.
+ *   2. CLAUDE.md is a relative symlink to AGENTS.md. A checkout that cannot
+ *      hold symlinks may carry a short English pointer file instead; it must
+ *      name AGENTS.md as the single source, carry no `Policy-Sync:` token, and
+ *      copy no rules.
+ *   3. CLAUDE.md never duplicates the policy text or a second revision token.
+ *   4. Every shared non-negotiable anchor appears in AGENTS.md.
  *
- * When policy text changes:
- *   - update the affected file(s) so the non-negotiables remain aligned;
- *   - bump the `Policy-Sync:` token in BOTH files to the same new value;
- *   - run `pnpm check:agent-policy`.
+ * When policy changes: edit AGENTS.md only, bump its `Policy-Sync:` token, and
+ * run `pnpm check:agent-policy`. Never copy rules into CLAUDE.md.
  */
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const failures = [];
-
-const read = (relPath) => {
-  try {
-    return readFileSync(path.join(root, relPath), "utf8");
-  } catch {
-    failures.push(`${relPath}: file is missing`);
-    return null;
-  }
-};
+const AGENTS_PATH = path.join(root, "AGENTS.md");
+const CLAUDE_PATH = path.join(root, "CLAUDE.md");
 
 const normalize = (text) =>
   text
@@ -46,16 +37,21 @@ const normalize = (text) =>
     .trim()
     .toLowerCase();
 
-const agentsRaw = read("AGENTS.md");
-const claudeRaw = read("CLAUDE.md");
-const agents = agentsRaw ? normalize(agentsRaw) : "";
-const claude = claudeRaw ? normalize(claudeRaw) : "";
+const SYNC_TOKEN = /policy-sync:\s*`?([^\s`]+)`?/i;
 
-// Shared non-negotiables. Each anchor is a distinctive phrase (or alternate
-// phrases) that must remain true in both the authoritative policy and the
-// Claude Code mirror. Prefer stable wording over section titles.
+/**
+ * Longest accepted pointer file. A pointer names the canonical policy file and
+ * nothing else, so any real rule text exceeds this.
+ */
+export const MAX_POINTER_BYTES = 512;
+
+/**
+ * Shared non-negotiables. Each anchor is a distinctive phrase (or alternate
+ * phrases) that must stay true in the authoritative policy file. Prefer stable
+ * wording over section titles.
+ */
 /** @type {{ id: string, anyOf: string[] }[]} */
-const REQUIRED_ANCHORS = [
+export const REQUIRED_ANCHORS = [
   {
     id: "process-model",
     anyOf: [
@@ -135,86 +131,181 @@ const REQUIRED_ANCHORS = [
   },
 ];
 
-function requireContains(label, haystack, needle, message) {
-  if (!haystack.includes(needle)) {
-    failures.push(`${label}: ${message}`);
-  }
+/** @param {string} text */
+export function findSyncToken(text) {
+  return text.match(SYNC_TOKEN)?.[1];
 }
 
-if (agentsRaw && claudeRaw) {
-  const syncToken = /policy-sync:\s*`?([^\s`]+)`?/i;
+const isAbsoluteTarget = (target) =>
+  path.isAbsolute(target) || /^[A-Za-z]:[\\/]/.test(target);
 
-  const agentsToken = agentsRaw.match(syncToken)?.[1];
-  const claudeToken = claudeRaw.match(syncToken)?.[1];
+const normalizeLinkTarget = (target) =>
+  target.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
 
-  if (!agentsToken) {
+/**
+ * Pure policy evaluation over the canonical file and the recorded CLAUDE.md
+ * entry. Filesystem resolution (does the link actually land on AGENTS.md) is
+ * checked by the caller, which has the paths.
+ *
+ * @param {object} input
+ * @param {string | null} input.agentsText
+ * @param {{ kind: "missing" } | { kind: "link", target: string } | { kind: "file", text: string }} input.claudeEntry
+ * @returns {string[]} failures
+ */
+export function evaluateAgentPolicy({ agentsText, claudeEntry }) {
+  const failures = [];
+
+  if (agentsText === null || agentsText === undefined) {
+    failures.push("AGENTS.md: file is missing");
+    return failures;
+  }
+
+  const agents = normalize(agentsText);
+
+  if (!findSyncToken(agentsText)) {
     failures.push(
-      'AGENTS.md: missing `Policy-Sync: <token>` (for example `Policy-Sync: 2026-02-14.1`)',
+      "AGENTS.md: missing `Policy-Sync: <token>` (for example `Policy-Sync: 2026-02-14.1`)",
     );
   }
-  if (!claudeToken) {
-    failures.push(
-      'CLAUDE.md: missing `Policy-Sync: <token>` (for example `Policy-Sync: 2026-02-14.1`)',
-    );
+  if (!agents.includes("claude.md")) {
+    failures.push("AGENTS.md: must name CLAUDE.md as the Claude Code compatibility entry");
   }
-  if (agentsToken && claudeToken && agentsToken !== claudeToken) {
-    failures.push(
-      `Policy-Sync token mismatch: AGENTS.md has \`${agentsToken}\`, CLAUDE.md has \`${claudeToken}\`. Update both mirrors and set the same new token.`,
-    );
+  if (!agents.includes("single source of truth") && !agents.includes("single source")) {
+    failures.push("AGENTS.md: must state that it is the single source of truth for agent policy");
   }
-
-  requireContains(
-    "CLAUDE.md",
-    claude,
-    "agents.md",
-    "must name AGENTS.md as the authoritative policy",
-  );
-  requireContains(
-    "CLAUDE.md",
-    claude,
-    "authoritative",
-    "must state that AGENTS.md is authoritative",
-  );
-  requireContains(
-    "AGENTS.md",
-    agents,
-    "claude.md",
-    "must name CLAUDE.md as the Claude Code mirror and require it to stay synchronized",
-  );
 
   for (const anchor of REQUIRED_ANCHORS) {
-    const inAgents = anchor.anyOf.some((phrase) => agents.includes(normalize(phrase)));
-    const inClaude = anchor.anyOf.some((phrase) => claude.includes(normalize(phrase)));
-    if (!inAgents && !inClaude) {
+    const present = anchor.anyOf.some((phrase) => agents.includes(normalize(phrase)));
+    if (!present) {
       failures.push(
-        `policy anchor \`${anchor.id}\`: missing from both AGENTS.md and CLAUDE.md (looked for: ${anchor.anyOf
+        `policy anchor \`${anchor.id}\`: missing from AGENTS.md (looked for: ${anchor.anyOf
           .map((p) => `"${p}"`)
           .join(" | ")})`,
       );
-    } else if (!inAgents) {
+    }
+  }
+
+  if (claudeEntry.kind === "missing") {
+    failures.push(
+      "CLAUDE.md: file is missing; add the compatibility link with `ln -sfn AGENTS.md CLAUDE.md`",
+    );
+    return failures;
+  }
+
+  if (claudeEntry.kind === "link") {
+    if (isAbsoluteTarget(claudeEntry.target)) {
       failures.push(
-        `policy anchor \`${anchor.id}\`: present in CLAUDE.md but missing from AGENTS.md`,
+        `CLAUDE.md: symlink target \`${claudeEntry.target}\` must be relative so every checkout resolves it`,
       );
-    } else if (!inClaude) {
+    } else if (normalizeLinkTarget(claudeEntry.target) !== "agents.md") {
       failures.push(
-        `policy anchor \`${anchor.id}\`: present in AGENTS.md but missing from CLAUDE.md — update the Claude Code mirror and bump Policy-Sync in both files`,
+        `CLAUDE.md: symlink must point at AGENTS.md, found \`${claudeEntry.target}\``,
+      );
+    }
+    return failures;
+  }
+
+  // A symlink checked out on a filesystem without link support becomes a file
+  // whose whole content is the raw link target. Diagnose that instead of
+  // reporting a missing cross-reference.
+  const text = claudeEntry.text;
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (!text.trim()) {
+    failures.push(
+      "CLAUDE.md: empty pointer file; link it instead with `ln -sfn AGENTS.md CLAUDE.md`",
+    );
+    return failures;
+  }
+  if (!text.trim().includes("\n") && normalizeLinkTarget(text.trim()) === "agents.md") {
+    failures.push(
+      "CLAUDE.md: this checkout wrote the symlink target as file content, so links are unsupported here; enable `git config core.symlinks true` or check out on a platform that supports symlinks",
+    );
+    return failures;
+  }
+  if (findSyncToken(text)) {
+    failures.push(
+      "CLAUDE.md: must not declare its own `Policy-Sync:` token; AGENTS.md is the single source of the policy revision",
+    );
+  }
+  if (bytes > MAX_POINTER_BYTES) {
+    failures.push(
+      `CLAUDE.md: ${bytes} bytes exceeds the ${MAX_POINTER_BYTES}-byte pointer limit; CLAUDE.md must not copy the policy — link it instead with \`ln -sfn AGENTS.md CLAUDE.md\``,
+    );
+  }
+  const claude = normalize(text);
+  if (!claude.includes("agents.md")) {
+    failures.push("CLAUDE.md: must name AGENTS.md as the file it points at");
+  }
+  if (!claude.includes("single source") && !claude.includes("authoritative")) {
+    failures.push("CLAUDE.md: must state that AGENTS.md is the authoritative single source");
+  }
+  for (const anchor of REQUIRED_ANCHORS) {
+    if (anchor.anyOf.some((phrase) => claude.includes(normalize(phrase)))) {
+      failures.push(
+        `CLAUDE.md: copies policy anchor \`${anchor.id}\`; replace the copied rules with a pointer to AGENTS.md`,
       );
     }
   }
+
+  return failures;
 }
 
-if (failures.length > 0) {
-  console.error("Agent policy sync check failed:\n");
-  for (const failure of failures) {
-    console.error(`  - ${failure}`);
+function readAgentsText() {
+  try {
+    return readFileSync(AGENTS_PATH, "utf8");
+  } catch {
+    return null;
   }
-  console.error(
-    "\nAGENTS.md is authoritative. Update the other mirror, keep non-negotiables aligned,",
-  );
-  console.error(
-    "and set the same `Policy-Sync:` token in both files. Then re-run: pnpm check:agent-policy",
-  );
-  process.exit(1);
 }
 
-console.log("Agent policy sync check passed (AGENTS.md ↔ CLAUDE.md).");
+/** @returns {{ kind: "missing" } | { kind: "link", target: string } | { kind: "file", text: string }} */
+function readClaudeEntry() {
+  try {
+    const info = lstatSync(CLAUDE_PATH);
+    if (info.isSymbolicLink()) {
+      return { kind: "link", target: readlinkSync(CLAUDE_PATH) };
+    }
+    if (info.isFile()) {
+      return { kind: "file", text: readFileSync(CLAUDE_PATH, "utf8") };
+    }
+    return { kind: "missing" };
+  } catch {
+    return { kind: "missing" };
+  }
+}
+
+function main() {
+  const agentsText = readAgentsText();
+  const claudeEntry = readClaudeEntry();
+  const failures = evaluateAgentPolicy({ agentsText, claudeEntry });
+
+  if (claudeEntry.kind === "link" && agentsText !== null) {
+    try {
+      const resolved = realpathSync(CLAUDE_PATH);
+      if (resolved !== realpathSync(AGENTS_PATH)) {
+        failures.push("CLAUDE.md: symlink resolves to a different file than AGENTS.md");
+      }
+    } catch {
+      failures.push("CLAUDE.md: symlink target does not exist in this checkout");
+    }
+  }
+
+  if (failures.length > 0) {
+    console.error("Agent policy check failed:\n");
+    for (const failure of failures) {
+      console.error(`  - ${failure}`);
+    }
+    console.error(
+      "\nAGENTS.md is the single policy file. Edit it, bump `Policy-Sync`, keep CLAUDE.md",
+    );
+    console.error("a relative symlink to it (`ln -sfn AGENTS.md CLAUDE.md`), then re-run:");
+    console.error("  pnpm check:agent-policy");
+    process.exit(1);
+  }
+
+  console.log("Agent policy check passed (AGENTS.md is the single source; CLAUDE.md → AGENTS.md).");
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}
