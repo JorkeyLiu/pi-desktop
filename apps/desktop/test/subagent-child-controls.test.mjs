@@ -352,10 +352,12 @@ test("wake settings render a single kind row with mandatory result helper and se
           saveSettings: async () => undefined,
         })),
     );
-    assert.match(html, /Parent wake-up/);
-    assert.match(html, /Elapsed time/);
+    assert.match(html, /Check subagent progress/);
+    assert.match(html, /Elapsed runtime/);
     assert.match(html, /Subagent results always wake the parent/);
-    assert.match(html, /seconds/);
+    assert.match(html, /minutes/);
+    // The stored 600 seconds read as 10 minutes; the section is still seconds.
+    assert.match(html, /value="10"/);
     assert.doesNotMatch(html, /Wake on completion/);
     assert.doesNotMatch(html, /Periodic check-in/);
     assert.doesNotMatch(html, /Tool-call threshold/);
@@ -432,6 +434,18 @@ test("F1 invalid and blank wake value reverts without saving", async () => {
     assert.deepEqual(save.resolveWakeValueCommit("9999", 600, 1, 900), { action: "save", next: 900 });
     // Context bounds clamp coarsely; tool bounds clamp per call.
     assert.deepEqual(save.resolveWakeValueCommit("500", 20000, 1000, 1000000), { action: "save", next: 1000 });
+    // The k-token fields round onto whole tokens, so a stored count that is not
+    // a whole thousand keeps its exact figure instead of being flattened; whole
+    // unit fields still drop a typed fraction.
+    assert.equal(save.roundSubagentThresholdValue(1.5, "context-tokens"), 1.5);
+    // The time field edits minutes but stores seconds, so it keeps whole-second
+    // precision: 1.5 minutes is 90 seconds, not a rounded 60.
+    assert.equal(save.roundSubagentThresholdValue(1.5, "time"), 1.5);
+    assert.equal(save.roundSubagentThresholdValue(2.7, "tool-calls"), 2);
+    const kRound = (value) => save.roundSubagentThresholdValue(value, "context-tokens");
+    assert.deepEqual(save.resolveWakeValueCommit("1.5", 1.5, 1, 1000, kRound), { action: "save", next: 1.5 });
+    assert.deepEqual(save.resolveWakeValueCommit("0.5", 1.5, 1, 1000, kRound), { action: "save", next: 1 });
+    assert.deepEqual(save.resolveWakeValueCommit("2000", 1.5, 1, 1000, kRound), { action: "save", next: 1000 });
     // Rendered single-kind control keeps the resolved value as its draft.
     const i18n = createInstance();
     await i18n.init({ lng: "en", resources: { en: { translation: catalogs.en } } });
@@ -443,7 +457,9 @@ test("F1 invalid and blank wake value reverts without saving", async () => {
           saveSettings: async () => undefined,
         })),
     );
-    assert.match(html, /value="600"/);
+    // 600 stored seconds read as 10 minutes in the shared minute field.
+    assert.match(html, /value="10"/);
+    assert.match(html, /minutes/);
   } finally { await vite.close(); }
 });
 

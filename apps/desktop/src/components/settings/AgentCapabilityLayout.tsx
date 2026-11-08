@@ -185,7 +185,8 @@ export function AgentCapabilityPage({
   children,
   className,
 }: {
-  toolbar: ReactNode;
+  /** Page-level controls; omitted when a page places them under a section. */
+  toolbar?: ReactNode;
   children: ReactNode;
   className?: string;
 }) {

@@ -826,6 +826,10 @@ The minimum selection is:
 - Subagent lifecycle: `pnpm test:e2e:subagent-lifecycle` (program-wait, steer,
   and continuation phases over real host-core/sidecar/Main), plus `pnpm test:e2e`
   and `pnpm test:e2e:subagents`.
+- Subagent execution settings (parent wake-up and self-handoff cards, k-token
+  fields, trigger labels and units): `node --test
+  apps/desktop/test/subagent-wake-kind-user-path.test.mjs
+  apps/desktop/test/subagent-execution-settings-user-path.test.mjs`.
 - Imported-extension dependency installation or registry-boundary changes: `pnpm test:e2e:plugin-import-deps`.
 - Trusted extension or plugin-extension changes: `pnpm test:e2e:trusted-extensions`.
 - Session collaboration / Session Orchestrator: `pnpm test:e2e:collaboration`.
@@ -8490,6 +8494,105 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 - **Status**: Draft — unit covered in `packages/shared`,
   `packages/agent-runtime`, and the host-core `user_subagents` regression test;
   the full UI journey needs a capable environment.
+
+#### E2E-SUBAGENT-execution-settings: Wake-up and self-handoff cards edit k tokens and persist tokens
+
+- **Preconditions**: A settings document that has a `subagentWakeup` section
+  and no `subagentSelfHandoff` section — the shape every document written
+  before self-handoff reads. Provider calls are not needed.
+- **Steps**:
+  1. Open Settings → Subagents. Confirm an **Execution management** section
+     (zh-CN 运行管理) sits above **Available subagents**, that its heading is the
+     only heading over the two program-owned rows, and that the check-progress
+     row (left label zh-CN 主动检查子代理 / zh-TW 主動檢查子代理) comes first with
+     the self-handoff row (left label zh-CN 子代理自交接) second. Confirm no
+     feature name appears a second time above or outside a row, and that search
+     and create belong to the agent list below them. Open both selectors and
+     confirm they offer the same option texts in the same order: context size,
+     tool calls, elapsed runtime, off.
+  2. Resize the destination from a wide window down to its narrowest workbench
+     width. Confirm both rows stay stacked and full width at every width, with
+     the feature label on the left and the selector plus compact value on the
+     right, a readable selector, and no horizontal overflow. In both rows switch
+     through every kind (context size, tool calls, elapsed runtime, off) at both
+     widths and confirm the selector's x position and width do not move, the
+     value and unit keep their own columns, and the value field is a 64 px,
+     spinner-free box on the selector's height.
+  3. On the check-progress row select **Context size**. Confirm the field
+     shows `200` next to the literal unit `k tokens`, and that the persisted
+     section is `{ kind: "context-tokens", value: 200000 }`. Edit the field to
+     `80` and confirm `{ value: 80000 }`.
+  4. Select **Elapsed runtime** again and confirm the field returns to its own
+     remembered value (`10` minutes for a stored `600` seconds; a document with
+     no stored wake section starts at the default `15` minutes / 900 seconds),
+     that editing it to `2` persists `{ value: 120 }` (minutes in the field,
+     seconds in the section), and that `Tool calls` persists calls from the
+     remembered default `50`.
+  5. On the self-handoff card select **Context size** and confirm `200` /
+     `k tokens`, persisted as `{ value: 200000 }`; then select **Elapsed
+     runtime** (`15` minutes → 900 seconds) and **Tool calls** (`50` calls).
+  6. Start from a stored wake value of `1500` tokens. Reopen Settings, focus and
+     leave the field, switch to another kind and back, and reopen the
+     destination: it reads `1.5`, the stored value stays `1500`, and no write
+     occurs without a user edit. Repeat with a stored wake time of `90` and
+     `100` seconds: the field reads `1.5` and `1.67` minutes, and leaving it
+     writes nothing.
+  7. Repeat step 6 for a stored self-handoff value of `1500` tokens.
+  8. Switch the UI language to zh-CN and zh-TW: the context trigger reads
+     上下文数 / 上下文數, and both fields still show `k tokens`; repeat for the
+     other locales and confirm a natural context size/count label and the same
+     literal unit.
+  9. Select **Off** on each card: the numeric field disappears and the section
+     persists `{ kind: "off" }` with no value.
+  10. Fail one save (host refusal) and confirm the selector reverts to the
+      stored value, the toast reports the failure, and the typed draft is not
+      silently replaced by a different unit.
+- **Expected**: Both rows use one compact row on the control line, flush to the
+  row's right edge — a compact spinner-free numeric field on the shared field
+  height, its unit, then the kind selector last, each in its own reserved
+  column — so the selector is the row's rightmost control at both wide and
+  narrow widths, with the feature name as the row's own left label and no second
+  heading over it. The selector keeps its position, width and right edge on
+  every kind, including `off`, which removes the field and unit from the page
+  (no invisible or disabled focus target) while their columns stay reserved; a
+  long localized unit elides inside its column and keeps its full text as its
+  title. Both rows order their options identically: context size,
+  tool calls, elapsed runtime, off. New kinds start from the shared defaults
+  (200000 tokens, 50 calls, 900 seconds) while every explicitly saved value,
+  including 1500 tokens or 90/100 seconds, keeps its exact figure. Context triggers of
+  both rows are labelled as a context size/count, never a threshold, and are
+  edited in thousands of tokens with step 1 while the stored value remains a raw
+  token count, so the wake contract and the self-handoff contract keep their
+  persisted units. A stored token count that is not a whole thousand is shown
+  exactly (1500 → 1.5) and is not rewritten by opening, blurring, switching
+  kinds, or reopening settings. Off hides the numeric field and writes no value.
+  The wake row keeps its existing semantics — one kind, elapsed time in seconds
+  within 1–900, tool calls in calls, results always resuming the parent — and
+  self-handoff still defaults to off for a settings document that never had it.
+- **Specs linked**: `04-ux/06-settings-ia.md` (Subagents destination),
+  `03-runtime/02-agent-runtime.md` §5f
+- **Acceptance**: C (conversation), F (persistence), Quality
+- **Milestone**: M6
+- **Status**: Automated for the presentation and save path (2026-10-18):
+  `node --test apps/desktop/test/subagent-wake-kind-user-path.test.mjs`
+  mounts the production wake card in isolated Electron with a stubbed host and
+  covers the k-token conversion (20000 / 80000 / 1500), the minute conversion
+  of the time trigger (10 minutes for 600 stored seconds, 2 minutes to 120
+  seconds, 90 and 100 legacy seconds shown as 1.5 and 1.67 without a write),
+  the literal units and bounds, the legacy round trip, the exact feature-name
+  copy of every locale, and the catalog key alignment;
+  `node --test apps/desktop/test/subagent-execution-settings-user-path.test.mjs`
+  mounts the production Subagents page and covers the single section heading,
+  the two full-width feature rows (label once inside the row, no exterior
+  duplicate, no obsolete inner label), both rows' k-token fields and persisted
+  values, the other triggers, off, the preserved wake semantics, and the
+  failure toast. Step 2's layout is measured from the rendered page in the same
+  fixture at 1000 px and again after resizing the window to 360 px: both rows
+  fill the section width, stay stacked, keep the label left of the controls
+  (above them when narrow), the control cluster ends on the row's content edge
+  with the selector as its rightmost control on every kind (value → unit →
+  selector, in DOM order as well, `off` reserving the columns to the left), and
+  neither the rows nor the page overflow horizontally.
 
 #### E2E-SUBAGENT-inherit-parent-tools
 
@@ -18749,3 +18852,33 @@ host-created files. The full app's file-preview viewer is covered separately.
   `apps/desktop/test/app-store-sidebar.test.mjs` and
   `apps/desktop/test/project-create-dialog.test.mjs`; full UI scenario remains
   Draft and is run only when explicitly requested in a capable environment.
+
+### E2E-SUBAGENT-handoff-checkpoint
+
+- **Preconditions**: A delegated run that reached its self-handoff trigger, so
+  the delegate's transcript tab carries one accepted `SubagentHandoff` call, one
+  refused call, and one call that is still running. No provider, paid API, or
+  user desktop instance is used; the fixture renders the production
+  `SubagentTranscriptTab` over seeded session messages.
+- **Steps**:
+  1. Render the tab with the three handoff calls plus an ordinary child tool
+     call and a second accepted handoff later in the same turn. Each accepted
+     call carries a free-form `handoff` text — prose, bullets, and a blank
+     line, with no field names the runtime asked for.
+  2. Compare the accepted calls against the ordinary rows, then open one
+     checkpoint.
+- **Expected**: Only the accepted calls become checkpoints, numbered by their
+  order in the tab's own transcript; each states its title and previews the
+  delegate's own handoff text on one clamped line, never a lifecycle status and
+  never argument or result JSON. The running and refused calls keep the tool
+  row and its own state (spinner, `Failed`) and their disclosed details.
+  Opening a checkpoint shows the whole authored handoff as plain text with its
+  own line breaks and bullets preserved — no field labels, no section list, no
+  per-field structure — and model-authored markup in it renders as text, not
+  HTML.
+- **Specs linked**: `04-ux/08-component-spec.md` (8.4a, 8.4b),
+  `04-ux/02-i18n-english-first.md`.
+- **Status**: Automated render coverage plus a hidden-Electron click/Space probe
+  in `apps/desktop/test/subagent-handoff-checkpoint.test.mjs`; the probe
+  asserts the expanded body equals the authored handoff character for
+  character.

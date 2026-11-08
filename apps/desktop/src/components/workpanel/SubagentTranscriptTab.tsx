@@ -54,6 +54,10 @@ import {
 } from "../../features/chat/transcript/shared";
 import { useOpenChatFileRef } from "../../hooks/use-preview-target";
 import { ToolRow } from "../../features/chat/transcript/ToolRow";
+import {
+  SubagentHandoffCheckpointRow,
+  handoffCheckpoint,
+} from "../../features/chat/transcript/SubagentHandoffCheckpoint";
 import { WorkingIndicator } from "../../features/chat/transcript/ActivityGroup";
 import { Markdown } from "../Markdown";
 import type { MessageAttachment } from "@pi-desktop/shared";
@@ -224,6 +228,20 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     () => buildSubagentTranscript(messages, activeDelegationId),
     [messages, activeDelegationId],
   );
+  // A handoff checkpoint is numbered by its place among this tab's accepted
+  // checkpoints: the runtime persists no generation number, and the row must
+  // not invent one. The order of the rows the reader is looking at is the only
+  // stable index available.
+  const handoffOrdinals = useMemo(() => {
+    const ordinals = new Map<string, number>();
+    for (const turn of transcriptResult?.turns ?? []) {
+      for (const row of turn.rows) {
+        if (row.kind !== "tool" || !handoffCheckpoint(row.message)) continue;
+        ordinals.set(row.message.id, ordinals.size + 1);
+      }
+    }
+    return ordinals;
+  }, [transcriptResult]);
 
   // A child that is genuinely working shows the transcript's own working
   // indicator at the end of its rows. It is suppressed while the child waits on
@@ -784,7 +802,19 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                     </div>
                     {turn.rows.map((row) =>
                       row.kind === "tool" ? (
-                        <ToolRow key={row.message.id} message={row.message} />
+                        // An accepted self-handoff is a context checkpoint, not
+                        // an ordinary tool invocation: it renders as the
+                        // transcript's own divider row. A pending, running, or
+                        // refused call keeps the tool row and its lifecycle.
+                        handoffCheckpoint(row.message) ? (
+                          <SubagentHandoffCheckpointRow
+                            key={row.message.id}
+                            message={row.message}
+                            times={handoffOrdinals.get(row.message.id)}
+                          />
+                        ) : (
+                          <ToolRow key={row.message.id} message={row.message} />
+                        )
                       ) : row.kind === "thinking" ? (
                         <ThinkingRow
                           key={`thinking-${row.message.id}`}

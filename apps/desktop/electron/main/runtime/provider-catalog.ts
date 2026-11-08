@@ -3,7 +3,9 @@ import {
   SESSION_THINKING_LEVELS,
   defaultCommandShellForPlatform,
   isCommandShellId,
+  isSubagentSelfHandoffSettings,
   isSubagentWakeupSettings,
+  normalizeSubagentSelfHandoffSettings,
   normalizeSubagentWakeupSettings,
   validateNetworkProxy,
   validateSpeechSettings,
@@ -272,6 +274,22 @@ export function createProviderCatalogRuntime({
           );
       }
     }
+    if (Object.prototype.hasOwnProperty.call(value, "subagentSelfHandoff")) {
+      const selfHandoff = (value as { subagentSelfHandoff?: unknown })
+        .subagentSelfHandoff;
+      validateSubagentSelfHandoffWrite(selfHandoff);
+      // New writes persist the canonical trigger; `undefined`/`null` clear it
+      // back to the product default (off), which is also what every settings
+      // document written before this feature reads as.
+      if (selfHandoff !== undefined && selfHandoff !== null) {
+        (value as { subagentSelfHandoff?: unknown }).subagentSelfHandoff =
+          normalizeSubagentSelfHandoffSettings(
+            selfHandoff as Parameters<
+              typeof normalizeSubagentSelfHandoffSettings
+            >[0],
+          );
+      }
+    }
     return settings;
   };
 
@@ -287,6 +305,22 @@ export function createProviderCatalogRuntime({
     if (wakeup === undefined || wakeup === null) return;
     if (!isSubagentWakeupSettings(wakeup)) {
       throw Object.assign(new Error("subagentWakeup is invalid"), {
+        errorCode: ErrorCodes.INVALID_ARGUMENT,
+      });
+    }
+  }
+
+  /**
+   * Stored self-handoff sections keep the canonical `{ kind, value }` shape:
+   * `null`/`undefined` clears back to the product default (off), a well-shaped
+   * section is normalized to canonical and persisted, and a mistyped value is
+   * rejected. Range clamping happens at read time, so an out-of-range write
+   * still lands and reads back clamped.
+   */
+  function validateSubagentSelfHandoffWrite(selfHandoff: unknown): void {
+    if (selfHandoff === undefined || selfHandoff === null) return;
+    if (!isSubagentSelfHandoffSettings(selfHandoff)) {
+      throw Object.assign(new Error("subagentSelfHandoff is invalid"), {
         errorCode: ErrorCodes.INVALID_ARGUMENT,
       });
     }

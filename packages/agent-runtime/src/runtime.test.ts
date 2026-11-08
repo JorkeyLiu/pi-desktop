@@ -11,7 +11,11 @@ import {
   type AssistantMessage,
   type AssistantMessageEvent,
 } from "@earendil-works/pi-ai";
-import { formatSessionMessage, type SessionMessageOrigin } from "@pi-desktop/shared";
+import {
+  DEFAULT_SUBAGENT_WAKEUP_TIME_SECONDS,
+  formatSessionMessage,
+  type SessionMessageOrigin,
+} from "@pi-desktop/shared";
 import { estimateContextTokens as estimateTranscriptTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { delegationSummary } from "./subagent-progress.js";
 import { buildSessionContext } from "./session-context.js";
@@ -12049,12 +12053,17 @@ describe("DesktopAgentRuntime subagent wakeup, progress and child steer", () => 
         // The legacy 1s bound is ignored: nothing returns at its expiry.
         await vi.advanceTimersByTimeAsync(1_000);
         expect(settled).toBe(false);
-        // The session's configured 600s period owns the wake.
-        await vi.advanceTimersByTimeAsync(599_000);
+        // The session's configured period — the canonical default — owns the
+        // wake; nothing returned at the legacy 1s bound.
+        await vi.advanceTimersByTimeAsync(
+          DEFAULT_SUBAGENT_WAKEUP_TIME_SECONDS * 1_000 - 1_000,
+        );
         const woken = await waiting;
         expect(woken.details.status).toBe("wakeup");
         expect(woken.details.wakeReason).toBe("time");
-        expect(woken.content[0].text).toContain("Still running after 600s");
+        expect(woken.content[0].text).toContain(
+          `Still running after ${DEFAULT_SUBAGENT_WAKEUP_TIME_SECONDS}s`,
+        );
         expect(woken.content[0].text).toContain(`explorer (${delegationId})`);
         expect((runtime as any).delegations.get(delegationId).status).toBe(
           "running",

@@ -1552,6 +1552,115 @@
   color: var(--ds-text-secondary);
 }
 
+/* An accepted self-handoff is a persisted checkpoint, not a tool invocation:
+   it borrows the context-compaction row's centred, muted divider language and
+   adds one disclosure whose body is the free-form handoff the delegate
+   wrote. Nothing here is editable and the row owns no actions. Both the
+   row and its head are shrinkable so a narrow work panel ellipsises the
+   preview instead of overflowing the transcript column. */
+.transcript-handoff-row {
+  min-width: 0;
+  margin: 14px 0;
+  color: var(--ds-text-muted);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.transcript-handoff-head {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  overflow: hidden;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: inherit;
+  cursor: pointer;
+}
+
+.transcript-handoff-head:hover {
+  color: var(--ds-text-secondary);
+}
+
+.transcript-handoff-head:focus-visible {
+  outline: 1.5px solid color-mix(in oklab, var(--ds-text-muted) 70%, transparent);
+  outline-offset: -2px;
+}
+
+/* The label identifies the checkpoint, so it keeps its line: only the
+   preview next to it gives way as the panel narrows. */
+.transcript-handoff-label {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The handoff preview is the one thing the collapsed row says beyond its label:
+   a long preview stays on the divider's single line instead of wrapping it
+   into a paragraph. */
+.transcript-handoff-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ds-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The caret stays out of the way until the row is engaged, as tool rows do. */
+.transcript-handoff-caret {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 12px;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition:
+    opacity var(--motion-duration-fast) var(--motion-ease-out),
+    transform var(--motion-duration-fast) var(--motion-ease-out);
+}
+
+.transcript-handoff-head:hover .transcript-handoff-caret,
+.transcript-handoff-head:focus-visible .transcript-handoff-caret,
+.transcript-handoff-head[aria-expanded="true"] .transcript-handoff-caret {
+  opacity: 1;
+}
+
+.transcript-handoff-head[aria-expanded="true"] .transcript-handoff-caret {
+  transform: rotate(90deg);
+}
+
+.transcript-handoff-body {
+  display: grid;
+  gap: 10px;
+  max-width: var(--chat-prose-max-width, 720px);
+  margin: 8px auto 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--ds-tile);
+  color: var(--ds-text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-compact);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.transcript-handoff-prose {
+  margin: 0;
+  color: var(--ds-text-primary);
+  /* The handoff is plain text: its author's line breaks, indentation, and list
+     markers are formatting to keep, not markup to interpret. */
+  white-space: pre-wrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .context-inspector-ring-progress,
   .context-inspector-trigger,

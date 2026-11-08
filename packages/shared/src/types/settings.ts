@@ -5,6 +5,7 @@ import type { NetworkProxySettings } from "../network-proxy.js";
 import type { NetworkPolicySettings } from "../network-policy.js";
 import type { ContextCompactionSettings } from "./sessions.js";
 import type { SubagentWakeupSettings } from "../subagent-wakeup.js";
+import type { SubagentSelfHandoffSettings } from "../subagent-handoff.js";
 import type { Mode } from "./common.js";
 import type { GlobalPermissionMode } from "./permissions.js";
 import type { PluginMarketSource } from "./plugins.js";
@@ -120,6 +121,15 @@ export type AppSettings = {
    * sections migrate at read time).
    */
   subagentWakeup?: SubagentWakeupSettings;
+  /**
+   * Persistent delegate self-handoff trigger (`{kind, value?}` with kind
+   * `off` (default), `context-tokens`, `tool-calls`, or `runtime`). Absent
+   * means off, which is exactly the behavior of every settings document
+   * written before this setting existed. The runtime normalizes stored values
+   * through `normalizeSubagentSelfHandoffSettings` at launch and on a live
+   * settings save; the renderer owns the settings UI.
+   */
+  subagentSelfHandoff?: SubagentSelfHandoffSettings;
   /** User overrides for the shared application shortcut map. */
   keybindings?: KeybindingOverrides;
   /** Unlocks the devtools console (settings button, F12, macOS View menu). */

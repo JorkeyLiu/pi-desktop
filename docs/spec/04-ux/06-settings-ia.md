@@ -752,22 +752,78 @@ system while preserving their different data ownership:
   and focus lift a control without adding a persistent in-flow divider; invalid
   form state is announced from the shared error region.
 
-- Subagent wake defaults are the persistent program-owned `AppSettings.subagentWakeup`
+- The Subagents destination opens with an **Execution management** section
+  (zh-CN 运行管理), whose heading is the section's only heading: it holds two
+  program-owned rows — check subagent progress (zh-CN 主动检查子代理,
+  zh-TW 主動檢查子代理) and self-handoff (zh-CN 子代理自交接) — each a
+  full-width shaded row with its feature name as the row's left label and the
+  controls on the right, stacked at every width, above the Available subagents
+  section (search, create, and the Built-in / Global groups). Both rows use the
+  same compact threshold cluster on the control line, flush to the row's right
+  edge: a bounded numeric field (64 px wide on the shared field height, centred
+  on tabular figures, no native stepper) with its unit, then the kind selector
+  last. The selector is therefore the row's rightmost control, and the cluster
+  ends on the row's content edge at every width — including the stacked narrow
+  row, which right-aligns the cluster rather than letting it fall to the text
+  edge. Value, unit and selector each own a reserved column, so the selector
+  keeps its x position, its width and its right edge when the selected kind's
+  label or unit changes — including `off`, which renders no field at all rather
+  than a hidden or disabled focus target while its columns stay reserved. The
+  selector column is sized by the longest option label the locale can show (a
+  hidden sizer holding every option label, so it never sizes to the label that
+  happens to be selected), with an 88 px floor and no fixed 180 px box. The row
+  keeps a draft per kind, so switching away and back restores what the user last
+  typed. The label column shrinks first, so a long selector label or a long
+  localized unit elides inside its reserved column (the unit keeps its full text
+  as its title) instead of separating the number from its unit or moving the
+  selector, and a narrow destination stacks label above controls and shrinks the
+  selector column without horizontal overflow.
+- Both rows read one vocabulary: the selector offers the same option texts in
+  both rows, in the same order (context size, tool calls, elapsed runtime, off —
+  from the shared `settings.subagentSelfHandoffKind*` copy), and the units are
+  shared too. The
+  context trigger is labelled as a context size/count (zh-CN 上下文数,
+  zh-TW 上下文數) and edited in the literal unit `k tokens`; the time trigger is
+  edited in `minutes` while the wake section keeps persisting seconds.
+- Check subagent progress is the persistent program-owned `AppSettings.subagentWakeup`
   (`{ kind: "time" | "tool-calls" | "context-tokens" | "off", value?: number }`,
-  default time 600 within 1–900 seconds; tool-calls 1–10000 incremental calls
-  per child; context-tokens 1000–1000000 upward crossing with rearm; `off`
-  disables progress resumption only). The user selects ONE kind; the program owns when
-  the model resumes under one cadence across explicit `TaskWait`, `TaskList` fresh-progress
-  reads, and the implicit idle resume — child callbacks never trigger the model early.
-  An attached child's result / completion delivery always resumes the parent and has no off
-  switch. The Subagents destination carries the section as a single row
-  (kind dropdown plus numeric unit) with a helper that results always resume the parent;
-  there is no completion toggle and no per-call model override. Persistence is host
-  `AppSettings` through the settings-set boundary (shape-validated, range-clamped on read;
-  legacy stored `onCompletion: false` is ignored), and launch plus the live runtime setter
+  default time 900 within 1–900 seconds, tool-calls remembered default 50 inside
+  1–10000 incremental calls per child, context-tokens remembered default 200000
+  inside 1000–1000000 tokens upward crossing with rearm; a saved explicit value
+  keeps its figure;
+  `off` disables progress resumption only). The user selects ONE kind; the
+  program owns when the model resumes under one cadence across explicit
+  `TaskWait`, `TaskList` fresh-progress reads, and the implicit idle resume —
+  child callbacks never trigger the model early. An attached child's result /
+  completion delivery always resumes the parent and has no off switch. The
+  context kind is edited in `k tokens` (1–1000, step 1) while the persisted
+  value stays a raw token count, so the stored contract is unchanged. A stored
+  count that is not a whole thousand keeps its exact figure — 1500 tokens reads
+  as 1.5 and is written back unchanged unless the user edits it — so opening,
+  leaving, or switching kinds never migrates stored data. The time kind is
+  edited in minutes over the same 1–900 second range and saved back as whole
+  seconds, so a stored figure that is not a whole minute keeps its exact
+  seconds — 90 reads as 1.5 minutes and 100 as 1.67 — and is never rewritten by
+  opening, leaving, or switching kinds. The row carries a
+  helper that results always resume the parent; there is no completion toggle
+  and no per-call model override. Persistence is host `AppSettings` through the
+  settings-set boundary (shape-validated, range-clamped on read; legacy stored
+  `onCompletion: false` is ignored), and launch plus the live runtime setter
   apply the selection to waits and the idle resume (see
-  `../03-runtime/02-agent-runtime.md` §5f). The user-configured `time` value (max 900)
-  cannot be shortened or restarted by the model; there is no global child-run timeout.
+  `../03-runtime/02-agent-runtime.md` §5f). The user-configured `time` value
+  (max 900) cannot be shortened or restarted by the model; there is no global
+  child-run timeout.
+- Self-handoff is the persistent program-owned `AppSettings.subagentSelfHandoff`
+  (`{ kind: "off" | "context-tokens" | "tool-calls" | "runtime", value?: number }`),
+  stored in the runtime's canonical units: context-tokens 1000–1000000 tokens,
+  tool-calls 1–10000 calls (remembered default 50), runtime 60–14400 seconds
+  (remembered default 900 = 15 minutes), context-tokens remembered default
+  200000; a saved explicit value keeps its figure. The card defaults to
+  `off`, which is also how every settings document written before the feature
+  reads. The context kind is edited in `k tokens`, tool calls in calls, and the
+  runtime trigger in whole minutes; only the display converts, so the persisted
+  shape and runtime semantics stay as documented in
+  `../03-runtime/02-agent-runtime.md`.
 
 ### Instructions (`instructions` tab)
 - Edit the global instruction Markdown used by every PI-Desktop Agent session.

@@ -8,6 +8,7 @@ import {
   isCommandShellCatalog,
   normalizeMode,
   normalizeSubagentWakeupSettings,
+  normalizeSubagentSelfHandoffSettings,
   resolveBindingLimits,
   trustedExtensionAgentKeyFromProviderId,
   type CommandShellCatalog,
@@ -15,6 +16,7 @@ import {
   type Mode,
   type SessionThinkingLevel,
   type SubagentWakeupSettings,
+  type SubagentSelfHandoffSettings,
   type UserSkillRecord,
   type UserSubagentRecord,
 } from "@pi-desktop/shared";
@@ -381,6 +383,11 @@ export function createHeadlessLaunchResolver(options: HeadlessLaunchResolverOpti
         // Persistent wake defaults, normalized once (see session-launch).
         subagentWakeup: normalizeSubagentWakeupSettings(
           (settings as { subagentWakeup?: SubagentWakeupSettings }).subagentWakeup,
+        ),
+        // Delegate self-handoff, normalized once (see session-launch).
+        subagentSelfHandoff: normalizeSubagentSelfHandoffSettings(
+          (settings as { subagentSelfHandoff?: SubagentSelfHandoffSettings })
+            .subagentSelfHandoff,
         ),
         commandShell,
         scratchDir: join(dataDir, "scratch", sessionId),

@@ -8,6 +8,7 @@ import {
   isImageGenerationModel,
   normalizeMode,
   normalizeSubagentWakeupSettings,
+  normalizeSubagentSelfHandoffSettings,
   trustedExtensionAgentKeyFromProviderId,
   type CommandShellCatalog,
   type McpServerRecord,
@@ -16,6 +17,7 @@ import {
   type Risk,
   type SessionThinkingLevel,
   type SubagentWakeupSettings,
+  type SubagentSelfHandoffSettings,
   type UserSkillRecord,
   type UserSubagentRecord,
 } from "@pi-desktop/shared";
@@ -713,6 +715,12 @@ export function createSessionLaunchRuntime({
         // merges only the fields its own call validly overrides.
         subagentWakeup: normalizeSubagentWakeupSettings(
           (settings as { subagentWakeup?: SubagentWakeupSettings }).subagentWakeup,
+        ),
+        // Delegate self-handoff: one normalized trigger for every delegate
+        // this session spawns; absent settings normalize to off.
+        subagentSelfHandoff: normalizeSubagentSelfHandoffSettings(
+          (settings as { subagentSelfHandoff?: SubagentSelfHandoffSettings })
+            .subagentSelfHandoff,
         ),
         ...(jevApiKey ? { jevApiKey } : {}),
         commandShell,

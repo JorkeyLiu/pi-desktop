@@ -107,6 +107,16 @@ export function registerSettingsIpc({
           validatedSettings !== null &&
           typeof validatedSettings === "object" &&
           Object.prototype.hasOwnProperty.call(validatedSettings, "subagentWakeup");
+        // The self-handoff trigger follows the same rule: forwarded only when
+        // this save touched it, so an unrelated save leaves live sessions on
+        // the trigger they already inherited.
+        const hasSelfHandoffWrite =
+          validatedSettings !== null &&
+          typeof validatedSettings === "object" &&
+          Object.prototype.hasOwnProperty.call(
+            validatedSettings,
+            "subagentSelfHandoff",
+          );
         await sidecar.call("sidecar.configure", {
           hostBinary: host.binaryPath,
           dataDir,
@@ -116,6 +126,13 @@ export function registerSettingsIpc({
             ? {
                 subagentWakeup: (result as { subagentWakeup?: unknown })
                   .subagentWakeup,
+              }
+            : {}),
+          ...(hasSelfHandoffWrite
+            ? {
+                subagentSelfHandoff: (
+                  result as { subagentSelfHandoff?: unknown }
+                ).subagentSelfHandoff,
               }
             : {}),
         });

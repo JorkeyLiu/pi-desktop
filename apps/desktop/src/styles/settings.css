@@ -4213,3 +4213,201 @@
 .sklm-page-jump::placeholder {
   color: var(--ds-text-muted);
 }
+
+/*
+  A capability destination may group its page into named sections: the page
+  keeps the destination h1, each section carries its own h2. Sections stack
+  with the destination's own rhythm, so a heading always reads as the start of
+  the group below it and never as a second page title.
+*/
+.settings-subsection {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-subsection-title {
+  margin: 0;
+  color: var(--ds-text-primary);
+  font-size: var(--text-lg);
+  font-weight: var(--font-weight-strong);
+  line-height: var(--leading-heading);
+}
+
+/*
+  The two Subagent execution rows: one per feature, each a full-width shaded
+  tile with its feature name on the left and the trigger cluster on the right,
+  stacked at every width the way the General settings rows are. The
+  `运行管理` h2 above them is the only shared heading.
+*/
+.subagent-execution-rows {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.subagent-execution-rows > .settings-card-block {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+/* A selector plus a value field needs more than the shared 240px control cap:
+   the control column takes the width it needs while the label column keeps the
+   remainder and shrinks first, so a long label never pushes the selector and
+   its value apart. The cluster it holds stays flush to the row's right edge at
+   every width — the stacked narrow row right-aligns it too, instead of letting
+   it fall to the text edge the way a form field does. */
+.settings-row:has(.settings-threshold-control) .settings-row-control {
+  max-width: none;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+/*
+  Value + unit + trigger as one cluster in three reserved columns, read left to
+  right and flush to the row's right edge: the bounded figure with its visible
+  unit, then the trigger selector last, so the solid control the eye lands on
+  is the row's right edge for every kind. An earlier order put the selector
+  first and the unit last, which left the row ending in a short muted word and
+  read as though nothing were aligned.
+
+  The selector column is content-sized, not a fixed box: it takes the width of
+  the longest option label this locale can show, so "Off" and "Elapsed runtime"
+  occupy the same column and the selector never moves when the kind changes.
+  That width comes from `.settings-threshold-select-sizer` — every option label
+  in one hidden cell — so it is the same for both execution rows, which offer
+  identical options. The floor (88px) keeps a short locale's trigger usable and
+  the sizer's own cap bounds an unusually long translation; the sizer also
+  carries one spare pixel, so every kind's label fits the column it defines and
+  no selected label can widen it.
+
+  The value column stays a fixed compact width and the unit column is reserved
+  once for the whole locale, never per kind. When a kind carries no value the
+  field and unit are not rendered at all — no hidden or disabled focus target —
+  while their columns stay reserved, so `off` does not shift the selector and
+  the trigger keeps the same rightmost x it has when a value is editable.
+*/
+.settings-threshold-control {
+  --settings-threshold-select-min-width: 88px;
+  --settings-threshold-select-max-width: 240px;
+  --settings-threshold-input-width: 64px;
+  --settings-threshold-unit-width: 76px;
+  display: grid;
+  grid-template-columns:
+    var(--settings-threshold-input-width)
+    var(--settings-threshold-unit-width)
+    minmax(var(--settings-threshold-select-min-width), max-content);
+  align-items: center;
+  column-gap: 8px;
+  justify-content: end;
+  min-width: 0;
+}
+
+/* All three controls share the single grid row, so the hidden sizer can occupy
+   the selector cell behind the trigger without adding a row or a gap. */
+.settings-threshold-control > .settings-threshold-input {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.settings-threshold-control > .settings-number-unit {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.settings-threshold-select-sizer,
+.settings-threshold-control > .settings-menu-select-anchor {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+/*
+  The sizer mirrors the trigger's box — the same type size, the same 10px
+  inline padding, and room for the 14px chevron plus its 6px gap — so the
+  column it defines is exactly what the trigger needs for the widest label.
+  It renders nothing: zero height, clipped, and hidden from the a11y tree.
+*/
+.settings-threshold-select-sizer {
+  display: grid;
+  grid-template-columns: minmax(0, max-content);
+  padding: 0 31px 0 10px;
+  max-width: var(--settings-threshold-select-max-width);
+  min-width: 0;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  font-size: var(--text-sm-plus);
+  white-space: nowrap;
+}
+
+/* Every label in the same cell: the cell is as wide as the widest of them. */
+.settings-threshold-select-sizer > span {
+  grid-area: 1 / 1;
+}
+
+/* The trigger fills its reserved column instead of sizing to the selected
+   label, so its box and its chevron stay put across kinds. */
+.settings-threshold-control .settings-menu-select-anchor,
+.settings-threshold-control .settings-menu-select-trigger {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.settings-threshold-control .settings-menu-select-trigger {
+  justify-content: space-between;
+  overflow: hidden;
+}
+
+.settings-threshold-control .settings-menu-select-trigger-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A compact figure, not a form field: a 64px column inside the shared field
+   height the selector beside it uses, centred on tabular digits so neither a
+   value change nor a different number of digits moves the eye off the column.
+   Keeping the shared height, rather than a shorter pill, keeps the whole
+   cluster on one control metric. */
+.settings-row-control .settings-threshold-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  height: var(--ds-field-height);
+  padding: 0 8px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  /* No native stepper: on a 64px column the spinner arrows would cover the
+     digits, and the figure is typed, pasted, or nudged with the arrow keys —
+     all of which the number input keeps. `appearance: textfield` is the Gecko
+     path; the WebKit pseudo-elements below cover the Chromium one. */
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.settings-row-control .settings-threshold-input::-webkit-outer-spin-button,
+.settings-row-control .settings-threshold-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
+/* The unit keeps the width of the widest unit this locale can show; a longer
+   localized word is elided rather than pushing the selector, and its full text
+   stays available as the element's title and accessible name. */
+.settings-threshold-control .settings-number-unit {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-number-unit {
+  color: var(--ds-text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-compact);
+  white-space: nowrap;
+}
