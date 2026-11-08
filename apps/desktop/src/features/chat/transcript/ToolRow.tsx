@@ -296,9 +296,13 @@ function HostToolRow({
       ? taskWaitLifecycle(message)
       : null;
   // A settled wait names its backend-owned outcome (results arrived, timeout,
-  // interrupted) or, for a checkpoint that woke on progress, the reason it
-  // woke; a `TaskStop` and a cheap `TaskList` snapshot have neither and keep
-  // their own settled label.
+  // interrupted). A `TaskWait` that woke on progress is the exception: the call
+  // returned, so the row must not keep saying it is waiting, while its delegates
+  // may still run and nothing arrived, so it must not claim results either — it
+  // falls back to the lifecycle verb below. An active `TaskList` that blocked on
+  // the coordinator keeps naming the reason it woke (its long-standing progress
+  // wording); a `TaskStop` and a cheap `TaskList` snapshot have no wait fields
+  // and keep their own settled label.
   const waitLabelKey =
     waitLifecycle?.kind === "completed"
       ? WAIT_SETTLED_LABEL_KEYS.completed
@@ -306,12 +310,14 @@ function HostToolRow({
         ? WAIT_SETTLED_LABEL_KEYS.timeout
         : waitLifecycle?.kind === "interrupted"
           ? WAIT_SETTLED_LABEL_KEYS.interrupted
-          : waitLifecycle?.kind === "progress"
+          : waitLifecycle?.kind === "progress" && lifecycle !== "wait"
             ? WAIT_PROGRESS_LABEL_KEYS[waitLifecycle.reason]
             : null;
-  // History stays inspectable: a folded checkpoint's tooltip names the
-  // actual wait outcome, so repeated waits on the same live delegation read
-  // as one ongoing state without losing what each row did.
+  // History stays inspectable: a row that settles on an outcome label keeps that
+  // outcome in the tooltip beside the roster, so repeated waits on the same live
+  // delegation read as one ongoing state without losing what each row did. A
+  // settled `TaskWait` that woke on progress has no outcome label to add, so it
+  // carries no wait tooltip.
   const waitTitle = waitLabelKey
     ? [t(waitLabelKey), rosterSummary].filter(Boolean).join(" · ")
     : undefined;

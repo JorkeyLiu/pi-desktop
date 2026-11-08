@@ -358,13 +358,17 @@ export const TOOL_ACTION_KEYS: Record<ToolAction, string> = {
  * `details.wakeReason`, never from the row's transport status:
  * - a wait that delivered settled reports is `completed` ("results arrived");
  * - a wait that woke on progress (`wakeup` + time/tool-calls/context-tokens)
- *   is an interim checkpoint on still-running delegates, not a result;
+ *   settled as the lifecycle verb below ("waited"): the call returned, the
+ *   delegates may still be running and no result arrived, so the row claims
+ *   neither a live wait nor a delivered result;
  * - a wait that hit its outer bound is `timeout`; cut by new user input is
  *   `interrupted`. An active `TaskList` waits through the same coordinator and
- *   reads the same outcomes; a cheap `TaskList` snapshot (no pending delegates)
- *   carries no `status` and keeps its own roster-check label. The renderer
- *   never invents timing control: the program's chosen progress cadence decides
- *   when a wait wakes; worker results arrive immediately on settlement.
+ *   reads the same outcomes, but a `TaskList` checkpoint that woke on progress
+ *   keeps naming the progress reason it woke (`WAIT_PROGRESS_LABEL_KEYS`): its
+ *   roster-check wording is unchanged. A cheap `TaskList` snapshot (no pending
+ *   delegates) carries no `status` and keeps its own roster-check label. The
+ *   renderer never invents timing control: the program's chosen progress cadence
+ *   decides when a wait wakes; worker results arrive immediately on settlement.
  */
 export const LIFECYCLE_LABEL_KEYS: Record<"wait" | "list" | "stop", string> = {
   wait: "chat.subagentWaited",

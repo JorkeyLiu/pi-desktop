@@ -113,17 +113,26 @@ test("a lifecycle row summarizes by agent name, never by delegation id", () => {
   // A lifecycle row keeps its fixed tool identity and states its own wait on
   // the right, not as a "Delegated" label. A settled TaskWait, or an active
   // TaskList that blocked on the coordinator, names its backend-owned wait
-  // outcome (results arrived vs interim progress vs timeout/interrupted); a
-  // cheap TaskList snapshot and TaskStop keep their own settled labels.
+  // outcome (results arrived vs timeout/interrupted); a cheap TaskList snapshot
+  // and TaskStop keep their own settled labels.
   assert.match(transcriptSource, /waitLabelKey/);
   assert.match(transcriptSource, /WAIT_SETTLED_LABEL_KEYS/);
-  assert.match(transcriptSource, /WAIT_PROGRESS_LABEL_KEYS/);
+  // A TaskWait that woke on progress settles as the lifecycle verb: the row
+  // states that it waited, never a live wait and never a delivered result. The
+  // per-wake-reason progress wording stays where it always was — an active
+  // TaskList checkpoint — so the badge contract is pinned by which lifecycle
+  // may read it rather than by banning the key outright.
+  assert.match(
+    transcriptSource,
+    /waitLifecycle\?\.kind === "progress" && lifecycle !== "wait"\s*\n\s*\? WAIT_PROGRESS_LABEL_KEYS\[waitLifecycle\.reason\]/,
+  );
+  assert.match(transcriptSource, /t\(waitLabelKey \?\? LIFECYCLE_LABEL_KEYS\[lifecycle\]\)/);
   assert.match(transcriptSource, /taskWaitLifecycle\(message\)/);
   // The wait lifecycle is read for both program-wait tools, never only wait.
   assert.match(transcriptSource, /lifecycle === "wait" \|\| lifecycle === "list"/);
-  // A folded checkpoint's tooltip still names what that row did, so repeated
-  // waits on one live delegation read as one ongoing state without losing
-  // inspectable history.
+  // A row that settles on an outcome label still keeps it in its tooltip, so
+  // repeated waits on one live delegation read as one ongoing state without
+  // losing inspectable history.
   assert.match(transcriptSource, /waitTitle/);
   assert.match(topologySource, /export function taskWaitLifecycle\(/);
   assert.match(topologySource, /export function collapsedWaitCheckpoints\(/);
@@ -141,14 +150,19 @@ test("a lifecycle row summarizes by agent name, never by delegation id", () => {
 
 test("a TaskWait row states its wait outcome on the right and keeps it in the tooltip", () => {
   // SSR contract: the row resolves its backend-owned wait outcome key, prints
-  // it in the right-hand status and keeps the roster in the tooltip. Key
-  // resolution itself is covered by the tab SSR fixtures; here the source
-  // contract proves the outcome reaches the status while the row's name stays
-  // the fixed tool identity.
+  // it in the right-hand status and keeps that outcome in the tooltip beside
+  // the roster. What each outcome renders is covered end to end by
+  // subagent-wait-settled-row; here the source contract proves the outcome
+  // reaches the status while the row's name stays the fixed tool identity.
   assert.match(transcriptSource, /t\(waitLabelKey \?\? LIFECYCLE_LABEL_KEYS\[lifecycle\]\)/);
   assert.match(transcriptSource, /const waitTitle = waitLabelKey\s*\n?\s*\? \[t\(waitLabelKey\), rosterSummary\]/);
   assert.match(transcriptSource, /WAIT_SETTLED_LABEL_KEYS\.completed/);
-  assert.match(transcriptSource, /WAIT_PROGRESS_LABEL_KEYS\[waitLifecycle\.reason\]/);
+  // No per-wake-reason progress label reaches a settled TaskWait: that wording
+  // belongs to an active TaskList checkpoint.
+  assert.match(
+    transcriptSource,
+    /waitLifecycle\?\.kind === "progress" && lifecycle !== "wait"/,
+  );
   assert.match(transcriptSource, /taskWaitLifecycle\(message\)/);
   assert.match(transcriptSource, /title=\{waitTitle\}/);
   assert.doesNotMatch(transcriptSource, /\{\s*lifecycle\s*\n?\s*\?\s*t\(\s*\(status === "running"/);
