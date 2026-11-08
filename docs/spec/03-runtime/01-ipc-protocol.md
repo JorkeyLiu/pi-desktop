@@ -834,14 +834,17 @@ the call's row at its chronological position and to stop the preparing pulse;
 `tool_start` still carries the complete arguments and replaces that row in
 place, and a call that never runs leaves no row behind.
 
-Append-only `message_update` frames set `stream: \"delta\"` and omit growing
+Append-only `message_update` frames set `stream: "delta"` and omit growing
 `content` / `thinking` from `message`. Consumers apply `deltaText` /
 `deltaThinking` onto the live row (replace instead of append when `resetText`
-or `resetThinking` is set). The runtime coalesces those frames on an ~16ms
-interval and flushes immediately before tool, terminal, abort, error, and
-retry events. `message_start` and `message_end` still carry a full
-`UiMessage`. Snapshot replacements omit `stream`. These fields are additive
-in protocol v11 (D412).
+or `resetThinking` is set). An empty `deltaText` is a valid value of that
+field: it reports growth the live row does not show, appends nothing, and keeps
+the frame delta-shaped, so a delta frame may arrive with no text to apply at
+all. No field and no protocol version changes. The runtime coalesces those
+frames on the same ~16ms interval and flushes immediately before tool,
+terminal, abort, error, and retry events.
+`message_start` and `message_end` still carry a full `UiMessage`. Snapshot
+replacements omit `stream`. These fields are additive in protocol v11 (D412).
 
 `status` events include an optional runtime-owned `activity` phase while a turn
 is active. `starting` is the prompt handoff; `waiting-model` is the interval

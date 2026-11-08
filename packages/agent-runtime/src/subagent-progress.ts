@@ -458,3 +458,20 @@ export function progressSnapshotEvent(
     turnId: record.taskTurnId,
   };
 }
+
+/**
+ * Growth of the live streamed row that triggers one mid-stream occupancy
+ * re-read and wake re-evaluation.
+ *
+ * A provider emits one delta per token, but the estimate behind the
+ * `context-tokens` wake covers the whole context: re-reading it per delta would
+ * turn one response into thousands of full-context estimates. One read per
+ * ~150 estimated tokens keeps a crossing visible inside the same response while
+ * bounding that work by content growth, not by token count. Clock-free on
+ * purpose: no timer, no polling loop.
+ *
+ * A frame that grows the estimate without growing visible text (streamed
+ * tool-call arguments) is emitted on this same cadence, so the gate has
+ * something to read when the transcript row stays still.
+ */
+export const STREAM_PROGRESS_EVALUATION_CHARS = 512;

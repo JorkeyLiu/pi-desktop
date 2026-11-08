@@ -14,7 +14,10 @@
 
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { estimateContextTokens } from "./pi-runtime-estimates.js";
+import {
+  estimateContextTokens,
+  estimateLiveContextTokens,
+} from "./pi-runtime-estimates.js";
 import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
@@ -163,6 +166,29 @@ export function contextBudgetFor(
 ): ContextBudget {
   return {
     tokens: estimateContextTokensFor(model, messages).tokens,
+    ...contextBudgetLimitsFor(model),
+  };
+}
+
+/**
+ * Same budget as `contextBudgetFor`, counted over the committed transcript plus
+ * the assistant row pi is still streaming.
+ *
+ * The live row is not part of `messages` until `message_end`, but it is already
+ * context the next request will carry, so a reader that skips it understates a
+ * long single response for its whole duration.
+ */
+export function contextBudgetForStreaming(
+  model: ContextBudgetModelInput,
+  committed: AgentMessage[],
+  live: AgentMessage | undefined,
+): ContextBudget {
+  const estimate =
+    "api" in model
+      ? estimateLiveContextTokens(committed, live, model)
+      : estimateLiveContextTokens(committed, live);
+  return {
+    tokens: estimate.tokens,
     ...contextBudgetLimitsFor(model),
   };
 }

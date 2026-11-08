@@ -64,7 +64,7 @@ import {
 import type { RuntimeProviderConfig } from "./provider-binding.js";
 import { clampThinkingLevel } from "./thinking-level.js";
 import { subagentModelBinding, type SubagentProviderRetryState } from "./subagent-model-binding.js";
-import { contextBudgetFor } from "./context-budget.js";
+import { contextBudgetFor, contextBudgetForStreaming } from "./context-budget.js";
 import { convertToLlm } from "./pi-runtime-messages.js";
 import {
   delegateRetentionMode,
@@ -73,6 +73,7 @@ import {
   subagentContextOverflowError,
   type DelegateTurnUpdate,
 } from "./subagent-context.js";
+import { STREAM_PROGRESS_EVALUATION_CHARS } from "./subagent-progress.js";
 import {
   dedupeToolCallMessages,
   reportDuplicateToolCallDrop,
@@ -260,6 +261,21 @@ export class SubagentRun {
   private currentAssistant?: UiMessage;
   /** Calls whose identity settled while their arguments were still streaming. */
   private readonly toolArgsPreparation = createToolArgsPreparation();
+  /**
+   * Estimate-relevant size of the assistant row this run is streaming: the text
+   * and thinking the transcript shows plus the names and arguments of the tool
+   * calls pi is writing into it.
+   *
+   * pi's estimator charges exactly those parts, so this number moves when this
+   * delegate's context estimate can move. It is accumulated from deltas rather
+   * than measured off the row: `JSON.stringify` of a half-written argument on
+   * every frame would cost more than the estimate it gates.
+   */
+  private streamedRowChars = 0;
+  /** Argument characters written into the streaming row's tool calls so far. */
+  private streamedToolCallChars = 0;
+  /** `streamedRowChars` at the last emitted frame: bounds argument-only frames. */
+  private emittedRowChars = 0;
   private lastReportText = "";
   private streamStartedAt?: number;
   private lastReportTruncated = false;
@@ -503,10 +519,14 @@ export class SubagentRun {
    *
    * `contextTokens` is the current estimated occupancy of this run's model
    * context, computed with the same budget semantics the compaction guard
-   * uses — an estimate, not spend. `usage` is the cumulative billed spend
-   * reported by this run's provider requests. Unknown estimator shapes
-   * (rows the heuristic cannot score) leave occupancy unknown rather than
-   * failing the read.
+   * uses — an estimate, not spend. It covers the committed transcript plus the
+   * live partial row: a single long streamed response reaches `messages` only
+   * at `message_end`, and its growth must be visible while it streams. The
+   * partial row is charged as content, never read as a usage anchor — its
+   * reported usage is still in flight. `usage` is the cumulative billed spend
+   * reported by this run's provider requests. Unknown estimator shapes (rows
+   * the heuristic cannot score) leave occupancy unknown rather than failing the
+   * read.
    */
   progress(): {
     toolCalls: number;
@@ -516,9 +536,10 @@ export class SubagentRun {
   } {
     let contextTokens: number | undefined;
     try {
-      contextTokens = contextBudgetFor(
+      contextTokens = contextBudgetForStreaming(
         this.agent.state.model,
         this.agent.state.messages,
+        this.agent.state.streamingMessage,
       ).tokens;
     } catch {
       contextTokens = undefined;
@@ -529,6 +550,19 @@ export class SubagentRun {
       ...(this.usage ? { usage: this.usage } : {}),
       ...(contextTokens !== undefined ? { contextTokens } : {}),
     };
+  }
+
+  /**
+   * Estimate-relevant size of the row this run is streaming, for readers that
+   * gate on streamed growth (the `context-tokens` wake).
+   *
+   * The transcript row a frame carries holds text and thinking only, while the
+   * estimate also charges tool-call names and arguments. A delegate writing one
+   * long argument therefore grows its context without growing its visible row;
+   * this counter is the measure that covers both.
+   */
+  streamedChars(): number {
+    return this.streamedRowChars;
   }
 
   private dedupeToolCalls(messages: AgentMessage[]): AgentMessage[] {
@@ -918,6 +952,29 @@ export class SubagentRun {
   }
 
   /**
+   * Charge tool-call arguments as they are written.
+   *
+   * Arguments exist only as stream frames: by the time the call is in the row
+   * it is settled, and measuring them then would `JSON.stringify` a
+   * half-written argument on every frame. Deltas are the increment, so the
+   * accounting stays O(delta) instead of O(arguments).
+   */
+  private trackStreamedToolCalls(event: AssistantMessageEvent | undefined): void {
+    if (!event) return;
+    if (event.type === "toolcall_delta") {
+      this.streamedToolCallChars += event.delta.length;
+      return;
+    }
+    // Some providers emit the whole call at once and never send a delta: the
+    // block is already written when it first appears.
+    if (event.type !== "toolcall_start") return;
+    const block = event.partial.content[event.contentIndex];
+    if (block?.type !== "toolCall") return;
+    this.streamedToolCallChars +=
+      block.name.length + (JSON.stringify(block.arguments)?.length ?? 0);
+  }
+
+  /**
    * Translate delegate events into transcript events.
    *
    * Only message and tool events are forwarded. `agent_end`, `turn_end` and
@@ -937,6 +994,9 @@ export class SubagentRun {
           : undefined;
         this.streamStartedAt = Date.now();
         this.toolArgsPreparation.reset();
+        this.streamedRowChars = 0;
+        this.streamedToolCallChars = 0;
+        this.emittedRowChars = 0;
         this.currentAssistant = {
           ...(retryingAssistant ?? this.newAssistantRow()),
           content: content.text,
@@ -956,6 +1016,7 @@ export class SubagentRun {
       case "message_update": {
         if (!this.currentAssistant || event.message.role !== "assistant") break;
         this.prepareToolCalls(event.assistantMessageEvent);
+        this.trackStreamedToolCalls(event.assistantMessageEvent);
         const content = assistantContent((event.message as AssistantMessage).content);
         const previousText = this.currentAssistant.content;
         const previousThinking = this.currentAssistant.thinking ?? "";
@@ -975,12 +1036,21 @@ export class SubagentRun {
           ...(nextThinking ? { thinking: nextThinking } : {}),
           status: "streaming",
         };
-        if (
-          textDelta.delta ||
-          thinkingDelta.delta ||
-          textDelta.reset ||
-          thinkingDelta.reset
-        ) {
+        this.streamedRowChars =
+          nextText.length + nextThinking.length + this.streamedToolCallChars;
+        const growing =
+          this.streamedRowChars - this.emittedRowChars >=
+          STREAM_PROGRESS_EVALUATION_CHARS;
+        // A frame carries visible growth, or — when only tool-call arguments
+        // are being written — one frame per growth quantum. The base waker
+        // charges arguments, so without that frame an argument stream long
+        // enough to cross the `context-tokens` threshold would stay invisible
+        // until `message_end`, which is the one event a long response delays.
+        const visibleDelta = Boolean(
+          textDelta.delta || thinkingDelta.delta || textDelta.reset || thinkingDelta.reset,
+        );
+        if (visibleDelta || growing) {
+          this.emittedRowChars = this.streamedRowChars;
           this.emit({
             type: "message_update",
             message: this.currentAssistant,
@@ -988,6 +1058,13 @@ export class SubagentRun {
             ...(thinkingDelta.delta ? { deltaThinking: thinkingDelta.delta } : {}),
             ...(textDelta.reset ? { resetText: true } : {}),
             ...(thinkingDelta.reset ? { resetThinking: true } : {}),
+            // A frame with no visible delta marks itself delta-shaped with an
+            // empty `deltaText`: the wire slimmer and the stream coalescer then
+            // treat it like every other append-only frame instead of
+            // serializing the whole cumulative row for growth the renderer
+            // already shows. The field is the existing one, so this adds no
+            // protocol surface.
+            ...(!visibleDelta ? { deltaText: "" } : {}),
           });
         }
         break;

@@ -113,11 +113,19 @@ export function createStreamCoalescer(
       const key = pendingKey(envelope, event);
       const existing = pending.get(key);
       if (existing) {
-        stats.coalesced += 1;
-        pending.set(key, {
-          envelope,
-          event: mergeMessageUpdates(existing.event, event),
-        });
+        const merged = mergeMessageUpdates(existing.event, event);
+        if (hasMessageUpdateDeltas(merged)) {
+          stats.coalesced += 1;
+          pending.set(key, { envelope, event: merged });
+        } else {
+          // Merging two updates whose deltas are all empty leaves no delta,
+          // reset, or `stream` marker behind, so the combined frame would ship
+          // as a full snapshot and lose its wire slimming. Emit the pending
+          // frame in order, then park this one as the new pending frame.
+          flushPending();
+          pending.set(key, { envelope, event });
+          scheduleFlush();
+        }
       } else {
         pending.set(key, { envelope, event });
         scheduleFlush();

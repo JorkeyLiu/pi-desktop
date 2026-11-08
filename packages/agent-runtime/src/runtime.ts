@@ -571,6 +571,9 @@ export type DelegationRecord = {
   /** Current estimated context occupancy of the delegate, when known.
    * An estimate, not spend: it says how full the child's window is. */
   contextTokens?: number;
+  /** Live streamed content already folded into `contextTokens`: the
+   * mid-stream re-read runs on content growth, never once per token. */
+  streamedProgressChars?: number;
   /** Wake watermarks shared by consecutive waits, so a re-wait cannot fire
    * on progress a previous wait already reported. */
   wake: SubagentWakeState;

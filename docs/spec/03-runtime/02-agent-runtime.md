@@ -776,10 +776,17 @@ criterion-by-criterion report of what was met and the evidence observed.
 - Pi `thinking` blocks become `UiMessage.thinking` and
   `message_update.deltaThinking`. They never append to `content` or
   `deltaText`.
-- Append-only `message_update` events set `stream: \"delta\"` and carry only the
+- Append-only `message_update` events set `stream: "delta"` and carry only the
   new chunk. The runtime keeps the full `currentAssistant` in memory, coalesces
   deltas every 16ms, and flushes before tool/terminal/abort/error/retry
-  boundaries. `message_end` is the authoritative snapshot (D412).
+  boundaries. `message_end` is the authoritative snapshot (D412). A frame whose
+  body chunk is empty — real growth with nothing to display, such as streamed
+  tool-call arguments — still marks itself delta-shaped by carrying
+  `deltaText: ""`, the existing delta field with an empty value. Consumers
+  append nothing for it and the row keeps its visible text. Merging two such
+  frames inside one coalescing window would leave no delta to send and degrade
+  the combined frame into a full snapshot, so the coalescer flushes the pending
+  frame first and parks the marker as the next pending one.
 - Restored assistant history reconstructs separate text and thinking blocks
   before the next turn. Assistant transport identity is `model.provider` /
   `model.id` (same as live requests), not the account row id — including when
@@ -1054,7 +1061,11 @@ entries, settlement details, and the idle-resume prompt each report the shared
 `toolCalls` / `turns`, the current estimated context occupancy
 (`contextTokens`), and the cumulative billed spend (`usage`). Occupancy is an
 estimate recomputed from the delegate's live messages with the same estimator
-the compaction budget uses — it says how full the child's window is. Spend is
+the compaction budget uses — it says how full the child's window is. The row a
+delegate is still streaming counts toward that estimate, including text,
+reasoning, and tool-call arguments, so a long single response is visible before
+it settles; that in-flight row's own partial usage is content, never a completed
+baseline, so the number keeps growing as the body arrives. Spend is
 the provider-reported usage merged by physical operation identity across live
 envelope reports, run progress reads, and settlement, so re-reports and replays
 never double-charge. The two are reported separately and must not be confused.

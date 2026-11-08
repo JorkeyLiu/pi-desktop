@@ -97,3 +97,34 @@ export function estimateContextTokens(
     lastUsageIndex,
   };
 }
+
+/**
+ * Estimate for the committed transcript plus the assistant row pi is still
+ * streaming.
+ *
+ * The in-flight row must not be read as a usage anchor. A provider reports
+ * usage before the body arrives — Anthropic sets input tokens at
+ * `message_start` — and pi leaves `stopReason: "pending"` on that row until the
+ * message stops, which `getLastAssistantUsageInfo` accepts. Anchoring on it
+ * would freeze the estimate at the tokens reported before the body started
+ * arriving and never charge the streamed content, so the anchor stays the last
+ * committed one and the live row is charged as trailing content.
+ *
+ * Committed usage is untouched: once the row commits, its settled usage is the
+ * anchor exactly as before.
+ */
+export function estimateLiveContextTokens(
+  committed: AgentMessage[],
+  live: AgentMessage | undefined,
+  model?: Model<Api>,
+): ContextUsageEstimate {
+  const estimate = estimateContextTokens(committed, model);
+  if (!live) return estimate;
+  const liveTokens = estimateTokens(live, model);
+  return {
+    tokens: estimate.tokens + liveTokens,
+    usageTokens: estimate.usageTokens,
+    trailingTokens: estimate.trailingTokens + liveTokens,
+    lastUsageIndex: estimate.lastUsageIndex,
+  };
+}

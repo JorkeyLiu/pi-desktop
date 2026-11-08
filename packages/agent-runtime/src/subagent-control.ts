@@ -34,6 +34,7 @@ import {
   formatDelegationHeartbeat,
   refreshDelegationProgress,
   snapshotWaitRecord,
+  STREAM_PROGRESS_EVALUATION_CHARS,
   type WaitResultSnapshot,
 } from "./subagent-progress.js";
 import type {
@@ -385,7 +386,9 @@ export type DelegationActivityEffects = {
  * and wake re-evaluation. Mirrors the parent's turn-boundary accounting:
  * `turn_start` counts, `tool_start` counts and pins arguments for replay,
  * `tool_end` releases them, `usage`/`message_end` merge spend by operation
- * identity and refresh the persisted Task snapshot.
+ * identity and refresh the persisted Task snapshot, and a streaming
+ * assistant row keeps the occupancy estimate — and therefore the
+ * `context-tokens` wake — current inside one long response.
  */
 export function routeDelegationEvent(
   record: {
@@ -393,6 +396,19 @@ export function routeDelegationEvent(
     turns: number;
     toolCalls: number;
     pendingToolCallIds?: Set<string>;
+    /**
+     * Live loop handle, when the record still holds one. Its streamed-row size
+     * is the only place growth inside a streamed tool-call argument is visible:
+     * the transcript row a frame carries holds text and thinking only, while
+     * the estimator also charges tool names and arguments.
+     */
+    run?: { streamedChars?: () => number } | null;
+    /**
+     * Streamed size already reflected in the record's occupancy estimate.
+     * Bounds mid-stream re-reads to content growth, so one long response cannot
+     * re-estimate the whole context per token.
+     */
+    streamedProgressChars?: number;
   },
   envelope: AgentEventEnvelope,
   effects: DelegationActivityEffects,
@@ -457,6 +473,31 @@ export function routeDelegationEvent(
         (event.type === "message_update" && event.deltaText),
     );
     if (thinking && !text) effects.touchPhase("thinking");
+    // Mid-stream occupancy. The running response lives in the run's
+    // `streamingMessage` and enters `messages` only at `message_end`, so a
+    // single long streamed response would otherwise hide its context growth
+    // from every waiter until the next event: a `context-tokens` threshold it
+    // crossed would stay unobserved for the rest of the response. Re-read the
+    // estimate and re-evaluate the waiters on growth only (a shrinking row
+    // re-baselines instead of stalling), never per token.
+    //
+    // The live loop's own size is the measure whenever the record holds one:
+    // it covers the streamed text, the thinking, and the tool-call arguments
+    // the estimator charges, which the transcript row a frame carries does not.
+    // The row itself is the fallback for a record without a live run. Wire-
+    // slimmed `stream: "delta"` updates never reach here (the runtime routes
+    // the in-process envelopes a delegate run emits, and the slimming happens
+    // only on the way to the renderer), so the fallback cannot be driven per
+    // event by a row that carries no cumulative content.
+    const streamed =
+      record.run?.streamedChars?.() ??
+      (event.message.content?.length ?? 0) + (event.message.thinking?.length ?? 0);
+    const evaluated = record.streamedProgressChars ?? 0;
+    if (streamed < evaluated || streamed - evaluated >= STREAM_PROGRESS_EVALUATION_CHARS) {
+      record.streamedProgressChars = streamed;
+      effects.refreshProgress();
+      effects.notifyWaiters();
+    }
   }
 }
 
