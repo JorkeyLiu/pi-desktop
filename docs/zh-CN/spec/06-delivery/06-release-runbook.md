@@ -21,6 +21,21 @@
 发布通道需要注入 Developer ID 身份（本地）或 `CSC_LINK` 证书（CI）；签名或公证验证
 失败时，发布会在上传前失败。
 
+
+运行 `scripts/build-desktop-release.mjs` 的打包通道（`dist`、`dist:mac`、`dist:win`）
+会把已安装 `electron` 包内 `node_modules/electron/checksums.json` 的官方校验和交给
+electron-builder。否则 electron-builder 每次都会重新读取发布版 `SHASUMS256.txt`，
+即使 Electron zip 已在 `@electron/get` 缓存中；GitHub 故障（504、代理失败、离线 runner）
+因此会让已持有有效 zip 的机器打包失败：缓存工件被视为无法校验，构建回退为重新下载。
+使用这些官方校验和时，同一个 zip 仍会按其官方 SHA-256 校验，Electron 工件无需联网。
+生成的配置只作用于上述通道；本地 `pnpm --filter @pi-desktop/desktop pack` 仍使用
+electron-builder 默认下载路径。当覆盖不会生效时同样跳过，并在构建日志中打印原因：
+配置自行固定 `electronVersion`、参数传入 `electronVersion` 或 `electronDist`，
+以及 electron-builder 不会原样转发的 `electronDownload` 块——`mirrorOptions`
+（会被折叠成裸 mirror）、`cache`/`mirror`/`customDir` 等旧版 electron-download 键、
+已存在 `checksums`、`force: true` 或 `unsafelyDisableChecksums: true`。
+这些通道保留 builder 自己的解析，而不是声称做了实际不会发生的校验。
+
 在 macOS 上，`pnpm dev` 创建并重用带有指纹的品牌 Electron 主机
 捆绑在 `.cache/electron-dev/` 下。它的包名称、可执行文件、标识符、
 和 ICNS 资源是仅用于开发的 PI-Desktop 值，因此 AppKit 显示

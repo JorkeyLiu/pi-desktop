@@ -20,6 +20,26 @@ requires an injected Developer ID identity (local) or `CSC_LINK` certificate
 (CI), and fails before publication if signing or notarization verification does
 not pass.
 
+The package lanes that run `scripts/build-desktop-release.mjs` (`dist`,
+`dist:mac`, `dist:win`) hand electron-builder the published Electron checksums
+from the installed `electron` package (`node_modules/electron/checksums.json`).
+electron-builder otherwise re-reads the release `SHASUMS256.txt` on every run,
+even when the Electron zip is already in the `@electron/get` cache, so a GitHub
+outage (504, proxy failure, offline runner) fails packaging on a machine that
+already holds a valid zip: the cached artifact is treated as unverifiable and
+the build falls back to re-downloading it. With the published values the same
+zip is still verified against its official SHA-256 and the Electron artifact
+needs no network. The generated configuration only applies to those lanes; a
+local `pnpm --filter @pi-desktop/desktop pack` keeps electron-builder's default
+downloader. The override is also skipped, with the reason printed in the build
+log, whenever it would not take effect: a config that pins its own
+`electronVersion`, arguments that pass `electronVersion` or `electronDist`, and
+an `electronDownload` block electron-builder does not forward unchanged —
+`mirrorOptions` (collapsed to a bare mirror), the legacy `electron-download`
+keys such as `cache`/`mirror`/`customDir`, existing `checksums`, `force: true`,
+or `unsafelyDisableChecksums: true`. Those lanes keep builder's own resolution
+rather than claim a verification they would not perform.
+
 On macOS, `pnpm dev` creates and reuses a fingerprinted branded Electron host
 bundle under `.cache/electron-dev/`. Its bundle name, executable, identifier,
 and ICNS resource are development-only PI-Desktop values, so AppKit shows
