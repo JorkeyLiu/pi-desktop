@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import type { AgentEventEnvelope, SubagentDefinition } from "@pi-desktop/shared";
 import type { Message } from "@earendil-works/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   composeSubagentSystemPrompt,
   MAX_SUBAGENT_REPORT_CHARS,
@@ -18,6 +19,7 @@ import {
   PROVIDER_RATE_LIMIT_MAX_RETRIES,
   PROVIDER_TRANSIENT_MAX_RETRIES,
 } from "./provider-retry.js";
+import { scopeDelegateTools } from "./subagent-continue.js";
 
 /** Terminal statuses a run can report (ADR 0253 removed `truncated`). */
 const RUN_STATUSES: SubagentRunStatus[] = [
@@ -1366,5 +1368,69 @@ describe("SubagentRun progress and steer", () => {
     await settled.run.run();
     expect(settled.run.isSettled()).toBe(true);
     expect(() => settled.run.steer("too late")).toThrow("already settled");
+  });
+});
+
+describe("SubagentRun delegate tool context", () => {
+
+  it("reads the delegate's own context for the duration of a scoped call", async () => {
+    const body = "# Skill: Notes (fixture/notes)\nBODY";
+    const childMessages = [
+      { role: "user", content: "Earlier child turn", timestamp: 1 },
+      {
+        role: "toolResult",
+        toolCallId: "child-call",
+        toolName: "Skill",
+        content: [{ type: "text", text: body }],
+        isError: false,
+        timestamp: 2,
+      },
+    ] as never[];
+    const { run } = createRun({ initialMessages: childMessages });
+    const real = run as unknown as SubagentRun;
+    const seen: Array<readonly unknown[]> = [];
+    const callContexts = new Map<string, () => readonly AgentMessage[]>();
+    const tool = {
+      name: "Skill",
+      label: "Skill",
+      description: "probe",
+      parameters: Type.Object({ id: Type.String() }),
+      execute: async () => {
+        // What the runtime gate would read while this call runs.
+        seen.push(callContexts.get("child-skill")?.() ?? []);
+        return { content: [{ type: "text", text: body }] };
+      },
+    };
+    const [scoped] = scopeDelegateTools(
+      [tool as never],
+      definition({ tools: ["Skill"] }),
+      "delegation-1",
+      undefined,
+      {
+        mutationOwners: new Map(),
+        permissionScopes: new Map(),
+        worktrees: new Map(),
+        callContexts,
+        contextMessages: () => real.contextMessages(),
+      },
+    );
+
+    await scoped!.execute("child-skill", { id: "fixture/notes" });
+
+    expect(seen).toHaveLength(1);
+    // The gate read this run's own live context, not a copy or the parent's.
+    expect(seen[0]).toBe(real.contextMessages());
+    expect(JSON.stringify(seen[0])).toContain("BODY");
+    expect(JSON.stringify(seen[0])).toContain("Earlier child turn");
+    // Cleanup: no entry survives the call, so a later call cannot inherit it.
+    expect(callContexts.size).toBe(0);
+  });
+
+  it("keeps two delegates' contexts apart", () => {
+    const first = createRun({ initialMessages: [{ role: "user", content: "A", timestamp: 1 }] as never[] });
+    const second = createRun({ initialMessages: [{ role: "user", content: "B", timestamp: 1 }] as never[] });
+    expect(JSON.stringify((first.run as unknown as SubagentRun).contextMessages())).toContain("A");
+    expect(JSON.stringify((first.run as unknown as SubagentRun).contextMessages())).not.toContain("B");
+    expect(JSON.stringify((second.run as unknown as SubagentRun).contextMessages())).toContain("B");
   });
 });

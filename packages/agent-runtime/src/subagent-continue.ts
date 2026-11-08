@@ -30,7 +30,7 @@ import {
 
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { DEFAULT_SUBAGENT_PERMISSION } from "@pi-desktop/shared";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool, AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SubagentDefinition } from "@pi-desktop/shared";
 import { nowIso } from "./agent-messages.js";
 import type { DelegationChain } from "./delegation-history.js";
@@ -715,6 +715,13 @@ export function buildContinueSpawnEmissions(options: {
  * The ledger stays optional so direct callers (and older call shapes) keep
  * working: without an owners binding the scope still applies, it is just not
  * recorded in the runtime maps.
+ *
+ * `contextMessages` answers "which agent is running this call". A delegate owns
+ * its own conversation, so a tool that decides something from context — the
+ * repeated `Skill` load is the first — must read the delegate's messages for
+ * the duration of the call, never the session runtime's. The callback exists
+ * only while the call runs, so a sibling delegate or a later resume never
+ * inherits another agent's context.
  */
 export function scopeDelegateTools(
   tools: AgentTool[],
@@ -725,6 +732,10 @@ export function scopeDelegateTools(
     mutationOwners: Map<string, string>;
     permissionScopes: Map<string, unknown>;
     worktrees: Map<string, string>;
+    /** Per-call context of the agent that owns the tool, keyed by call id. */
+    callContexts?: Map<string, () => readonly AgentMessage[]>;
+    /** The owning agent's live context; installed only while a call runs. */
+    contextMessages?: () => readonly AgentMessage[];
   },
 ): AgentTool[] {
   const scope = definition.permission ?? DEFAULT_SUBAGENT_PERMISSION;
@@ -736,12 +747,15 @@ export function scopeDelegateTools(
         owners?.permissionScopes.set(toolCallId, scope);
       }
       if (worktreeKey) owners?.worktrees.set(toolCallId, worktreeKey);
+      const readContext = owners?.contextMessages;
+      if (readContext) owners?.callContexts?.set(toolCallId, readContext);
       try {
         return await tool.execute(toolCallId, args, signal, onUpdate);
       } finally {
         owners?.permissionScopes.delete(toolCallId);
         owners?.worktrees.delete(toolCallId);
         owners?.mutationOwners.delete(toolCallId);
+        owners?.callContexts?.delete(toolCallId);
       }
     },
   }));

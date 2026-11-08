@@ -3753,11 +3753,11 @@ window; opening a normal panel afterward must still work.
 #### E2E-024I: Plugin skills reach the agent and load on demand
 
 - **Preconditions**: `examples/plugins/hello` enabled with `agent.prompt.inject` granted; a second copy of the manifest without that permission available; one workspace that is a plugin directory and one that is not.
-- **Steps**: 1) Start a session and ask the agent what skills it has. 2) Ask it to follow the Hello demo skill so it calls the `Skill` tool. 3) Edit the skill document and repeat step 2. 4) Disable the plugin and start a new turn. 5) Load the variant without `agent.prompt.inject` and repeat step 1. 6) Declare a document larger than the per-skill cap. 7) Open each of the two workspaces in turn.
-- **Expected**: The catalog lists the skill id, name, and trimmed description but no body or path, after the built-in skills and before the project instruction chain; the `Skill` schema is loaded through `ToolSearch` only when requested and reads the edited file without a restart; the loaded result identifies the actual `SKILL.md` path and its parent directory before the body so relative references resolve against that document; disabling the plugin rebuilds the runtime so the skill disappears from the next turn; the variant without the permission loads normally and contributes no skills; the oversized document is skipped with an audit line rather than clamped into the prompt; the built-in `plugin-development` skill is catalogued in the plugin workspace and absent in the other, while `PluginCheck` is listed in the bounded on-demand tool catalog in both.
+- **Steps**: 1) Start a session and ask the agent what skills it has. 2) Ask it to follow the Hello demo skill so it calls the `Skill` tool. 3) Edit the skill document and repeat step 2. 4) Disable the plugin and start a new turn. 5) Load the variant without `agent.prompt.inject` and repeat step 1. 6) Declare a document larger than the per-skill cap. 7) Open each of the two workspaces in turn. 8) In one session, load the same skill on two consecutive turns, then force a compaction that drops the body and load it again.
+- **Expected**: The catalog lists the skill id, name, and trimmed description but no body or path, after the built-in skills and before the project instruction chain; the `Skill` schema is loaded through `ToolSearch` only when requested and reads the edited file without a restart; the loaded result identifies the actual `SKILL.md` path and its parent directory before the body so relative references resolve against that document; disabling the plugin rebuilds the runtime so the skill disappears from the next turn; the variant without the permission loads normally and contributes no skills; the oversized document is skipped with an audit line rather than clamped into the prompt; the built-in `plugin-development` skill is catalogued in the plugin workspace and absent in the other, while `PluginCheck` is listed in the bounded on-demand tool catalog in both; the second consecutive load returns a short reuse notice naming the requested id instead of repeating the body, the expanded Skill row shows that notice, and once the checkpoint drops the body the next load returns the full document again.
 - **Specs linked**: `07-plugins/02-plugin-manifest-schema.md`, `07-plugins/04-plugin-security.md` §7.1, `07-plugins/10-plugin-devex.md`, ADR 0039, ADR 0037, D174
 - **Acceptance**: G (skill activation) + E (tools & permissions) + D (high-risk permission gating)
-- **Status**: Unit-covered (`plugin-skills.test.mjs`, agent-runtime prompt/digest tests); agent-facing scenario Draft
+- **Status**: Unit-covered (`plugin-skills.test.mjs`, agent-runtime prompt/digest tests, `packages/agent-runtime/src/skill-context.test.ts` and the captured-provider-context cases in `system-transcript-runtime.test.ts`); agent-facing scenario Draft
 
 #### E2E-024J: Plugin theme applies and falls back when withdrawn
 
@@ -18412,7 +18412,10 @@ renderer's durable transcript reads. No real model or provider is contacted.
   Runtime/adapter tests verify the native delta contains only the modified entry,
   and fallback models receive the complete current catalog with removals applied.
   Invoke Skill through the actual sidecar
-  bridge with a fixture body supplied by the embedding host. Compact, restart
+  bridge with a fixture body supplied by the embedding host; a second load of
+  the same document in the same context keeps one body in the provider request
+  and returns the reuse notice in both the model result and the persisted row.
+  Compact, restart
   the sidecar, and verify current skills and active tools survive without
   replaying old tool results. Remove the final skill and verify its catalog and
   executable schema disappear without recreating the runtime.

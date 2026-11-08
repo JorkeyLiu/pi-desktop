@@ -285,6 +285,7 @@ import {
   type PluginSkillDef,
 } from "./plugin-skills-prompt.js";
 import { pluginSkillsDigest } from "./plugin-skills.js";
+import { repeatedSkillNotice } from "./skill-context.js";
 import {
   openCodeEndpointFromProvider,
   withOpenCodeSessionHeaders,
@@ -1939,6 +1940,17 @@ export class DesktopAgentRuntime {
   private mutationRecoveryGraces = new Set<string>();
   /** Tool-call ownership keeps concurrent delegates' mutation budgets apart. */
   private mutationOwners = new Map<string, string>();
+  /**
+   * The model context that owns each running delegate tool call. A delegate
+   * owns its own conversation (ADR 0062), so a context-derived decision inside
+   * a tool — the repeated `Skill` load is the first — reads the delegate's
+   * messages through this entry instead of this runtime's. Absent for the
+   * session runtime's own calls.
+   */
+  private readonly delegateCallContexts = new Map<
+    string,
+    () => readonly AgentMessage[]
+  >();
   /** Why the recovery guard ended the turn, pending its visible error row. */
   private pendingMutationTermination?: {
     kind: "edit" | "patch-command";
@@ -3737,6 +3749,33 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         } else {
           text = JSON.stringify(rawContent, null, 2);
         }
+        // A skill document the model already holds in full is not worth
+        // sending again: the body is the largest result it can ask for. The
+        // decision is read from the context that owns this call
+        // (skill-context.ts): this runtime's own for a session call, the
+        // delegate's for a delegated one. An evicted, revised, or
+        // never-delivered document still loads.
+        if (
+          toolName === SKILL_TOOL_NAME &&
+          result.ok &&
+          result.isError !== true
+        ) {
+          const contextMessages =
+            this.delegateCallContexts.get(toolCallId)?.() ??
+            this.liveSessionContext().messages;
+          const reused = repeatedSkillNotice(
+            contextMessages,
+            text,
+            typeof recordParams?.id === "string" ? recordParams.id : "",
+          );
+          if (reused !== undefined) {
+            // The result details are what main persists and what a restored
+            // context replays: they must carry what the model actually saw, so
+            // the expanded Skill row and the replayed body agree.
+            text = reused;
+            details = reused;
+          }
+        }
         if (!result.ok) this.failedHostToolCalls.add(toolCallId);
         return {
           content: [{ type: "text", text }, ...imageBlocks],
@@ -4806,6 +4845,11 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             mutationOwners: this.mutationOwners,
             permissionScopes: this.delegatePermissionScopes,
             worktrees: this.delegateWorktrees,
+            callContexts: this.delegateCallContexts,
+            // The run is constructed below, and this callback is read only
+            // while one of its calls is executing, so it always observes the
+            // child that owns the call — never a sibling or the parent.
+            contextMessages: () => subagentRun?.contextMessages() ?? [],
           });
           subagentRun = new SubagentRun({
             definition,
@@ -9248,6 +9292,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     this.mutationFailureCounts.clear();
     this.mutationRecoveryGraces.clear();
     this.mutationOwners.clear();
+    this.delegateCallContexts.clear();
     this.delegateMutationTerminations.clear();
     this.pendingMutationTermination = undefined;
     this.terminatingToolCalls.clear();
