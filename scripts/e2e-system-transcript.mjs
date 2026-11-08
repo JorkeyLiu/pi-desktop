@@ -145,6 +145,24 @@ try {
       assert(!JSON.stringify(requests.at(-1).messages).includes("First skill"));
       assert(JSON.stringify(requests.at(-1).messages).includes("Unchanged skill"));
       console.log("PASS: skill catalog update reuses runtime and Skill executes across process boundary");
+      // A second load of the same document in the same context must not repeat
+      // the body: the sidecar still serves it, the model receives a reuse
+      // notice, and the persisted row matches what the model saw.
+      responses.push({ name: "Skill", args: { id: skills[0].id } });
+      const repeated = await prompt("user-3b");
+      assert.equal(executedTools.length, 2, "a repeat load still reaches the embedding host");
+      const repeatMessages = JSON.stringify(requests.at(-1).messages);
+      assert.equal(
+        repeatMessages.split("Fixture skill body").length - 1,
+        1,
+        "the skill body must appear once in the model context",
+      );
+      assert(repeatMessages.includes("already loaded"));
+      assert(
+        JSON.stringify(repeated.toolResults.at(-1)?.result ?? {}).includes("already loaded"),
+        "the persisted tool result carries the reuse notice",
+      );
+      console.log("PASS: a repeated Skill load reuses the body the context already holds");
       await sidecar.call("agent.compact", params());
       const compacted = await detail();
       assert(JSON.parse(compacted.compaction.details.systemMessageJson).toolsAdded.some((tool) => tool.name === "BrowserPreview"));

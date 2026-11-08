@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { type Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
+import { type Agent, type AgentMessage, type AgentTool, type AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   createAssistantMessageEventStream,
   getCurrentTools,
@@ -7809,6 +7809,167 @@ describe("DesktopAgentRuntime plugin skills (D174)", () => {
         args: { id: "demo.hello/release-notes" },
       }),
     );
+    expect(result.content).toEqual([
+      { type: "text", text: "# Skill: Release notes" },
+    ]);
+
+    await runtime.dispose();
+  });
+
+  const loadedSkillRows = (content: string): UiMessage[] => [
+    { id: "u1", role: "user", content: "Load the skill", createdAt: "2026-09-01T00:00:00Z" },
+    { id: "a1", role: "assistant", content: "", createdAt: "2026-09-01T00:00:01Z" },
+    {
+      id: "t1", role: "tool", content, createdAt: "2026-09-01T00:00:02Z",
+      toolCallId: "loaded-call", toolName: "Skill", toolResult: content, toolStatus: "success",
+    },
+  ];
+
+  it("replaces a repeat load with a reuse notice when the context holds the document", async () => {
+    const host = {
+      call: vi.fn().mockResolvedValue({ ok: true, content: "# Skill: Release notes" }),
+    };
+    const runtime = createRuntime({
+      pluginSkills,
+      host,
+      history: loadedSkillRows("# Skill: Release notes"),
+    });
+    const tool = (runtime as any).agent.state.tools.find(
+      (entry: any) => entry.name === "Skill",
+    );
+
+    const result = await tool.execute("call-2", {
+      id: "demo.hello/release-notes",
+    });
+
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0].text).toContain("already loaded");
+    expect(result.content[0].text).not.toContain("# Skill: Release notes");
+    // The transcript row carries what the model saw, so a restored context
+    // replays the notice rather than a body it never received.
+    expect(result.details).toBe(result.content[0].text);
+
+    await runtime.dispose();
+  });
+
+  /** One delegate's tool scope, wired the way the runtime wires a spawn. */
+  const delegateScope = (
+    runtime: any,
+    tool: AgentTool,
+    name: string,
+    contextMessages: () => readonly any[],
+  ): AgentTool => {
+    const definition: SubagentDefinition = {
+      name,
+      description: "Read files.",
+      tools: ["Skill"],
+      prompt: "Report.",
+      source: "builtin",
+    };
+    const callContexts = runtime.delegateCallContexts as Map<
+      string,
+      () => readonly any[]
+    >;
+    const [scoped] = scopeDelegateTools([tool], definition, `delegation-${name}`, undefined, {
+      mutationOwners: new Map(),
+      permissionScopes: new Map(),
+      worktrees: new Map(),
+      callContexts,
+      contextMessages,
+    });
+    return scoped!;
+  };
+  const skillToolOf = (runtime: any): AgentTool =>
+    runtime.agent.state.tools.find((entry: any) => entry.name === "Skill");
+  const resultText = (result: AgentToolResult<unknown>): string => {
+    const [block] = result.content;
+    return (block as { text?: string } | undefined)?.text ?? "";
+  };
+  const childContext = (content: string): any[] => [
+    { role: "user", content: "Load the skill", timestamp: 1 },
+    {
+      role: "toolResult",
+      toolCallId: "child-loaded",
+      toolName: "Skill",
+      content: [{ type: "text", text: content }],
+      isError: false,
+      timestamp: 2,
+    },
+  ];
+
+  it("suppresses a repeat load inside a delegate's own context", async () => {
+    const host = {
+      call: vi.fn().mockResolvedValue({ ok: true, content: "# Skill: Release notes" }),
+    };
+    // The parent never loaded the document: suppression here can only come
+    // from the child context the scope supplies.
+    const runtime = createRuntime({ pluginSkills, host });
+    const delegated = delegateScope(
+      runtime,
+      skillToolOf(runtime),
+      "explorer",
+      () => childContext("# Skill: Release notes"),
+    );
+
+    const result = await delegated.execute("delegate-call", {
+      id: "demo.hello/release-notes",
+    });
+
+    expect(resultText(result)).toContain("already loaded");
+    expect(result.details).toBe(resultText(result));
+    // Cancellation/cleanup: the per-call entry never outlives the call.
+    expect((runtime as any).delegateCallContexts.size).toBe(0);
+
+    await runtime.dispose();
+  });
+
+  it("keeps parent and sibling delegate contexts independent", async () => {
+    const host = {
+      call: vi.fn().mockResolvedValue({ ok: true, content: "# Skill: Release notes" }),
+    };
+    const runtime = createRuntime({
+      pluginSkills,
+      host,
+      history: loadedSkillRows("# Skill: Release notes"),
+    });
+    const tool = skillToolOf(runtime);
+    // Sibling one already holds the document, sibling two does not.
+    const loaded = delegateScope(runtime, tool, "explorer", () =>
+      childContext("# Skill: Release notes"),
+    );
+    const cold = delegateScope(runtime, tool, "reviewer", () => []);
+
+    const [loadedResult, coldResult] = await Promise.all([
+      loaded.execute("sibling-a", { id: "demo.hello/release-notes" }),
+      cold.execute("sibling-b", { id: "demo.hello/release-notes" }),
+    ]);
+
+    expect(resultText(loadedResult)).toContain("already loaded");
+    // The parent's own context holds the body, and the cold sibling still gets
+    // the whole document: neither leaks into the other agent's decision.
+    expect(coldResult.content).toEqual([
+      { type: "text", text: "# Skill: Release notes" },
+    ]);
+
+    await runtime.dispose();
+  });
+
+  it("still loads the body for the session's own call after a delegate used the tool", async () => {
+    const host = {
+      call: vi.fn().mockResolvedValue({ ok: true, content: "# Skill: Release notes" }),
+    };
+    const runtime = createRuntime({ pluginSkills, host });
+    const tool = skillToolOf(runtime);
+    const delegated = delegateScope(runtime, tool, "explorer", () =>
+      childContext("# Skill: Release notes"),
+    );
+    await delegated.execute("delegate-call", { id: "demo.hello/release-notes" });
+
+    // The parent context never saw that body, so its own load is not suppressed
+    // and the child's entry did not survive its call.
+    const result = await tool.execute("parent-call", {
+      id: "demo.hello/release-notes",
+    });
     expect(result.content).toEqual([
       { type: "text", text: "# Skill: Release notes" },
     ]);

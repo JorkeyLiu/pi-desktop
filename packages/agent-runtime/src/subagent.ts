@@ -493,6 +493,17 @@ export class SubagentRun {
   }
 
   /**
+   * This delegate's live model context.
+   *
+   * A delegate owns its own conversation (ADR 0062), so a decision that asks
+   * "has this agent already seen X" has to read these messages, not the
+   * parent's. Read-only: callers observe context, they never rewrite it.
+   */
+  contextMessages(): readonly AgentMessage[] {
+    return this.agent.state.messages;
+  }
+
+  /**
    * Feed one user turn into the live child conversation (child steer).
    *
    * The input enters only this delegate's agent loop: the runtime emits the

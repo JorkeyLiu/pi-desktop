@@ -1620,6 +1620,20 @@ catalog, and a stale direct load through `Skill` is refused. This switch governs
 the skill document only; associated agent tools keep their independent
 registration and activation behavior.
 
+A repeated `Skill` load is answered from the context it already occupies. When an
+identical complete skill document is currently visible as a successful `Skill`
+result in that agent's own model context, the runtime returns a short reuse
+notice naming the requested id instead of the body; otherwise the full document
+loads. Availability is derived from that context, never from a loaded flag: a
+body dropped by compaction, retained only in part, never delivered
+successfully, or revised on disk loads in full, and the caller's id plus the
+call/result protocol are unchanged. A delegated call is decided by the context
+of the delegate that owns it, supplied to the tool scope for the duration of
+that call only, so one child reuses its own earlier load while the session and
+its sibling children each keep their independent answer. The recorded result
+row carries what the model actually received, so an expanded row, a restored
+session and a replayed checkpoint match the live context.
+
 Before model dispatch, Desktop acknowledges new system records through Host's
 existing transcript writer. Restart replays these provider-neutral records in
 order. An old history without records receives the current declaration at its
