@@ -14,8 +14,7 @@ Read the documents relevant to your change:
 - [`AGENTS.md`](AGENTS.md) — repository rules for contributors and agents.
 - [`CLAUDE.md`](CLAUDE.md) — Claude Code / Cowork compatibility entry: a
   relative symlink to `AGENTS.md`, which is the single source of the policy.
-  Edit `AGENTS.md` only, bump its `Policy-Sync:` token, and run
-  `pnpm check:agent-policy`.
+  Edit `AGENTS.md` only; never copy policy text into `CLAUDE.md`.
 - [`README.md`](README.md) — product overview and development context.
 - [`docs/spec/00-baseline.md`](docs/spec/00-baseline.md) — frozen architecture
   and product decisions.

@@ -1,14 +1,10 @@
 # AGENTS.md
 
-Policy-Sync: 2026-10-18.3
-
 Mandatory rules for AI coding agents working in PI-Desktop.
 
-This file is the single source of truth. `CLAUDE.md` is only the Claude Code /
-Claude Cowork compatibility entry: a relative symlink to this file, so it holds
-no rules and no revision token of its own. Never copy policy text into
-`CLAUDE.md`. The gate is `pnpm check:agent-policy`
-(`scripts/check-agent-policy-sync.mjs`).
+This file is the single source of truth for AI-agent policy. `CLAUDE.md` is a
+relative symlink to this file, kept so Claude Code / Claude Cowork find the same
+rules; edit `AGENTS.md` only and never copy policy text into `CLAUDE.md`.
 
 PI-Desktop is released software with real users. Treat every change as
 production maintenance, not prototype work.
@@ -813,6 +809,5 @@ not actually executed.
 * Periodically remove rules that the model already infers from code,
   that have never influenced a decision, or that are obsolete —
   otherwise the critical constraints get diluted.
-* Every change here bumps `Policy-Sync` in this file and passes
-  `pnpm check:agent-policy`. `CLAUDE.md` carries no rules and no token of
-  its own; it only links here.
+* Keep `CLAUDE.md` a relative symlink to this file (`ln -sfn AGENTS.md
+  CLAUDE.md`); it carries no rules of its own.

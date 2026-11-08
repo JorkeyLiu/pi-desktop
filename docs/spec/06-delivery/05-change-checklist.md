@@ -91,9 +91,8 @@ Reference the [spec update matrix](03-ai-development-workflow.md#3-spec-update-m
 After implementation (or alongside it):
 
 - [ ] Every affected spec file is updated with the new behavior.
-- [ ] If agent policy changed: edit `AGENTS.md` only, bump its `Policy-Sync:`
-  token, keep `CLAUDE.md` a relative symlink to it (`ln -sfn AGENTS.md CLAUDE.md`),
-  and confirm `pnpm check:agent-policy` passes. Never add rules or a token to
+- [ ] If agent policy changed: edit `AGENTS.md` only and keep `CLAUDE.md` a
+  relative symlink to it (`ln -sfn AGENTS.md CLAUDE.md`). Never add rules to
   `CLAUDE.md`.
 - [ ] If architectural boundary changed: ADR is written or updated in `docs/adr/`.
 - [ ] If an implementation default changed: `decisions-log.md` entry updated.
