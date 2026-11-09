@@ -22,6 +22,7 @@ import {
   degradedDelegateMessages,
   delegateRetentionMode,
   prepareDelegateTurnContext,
+  replaceContextMessages,
   subagentContextOverflowError,
 } from "./subagent-context.js";
 
@@ -511,5 +512,105 @@ describe("subagentContextOverflowError", () => {
     expect(error.message).toContain("Narrow the task");
     expect(error.message).toContain("larger context window");
     expect(error.message).toContain("read less at once");
+  });
+});
+
+describe("replaceContextMessages", () => {
+  const system = { role: "system" as const, content: "system prompt", timestamp: 0 };
+  const dispatch = { role: "user" as const, content: "dispatch task", timestamp: 1 };
+  const segment: AgentMessage = assistantText("worked");
+
+  it("keeps the leading system prompt and appends the replacement in order", () => {
+    const summary = { role: "user" as const, content: "summary", timestamp: 9 };
+    const messages = replaceContextMessages({
+      messages: [system, dispatch, segment],
+      replacement: [summary],
+    });
+    expect(messages).toEqual([system, summary]);
+    expect(messages[1]).toBe(summary);
+  });
+
+  it("drops a system row from the replacement so exactly one survives", () => {
+    const replacementSystem = {
+      role: "system" as const,
+      content: "replacement prompt",
+      timestamp: 9,
+    };
+    const summary = { role: "user" as const, content: "summary", timestamp: 9 };
+    expect(
+      replaceContextMessages({
+        messages: [system, dispatch],
+        replacement: [replacementSystem, summary],
+      }),
+    ).toEqual([system, summary]);
+  });
+
+  it("keeps every replacement row when the run carries no system message", () => {
+    const summary = { role: "user" as const, content: "summary", timestamp: 9 };
+    expect(
+      replaceContextMessages({
+        messages: [dispatch, segment],
+        replacement: [summary],
+      }),
+    ).toEqual([summary]);
+  });
+
+  it("installs a real compaction outcome exactly as the protection path did", async () => {
+    // The compaction path used to inline the install: the delegate's leading
+    // system row, then every row of the outcome, in order. Running the real
+    // protection pass and installing it through the shared helper proves the
+    // extraction changed nothing about what a compaction leaves in place.
+    const taskBrief = "Read the permission flow.";
+    const segment = "$".repeat(7_000);
+    const systemRow = {
+      role: "system" as const,
+      content: "You are the explorer subagent.",
+      timestamp: 0,
+    };
+    const prior: AgentMessage[] = [
+      systemRow,
+      userMessage(taskBrief),
+      assistantToolCall("hard-trigger"),
+      toolResult(segment, "hard-trigger"),
+    ];
+    const { factory } = summaryModels(() => summarySuccess("SUMMARY TEXT"));
+    const outcome = await prepareDelegateTurnContext({
+      messages: prior,
+      model: smallModel(),
+      taskBrief,
+      retentionMode: "active_turn",
+      summaryModels: factory,
+      signal: new AbortController().signal,
+    });
+    expect(outcome.kind).toBe("compacted");
+    if (outcome.kind !== "compacted") return;
+
+    const installed = replaceContextMessages({
+      messages: prior,
+      replacement: outcome.messages,
+    });
+    expect(installed[0]).toBe(systemRow);
+    const legacy = [
+      systemRow,
+      ...outcome.messages.filter((message) => message.role !== "system"),
+    ];
+    expect(installed).toEqual(legacy);
+    // The absorbed segment is gone and the stand-in is in place.
+    const text = JSON.stringify(installed);
+    expect(text).not.toContain(segment);
+    expect(text).toContain("SUMMARY TEXT");
+  });
+
+  it("returns a new array so the loop can own its own context", () => {
+    const original = [system, dispatch];
+    const installed = replaceContextMessages({
+      messages: original,
+      replacement: [{ role: "user" as const, content: "summary", timestamp: 9 }],
+    });
+    expect(installed).not.toBe(original);
+    // Rows are shared, never cloned or mutated: the producers treat messages
+    // as immutable, and the system row must be the very one already in place.
+    expect(installed[0]).toBe(system);
+    expect(original).toHaveLength(2);
   });
 });

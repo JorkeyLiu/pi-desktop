@@ -1,57 +1,72 @@
-import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { AppSettings, SubagentWakeupKind, SubagentWakeupSettings } from "@pi-desktop/shared";
+import type {
+  AppSettings,
+  SubagentWakeupKind,
+  SubagentWakeupSettings,
+} from "@pi-desktop/shared";
 import {
   DEFAULT_SUBAGENT_WAKEUP_CONTEXT_TOKENS,
   DEFAULT_SUBAGENT_WAKEUP_TIME_SECONDS,
   DEFAULT_SUBAGENT_WAKEUP_TOOL_CALLS,
-  MAX_SUBAGENT_WAKEUP_CONTEXT_TOKENS,
-  MAX_SUBAGENT_WAKEUP_TIME_SECONDS,
-  MAX_SUBAGENT_WAKEUP_TOOL_CALLS,
-  MIN_SUBAGENT_WAKEUP_CONTEXT_TOKENS,
-  MIN_SUBAGENT_WAKEUP_TIME_SECONDS,
-  MIN_SUBAGENT_WAKEUP_TOOL_CALLS,
   normalizeSubagentWakeupSettings,
+  subagentHandoffKTokensToTokens,
+  subagentHandoffMinutesToSeconds,
+  subagentHandoffSecondsToMinutes,
+  subagentHandoffTokensToKTokens,
+  subagentWakeupBounds,
 } from "@pi-desktop/shared";
+import { roundSubagentThresholdValue } from "../../lib/subagent-settings-save";
 import { useAppStore } from "../../stores/app-store";
 import { SettingsCard, SettingsRow } from "../../features/settings/primitives";
-import { Input } from "../ui";
-import { SettingsMenuSelect } from "./SettingsMenuSelect";
-import { resolveWakeValueCommit } from "../../lib/subagent-settings-save";
+import { SubagentThresholdRow } from "./SubagentThresholdRow";
 
-function rawWakeup(settings: AppSettings): SubagentWakeupSettings | undefined {
-  const candidate = (settings as { subagentWakeup?: unknown }).subagentWakeup;
-  if (candidate && typeof candidate === "object" && "kind" in (candidate as Record<string, unknown>)) {
-    return candidate as SubagentWakeupSettings;
-  }
-  // Legacy sections migrate through the normalizer; the renderer only needs
-  // the resolved canonical view.
-  return undefined;
-}
-
-function boundsFor(kind: SubagentWakeupKind): readonly [number, number] | null {
-  if (kind === "time") return [MIN_SUBAGENT_WAKEUP_TIME_SECONDS, MAX_SUBAGENT_WAKEUP_TIME_SECONDS] as const;
-  if (kind === "tool-calls") return [MIN_SUBAGENT_WAKEUP_TOOL_CALLS, MAX_SUBAGENT_WAKEUP_TOOL_CALLS] as const;
-  if (kind === "context-tokens")
-    return [MIN_SUBAGENT_WAKEUP_CONTEXT_TOKENS, MAX_SUBAGENT_WAKEUP_CONTEXT_TOKENS] as const;
-  return null;
-}
-
-function defaultFor(kind: SubagentWakeupKind): string {
-  if (kind === "time") return String(DEFAULT_SUBAGENT_WAKEUP_TIME_SECONDS);
-  if (kind === "tool-calls") return String(DEFAULT_SUBAGENT_WAKEUP_TOOL_CALLS);
-  return String(DEFAULT_SUBAGENT_WAKEUP_CONTEXT_TOKENS);
+/** The stored section, whatever shape it has; the normalizer resolves it. */
+function storedWakeup(settings: AppSettings): unknown {
+  return (settings as { subagentWakeup?: unknown }).subagentWakeup;
 }
 
 /**
- * Single-setting wake control for the Subagents destination.
+ * Storage unit → the unit this card edits.
  *
- * One row: select the progress kind (elapsed time / tool calls / context
- * threshold / off), then a numeric value with a visible unit. Result delivery
- * is unconditional — settling delegates always wake the parent — so there is
- * no completion toggle and no per-row checkboxes. Each kind remembers its own
- * draft while inactive so switching back restores it; saves replace the whole
- * `{kind, value}` atomically and serialize through the page queue.
+/**
+ * Storage unit → the unit this row edits.
+ *
+ * Two triggers are stored in a unit the row does not edit in: the context
+ * trigger is stored in tokens and edited in thousands (`k tokens`), and the
+ * time trigger is stored in seconds and edited in minutes — the same units the
+ * self-handoff row uses, so the two rows' figures mean the same thing. Tool
+ * calls are edited in their stored unit. The conversions are the shared ones,
+ * so the settings UI and the runtime cannot disagree about what a saved number
+ * means.
+ */
+function toDisplay(kind: string, stored: number): number {
+  if (kind === "context-tokens") return subagentHandoffTokensToKTokens(stored);
+  if (kind === "time") return subagentHandoffSecondsToMinutes(stored);
+  return stored;
+}
+
+function toStored(kind: string, display: number): number {
+  if (kind === "context-tokens") return subagentHandoffKTokensToTokens(display);
+  if (kind === "time") return subagentHandoffMinutesToSeconds(display);
+  return Math.floor(display);
+}
+
+/**
+ * Parent-side progress checks for the Subagents destination.
+ *
+ * One shaded full-width row: the feature name on the left, and flush to the
+ * right edge a bounded numeric value with a visible unit followed by the
+ * trigger selector that says when a waiting parent is told about delegate
+ * progress (context size / tool calls / elapsed time / off, the same order and
+ * the same labels the self-handoff row offers) — the selector last, so it is
+ * the row's rightmost control for every kind. Subagent results reach the
+ * parent — so there is no completion toggle. The options and units are the
+ * self-handoff row's, so the two rows read alike, while the stored `kind`
+ * identifiers stay the wake contract's. The row geometry and draft rules are
+ * shared, and each kind remembers its own draft while inactive; saves replace
+ * the whole `{kind, value}` section atomically through the page's save queue.
+ * Context is edited in k tokens and time in minutes, while the persisted value
+ * stays a raw token count and seconds, so the stored contract is unchanged.
  */
 export function SubagentWakeSettings({
   settings,
@@ -62,61 +77,28 @@ export function SubagentWakeSettings({
 }) {
   const { t } = useTranslation();
   const showToast = useAppStore((state) => state.showToast);
-  const stored = rawWakeup(settings);
   const resolved = normalizeSubagentWakeupSettings(
-    stored ?? (settings as { subagentWakeup?: unknown }).subagentWakeup as never,
+    storedWakeup(settings) as SubagentWakeupSettings | null | undefined,
   );
-  const kind: SubagentWakeupKind = resolved.kind;
 
-  const [drafts, setDrafts] = useState<Record<string, string>>(() => ({
-    time: resolved.kind === "time" && resolved.value != null ? String(resolved.value) : String(DEFAULT_SUBAGENT_WAKEUP_TIME_SECONDS),
-    "tool-calls":
-      resolved.kind === "tool-calls" && resolved.value != null
-        ? String(resolved.value)
-        : String(DEFAULT_SUBAGENT_WAKEUP_TOOL_CALLS),
-    "context-tokens":
-      resolved.kind === "context-tokens" && resolved.value != null
-        ? String(resolved.value)
-        : String(DEFAULT_SUBAGENT_WAKEUP_CONTEXT_TOKENS),
-  }));
-
-  // Sync the active kind's draft when the stored value changes externally.
-  // Inactive drafts are remembered untouched. A draft the user is editing is
-  // never clobbered by our own save landing: it only follows when it still
-  // matches the previous resolved value (no unsaved edit) or the kind itself
-  // changed.
-  const lastResolved = useRef<{ kind: SubagentWakeupKind; value?: number }>({
-    kind: resolved.kind,
-    value: resolved.value,
-  });
-  useEffect(() => {
-    const previous = lastResolved.current;
-    lastResolved.current = { kind: resolved.kind, value: resolved.value };
-    if (resolved.kind === "off" || resolved.value == null) return;
-    const next = String(resolved.value);
-    setDrafts((current) => {
-      if (current[resolved.kind] === next) return current;
-      // Kind switch always follows the stored value; same-kind updates only
-      // follow when there is no unsaved user edit in flight.
-      if (resolved.kind !== previous.kind) return { ...current, [resolved.kind]: next };
-      const prevText = previous.value != null && previous.kind === resolved.kind ? String(previous.value) : undefined;
-      if (prevText !== undefined && current[resolved.kind] !== prevText) return current;
-      return { ...current, [resolved.kind]: next };
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolved.kind, resolved.value]);
-
-  const draft = kind === "off" ? "" : (drafts[kind] ?? defaultFor(kind));
-  const bounds = boundsFor(kind);
-  const isOff = kind === "off";
+  // The figure is shown rounded the way an edit of that kind would round it, so
+  // a legacy value that is not a whole display unit reads exactly and is not
+  // rewritten by merely opening or leaving the field.
+  const displayValue =
+    resolved.kind === "off" || resolved.value === undefined
+      ? undefined
+      : roundSubagentThresholdValue(
+          toDisplay(resolved.kind, resolved.value),
+          resolved.kind,
+        );
 
   const unitLabel =
-    kind === "time"
-      ? t("settings.subagentWakeUnitSeconds")
-      : kind === "tool-calls"
-        ? t("settings.subagentWakeUnitCalls")
-        : kind === "context-tokens"
-          ? t("settings.subagentWakeUnitTokens")
+    resolved.kind === "time"
+      ? t("settings.subagentSelfHandoffUnitMinutes")
+      : resolved.kind === "tool-calls"
+        ? t("settings.subagentSelfHandoffUnitCalls")
+        : resolved.kind === "context-tokens"
+          ? t("settings.subagentSelfHandoffUnitKTokens")
           : "";
 
   const save = async (next: SubagentWakeupSettings) => {
@@ -128,92 +110,86 @@ export function SubagentWakeSettings({
     } catch (error) {
       // Drafts stay untouched so nothing the user typed is lost; the error is
       // observable and the selector reverts via the unchanged settings prop.
-      showToast(error instanceof Error ? error.message : String(error), { variant: "error" });
+      showToast(error instanceof Error ? error.message : String(error), {
+        variant: "error",
+      });
     }
   };
-
-  const selectKind = (nextKind: string) => {
-    if (nextKind !== "time" && nextKind !== "tool-calls" && nextKind !== "context-tokens" && nextKind !== "off") {
-      return;
-    }
-    if (nextKind === kind) return;
-    if (nextKind === "off") {
-      void save({ kind: "off" });
-      return;
-    }
-    const remembered = drafts[nextKind] ?? defaultFor(nextKind);
-    const parsed = Number(remembered);
-    const nextBounds = boundsFor(nextKind);
-    const value =
-      nextBounds && Number.isFinite(parsed)
-        ? Math.min(nextBounds[1], Math.max(nextBounds[0], Math.floor(parsed)))
-        : Number(defaultFor(nextKind));
-    setDrafts((current) => ({ ...current, [nextKind]: String(value) }));
-    void save({ kind: nextKind, value });
-  };
-
-  const commitValue = () => {
-    if (isOff || !bounds) return;
-    const decision = resolveWakeValueCommit(draft, resolved.value, bounds[0], bounds[1]);
-    if (decision.action === "revert") {
-      setDrafts((current) => ({ ...current, [kind]: decision.draft }));
-      return;
-    }
-    setDrafts((current) => ({ ...current, [kind]: String(decision.next) }));
-    if (decision.next === resolved.value) return;
-    void save({ kind, value: decision.next });
-  };
-
-  const step = kind === "context-tokens" ? 1000 : 1;
 
   return (
-    <SettingsCard title={t("settings.subagentWakeTitle")} description={t("settings.subagentWakeDesc")}>
-      <SettingsRow title={t("settings.subagentWakeKind")} description={t("settings.subagentWakeKindDesc")}>
-        <div
-          className="settings-wake-kind-control"
-          style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}
-        >
-          <SettingsMenuSelect
-            value={kind}
-            label={t("settings.subagentWakeKind")}
-            onChange={selectKind}
-            options={[
-              { id: "time", label: t("settings.subagentWakeKindTime") },
-              { id: "tool-calls", label: t("settings.subagentWakeKindToolCalls") },
-              { id: "context-tokens", label: t("settings.subagentWakeKindContextTokens") },
-              { id: "off", label: t("settings.subagentWakeKindOff") },
-            ]}
-          />
-          {isOff ? null : (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <Input
-                type="number"
-                min={bounds?.[0]}
-                max={bounds?.[1]}
-                step={step}
-                inputMode="numeric"
-                value={draft}
-                disabled={isOff}
-                aria-label={t("settings.subagentWakeKind")}
-                onChange={(event) =>
-                  setDrafts((current) => ({ ...current, [kind]: event.target.value }))
-                }
-                onBlur={commitValue}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    event.currentTarget.blur();
-                  }
-                }}
-                style={{ width: 120 }}
-              />
-              <span className="settings-wake-unit" aria-hidden="true">
-                {unitLabel}
-              </span>
-            </span>
-          )}
-        </div>
+    <SettingsCard>
+      <SettingsRow
+        title={t("settings.subagentWakeTitle")}
+        description={t("settings.subagentWakeKindDesc")}
+      >
+        <SubagentThresholdRow
+          label={t("settings.subagentWakeTitle")}
+          valueLabel={t("settings.subagentWakeKind")}
+          kind={resolved.kind}
+          value={displayValue}
+          options={[
+            {
+              id: "context-tokens",
+              label: t("settings.subagentSelfHandoffKindContextTokens"),
+            },
+            { id: "tool-calls", label: t("settings.subagentSelfHandoffKindToolCalls") },
+            { id: "time", label: t("settings.subagentSelfHandoffKindRuntime") },
+            { id: "off", label: t("settings.subagentSelfHandoffKindOff") },
+          ]}
+          valueBounds={wakeBounds()}
+          defaults={{
+            time: toDisplay("time", DEFAULT_SUBAGENT_WAKEUP_TIME_SECONDS),
+            "tool-calls": toDisplay("tool-calls", DEFAULT_SUBAGENT_WAKEUP_TOOL_CALLS),
+            "context-tokens": toDisplay(
+              "context-tokens",
+              DEFAULT_SUBAGENT_WAKEUP_CONTEXT_TOKENS,
+            ),
+          }}
+          unit={unitLabel}
+          step={1}
+          round={roundSubagentThresholdValue}
+          onSelectKind={(kind, value) =>
+            void save(
+              kind === "off" || value === undefined
+                ? { kind: "off" }
+                : ({
+                    kind: kind as SubagentWakeupKind,
+                    value: toStored(kind, value),
+                  } as SubagentWakeupSettings),
+            )
+          }
+          onCommitValue={(kind, value) =>
+            void save({
+              kind: kind as SubagentWakeupKind,
+              value: toStored(kind, value),
+            })
+          }
+        />
       </SettingsRow>
     </SettingsCard>
   );
+}
+
+/**
+ * Display bounds per enabled kind, in the unit the row edits.
+ *
+ * The stored bounds are token counts and seconds; the fields show their k-token
+ * and minute equivalents, so the context floor is 1 (1,000 tokens) and the
+ * ceiling 1000 (1,000,000 tokens), and the time floor is 1 second and the
+ * ceiling 900 seconds, rounded the same way the field rounds an edit. Tool
+ * calls are already edited in their stored unit.
+ */
+function wakeBounds(): Record<string, readonly [number, number]> {
+  const bounds: Record<string, readonly [number, number]> = {};
+  for (const kind of ["time", "tool-calls", "context-tokens"] as const) {
+    const range = subagentWakeupBounds(kind);
+    if (range) {
+      const display = [toDisplay(kind, range[0]), toDisplay(kind, range[1])] as const;
+      bounds[kind] = [
+        roundSubagentThresholdValue(display[0], kind),
+        roundSubagentThresholdValue(display[1], kind),
+      ] as const;
+    }
+  }
+  return bounds;
 }

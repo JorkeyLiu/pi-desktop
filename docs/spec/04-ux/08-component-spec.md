@@ -2215,6 +2215,44 @@ message its checkpoint covers.
 - `role="separator"`. No actions, no hover state, no selection, no disclosure.
   Nothing about a checkpoint is editable, so the row is informational only.
 
+### 8.4b Delegated-task handoff checkpoint
+
+A delegate's accepted self-handoff, drawn inside the delegation's own
+transcript tab in 8.4a's visual language — a centred muted label between the
+rows it separates — because it is the same fact: the earlier working history was
+replaced.
+
+- Only a persisted acceptance is a checkpoint. The runtime records
+  `details.accepted: true` on the result of a submission it installed; a call
+  that is preparing, running, or was refused is not one, and keeps the ordinary
+  tool row with that row's own lifecycle state. No status is encoded in the
+  checkpoint's text.
+- `--ds-text-muted` at `--text-2xs` with tabular numerals, like 8.4a. The
+  label states the checkpoint and its position among the accepted handoffs of
+  the tab being read; the second muted segment previews the handoff the
+  delegate wrote — its own opening words, whitespace flattened onto one
+  ellipsised line. It never restates pending/completed state.
+- The row is a disclosure: the head is one button with `aria-expanded` and an
+  `aria-controls` relationship to the body, reachable and activatable from the
+  keyboard, with the caret revealed only when the row is engaged or open. It
+  carries no actions and nothing in it is editable.
+- Semantics: a labelled `role="group"`, not 8.4a's `role="separator"`. A
+  separator makes its content presentational, which would remove the expand
+  control from the accessibility tree.
+- Body: the whole handoff the delegate authored and submitted, as plain text.
+  The delegate wrote it in whatever form it chose — prose, bullets, a plan —
+  so there is no field list and no localized label per section: the authored
+  line breaks, indentation, and list markers are preserved
+  (`white-space: pre-wrap`) instead of being interpreted. The submitted text
+  is untrusted model output, so it reaches the reader as a React text node,
+  never as HTML or parsed Markdown. Only the collapsed preview is clamped, and
+  that clamp is the UI's: the expanded body always shows every character.
+- Wire field names, raw arguments, and result JSON are never printed; the row
+  reads the call's `handoff` argument and the result's `accepted` flag only.
+- The ordinary tool row above and below it is unaffected, including its
+  running spinner, failure state, and disclosed details. A refused submission
+  is an error tool row like any other and keeps its own explanation.
+
 ### 8.5 Accessibility
 
 - User: `aria-label="User message"`

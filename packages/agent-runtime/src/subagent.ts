@@ -43,12 +43,15 @@ import {
   addUsage,
   cumulativeDelta,
   isCertificateVerificationError,
+  normalizeSubagentSelfHandoffSettings,
   subagentCanMutate,
   subagentToolsLabel,
   type AgentEventEnvelope,
   type MessageUsage,
+  type ResolvedSubagentSelfHandoffSettings,
   type SubagentDefinition,
   type SubagentRunStatus as SharedSubagentRunStatus,
+  type SubagentSelfHandoffSettings,
   type SubagentThinkingLevel,
   type UiMessage,
 } from "@pi-desktop/shared";
@@ -64,16 +67,30 @@ import {
 import type { RuntimeProviderConfig } from "./provider-binding.js";
 import { clampThinkingLevel } from "./thinking-level.js";
 import { subagentModelBinding, type SubagentProviderRetryState } from "./subagent-model-binding.js";
-import { contextBudgetFor, contextBudgetForStreaming } from "./context-budget.js";
+import { contextBudgetFor, contextBudgetForStreaming, contextBudgetLimitsFor } from "./context-budget.js";
 import { convertToLlm } from "./pi-runtime-messages.js";
 import {
+  delegateRequestTokens,
   delegateRetentionMode,
   delegateSummaryModels,
   prepareDelegateTurnContext,
+  replaceContextMessages,
   subagentContextOverflowError,
   type DelegateTurnUpdate,
 } from "./subagent-context.js";
 import { STREAM_PROGRESS_EVALUATION_CHARS } from "./subagent-progress.js";
+import {
+  buildSubagentHandoffContext,
+  createSubagentHandoffState,
+  createSubagentHandoffTool,
+  decideSubagentHandoff,
+  normalizeHandoffPayload,
+  renderSubagentHandoffRequest,
+  renderSubagentHandoffSummary,
+  type SubagentHandoffPayload,
+  type SubagentHandoffSnapshot,
+  type SubagentHandoffState,
+} from "./subagent-handoff.js";
 import {
   dedupeToolCallMessages,
   reportDuplicateToolCallDrop,
@@ -122,6 +139,8 @@ export type SubagentRunResult = {
   contextDegraded?: boolean;
   /** True when the delegate response hit the model's output token limit. */
   outputTruncated?: boolean;
+  /** Context handoffs this run performed on its own context. */
+  handoffs?: number;
   /** File path in session scratch where the unclipped report was preserved (ADR 0062). */
   scratchReportPath?: string;
   error?: {
@@ -194,6 +213,14 @@ export type SubagentRunOptions = {
    * refusal must surface as a provider error, not a silent text-only turn.
    */
   initialImages?: ImageContent[];
+
+  /**
+   * Self-handoff trigger for this run (`AppSettings.subagentSelfHandoff`).
+   * Absent or `off` attaches no handoff tool and changes nothing about the
+   * run; every other kind adds one runtime-owned tool and one transient
+   * request message at the turn boundaries that cross the threshold.
+   */
+  selfHandoff?: SubagentSelfHandoffSettings;
 };
 
 /**
@@ -309,11 +336,31 @@ export class SubagentRun {
   private readonly runAbortController = new AbortController();
   /** Set once `run()` settles; steering a settled run is a no-op rejection. */
   private finished = false;
+  /** Resolved self-handoff trigger; `off` keeps the whole feature inert. */
+  private readonly selfHandoff: ResolvedSubagentSelfHandoffSettings;
+  private readonly handoffState: SubagentHandoffState;
+  /** A validated submission waiting for the next safe turn boundary. */
+  private pendingHandoff?: SubagentHandoffPayload;
+  /** The dispatch turn, kept verbatim across every handoff generation. */
+  private handoffHeader?: AgentMessage[];
+  /**
+   * The transient request the next provider request carries.
+   *
+   * Held outside `state.messages` on purpose: the transcript records what the
+   * delegate did, not the runtime's prompts, and an unanswered request must not
+   * become permanent history. It is injected through `transformContext`, which
+   * every provider request passes through — including the ones `agent.continue()`
+   * issues after a provider retry or a model fallback.
+   */
+  private handoffRequest?: AgentMessage;
 
   constructor(opts: SubagentRunOptions) {
     this.opts = opts;
     this.provider = opts.provider;
     this.thinkingLevel = opts.thinkingLevel;
+    this.selfHandoff = normalizeSubagentSelfHandoffSettings(opts.selfHandoff);
+    this.handoffState = createSubagentHandoffState(Date.now());
+    const tools = this.selfHandoff.kind === "off" ? opts.tools : this.toolsWithHandoff(opts.tools);
     this.attemptedModels.add(`${opts.provider.id}/${opts.provider.modelId}`);
     const binding = this.modelBinding();
     this.agent = new Agent({
@@ -321,6 +368,10 @@ export class SubagentRun {
       getApiKey: binding.getApiKey,
       convertToLlm: (messages) =>
         convertToLlm(this.dedupeToolCalls(messages)),
+      // The runtime's own request context; the durable transcript is untouched.
+      // See `withHandoffRequest` for why the request travels here rather than
+      // through the boundary's returned context.
+      transformContext: async (messages) => this.withHandoffRequest(messages),
       // The same turn-boundary context protection the session has (ADR 0299):
       // re-estimate at each boundary, compact before the next request, degrade
       // before failing. The budget derives from this run's resolved model.
@@ -330,7 +381,7 @@ export class SubagentRun {
       initialState: {
         systemPrompt: opts.systemPrompt,
         model: binding.model,
-        tools: opts.tools,
+        tools,
         thinkingLevel: binding.agentThinkingLevel,
         messages: opts.initialMessages ? [...opts.initialMessages] : [],
       },
@@ -397,6 +448,18 @@ export class SubagentRun {
       }
       if (initialContext.kind !== "unchanged") {
         this.installContextOutcome(initialContext);
+      }
+      if (this.selfHandoff.kind !== "off") {
+        // The dispatch header is fixed here, before the opening turn joins the
+        // transcript: every handoff generation rebuilds from exactly these
+        // rows, so the original task can never be summarized away by a model
+        // that forgot to preserve it.
+        this.handoffHeader = [
+          ...(agentState?.messages ?? []).filter(
+            (message) => message.role !== "system",
+          ),
+          initialTaskMessage,
+        ];
       }
       await this.agent.prompt(initialTaskMessage);
       await this.agent.waitForIdle();
@@ -603,13 +666,10 @@ export class SubagentRun {
   private installContextOutcome(
     outcome: Extract<DelegateTurnUpdate, { kind: "compacted" | "degraded" }>,
   ): void {
-    const systemMessage = this.agent.state.messages.find(
-      (message) => message.role === "system",
-    );
-    this.agent.state.messages = [
-      ...(systemMessage ? [systemMessage] : []),
-      ...outcome.messages.filter((message) => message.role !== "system"),
-    ];
+    this.agent.state.messages = replaceContextMessages({
+      messages: this.agent.state.messages,
+      replacement: outcome.messages,
+    });
     if (outcome.kind === "compacted") {
       this.contextCompactions += 1;
     } else {
@@ -618,43 +678,282 @@ export class SubagentRun {
   }
 
   /**
+   * The runtime-owned handoff tool, appended after the definition's own tools.
+   *
+   * Only attached when a trigger is enabled, so a run with self-handoff off
+   * carries exactly the tool list it carried before this feature. It reaches
+   * no host capability: it records a submission in the run that owns it, which
+   * is why it needs no entry in the definition's assignable tool names and no
+   * permission scope.
+   */
+  private toolsWithHandoff(tools: AgentTool[]): AgentTool[] {
+    return [
+      ...tools,
+      createSubagentHandoffTool({
+        onSubmit: (args) => this.acceptHandoffSubmission(args),
+      }),
+    ];
+  }
+
+  /**
+   * Validate one submission and hold it for the next safe boundary.
+   *
+   * Nothing is cleared here: the payload is parked and the replacement happens
+   * in `installPendingHandoff`, so a run that never reaches another boundary
+   * (or is aborted first) keeps the history it had. A rejected submission
+   * returns its reason to the model verbatim and counts toward the failure
+   * budget, which is what stops a delegate from retrying the same bad shape
+   * for a whole segment.
+   *
+   * An invalid payload keeps the request outstanding, so the delegate can
+   * correct it in the same turn (the tool error is the correction prompt); a
+   * valid one closes the request and clears the transient message with it.
+   */
+  private acceptHandoffSubmission(
+    args: unknown,
+  ): { ok: true } | { ok: false; error: string } {
+    if (this.pendingHandoff) {
+      return {
+        ok: false,
+        error:
+          "A handoff is already recorded for this boundary. Keep working until it is applied.",
+      };
+    }
+    if (!this.handoffState.requested) {
+      return {
+        ok: false,
+        error:
+          "No handoff was requested. Keep working on the delegated task; the runtime asks for a handoff when it is needed.",
+      };
+    }
+    // The request has been delivered and answered either way; it must not be
+    // re-sent with the delegate's correction.
+    this.handoffRequest = undefined;
+    const normalized = normalizeHandoffPayload(args);
+    if (!normalized.ok) {
+      this.handoffState.failures += 1;
+      this.handoffState.unanswered = 0;
+      return { ok: false, error: normalized.error };
+    }
+    this.pendingHandoff = normalized.payload;
+    this.handoffState.requested = false;
+    this.handoffState.failures = 0;
+    this.handoffState.unanswered = 0;
+    this.handoffState.requestedAtToolCalls = 0;
+    return { ok: true };
+  }
+
+  /** Occupancy the next request would carry, or undefined when unmeasurable. */
+  private measureRequestTokens(): number | undefined {
+    try {
+      return delegateRequestTokens({
+        messages: this.agent.state.messages,
+        model: this.agent.state.model,
+        systemPrompt: this.agent.state.systemPrompt,
+        tools: this.agent.state.tools,
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private handoffSnapshot(): SubagentHandoffSnapshot {
+    const snapshot: SubagentHandoffSnapshot = {
+      toolCalls: this.handoffState.toolCalls,
+      turns: this.handoffState.turns,
+      segmentElapsedMs: Math.max(
+        0,
+        Date.now() - this.handoffState.segmentStartedAt,
+      ),
+    };
+    if (this.selfHandoff.kind === "context-tokens") {
+      const contextTokens = this.measureRequestTokens();
+      if (contextTokens !== undefined) snapshot.contextTokens = contextTokens;
+    }
+    return snapshot;
+  }
+
+  /**
+   * Decide the trigger and park the request the next provider request carries.
+   *
+   * The snapshot is taken before any compaction pass, so a token threshold is
+   * measured against the request the delegate would send on its own — the
+   * context it still owns and can describe. Measuring after compaction would
+   * hide every threshold at or above the compaction trigger, which is exactly
+   * where a long-running delegate lives.
+   *
+   * A boundary that stops asking also drops the parked message: the request is
+   * bound to the boundary that made it, so no stale instruction can leak into
+   * a later request.
+   */
+  private scheduleHandoffRequest(snapshot: SubagentHandoffSnapshot): boolean {
+    if (this.selfHandoff.kind === "off") return false;
+    const decision = decideSubagentHandoff({
+      settings: this.selfHandoff,
+      state: this.handoffState,
+      snapshot,
+    });
+    if (decision.action !== "request") {
+      this.handoffRequest = undefined;
+      return false;
+    }
+    this.handoffState.requested = true;
+    this.handoffState.unanswered += 1;
+    this.handoffState.requestedAtToolCalls = snapshot.toolCalls;
+    this.handoffRequest = {
+      role: "user",
+      content: renderSubagentHandoffRequest({
+        settings: this.selfHandoff,
+        snapshot,
+      }),
+      timestamp: Date.now(),
+    };
+    return true;
+  }
+
+  /**
+   * The request the next provider request carries.
+   *
+   * It rides on `transformContext` rather than on the boundary's returned
+   * context because a provider retry and a model fallback both resume through
+   * `agent.continue()`, which rebuilds the loop's context from
+   * `state.messages`. A message that only lived in the boundary's return value
+   * would be lost exactly when the delegate still needs it, and a message
+   * written into `state.messages` would become durable history the delegate
+   * never wrote. This hook runs for every provider request and appends
+   * nothing to either list.
+   */
+  private withHandoffRequest(messages: AgentMessage[]): AgentMessage[] {
+    return this.handoffRequest ? [...messages, this.handoffRequest] : messages;
+  }
+
+  /**
+   * Whether the request the delegate would send now still fits the model's
+   * safety boundary. When it does, the handoff request itself is the context
+   * operation for this boundary and the lossy protection pass is skipped;
+   * when it does not, safety comes first and the delegate is still asked.
+   */
+  private requestFitsWindow(snapshot: SubagentHandoffSnapshot): boolean {
+    const tokens = snapshot.contextTokens ?? this.measureRequestTokens();
+    if (tokens === undefined) return false;
+    return tokens < contextBudgetLimitsFor(this.agent.state.model).hardLimit;
+  }
+
+  /**
+   * Replace the previous handoff and the segment it absorbed with the one just
+   * submitted, keeping the dispatch header verbatim. Rebuilding from the
+   * header — rather than splicing — is what keeps generations from
+   * concatenating: exactly one summary row survives, whatever its generation.
+   */
+  private installPendingHandoff(): boolean {
+    const payload = this.pendingHandoff;
+    if (!payload) return false;
+    this.pendingHandoff = undefined;
+    const now = Date.now();
+    this.handoffState.handoffs += 1;
+    const header = this.handoffHeader ?? this.dispatchHeader();
+    const summary = renderSubagentHandoffSummary({
+      payload,
+      generation: this.handoffState.handoffs,
+    });
+    this.agent.state.messages = replaceContextMessages({
+      messages: this.agent.state.messages,
+      replacement: buildSubagentHandoffContext({ header, summary, now }),
+    });
+    this.handoffState.toolCalls = 0;
+    this.handoffState.turns = 0;
+    this.handoffState.segmentStartedAt = now;
+    this.handoffState.requested = false;
+    this.handoffState.unanswered = 0;
+    this.handoffState.requestedAtToolCalls = 0;
+    this.handoffState.failures = 0;
+    // The request that produced this submission is spent; a new segment starts
+    // without one.
+    this.handoffRequest = undefined;
+    // A rollover that leaves the context trigger satisfied means the fixed
+    // dispatch header is already past the threshold: rearming then requires
+    // real work, so no boundary can ask again immediately.
+    const threshold = this.selfHandoff.value;
+    const occupancy = this.measureRequestTokens();
+    this.handoffState.noProgress =
+      this.selfHandoff.kind === "context-tokens" &&
+      typeof threshold === "number" &&
+      typeof occupancy === "number" &&
+      occupancy >= threshold
+        ? this.handoffState.noProgress + 1
+        : 0;
+    return true;
+  }
+
+  /** The dispatch turn as recorded at run start; a fallback for older runs. */
+  private dispatchHeader(): AgentMessage[] {
+    const task = this.agent.state.messages.find(
+      (message) => message.role === "user",
+    );
+    this.handoffHeader = task ? [task] : [];
+    return this.handoffHeader;
+  }
+
+  /**
    * Shape the delegate's next in-run turn, mirroring the session's
    * `prepareNextTurn` (ADR 0299, decisions 2-4). A compaction rewrites only
    * this agent's in-memory messages; nothing is persisted anywhere.
+   *
+   * Order is the contract:
+   *
+   * 1. A validated handoff replaces the previous generation — the rollover the
+   *    delegate already agreed to.
+   * 2. The trigger is decided against the request the delegate would send now,
+   *    before any protection pass rewrites it. A token threshold at or above
+   *    the compaction trigger is otherwise invisible: the compaction would
+   *    shrink the very occupancy that was supposed to cross it.
+   * 3. Protection runs last, and only when it is still needed. While the
+   *    boundary is asking and the request still fits the model window, the
+   *    handoff *is* this boundary's context operation: compacting first would
+   *    summarize away the segment the delegate is being asked to describe.
+   *    A request that no longer fits is compacted or degraded first, exactly
+   *    as before, and the delegate is asked anyway.
    */
   private async prepareNextTurn(
     turn: PrepareNextTurnContext,
     signal?: AbortSignal,
   ): Promise<AgentLoopTurnUpdate | undefined> {
-    const outcome = await prepareDelegateTurnContext({
-      messages: this.agent.state.messages,
-      systemPrompt: this.agent.state.systemPrompt,
-      tools: this.agent.state.tools,
-      model: this.agent.state.model,
-      taskBrief: this.opts.task,
-      retentionMode: delegateRetentionMode(turn),
-      summaryModels: () =>
-        delegateSummaryModels(
-          this.provider,
-          this.agent.state.model,
-          this.opts.sessionId,
-          usage => this.recordUsage(usage),
-        ),
-      thinkingLevel: this.agent.state.thinkingLevel,
-      signal: signal ?? this.runSignal(),
-    });
-    if (outcome.kind === "unchanged") return undefined;
+    const handedOff = this.installPendingHandoff();
+    const snapshot = this.handoffSnapshot();
+    const requested = this.scheduleHandoffRequest(snapshot);
+    const outcome: DelegateTurnUpdate =
+      requested && this.requestFitsWindow(snapshot)
+        ? { kind: "unchanged" }
+        : await prepareDelegateTurnContext({
+            messages: this.agent.state.messages,
+            systemPrompt: this.agent.state.systemPrompt,
+            tools: this.agent.state.tools,
+            model: this.agent.state.model,
+            taskBrief: this.opts.task,
+            retentionMode: delegateRetentionMode(turn),
+            summaryModels: () =>
+              delegateSummaryModels(
+                this.provider,
+                this.agent.state.model,
+                this.opts.sessionId,
+                usage => this.recordUsage(usage),
+              ),
+            thinkingLevel: this.agent.state.thinkingLevel,
+            signal: signal ?? this.runSignal(),
+          });
     if (outcome.kind === "overflow") {
       // The Agent wrapper converts this throw into the normal error/agent_end
       // sequence; `message_end` picks the pending overflow up so the run
       // surfaces SUBAGENT_CONTEXT_OVERFLOW instead of a classified provider
-      // error, and `useNextModel` still gets its fallback pass first.
+      // error, and `useNextModel` still gets its fallback pass first. The
+      // parked request survives the throw, so a fallback attempt carries it.
       this.pendingContextOverflow = subagentContextOverflowError(
         this.provider.modelId,
       );
       throw new Error(this.pendingContextOverflow.message);
     }
-    this.installContextOutcome(outcome);
+    if (outcome.kind !== "unchanged") this.installContextOutcome(outcome);
+    if (!handedOff && outcome.kind === "unchanged") return undefined;
     return {
       context: {
         // The loop owns its context array: pi appends every streamed assistant
@@ -663,7 +962,8 @@ export class SubagentRun {
         // `state.messages`. Handing over the live array stores each message of
         // the run's later iterations twice, which doubles the estimate at the
         // next boundary and leaves `useNextModel` a trailing assistant row it
-        // cannot resume from (D620).
+        // cannot resume from (D620). The handoff request travels through
+        // `transformContext` instead, so no prompt ever enters this array.
         messages: [...this.agent.state.messages],
         tools: this.agent.state.tools,
       },
@@ -885,6 +1185,7 @@ export class SubagentRun {
       ...(this.contextCompactions > 0 ? { contextCompactions: this.contextCompactions } : {}),
       ...(this.contextDegraded ? { contextDegraded: true } : {}),
       ...(this.lastReportTruncated ? { outputTruncated: true } : {}),
+      ...(this.handoffState.handoffs > 0 ? { handoffs: this.handoffState.handoffs } : {}),
       ...(scratchReportPath ? { scratchReportPath } : {}),
       ...(error ? { error } : {}),
     };
@@ -996,6 +1297,7 @@ export class SubagentRun {
     switch (event.type) {
       case "turn_start":
         this.turns += 1;
+        this.handoffState.turns += 1;
         break;
       case "message_start": {
         if (event.message.role !== "assistant") break;
@@ -1183,6 +1485,7 @@ export class SubagentRun {
       }
       case "tool_execution_start":
         this.toolCalls += 1;
+        this.handoffState.toolCalls += 1;
         this.emit({
           type: "tool_start",
           toolCallId: event.toolCallId,

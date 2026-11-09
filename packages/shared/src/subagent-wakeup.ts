@@ -4,7 +4,7 @@
  * correction).
  *
  * Canonical shape is one setting, not four independent rows:
- * - `kind: "time"` — periodic heartbeat while delegates run (default 600s).
+ * - `kind: "time"` — periodic heartbeat while delegates run (default 900s).
  * - `kind: "tool-calls"` — wake after each additional N tool calls.
  * - `kind: "context-tokens"` — wake on upward crossing of N tokens.
  * - `kind: "off"` — disable proactive progress checks (the original
@@ -24,8 +24,12 @@
 
 import type { MessageUsage } from "./types/messages.js";
 
-/** Periodic heartbeat default: the historical `TaskWait` wait. */
-export const DEFAULT_SUBAGENT_WAKEUP_TIME_SECONDS = 600;
+/**
+ * Periodic heartbeat default, and the wake trigger's default when the kind is
+ * first selected: 15 minutes. The figure matches the self-handoff runtime
+ * default, so both execution rows start from the same threshold.
+ */
+export const DEFAULT_SUBAGENT_WAKEUP_TIME_SECONDS = 900;
 export const MIN_SUBAGENT_WAKEUP_TIME_SECONDS = 1;
 export const MAX_SUBAGENT_WAKEUP_TIME_SECONDS = 900;
 
@@ -33,13 +37,13 @@ export const MAX_SUBAGENT_WAKEUP_TIME_SECONDS = 900;
 export const MIN_SUBAGENT_WAKEUP_TOOL_CALLS = 1;
 export const MAX_SUBAGENT_WAKEUP_TOOL_CALLS = 10_000;
 /** Remembered default when switching to the tool-calls kind. */
-export const DEFAULT_SUBAGENT_WAKEUP_TOOL_CALLS = 10;
+export const DEFAULT_SUBAGENT_WAKEUP_TOOL_CALLS = 50;
 
 /** `context-tokens` is an occupancy estimate, so the floor stays coarse. */
 export const MIN_SUBAGENT_WAKEUP_CONTEXT_TOKENS = 1_000;
 export const MAX_SUBAGENT_WAKEUP_CONTEXT_TOKENS = 1_000_000;
-/** Remembered default when switching to the context kind. */
-export const DEFAULT_SUBAGENT_WAKEUP_CONTEXT_TOKENS = 20_000;
+/** Remembered default when switching to the context kind: 200k tokens. */
+export const DEFAULT_SUBAGENT_WAKEUP_CONTEXT_TOKENS = 200_000;
 
 /** The single selectable progress-check kind. */
 export type SubagentWakeupKind = "time" | "tool-calls" | "context-tokens" | "off";
@@ -53,7 +57,7 @@ export type SubagentWakeupSettings = {
   value?: number;
 };
 
-/** Product default: periodic 600s heartbeat. */
+/** Product default: periodic 900s heartbeat. */
 export const DEFAULT_SUBAGENT_WAKEUP_SETTINGS: SubagentWakeupSettings = {
   kind: "time",
   value: DEFAULT_SUBAGENT_WAKEUP_TIME_SECONDS,

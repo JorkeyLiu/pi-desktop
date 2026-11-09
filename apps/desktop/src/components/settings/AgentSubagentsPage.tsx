@@ -8,6 +8,7 @@ import {
   mergeSettingsPatch,
 } from "../../lib/subagent-settings-save";
 import { SubagentWakeSettings } from "./SubagentWakeSettings";
+import { SubagentSelfHandoffSettings } from "./SubagentSelfHandoffSettings";
 import { useHostCollection } from "../../hooks/use-host-collection";
 import {
   AgentCapabilityPage,
@@ -420,60 +421,81 @@ export function AgentSubagentsPage() {
   );
 
   return (
-    <AgentCapabilityPage
-      className="agent-subagents-page"
-      toolbar={
+    <AgentCapabilityPage className="agent-subagents-page">
+      <section className="settings-subsection" aria-labelledby="subagent-execution-heading">
+        {/* Page title stays the destination's own h1; this h2 is the one shared
+            heading for the two program-owned rows below it. */}
+        <h2 id="subagent-execution-heading" className="settings-subsection-title">
+          {t("settings.subagentExecutionTitle")}
+        </h2>
+        <div className="subagent-execution-rows">
+          {settings ? (
+            <>
+              <SubagentWakeSettings settings={settings} saveSettings={saveSettings} />
+              <SubagentSelfHandoffSettings
+                settings={settings}
+                saveSettings={saveSettings}
+              />
+            </>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="settings-subsection" aria-labelledby="subagent-available-heading">
+        <h2 id="subagent-available-heading" className="settings-subsection-title">
+          {t("settings.subagentAvailableTitle")}
+        </h2>
+        {/* Search filters the list below, so it belongs with the list rather
+            than above the execution controls. */}
         <CapabilityToolbar
           search={search}
           onSearchChange={setSearch}
           searchPlaceholder={t("extensions.subagents.searchPlaceholder")}
           actions={addButton}
         />
-      }
-    >
-      {settings ? <SubagentWakeSettings settings={settings} saveSettings={saveSettings} /> : null}
-      <CapabilityPanel
-        loading={loading}
-        refreshing={refreshing}
-        loadingLabel={t("settings.loadingCapabilities")}
-      >
-        {noMatches ? (
-          <CapabilityEmpty
-            message={t("settings.capabilityNoMatches")}
-            icon={<IconBot size={18} />}
-          />
-        ) : (
-          <>
-            {visibleBuiltins.length > 0 ? (
-              <>
-                <CapabilityGroupHeader
-                  label={t("extensions.subagents.sourceBuiltin")}
-                  count={visibleBuiltins.length}
-                />
-                {visibleBuiltins.map(renderBuiltin)}
-              </>
-            ) : null}
-            {showOwnedGroup ? (
-              <>
-                <CapabilityGroupHeader
-                  label={t("settings.globalLevel")}
-                  path={GLOBAL_SUBAGENTS_PATH}
-                  count={visibleOwned.length}
-                />
-                {visibleOwned.length === 0 ? (
-                  <CapabilityEmpty
-                    message={t("settings.subagentsEmpty")}
-                    icon={<IconBot size={18} />}
-                    action={addButton}
+        <CapabilityPanel
+          loading={loading}
+          refreshing={refreshing}
+          loadingLabel={t("settings.loadingCapabilities")}
+        >
+          {noMatches ? (
+            <CapabilityEmpty
+              message={t("settings.capabilityNoMatches")}
+              icon={<IconBot size={18} />}
+            />
+          ) : (
+            <>
+              {visibleBuiltins.length > 0 ? (
+                <>
+                  <CapabilityGroupHeader
+                    label={t("extensions.subagents.sourceBuiltin")}
+                    count={visibleBuiltins.length}
                   />
-                ) : (
-                  visibleOwned.map(renderRow)
-                )}
-              </>
-            ) : null}
-          </>
-        )}
-      </CapabilityPanel>
+                  {visibleBuiltins.map(renderBuiltin)}
+                </>
+              ) : null}
+              {showOwnedGroup ? (
+                <>
+                  <CapabilityGroupHeader
+                    label={t("settings.globalLevel")}
+                    path={GLOBAL_SUBAGENTS_PATH}
+                    count={visibleOwned.length}
+                  />
+                  {visibleOwned.length === 0 ? (
+                    <CapabilityEmpty
+                      message={t("settings.subagentsEmpty")}
+                      icon={<IconBot size={18} />}
+                      action={addButton}
+                    />
+                  ) : (
+                    visibleOwned.map(renderRow)
+                  )}
+                </>
+              ) : null}
+            </>
+          )}
+        </CapabilityPanel>
+      </section>
 
       {editor ? (
         <SubagentEditorSheet

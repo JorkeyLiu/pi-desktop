@@ -120,11 +120,14 @@ import {
   splitInlineContent,
   subagentModelKey,
   subagentToolsLabel,
+  normalizeSubagentSelfHandoffSettings,
   normalizeSubagentWakeupSettings,
   type ProposalKind,
+  type ResolvedSubagentSelfHandoffSettings,
   type ResolvedSubagentWakeupSettings,
   type SubagentDeliveryOwner,
   type SubagentPermission,
+  type SubagentSelfHandoffSettings,
   type SubagentWakeReason,
   type SubagentWakeupSettings,
 } from "@pi-desktop/shared";
@@ -948,6 +951,12 @@ export type AgentRuntimeOptions = {
    * `setSubagentWakeup`.
    */
   subagentWakeup?: SubagentWakeupSettings;
+  /**
+   * Persistent delegate self-handoff trigger (AppSettings.subagentSelfHandoff,
+   * already normalized by the launcher). Absent means off; the live setter
+   * refreshes it when the user saves settings.
+   */
+  subagentSelfHandoff?: SubagentSelfHandoffSettings;
   /**
    * Which compaction family to use. Tests set it explicitly; production reads
    * `PI_DESKTOP_COMPACTION_STRATEGY` and otherwise summarizes.
@@ -1857,6 +1866,13 @@ export class DesktopAgentRuntime {
    */
   private sessionWakeup: ResolvedSubagentWakeupSettings =
     normalizeSubagentWakeupSettings(undefined);
+  /**
+   * Self-handoff trigger every delegate of this session inherits at spawn.
+   * Replaced only by launch options and `setSubagentSelfHandoff`; a run that
+   * already started keeps the trigger it was spawned with.
+   */
+  private sessionSelfHandoff: ResolvedSubagentSelfHandoffSettings =
+    normalizeSubagentSelfHandoffSettings(undefined);
   /** One-shot listeners re-evaluating an in-flight wake-aware wait. */
   private readonly wakeWaiters: ReturnType<typeof createWakeWaiterRegistry>;
   private delegationCoordinator?: ReturnType<typeof createDelegationCoordinator>;
@@ -2046,6 +2062,9 @@ export class DesktopAgentRuntime {
     this.projectMemory = opts.projectMemory?.trim() || undefined;
     this.compactionEnabled = compactionEnabled(opts.compactionSettings);
     this.sessionWakeup = normalizeSubagentWakeupSettings(opts.subagentWakeup);
+    this.sessionSelfHandoff = normalizeSubagentSelfHandoffSettings(
+      opts.subagentSelfHandoff,
+    );
     this.compactionStrategy = resolveCompactionStrategy(opts.compactionStrategy);
 
     this.rebuildToolCatalog();
@@ -4893,6 +4912,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             // through the same bookkeeping the parent uses.
             resolveToolOutcome: (context) => this.resolveOwnToolOutcome(context),
             signal: abortSignal,
+            selfHandoff: this.sessionSelfHandoff,
             ...(initialMessages ? { initialMessages } : {}),
             // A user continuation's own images open the new run's turn; the
             // parent's `Task` brief never carries attachments.
@@ -6697,6 +6717,17 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     this.sessionWakeup = normalizeSubagentWakeupSettings(input ?? undefined);
     this.programCoordinator().handleSelectedWakeUpdate();
     this.wakeWaiters.notify();
+  }
+
+  /**
+   * Replace the session's delegate self-handoff trigger. Delegates spawned
+   * after this call inherit it; runs already in flight keep the trigger they
+   * started with, so a settings save never rewrites the rules of a context
+   * operation half-way through.
+   */
+  setSubagentSelfHandoff(input?: SubagentSelfHandoffSettings | null): void {
+    if (this.disposed) throw new Error("runtime disposed");
+    this.sessionSelfHandoff = normalizeSubagentSelfHandoffSettings(input ?? undefined);
   }
 
   private programCoordinator(): ReturnType<typeof createDelegationCoordinator> {

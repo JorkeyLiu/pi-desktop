@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_SUBAGENT_WAKEUP_TIME_SECONDS } from "@pi-desktop/shared";
 
 import { createHeadlessLaunchResolver, type HostProviderRecord } from "./launch-resolver.js";
 
@@ -135,7 +136,7 @@ describe("createHeadlessLaunchResolver", () => {
     );
     expect(fallback.sidecarParams.subagentWakeup).toEqual({
       kind: "time",
-      value: 600,
+      value: DEFAULT_SUBAGENT_WAKEUP_TIME_SECONDS,
     });
     // Legacy persisted shapes still read compatibly into canonical.
     const legacy = await resolver.resolve(

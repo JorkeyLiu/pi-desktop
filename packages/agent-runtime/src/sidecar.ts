@@ -28,6 +28,7 @@ import {
 } from "./sidecar-config.js";
 import { matchesExpectedTurnId } from "./turn-target.js";
 import { applySubagentWakeupConfigure } from "./sidecar-subagent-wakeup.js";
+import { applySubagentSelfHandoffConfigure } from "./sidecar-subagent-self-handoff.js";
 import {
   continueHydrationSource,
   parseChildInputAttachments,
@@ -49,6 +50,7 @@ import type {
   AskToolResolution,
   SubagentDefinition,
   SubagentWakeupSettings,
+  SubagentSelfHandoffSettings,
   ContextCompactionRecord,
   ContextCompactionSettings,
   CommandShellOption,
@@ -140,6 +142,8 @@ type RuntimeParams = {
   compactionSettings?: ContextCompactionSettings;
   /** Persistent delegation-wake defaults (AppSettings.subagentWakeup). */
   subagentWakeup?: SubagentWakeupSettings;
+  /** Persistent delegate self-handoff trigger (AppSettings.subagentSelfHandoff). */
+  subagentSelfHandoff?: SubagentSelfHandoffSettings;
   attachmentsDir?: string;
   userMessageId?: string;
   sessionMessage?: SessionMessageOrigin;
@@ -273,6 +277,7 @@ async function runtimeFor(
     reusable.setCompactionSettings(params.compactionSettings);
     reusable.setInfiniteProviderRetry(params.infiniteProviderRetry === true);
     reusable.setSubagentWakeup(params.subagentWakeup);
+    reusable.setSubagentSelfHandoff(params.subagentSelfHandoff);
     reusable.setMode(mode);
     return reusable;
   }
@@ -327,6 +332,7 @@ async function runtimeFor(
     attachmentsDir: params.attachmentsDir,
     compactionSettings: params.compactionSettings,
     subagentWakeup: params.subagentWakeup,
+    subagentSelfHandoff: params.subagentSelfHandoff,
     pluginTools,
     pluginSkills,
     trustedExtensions,
@@ -418,6 +424,7 @@ async function handle(method: string, params: any): Promise<unknown> {
       // without the field leaves waits untouched. Future launches read the
       // same persisted values and normalize identically.
       applySubagentWakeupConfigure(runtimes, params);
+      applySubagentSelfHandoffConfigure(runtimes, params);
       return { ok: true, mode: "host-proxy" };
     }
     case "sidecar.health":

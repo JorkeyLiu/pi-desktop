@@ -98,6 +98,34 @@ export type DelegateTurnUpdate =
   | { kind: "overflow"; tokens: number; hardLimit: number };
 
 /**
+ * Rebuild a delegate's message list as its leading system prompt followed by a
+ * replacement set.
+ *
+ * A delegate has exactly one context operation available to it — swap the rows
+ * it already sent for a shorter account of them — and two different producers
+ * perform it: the protection pass (ADR 0299) replaces the history with a
+ * provider summary, and a self-handoff replaces it with the dispatch header
+ * plus the delegate's own handoff. Both preserve the same invariant: the
+ * leading system row survives verbatim and in place, every replacement row is
+ * appended after it, and nothing of the old history is spliced back in.
+ *
+ * Returns a new array the loop can own; the message objects themselves are
+ * shared, because neither producer mutates a row it installs.
+ */
+export function replaceContextMessages(input: {
+  messages: readonly AgentMessage[];
+  replacement: readonly AgentMessage[];
+}): AgentMessage[] {
+  const systemMessage = input.messages.find(
+    (message) => message.role === "system",
+  );
+  return [
+    ...(systemMessage ? [systemMessage] : []),
+    ...input.replacement.filter((message) => message.role !== "system"),
+  ];
+}
+
+/**
  * The terminal failure the parent model can act on (ADR 0299, decision 5):
  * not the provider's raw overflow sentence, but the three changes that would
  * actually let a retry succeed.
@@ -251,6 +279,31 @@ function delegateContextBudgetFor(
     outputCapReplayTarget(model),
   );
   return { ...estimate, tokens: Math.max(estimate.tokens, requestTokens) };
+}
+
+/**
+ * Occupancy the next delegate request would carry: transcript rows plus the
+ * provider-visible system prompt and tool schemas.
+ *
+ * The self-handoff threshold reads this figure rather than cumulative spend,
+ * so a token trigger describes how full the window actually is — the same
+ * estimate the compaction guard in `prepareDelegateTurnContext` compares
+ * against its own budget.
+ */
+export function delegateRequestTokens(input: {
+  messages: AgentMessage[];
+  model: Model<Api>;
+  additionalMessages?: AgentMessage[];
+  systemPrompt?: string;
+  tools?: unknown[];
+}): number {
+  return delegateContextBudgetFor(
+    input.model,
+    input.messages,
+    input.additionalMessages,
+    input.systemPrompt,
+    input.tools,
+  ).tokens;
 }
 
 /**

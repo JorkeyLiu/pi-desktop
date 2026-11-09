@@ -1009,12 +1009,16 @@ core set rather than the on-demand catalog of §7.1:
 **Program coordinator (one cadence, model resumes on program terms).** One persistent
 `AppSettings.subagentWakeup` selects a single program trigger:
 `{ kind: "time" | "tool-calls" | "context-tokens" | "off", value?: number }`
-(default `{ kind: "time", value: 600 }`). `time` is a periodic heartbeat in seconds
-(1–900); `tool-calls` resumes after each additional N tool calls a running delegate
+(default `{ kind: "time", value: 900 }`, i.e. 15 minutes). `time` is a periodic heartbeat
+in seconds (1–900); `tool-calls` resumes after each additional N tool calls a running delegate
 makes (1–10000, counted per child from its own watermark); `context-tokens` resumes when
 a running delegate's estimated context occupancy crosses upward past N tokens
 (1000–1000000) and rearms only after occupancy drops back below the threshold. The user
-selects ONE kind at a time; `off` disables progress resumption only. The program owns when
+selects ONE kind at a time, from the shared trigger vocabulary in the order
+context size → tool calls → elapsed time → off; selecting a kind in Settings uses that
+kind's remembered default — 200000 tokens, 50 calls, 900 s — while a value saved
+explicitly is never rewritten by the default change (the read-time normalizer keeps its
+documented fallback to the product default for a malformed canonical value). `off` disables progress resumption only. The program owns when
 the model resumes: one cadence/checkpoint applies uniformly across explicit `TaskWait`,
 `TaskList` fresh-progress reads while the parent expects running children, and the implicit
 idle resume. Child tool/context callbacks update coordinator state only — they never trigger
@@ -1034,6 +1038,53 @@ out-of-range values persist and read back clamped), and carried as sidecar launc
 options plus a live setter for settings changes. There is no Rust or storage-schema change:
 unknown settings fields pass through host-core untouched. The live sidebar streams the same
 metrics independently and never requires model inference.
+
+**Delegate self-handoff (context rollover inside one run).** A delegate can roll its own
+model context over without ending the delegation. One global
+`AppSettings.subagentSelfHandoff` selects a single trigger —
+`{ kind: "off" | "context-tokens" | "tool-calls" | "runtime", value?: number }`, default
+`{ kind: "off" }`, so every settings document written before the setting existed keeps its
+previous behavior. `context-tokens` (1000–1000000, edited in k tokens) fires on the
+*request* occupancy of the next provider call — the same system-prompt, tool-schema, and
+message estimate the compaction guard uses — never on cumulative spend; `tool-calls`
+(1–10000) counts calls inside the current segment; `runtime` (60–14400 s, edited in
+minutes) measures elapsed segment time. Only the settings UI converts units; the stored
+value is always canonical. At a safe turn boundary that crosses the trigger the runtime
+adds one transient request message asking the delegate to call `SubagentHandoff` with one
+free-form text: the handoff its future self needs to continue this task, in whatever
+form and up to 12000 characters it chooses, with no required outline. The runtime imposes
+no field list — what a continuation needs depends on the task — so the handoff may be
+prose, bullets, notes, or a plan, and the prompt names the usual content (facts that still
+matter, binding decisions and constraints, files and state, what was verified and how,
+remaining work, pending or background operations) only as examples. The text is written
+by the delegate, never by the compaction summarizer: a handoff is the run's own account
+of itself, not a generic provider summary. A valid submission is held, and the next
+boundary installs it: the context becomes the immutable dispatch header followed by
+exactly one handoff message — a short framing line plus the authored text verbatim — so
+the previous handoff and the segment it absorbed are dropped and handoff generations
+never concatenate.
+The system prompt, permissions, tools, run identity, worktree, cancellation handle, and
+single report relationship are unaffected — nothing terminal happens, no parent or user
+handoff is required, and `agent_end`/`turn_end` are never emitted for a rollover. Counts and
+time reset only after a successful handoff (context occupancy is re-measured); a rejected,
+invalid, or unrequested submission changes nothing and is reported to the model as a tool
+error carrying the reason it can correct (an empty text, or one over the bound; the text
+is never silently truncated). Successful rollovers are unlimited; only the failure side
+is bounded, and every streak counter resets on a valid, useful handoff: at most 3
+consecutive unanswered requests, 3 consecutive invalid submissions, and 2 consecutive
+no-progress rollovers (the fixed header alone exceeds the threshold, so re-asking after
+one requires real work). A request is repeated only after the segment advanced, so a
+threshold below the dispatch header's own size can never spin. The token trigger is
+evaluated on the pre-compaction request, before any protection pass. ADR 0299's compaction
+and degradation remain the safety fallback and run at the same boundary after the handoff
+decision, and they stay the fallback when protection is still needed: at a boundary that
+is asking and whose request still fits the model's hard limit, that handoff request is the
+context operation and the lossy protection pass is skipped; a request that does not fit is
+compacted or degraded exactly as before. The normalizer is applied at launch
+(`session-launch`, `launch-resolver`), at the settings-set boundary (mistyped values
+rejected), on the sidecar launch/runtime options,
+and through the live `setSubagentSelfHandoff` setter; there is no Rust or storage-schema
+change.
 
 **State ownership.** Execution (`running`), result (`pending` vs `delivered`), and turn
 liveness are distinct: a delegate can be settled-pending while the parent turn stays open;
