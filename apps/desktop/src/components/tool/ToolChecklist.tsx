@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { SCROLL_OWNER_CHAINED } from "../../lib/transcript-scroll";
 import type { ToolBlock } from "../../lib/tool-presentation";
 import { TodoStatusGlyph } from "../TodoStatusGlyph";
 import { MoreNote } from "./BlockHead";
@@ -73,7 +74,7 @@ export function ToolChecklist({ block }: { block: TodosBlock }) {
         ) : null}
       </div>
       {block.items.length > 0 ? (
-        <ul className="tool-todo-list">
+        <ul className="tool-todo-list" data-scroll-owner={SCROLL_OWNER_CHAINED}>
           {block.items.map((item, index) => {
             const label = t(`chat.todo.status.${item.status}`);
             const priorityKey = item.priority

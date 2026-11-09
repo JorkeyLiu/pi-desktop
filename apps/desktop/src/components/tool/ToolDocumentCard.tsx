@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { SCROLL_OWNER_CHAINED } from "../../lib/transcript-scroll";
 import type { ToolBlock } from "../../lib/tool-presentation";
 import { Markdown } from "../Markdown";
 import { BlockHead } from "./BlockHead";
@@ -28,7 +29,10 @@ export function ToolDocumentCard({ block }: { block: DocumentBlock }) {
         ) : null}
       </div>
       {block.fields.length > 0 ? (
-        <dl className="tool-fields tool-document-meta">
+        <dl
+          className="tool-fields tool-document-meta"
+          data-scroll-owner={SCROLL_OWNER_CHAINED}
+        >
           {block.fields.map((row) => (
             <div className="tool-field" key={row.label}>
               <dt className="tool-field-label">{row.label}</dt>
@@ -40,7 +44,7 @@ export function ToolDocumentCard({ block }: { block: DocumentBlock }) {
       {block.body ? (
         <>
           <BlockHead label={t("chat.toolBlockContent")} copy={block.body} />
-          <div className="tool-document-body">
+          <div className="tool-document-body" data-scroll-owner={SCROLL_OWNER_CHAINED}>
             <Markdown source={block.body} />
           </div>
         </>

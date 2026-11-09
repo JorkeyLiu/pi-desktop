@@ -10583,6 +10583,12 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   confirm it stays readable from its own argument.
   Deliver an out-of-order older `todos.changed` event and confirm it cannot
   replace the newer snapshot. Confirm no Composer surface renders a checklist.
+  Wheel over the checklist body with real input: over the progress line, the gap
+  under it, and the list's own padding the transcript scrolls; over a row of a
+  three-item list the transcript scrolls; in a long list the list itself scrolls
+  first and the transcript continues at its top and bottom edges, releasing
+  follow and surfacing the jump control, while a gesture the list consumes does
+  not ask the transcript for earlier history.
 - **Expected**: Host SQLite is authoritative; each successful full replacement
   advances revision, including clear, and emits one committed `todos.changed`
   snapshot. The tool result carries the committed list, and the row renders that
@@ -10615,7 +10621,15 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   and single-active-item normalization as rendered, a refused write against
   another session's turn, a write from a turn that already ended, a legacy
   row without a committed list, stale-event rejection through the production
-  store, and host-restart durability. Renderer contracts are also covered by
+  store, and host-restart durability. Native wheel input over the cards — the
+  production transcript, its scroll attribution and the application stylesheet
+  in an isolated Electron renderer, with wheel events delivered as real
+  `mouseWheel` input rather than dispatched `WheelEvent`s — is covered by
+  `pnpm test:e2e:tool-wheel` (`scripts/e2e-transcript-tool-wheel.mjs`): a
+  three-row checklist, its progress line and the gap under it, a 25-row
+  checklist in both directions with both edge hand-offs, the card's value list,
+  payload fields and document body, and the ownership of a gesture the list
+  itself consumes. Renderer contracts are also covered by
   `apps/desktop/test/tool-presentation.test.mjs` and
   `apps/desktop/test/todo-checklist-card.test.mjs`; `runtime-todos.test.ts`
   covers tool validation and the committed list surviving the runtime's result

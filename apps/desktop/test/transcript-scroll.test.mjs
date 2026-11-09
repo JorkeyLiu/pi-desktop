@@ -1,18 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  chainedOwnerConsumesGesture,
   HISTORY_REVEAL_THRESHOLD_PX,
+  LATER_REVEAL_THRESHOLD_PX,
   TRANSCRIPT_REPIN_THRESHOLD_PX,
   TRANSCRIPT_SCROLL_GESTURE_WINDOW_MS,
   isHistoryRevealPosition,
   isLaterRevealPosition,
   isRecentScrollGesture,
   isTranscriptBottom,
-  LATER_REVEAL_THRESHOLD_PX,
   reduceTranscriptScroll,
   shouldContinueEarlierHistory,
   shouldOfferLatestNavigation,
   transcriptHasLayout,
+  wheelDirectionFromDelta,
 } from "../src/lib/transcript-scroll.ts";
 
 function update(overrides = {}) {
@@ -367,4 +369,45 @@ test("a scroller without a layout box is never at its bottom", () => {
 test("a fractional device pixel ratio at the bottom is the bottom", () => {
   // Asked for 841, reported 840.909: sub-pixel slack, not a reading position.
   assert.equal(isTranscriptBottom({ scrollTop: 840.909, scrollHeight: 1_341, clientHeight: 500 }), true);
+});
+
+/*
+  A bounded list inside a tool card scrolls itself while it has room and lets the
+  wheel continue to the transcript at its own edges. Attribution follows the same
+  rule, so a chained gesture at the edge is the transcript's gesture and a
+  gesture the list still consumes is not.
+*/
+const halfway = { scrollTop: 200, scrollHeight: 760, clientHeight: 260 };
+
+test("a wheel delta names its own direction", () => {
+  assert.equal(wheelDirectionFromDelta(120), 1);
+  assert.equal(wheelDirectionFromDelta(-120), -1);
+  assert.equal(wheelDirectionFromDelta(0), 0);
+  assert.equal(wheelDirectionFromDelta(Number.NaN), 0);
+});
+
+test("a chained list owns a gesture while it still has room in that direction", () => {
+  assert.equal(chainedOwnerConsumesGesture(halfway, 1), true);
+  assert.equal(chainedOwnerConsumesGesture(halfway, -1), true);
+});
+
+test("a chained list that cannot move in the direction hands the gesture over", () => {
+  const atBottom = { ...halfway, scrollTop: 500 };
+  const atTop = { ...halfway, scrollTop: 0 };
+  assert.equal(chainedOwnerConsumesGesture(atBottom, 1), false);
+  assert.equal(chainedOwnerConsumesGesture(atBottom, -1), true);
+  assert.equal(chainedOwnerConsumesGesture(atTop, -1), false);
+  assert.equal(chainedOwnerConsumesGesture(atTop, 1), true);
+});
+
+test("a list that does not overflow never owns the gesture", () => {
+  const short = { scrollTop: 0, scrollHeight: 100, clientHeight: 100 };
+  assert.equal(chainedOwnerConsumesGesture(short, 1), false);
+  assert.equal(chainedOwnerConsumesGesture(short, -1), false);
+  assert.equal(chainedOwnerConsumesGesture(short, 0), false);
+});
+
+test("a gesture with no vertical direction keeps the geometry answer", () => {
+  const atBottom = { ...halfway, scrollTop: 500 };
+  assert.equal(chainedOwnerConsumesGesture(atBottom, 0), true);
 });

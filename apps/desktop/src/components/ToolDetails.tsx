@@ -8,9 +8,10 @@ import { useOpenPreviewTarget } from "../hooks/use-preview-target";
 import { useChatFileMenu } from "../hooks/use-chat-file-menu";
 import { ContextMenu } from "./ContextMenu";
 import { useAppStore } from "../stores/app-store";
-import type { ToolBlock, ToolChip } from "../lib/tool-presentation";
 import { AskToolRichText } from "./AskToolRichText";
 import { BlockHead, MoreNote } from "./tool/BlockHead";
+import { SCROLL_OWNER_CHAINED } from "../lib/transcript-scroll";
+import type { ToolBlock, ToolChip } from "../lib/tool-presentation";
 import { ToolChecklist } from "./tool/ToolChecklist";
 import { ToolDocumentCard } from "./tool/ToolDocumentCard";
 import { ToolRawPayload, ToolValueList } from "./tool/ToolValueList";
@@ -284,7 +285,7 @@ function BlockBody({
       );
     case "fields":
       return (
-        <dl className="tool-fields">
+        <dl className="tool-fields" data-scroll-owner={SCROLL_OWNER_CHAINED}>
           {block.rows.map((row) => (
             <div className="tool-field" key={row.label}>
               <dt className="tool-field-label">{row.label}</dt>

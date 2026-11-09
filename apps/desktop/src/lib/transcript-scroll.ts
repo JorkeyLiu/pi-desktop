@@ -244,6 +244,19 @@ export const SCROLL_GESTURE_KEYS: ReadonlySet<string> = new Set([
 /** Marks a scroll container so input can be attributed to the nearest one. */
 export const SCROLL_OWNER_ATTRIBUTE = "data-scroll-owner";
 
+/**
+ * A nested scroller that consumes a gesture only while it can still move, and
+ * lets the gesture continue to the scroller behind it at its own edges.
+ *
+ * A bounded list inside a tool card is this shape: it scrolls itself while it
+ * has somewhere to go, and the transcript keeps scrolling when it does not. The
+ * value names that contract on the element, so attribution never has to read
+ * computed style in the wheel path: an unmarked nested scroller is a trap or a
+ * horizontally overflowing box and stays attributed statically, while a
+ * `chain` owner is attributed by where it actually is.
+ */
+export const SCROLL_OWNER_CHAINED = "chain";
+
 export type ScrollInputType =
   | "wheel"
   | "touchstart"
@@ -286,6 +299,49 @@ export function consumesVerticalScroll(geometry: {
   clientHeight: number;
 }): boolean {
   return geometry.scrollHeight > geometry.clientHeight + 1;
+}
+
+/**
+ * Whether a chained nested scroller still owns the gesture it is given.
+ *
+ * A `chain` owner moves until it reaches the edge it is being pushed against;
+ * past that edge the browser hands the same gesture to the scroller behind it,
+ * so the gesture is that scroller's. Without this, a gesture that already
+ * scrolled the transcript at a list's edge would still be counted as the list's
+ * and the transcript would neither follow nor release follow — it would just
+ * sit where the reader left it while the jump control refused to appear.
+ *
+ * A gesture with no vertical direction (a touch, or a horizontal wheel) keeps
+ * the previous answer: geometry alone, which is also what a trapped owner gets.
+ */
+export function chainedOwnerConsumesGesture(
+  geometry: {
+    scrollTop: number;
+    scrollHeight: number;
+    clientHeight: number;
+  },
+  direction: number,
+): boolean {
+  if (!consumesVerticalScroll(geometry)) return false;
+  if (direction === 0) return true;
+  const travelLeft =
+    direction > 0
+      ? geometry.scrollHeight - geometry.clientHeight - geometry.scrollTop
+      : geometry.scrollTop;
+  return travelLeft > 1;
+}
+
+/** The vertical direction a wheel event asks for: -1 up, 0 none, 1 down. */
+export function wheelGestureDirection(event: Event): -1 | 0 | 1 {
+  if (typeof WheelEvent === "undefined") return 0;
+  if (!(event instanceof WheelEvent)) return 0;
+  return wheelDirectionFromDelta(event.deltaY);
+}
+
+/** The direction a wheel delta asks for: -1 up, 0 none, 1 down. */
+export function wheelDirectionFromDelta(deltaY: number): -1 | 0 | 1 {
+  if (!Number.isFinite(deltaY) || deltaY === 0) return 0;
+  return deltaY > 0 ? 1 : -1;
 }
 
 /**

@@ -1580,6 +1580,16 @@ Project drag/drop follows these patterns:
   of a scroll; a keystroke inside a text field belongs to that field; and input a
   nested scroller consumes is not the outer scroller's gesture. Arrow keys still
   scroll and Space still activates a focused title.
+- A bounded block inside a tool card (the checklist list, a value list, a
+  payload's field rows, a document body) scrolls itself while it has somewhere
+  to go and hands the wheel to the transcript at its own edges and over its own
+  padding: a reader wheeling past the end of a three-row checklist keeps moving
+  through the conversation instead of stopping on an empty strip of card. The
+  gesture is attributed by what actually moves — the list while it still has
+  room, the transcript once the list is at its edge — so the transcript follows,
+  releases follow, and continues earlier history only for the gesture it really
+  received. These lists therefore never trap the wheel to keep their own scroll
+  position; the delegate run dock keeps its own nested ownership (D302).
 - User send / retry / regenerate: re-pins, hides the jump control, and positions the latest content in the layout phase so the new turn is visible without a top-of-history flash; subsequent persisted and streamed rows continue to follow the bottom
 - Scroll-to-bottom button: horizontally centred 8px above the bottom edge of its
   own transcript viewport, so it floats just above the composer and never on it

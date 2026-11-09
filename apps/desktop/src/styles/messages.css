@@ -3287,7 +3287,10 @@
   max-height: 260px;
   margin: 0;
   overflow: auto;
-  overscroll-behavior-y: contain;
+  /* Same rule as the checklist list: the fields of a payload are a bounded
+     block inside the card, and a reader who reaches its end keeps going through
+     the transcript instead of stopping on its padding. */
+  overscroll-behavior-y: auto;
   border-radius: var(--radius-md);
   background: var(--ds-tile);
   padding: 6px 10px;
@@ -3514,7 +3517,11 @@
   max-height: 260px;
   margin: 0;
   overflow: auto;
-  overscroll-behavior-y: contain;
+  /* The transcript keeps the gesture at this list's own edges and over its
+     padding: the list scrolls itself while it has room, and a reader wheeling
+     past the end of a short checklist keeps moving through the conversation
+     instead of stopping dead on an empty strip of card. */
+  overscroll-behavior-y: auto;
   border-radius: var(--radius-md);
   background: var(--ds-tile);
   padding: 6px 8px;
@@ -3621,7 +3628,7 @@
 .tool-document-body {
   max-height: 360px;
   overflow: auto;
-  overscroll-behavior-y: contain;
+  overscroll-behavior-y: auto;
   border-radius: var(--radius-md);
   background: var(--ds-tool-row-bg);
   padding: 10px 12px;
@@ -3656,7 +3663,7 @@
   max-height: 260px;
   margin: 0;
   overflow: auto;
-  overscroll-behavior-y: contain;
+  overscroll-behavior-y: auto;
   border-radius: var(--radius-md);
   background: var(--ds-tile);
   padding: 6px 10px;
