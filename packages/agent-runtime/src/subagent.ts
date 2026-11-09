@@ -84,6 +84,7 @@ import {
   createSubagentHandoffState,
   createSubagentHandoffTool,
   decideSubagentHandoff,
+  handoffSteeringMessages,
   normalizeHandoffPayload,
   renderSubagentHandoffRequest,
   renderSubagentHandoffSummary,
@@ -344,6 +345,19 @@ export class SubagentRun {
   /** The dispatch turn, kept verbatim across every handoff generation. */
   private handoffHeader?: AgentMessage[];
   /**
+   * The rows this runtime authored through the child loop's `steer()`, in the
+   * order the user sent them.
+   *
+   * This is the only record of which rows in the delegate's context are user
+   * directions. A rollover rebuilds that context from scratch, so without this
+   * ledger every direction the user sent after the dispatch turn would be
+   * deleted at the first handoff — the delegate would keep working on a task
+   * the user had already amended. Keeping the message objects makes retention
+   * identity-based and duplicate-free; `handoffSteeringMessages` decides which
+   * of them the current context actually holds.
+   */
+  private readonly steeringLedger: AgentMessage[] = [];
+  /**
    * The transient request the next provider request carries.
    *
    * Held outside `state.messages` on purpose: the transcript records what the
@@ -453,7 +467,9 @@ export class SubagentRun {
         // The dispatch header is fixed here, before the opening turn joins the
         // transcript: every handoff generation rebuilds from exactly these
         // rows, so the original task can never be summarized away by a model
-        // that forgot to preserve it.
+        // that forgot to preserve it. Directions the user sends to this run
+        // later are not part of the header — they are kept by the run's own
+        // steering ledger, which the rebuild replays after it.
         this.handoffHeader = [
           ...(agentState?.messages ?? []).filter(
             (message) => message.role !== "system",
@@ -585,7 +601,13 @@ export class SubagentRun {
     const content: UserMessage["content"] = images.length
       ? [...(body ? [{ type: "text" as const, text: body }] : []), ...images]
       : body;
-    this.agent.steer({ role: "user", content, timestamp: Date.now() });
+    const message: UserMessage = { role: "user", content, timestamp: Date.now() };
+    this.agent.steer(message);
+    // Recorded only after the loop accepted it: this row is now this runtime's
+    // own user direction, and each rollover has to carry it forward. The
+    // message object is the identity a later rebuild recognizes, so an
+    // identical sentence sent twice stays two distinct directions.
+    this.steeringLedger.push(message);
   }
 
   /**
@@ -841,9 +863,15 @@ export class SubagentRun {
 
   /**
    * Replace the previous handoff and the segment it absorbed with the one just
-   * submitted, keeping the dispatch header verbatim. Rebuilding from the
-   * header — rather than splicing — is what keeps generations from
-   * concatenating: exactly one summary row survives, whatever its generation.
+   * submitted, keeping the dispatch header and the user's directions verbatim.
+   *
+   * Rebuilding from the header — rather than splicing — is what keeps
+   * generations from concatenating: exactly one summary row survives, whatever
+   * its generation. The directions are selected by provenance from the rows the
+   * delegate's context still holds (see `handoffSteeringMessages`), which is
+   * also what keeps a direction pi has queued but not yet delivered out of the
+   * replacement: that one arrives through the loop's own delivery right after
+   * this boundary.
    */
   private installPendingHandoff(): boolean {
     const payload = this.pendingHandoff;
@@ -852,13 +880,18 @@ export class SubagentRun {
     const now = Date.now();
     this.handoffState.handoffs += 1;
     const header = this.handoffHeader ?? this.dispatchHeader();
+    const steering = handoffSteeringMessages({
+      ledger: this.steeringLedger,
+      messages: this.agent.state.messages,
+      header,
+    });
     const summary = renderSubagentHandoffSummary({
       payload,
       generation: this.handoffState.handoffs,
     });
     this.agent.state.messages = replaceContextMessages({
       messages: this.agent.state.messages,
-      replacement: buildSubagentHandoffContext({ header, summary, now }),
+      replacement: buildSubagentHandoffContext({ header, steering, summary, now }),
     });
     this.handoffState.toolCalls = 0;
     this.handoffState.turns = 0;

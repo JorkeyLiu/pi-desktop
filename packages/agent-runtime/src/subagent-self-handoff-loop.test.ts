@@ -69,6 +69,26 @@ function hasInstruction(messages: readonly LlmMessage[]): boolean {
   return requestText(messages).includes("[Context handoff required]");
 }
 
+function countOf(text: string, needle: string): number {
+  return text.split(needle).length - 1;
+}
+
+/** Image block payloads a request actually carries, in order. */
+function imageData(messages: readonly LlmMessage[]): string[] {
+  const found: string[] = [];
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (!block || typeof block !== "object") continue;
+      const entry = block as { type?: string; data?: string };
+      if (entry.type === "image" && typeof entry.data === "string") {
+        found.push(entry.data);
+      }
+    }
+  }
+  return found;
+}
+
 function assistantMessage(
   content: AssistantMessage["content"],
   stopReason: AssistantMessage["stopReason"],
@@ -134,12 +154,24 @@ type ScriptedReply =
  * A deterministic provider: it answers the Nth request with the Nth scripted
  * reply and records every request exactly as the loop built it.
  */
-function scriptedProvider(script: ScriptedReply[], requests: LlmMessage[][]) {
+function scriptedProvider(
+  script: ScriptedReply[],
+  requests: LlmMessage[][],
+  /**
+   * Called with the index of each request as it is built, before its scripted
+   * reply. This is where a live user steer lands: text the user sends while
+   * that turn runs is queued on the child loop and handed to the delegate at
+   * the next boundary.
+   */
+  onRequest?: (round: number) => void,
+) {
   let round = 0;
   return (_model: unknown, context: { messages: LlmMessage[] }) => {
     requests.push(context.messages.map((message) => ({ ...message })));
+    const requestIndex = round;
     const reply = script[round] ?? { kind: "text" as const, text: "done" };
     round += 1;
+    onRequest?.(requestIndex);
     const stream = createAssistantMessageEventStream();
     if (reply.kind === "abort") {
       reply.abort();
@@ -360,5 +392,138 @@ describe("SubagentRun self-handoff through the real loop", () => {
     const history = requestText(agent.state.messages as unknown as LlmMessage[]);
     expect(history).toContain("contents of read-1");
     expect(history).not.toContain("[Delegated-task handoff");
+  });
+
+  /**
+   * The direction the user sent must outlive the rollover it arrived in.
+   *
+   * Steering is ordinary user input to the child loop, so a rollover that
+   * rebuilds the context from the dispatch header alone silently deletes the
+   * only place the user's later instruction lived. This walks the real loop
+   * through two rollovers with one extra direction before each, and asserts
+   * what the delegate's provider request actually carries afterwards.
+   */
+  it("keeps delivered steering directions across every rollover, once and in order", async () => {
+    const DIRECTION_A =
+      "Additional direction A: also verify the dialog's focus trap before reporting.";
+    const DIRECTION_B =
+      "Additional direction B: report the exact line number of the focus-trap check.";
+    const readCalls: string[] = [];
+    const requests: LlmMessage[][] = [];
+    const script: ScriptedReply[] = [
+      { kind: "tools", calls: [readCall("read-1")] },
+      { kind: "tools", calls: [handoffCall("handoff-1")] },
+      { kind: "tools", calls: [readCall("read-2")] },
+      { kind: "tools", calls: [handoffCall("handoff-2")] },
+      { kind: "text", text: "Final report: the dialog is in PermissionDialog.tsx." },
+    ];
+    const { run, agent } = createRun({ kind: "tool-calls", value: 1 }, [
+      readTool(readCalls),
+    ]);
+    agent.streamFunction = scriptedProvider(script, requests, (round) => {
+      // Both directions are sent while a turn is already running, so each one
+      // is delivered inside the segment the following handoff absorbs.
+      if (round === 0) run.steer(DIRECTION_A);
+      if (round === 2) run.steer(DIRECTION_B);
+    });
+
+    const result = await run.run();
+
+    expect(requests).toHaveLength(5);
+    // The delegate was actually given the direction...
+    expect(requestText(requests[1]!)).toContain(DIRECTION_A);
+    // ...and it survives the first rollover, ahead of the new summary.
+    const afterFirst = requestText(requests[2]!);
+    expect(afterFirst).toContain(TASK);
+    expect(countOf(afterFirst, DIRECTION_A)).toBe(1);
+    expect(afterFirst).toContain("[Delegated-task handoff 1]");
+    expect(afterFirst).not.toContain("contents of read-1");
+
+    // Both directions survive the second rollover: chronological, exactly
+    // once each, and still ahead of the one surviving summary.
+    const afterSecond = requestText(requests[4]!);
+    expect(countOf(afterSecond, DIRECTION_A)).toBe(1);
+    expect(countOf(afterSecond, DIRECTION_B)).toBe(1);
+    expect(afterSecond.indexOf(DIRECTION_A)).toBeLessThan(
+      afterSecond.indexOf(DIRECTION_B),
+    );
+    expect(afterSecond.indexOf(DIRECTION_B)).toBeLessThan(
+      afterSecond.indexOf("[Delegated-task handoff 2]"),
+    );
+    expect(afterSecond).toContain("[Delegated-task handoff 2]");
+    expect(afterSecond).not.toContain("[Delegated-task handoff 1]");
+    expect(afterSecond).not.toContain("contents of read-2");
+    expect(result.status).toBe("completed");
+    expect(result.handoffs).toBe(2);
+  });
+
+  /**
+   * The one direction the fix could duplicate: pi drains the steering queue at
+   * the end of a turn and only hands those messages to the model after the
+   * boundary ran. Such a message is not in the delegate's context when the
+   * rollover installs its replacement, so the rollover must leave it to the
+   * loop's own delivery instead of copying it in as well.
+   */
+  it("delivers a direction queued before the rollover install exactly once", async () => {
+    const QUEUED =
+      "Direction sent while the handoff turn ran: check the escape key handler too.";
+    const requests: LlmMessage[][] = [];
+    const script: ScriptedReply[] = [
+      { kind: "tools", calls: [readCall("read-1")] },
+      { kind: "tools", calls: [handoffCall("handoff-1")] },
+      { kind: "tools", calls: [readCall("read-2")] },
+      { kind: "text", text: "Final report: done." },
+    ];
+    const { run, agent } = createRun({ kind: "tool-calls", value: 1 }, [
+      readTool([]),
+    ]);
+    agent.streamFunction = scriptedProvider(script, requests, (round) => {
+      // Sent on the turn that submits the handoff: queued, drained, and only
+      // then delivered — after the boundary installed the new context.
+      if (round === 1) run.steer(QUEUED);
+    });
+
+    const result = await run.run();
+
+    expect(requests).toHaveLength(4);
+    const afterRollover = requestText(requests[2]!);
+    expect(afterRollover).toContain("[Delegated-task handoff 1]");
+    expect(countOf(afterRollover, QUEUED)).toBe(1);
+    expect(countOf(requestText(requests[3]!), QUEUED)).toBe(1);
+    expect(result.status).toBe("completed");
+    expect(result.handoffs).toBe(1);
+  });
+
+  it("keeps a steering image through a rollover", async () => {
+    const image = {
+      type: "image" as const,
+      data: "iVBORw0KGgoAAAANSUhEUg==",
+      mimeType: "image/png",
+    };
+    const requests: LlmMessage[][] = [];
+    const script: ScriptedReply[] = [
+      { kind: "tools", calls: [readCall("read-1")] },
+      { kind: "tools", calls: [handoffCall("handoff-1")] },
+      { kind: "text", text: "Final report: compared." },
+    ];
+    const { run, agent } = createRun({ kind: "tool-calls", value: 1 }, [
+      readTool([]),
+    ]);
+    agent.streamFunction = scriptedProvider(script, requests, (round) => {
+      if (round === 0) {
+        run.steer("Compare this screenshot with the rendered dialog.", [image]);
+      }
+    });
+
+    const result = await run.run();
+
+    expect(requests).toHaveLength(3);
+    expect(imageData(requests[1]!)).toEqual([image.data]);
+    // The bytes travel with the direction, unchanged, across the rollover.
+    const afterRollover = requestText(requests[2]!);
+    expect(afterRollover).toContain("Compare this screenshot");
+    expect(afterRollover).toContain("[Delegated-task handoff 1]");
+    expect(imageData(requests[2]!)).toEqual([image.data]);
+    expect(result.status).toBe("completed");
   });
 });

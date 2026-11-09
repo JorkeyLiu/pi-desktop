@@ -18909,3 +18909,45 @@ host-created files. The full app's file-preview viewer is covered separately.
   in `apps/desktop/test/subagent-handoff-checkpoint.test.mjs`; the probe
   asserts the expanded body equals the authored handoff character for
   character.
+
+### E2E-SUBAGENT-handoff-keeps-steering
+
+- **Preconditions**: A delegated run with a self-handoff trigger enabled
+  (`tool-calls` or `context-tokens`), driven through the production
+  `SubagentRun.run()` entry and the real pi agent loop. Only the provider
+  transport is scripted, so every request the delegate would actually send is
+  observable; no provider, paid API, or user desktop instance is used.
+- **Steps**:
+  1. Send one user direction to the running delegate while its first segment
+     runs, and let the delegate submit `SubagentHandoff`.
+  2. Read the request that follows the rollover.
+  3. Send a second direction in the next segment, let the delegate submit a
+     second handoff, and read the request after that rollover.
+  4. Repeat with a direction queued during the very turn that submits the
+     handoff, so pi drains it at the end of the turn and only hands it to the
+     model after the boundary installed the new context.
+  5. Repeat with a direction that carries an image attachment, and repeat once
+     with two byte-identical directions.
+  6. Inspect the delegate transcript and the parent's model context after the
+     run settles.
+- **Expected**: Each request after a rollover carries the immutable dispatch
+  header, then every delivered direction in delivery order, then exactly one
+  handoff summary; the absorbed segment's tool rows and the previous summary
+  are gone. Each direction appears exactly once, keeps its original text and
+  images unchanged, and two intentional identical directions stay two rows.
+  A direction queued at the boundary is delivered once by the loop after the
+  install, not duplicated into the replacement. Nothing the runtime generates
+  for itself (handoff request, summary, tool output, provider errors) is
+  retained as a direction, and the transcript still holds only the delegate's
+  own rows.
+- **Specs linked**: `03-runtime/02-agent-runtime.md` (delegate self-handoff,
+  live child steering), ADR 0299, ADR 0062.
+- **Acceptance criterion**: C — Conversation & stream; Quality
+- **Milestone**: M6+
+- **Status**: Unit-covered. No UI surface: the runtime path is covered by
+  `packages/agent-runtime/src/subagent-self-handoff-loop.test.ts` (two
+  rollovers with a direction before each, the queued-at-boundary case, and an
+  image-carrying direction, all through the real loop) and
+  `packages/agent-runtime/src/subagent-handoff.test.ts` for the provenance
+  rules. No Electron journey is required because the behavior is internal to
+  the child's model context and adds no rendered or persisted state.

@@ -1059,10 +1059,23 @@ matter, binding decisions and constraints, files and state, what was verified an
 remaining work, pending or background operations) only as examples. The text is written
 by the delegate, never by the compaction summarizer: a handoff is the run's own account
 of itself, not a generic provider summary. A valid submission is held, and the next
-boundary installs it: the context becomes the immutable dispatch header followed by
-exactly one handoff message — a short framing line plus the authored text verbatim — so
-the previous handoff and the segment it absorbed are dropped and handoff generations
-never concatenate.
+boundary installs it: the context becomes the immutable dispatch header, then every
+user direction the run was already given, then exactly one handoff message — a short
+framing line plus the authored text verbatim — so the previous handoff and the segment
+it absorbed are dropped and handoff generations never concatenate, while the direction
+the user sent to this run is never absorbed.
+The rebuilt context keeps the delegate's in-flight steering by provenance, not by
+inspection: the run records the exact rows it authored through the child's own steer
+channel and replays those the context still holds, in delivery order and once each.
+Role, wording, and text similarity are never used as evidence — two intentional
+identical directions stay two rows — and the images a direction carries travel with it
+verbatim. A direction pi had queued but not yet delivered when the boundary ran is not
+in the context, so the rollover leaves it absent and the loop's own delivery appends it
+once after the install, never twice. A direction a compaction pass absorbed stays
+absorbed: a handoff replays only what the current context holds. The handoff request and
+the summary framing both say that the task and the directions survive the rollover, so
+the delegate is told to reconcile a later direction with the earlier ones instead of
+restating them.
 The system prompt, permissions, tools, run identity, worktree, cancellation handle, and
 single report relationship are unaffected — nothing terminal happens, no parent or user
 handoff is required, and `agent_end`/`turn_end` are never emitted for a rollover. Counts and
@@ -1313,7 +1326,10 @@ running flag). It is refused once that owner ended; a delegate that settled
 first continues via `agent.continueSubagent` instead. A settled delegate
 continues directly, seeded from whatever child rows remain or its original task
 brief — no parent prompt. Only an explicit
-parent-model `Task(resume)` reattaches a chain as a new parent-owned run.
+parent-model `Task(resume)` reattaches a chain as a new parent-owned run. A
+steered direction in a live run is also part of what a self-handoff rollover
+must preserve: it is replayed verbatim, in order, exactly once, ahead of the
+new handoff summary.
 The renderer exposes one Send composer: while running it steers via
 `agent.steerSubagent` with the owning turn identity; while settled and
 continuable it continues via `agent.continueSubagent`; there is no second
