@@ -28,10 +28,13 @@ import type { MessageUsage } from "./types/messages.js";
  * Periodic heartbeat default, and the wake trigger's default when the kind is
  * first selected: 15 minutes. The figure matches the self-handoff runtime
  * default, so both execution rows start from the same threshold.
+ *
+ * The user-set ceiling is 300 minutes, the same ceiling the self-handoff
+ * runtime trigger uses; the floor stays one second.
  */
 export const DEFAULT_SUBAGENT_WAKEUP_TIME_SECONDS = 900;
 export const MIN_SUBAGENT_WAKEUP_TIME_SECONDS = 1;
-export const MAX_SUBAGENT_WAKEUP_TIME_SECONDS = 900;
+export const MAX_SUBAGENT_WAKEUP_TIME_SECONDS = 300 * 60;
 
 /** `tool-calls` wakes after each additional N calls; below 1 is meaningless. */
 export const MIN_SUBAGENT_WAKEUP_TOOL_CALLS = 1;

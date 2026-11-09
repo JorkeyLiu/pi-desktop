@@ -8577,7 +8577,7 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   exactly (1500 → 1.5) and is not rewritten by opening, blurring, switching
   kinds, or reopening settings. Off hides the numeric field and writes no value.
   The wake row keeps its existing semantics — one kind, elapsed time in seconds
-  within 1–900, tool calls in calls, results always resuming the parent — and
+  within 1–18000 (edited in minutes up to 300), tool calls in calls, results always resuming the parent — and
   self-handoff still defaults to off for a settings document that never had it.
 - **Specs linked**: `04-ux/06-settings-ia.md` (Subagents destination),
   `03-runtime/02-agent-runtime.md` §5f
@@ -8589,13 +8589,15 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   covers the k-token conversion (20000 / 80000 / 1500), the minute conversion
   of the time trigger (10 minutes for 600 stored seconds, 2 minutes to 120
   seconds, 90 and 100 legacy seconds shown as 1.5 and 1.67 without a write),
+  the 300-minute (18000-second) time ceiling and its clamp,
   the literal units and bounds, the legacy round trip, the exact feature-name
   copy of every locale, and the catalog key alignment;
   `node --test apps/desktop/test/subagent-execution-settings-user-path.test.mjs`
   mounts the production Subagents page and covers the single section heading,
   the two full-width feature rows (label once inside the row, no exterior
   duplicate, no obsolete inner label), both rows' k-token fields and persisted
-  values, the other triggers, off, the preserved wake semantics, and the
+  values, the runtime row's 300-minute (18000-second) ceiling and clamp, the
+  other triggers, off, the preserved wake semantics, and the
   failure toast. Step 2's layout is measured from the rendered page in the same
   fixture at 1000 px and again after resizing the window to 360 px: both rows
   fill the section width, stay stacked, keep the label left of the controls

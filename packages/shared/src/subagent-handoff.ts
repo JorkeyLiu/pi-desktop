@@ -44,9 +44,12 @@ export const MAX_SUBAGENT_HANDOFF_TOOL_CALLS = 10_000;
 /** Remembered default when the tool-call kind is selected. */
 export const DEFAULT_SUBAGENT_HANDOFF_TOOL_CALLS = 50;
 
-/** `runtime` is stored in seconds and edited in whole minutes. */
+/**
+ * `runtime` is stored in seconds and edited in whole minutes. The user-set
+ * ceiling is 300 minutes; the floor stays one minute.
+ */
 export const MIN_SUBAGENT_HANDOFF_RUNTIME_SECONDS = 60;
-export const MAX_SUBAGENT_HANDOFF_RUNTIME_SECONDS = 240 * 60;
+export const MAX_SUBAGENT_HANDOFF_RUNTIME_SECONDS = 300 * 60;
 /** Remembered default when the runtime kind is selected: 15 minutes. */
 export const DEFAULT_SUBAGENT_HANDOFF_RUNTIME_SECONDS = 15 * 60;
 export const SECONDS_PER_MINUTE = 60;

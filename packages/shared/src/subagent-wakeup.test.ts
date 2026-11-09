@@ -11,6 +11,7 @@ import {
   isSubagentWakeupSettings,
   isUuid,
   normalizeSubagentWakeupSettings,
+  subagentWakeupBounds,
 } from "./subagent-wakeup.js";
 
 describe("normalizeSubagentWakeupSettings canonical", () => {
@@ -45,7 +46,7 @@ describe("normalizeSubagentWakeupSettings canonical", () => {
 
   it("clamps each kind into its exported bounds", () => {
     expect(
-      normalizeSubagentWakeupSettings({ kind: "time", value: 10_000 }),
+      normalizeSubagentWakeupSettings({ kind: "time", value: 20_000 }),
     ).toEqual({ kind: "time", value: MAX_SUBAGENT_WAKEUP_TIME_SECONDS });
     expect(
       normalizeSubagentWakeupSettings({ kind: "time", value: 0 }),
@@ -138,6 +139,32 @@ describe("normalizeSubagentWakeupSettings canonical", () => {
     expect(
       normalizeSubagentWakeupSettings({ timeSeconds: 30, onCompletion: false }),
     ).toEqual({ kind: "time", value: 30 });
+  });
+});
+
+describe("proactive-check time ceiling", () => {
+  it("accepts a 300-minute interval and clamps above it", () => {
+    // The user-set ceiling is 300 minutes; the 15-minute product default and
+    // the 1-second floor are unchanged.
+    expect(MAX_SUBAGENT_WAKEUP_TIME_SECONDS).toBe(18_000);
+    expect(DEFAULT_SUBAGENT_WAKEUP_TIME_SECONDS).toBe(900);
+    expect(MIN_SUBAGENT_WAKEUP_TIME_SECONDS).toBe(1);
+    expect(subagentWakeupBounds("time")).toEqual([
+      MIN_SUBAGENT_WAKEUP_TIME_SECONDS,
+      MAX_SUBAGENT_WAKEUP_TIME_SECONDS,
+    ]);
+    expect(
+      normalizeSubagentWakeupSettings({ kind: "time", value: 18_000 }),
+    ).toEqual({ kind: "time", value: 18_000 });
+    expect(
+      normalizeSubagentWakeupSettings({ kind: "time", value: 17_999 }),
+    ).toEqual({ kind: "time", value: 17_999 });
+    expect(
+      normalizeSubagentWakeupSettings({ kind: "time", value: 18_001 }),
+    ).toEqual({ kind: "time", value: 18_000 });
+    // Other kinds keep their own ceilings.
+    expect(subagentWakeupBounds("tool-calls")).toEqual([1, 10_000]);
+    expect(subagentWakeupBounds("context-tokens")).toEqual([1_000, 1_000_000]);
   });
 });
 

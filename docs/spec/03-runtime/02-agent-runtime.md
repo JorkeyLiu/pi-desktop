@@ -1010,7 +1010,7 @@ core set rather than the on-demand catalog of §7.1:
 `AppSettings.subagentWakeup` selects a single program trigger:
 `{ kind: "time" | "tool-calls" | "context-tokens" | "off", value?: number }`
 (default `{ kind: "time", value: 900 }`, i.e. 15 minutes). `time` is a periodic heartbeat
-in seconds (1–900); `tool-calls` resumes after each additional N tool calls a running delegate
+in seconds (1–18000, i.e. up to 300 minutes); `tool-calls` resumes after each additional N tool calls a running delegate
 makes (1–10000, counted per child from its own watermark); `context-tokens` resumes when
 a running delegate's estimated context occupancy crosses upward past N tokens
 (1000–1000000) and rearms only after occupancy drops back below the threshold. The user
@@ -1025,7 +1025,7 @@ idle resume. Child tool/context callbacks update coordinator state only — they
 the model early and never bypass the gate. The model carries no timing: `Task` / `TaskWait` /
 `TaskList` accept no `timeoutSeconds` or per-call wake override, and any legacy timing args
 persisted in older provider tool calls are ignored safely without reintroducing an override.
-The user-configured `time` value (max 900) cannot be shortened or restarted by the model;
+The user-configured `time` value (max 18000, i.e. 300 minutes) cannot be shortened or restarted by the model;
 there is no global child-run timeout derived from it. Internal cancellation and provider
 timeouts stay program-owned and never surface as a model timeout. An attached child's
 result / completion delivery always resumes the parent and cannot be configured off; a
@@ -1047,7 +1047,7 @@ model context over without ending the delegation. One global
 previous behavior. `context-tokens` (1000–1000000, edited in k tokens) fires on the
 *request* occupancy of the next provider call — the same system-prompt, tool-schema, and
 message estimate the compaction guard uses — never on cumulative spend; `tool-calls`
-(1–10000) counts calls inside the current segment; `runtime` (60–14400 s, edited in
+(1–10000) counts calls inside the current segment; `runtime` (60–18000 s, edited in
 minutes) measures elapsed segment time. Only the settings UI converts units; the stored
 value is always canonical. At a safe turn boundary that crosses the trigger the runtime
 adds one transient request message asking the delegate to call `SubagentHandoff` with one

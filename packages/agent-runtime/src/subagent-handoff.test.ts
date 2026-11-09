@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ResolvedSubagentSelfHandoffSettings } from "@pi-desktop/shared";
+import {
+  normalizeSubagentSelfHandoffSettings,
+  type ResolvedSubagentSelfHandoffSettings,
+} from "@pi-desktop/shared";
 import {
   HANDOFF_REARM_TOOL_CALLS,
   MAX_SUBAGENT_HANDOFF_CHARS,
@@ -95,6 +98,20 @@ describe("decideSubagentHandoff", () => {
     })).toEqual({ action: "wait", reason: "below-threshold" });
     expect(decision(trigger, createSubagentHandoffState(NOW), {
       segmentElapsedMs: 600_000,
+    })).toEqual({ action: "request" });
+  });
+
+  it("fires a 300-minute runtime selection at its own deadline, not an older cap", () => {
+    const trigger = normalizeSubagentSelfHandoffSettings({
+      kind: "runtime",
+      value: 18_000,
+    });
+    expect(trigger).toEqual({ kind: "runtime", value: 18_000 });
+    expect(decision(trigger, createSubagentHandoffState(NOW), {
+      segmentElapsedMs: 17_999_000,
+    })).toEqual({ action: "wait", reason: "below-threshold" });
+    expect(decision(trigger, createSubagentHandoffState(NOW), {
+      segmentElapsedMs: 18_000_000,
     })).toEqual({ action: "request" });
   });
 

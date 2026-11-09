@@ -787,7 +787,7 @@ system while preserving their different data ownership:
   edited in `minutes` while the wake section keeps persisting seconds.
 - Check subagent progress is the persistent program-owned `AppSettings.subagentWakeup`
   (`{ kind: "time" | "tool-calls" | "context-tokens" | "off", value?: number }`,
-  default time 900 within 1–900 seconds, tool-calls remembered default 50 inside
+  default time 900 within 1–18000 seconds (edited in minutes, up to 300), tool-calls remembered default 50 inside
   1–10000 incremental calls per child, context-tokens remembered default 200000
   inside 1000–1000000 tokens upward crossing with rearm; a saved explicit value
   keeps its figure;
@@ -801,7 +801,7 @@ system while preserving their different data ownership:
   count that is not a whole thousand keeps its exact figure — 1500 tokens reads
   as 1.5 and is written back unchanged unless the user edits it — so opening,
   leaving, or switching kinds never migrates stored data. The time kind is
-  edited in minutes over the same 1–900 second range and saved back as whole
+  edited in minutes over the same 1–18000 second range and saved back as whole
   seconds, so a stored figure that is not a whole minute keeps its exact
   seconds — 90 reads as 1.5 minutes and 100 as 1.67 — and is never rewritten by
   opening, leaving, or switching kinds. The row carries a
@@ -811,13 +811,13 @@ system while preserving their different data ownership:
   `onCompletion: false` is ignored), and launch plus the live runtime setter
   apply the selection to waits and the idle resume (see
   `../03-runtime/02-agent-runtime.md` §5f). The user-configured `time` value
-  (max 900) cannot be shortened or restarted by the model; there is no global
+  (max 18000, i.e. 300 minutes) cannot be shortened or restarted by the model; there is no global
   child-run timeout.
 - Self-handoff is the persistent program-owned `AppSettings.subagentSelfHandoff`
   (`{ kind: "off" | "context-tokens" | "tool-calls" | "runtime", value?: number }`),
   stored in the runtime's canonical units: context-tokens 1000–1000000 tokens,
-  tool-calls 1–10000 calls (remembered default 50), runtime 60–14400 seconds
-  (remembered default 900 = 15 minutes), context-tokens remembered default
+  tool-calls 1–10000 calls (remembered default 50), runtime 60–18000 seconds
+  (edited in minutes, up to 300; remembered default 900 = 15 minutes), context-tokens remembered default
   200000; a saved explicit value keeps its figure. The card defaults to
   `off`, which is also how every settings document written before the feature
   reads. The context kind is edited in `k tokens`, tool calls in calls, and the

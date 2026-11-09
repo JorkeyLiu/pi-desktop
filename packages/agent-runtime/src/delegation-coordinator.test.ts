@@ -121,6 +121,28 @@ describe("delegation coordinator time cadence (selected wake only)", () => {
       vi.useRealTimers();
     }
   });
+
+  it("time18000: a 300-minute selection owns its own deadline", () => {
+    vi.useFakeTimers();
+    try {
+      const now0 = Date.now();
+      const selected = normalizeSubagentWakeupSettings({
+        kind: "time",
+        value: 18_000,
+      });
+      expect(selected).toEqual({ kind: "time", value: 18_000 });
+      const coordinator = createDelegationCoordinator({
+        getSelectedWake: () => ({ ...selected }),
+        getRecords: () => [record("d")],
+      });
+      const plan = coordinator.planProgramWait({});
+      expect(plan.wake).toEqual({ kind: "time", value: 18_000 });
+      expect(plan.deadline).toBe(now0 + 18_000_000);
+      expect(coordinator.peekPolicyDeadline()).toBe(now0 + 18_000_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("delegation coordinator shared checkpoint across wait/list/idle", () => {

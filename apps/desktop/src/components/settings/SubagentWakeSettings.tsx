@@ -176,8 +176,8 @@ export function SubagentWakeSettings({
  * The stored bounds are token counts and seconds; the fields show their k-token
  * and minute equivalents, so the context floor is 1 (1,000 tokens) and the
  * ceiling 1000 (1,000,000 tokens), and the time floor is 1 second and the
- * ceiling 900 seconds, rounded the same way the field rounds an edit. Tool
- * calls are already edited in their stored unit.
+ * ceiling 300 minutes (18,000 seconds), rounded the same way the field rounds
+ * an edit. Tool calls are already edited in their stored unit.
  */
 function wakeBounds(): Record<string, readonly [number, number]> {
   const bounds: Record<string, readonly [number, number]> = {};

@@ -571,6 +571,20 @@ window.narrowColumnsProbe = async () => {
     "runtime edit must store seconds: " + JSON.stringify(lastSave().subagentSelfHandoff),
   );
 
+  // The runtime ceiling is 300 minutes: the field reports it and a 300-minute
+  // edit persists 18000 seconds.
+  check(numberIn(handoffRow).getAttribute("max") === "300", "runtime field ceiling must be 300 minutes: " + numberIn(handoffRow).getAttribute("max"));
+  check(numberIn(handoffRow).getAttribute("min") === "1", "runtime field floor must be 1 minute: " + numberIn(handoffRow).getAttribute("min"));
+  setNumber(handoffRow, "300");
+  await settleSave();
+  blurNumber(handoffRow);
+  await settleSave();
+  check(
+    JSON.stringify(lastSave().subagentSelfHandoff) === JSON.stringify({ kind: "runtime", value: 18000 }),
+    "300 minutes must persist 18000 seconds: " + JSON.stringify(lastSave().subagentSelfHandoff),
+  );
+  check(numberIn(handoffRow).value === "300", "runtime draft must keep 300 minutes: " + numberIn(handoffRow).value);
+
   // Tool calls: integer calls.
   await chooseOption(handoffRow, "tool-calls");
   check(

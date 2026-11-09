@@ -226,6 +226,25 @@ window.wakeProbe = async () => {
   await settle(); await settle(); await new Promise((r) => setTimeout(r, 50));
   check(JSON.stringify(saves[saves.length - 1].subagentWakeup) === JSON.stringify({ kind: "time", value: 120 }), "an edited minute must persist seconds: " + JSON.stringify(saves[saves.length - 1]));
 
+  // The elapsed-time ceiling is 300 minutes: a 300-minute edit persists 18000
+  // seconds and a typed value above it clamps without a redundant write.
+  check(numberInput().getAttribute("max") === "300", "time field ceiling must be 300 minutes: " + numberInput().getAttribute("max"));
+  // The floor stays 1 model second, shown in its minute equivalent.
+  check(numberInput().getAttribute("min") === "0.02", "time field floor must be 1 second shown as 0.02 minutes: " + numberInput().getAttribute("min"));
+  setNumber("300");
+  await settle();
+  blurNumber();
+  await settle(); await settle(); await new Promise((r) => setTimeout(r, 50));
+  check(JSON.stringify(saves[saves.length - 1].subagentWakeup) === JSON.stringify({ kind: "time", value: 18000 }), "300 minutes must persist 18000 seconds: " + JSON.stringify(saves[saves.length - 1]));
+  check(numberInput().value === "300", "time draft must keep 300 minutes: " + numberInput().value);
+  const ceilingSaves = saves.length;
+  setNumber("400");
+  await settle();
+  blurNumber();
+  await settle(); await settle(); await new Promise((r) => setTimeout(r, 50));
+  check(numberInput().value === "300", "an above-ceiling edit must clamp to 300 minutes: " + numberInput().value);
+  check(saves.length === ceilingSaves, "a clamped-to-stored edit must not write again");
+
   // Context trigger: edited in k tokens, persisted as raw tokens, literal unit.
   await chooseKind("context-tokens");
   check(JSON.stringify(saves[saves.length - 1].subagentWakeup) === JSON.stringify({ kind: "context-tokens", value: 200000 }), "context switch must store the 200000-token default: " + JSON.stringify(saves[saves.length - 1]));

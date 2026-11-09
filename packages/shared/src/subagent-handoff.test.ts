@@ -217,11 +217,11 @@ describe("display-unit conversions", () => {
       DEFAULT_SUBAGENT_HANDOFF_RUNTIME_SECONDS,
     );
     expect(subagentHandoffSecondsToMinutes(DEFAULT_SUBAGENT_HANDOFF_RUNTIME_SECONDS)).toBe(15);
-    expect(subagentHandoffSecondsToMinutes(MAX_SUBAGENT_HANDOFF_RUNTIME_SECONDS)).toBe(240);
+    expect(subagentHandoffSecondsToMinutes(MAX_SUBAGENT_HANDOFF_RUNTIME_SECONDS)).toBe(300);
   });
 
   it("round-trips a UI-edited value back to the stored unit", () => {
-    for (const minutes of [1, 15, 240]) {
+    for (const minutes of [1, 15, 240, 300]) {
       expect(
         subagentHandoffSecondsToMinutes(
           subagentHandoffMinutesToSeconds(minutes),
@@ -241,5 +241,31 @@ describe("subagentSelfHandoffEnabled", () => {
     expect(subagentSelfHandoffEnabled({ kind: "off" })).toBe(false);
     expect(subagentSelfHandoffEnabled(undefined)).toBe(false);
     expect(subagentSelfHandoffEnabled({ kind: "runtime" })).toBe(true);
+  });
+});
+
+describe("self-handoff runtime ceiling", () => {
+  it("accepts a 300-minute runtime and clamps above it", () => {
+    // The user-set ceiling is 300 minutes; the 15-minute remembered default
+    // and the 60-second floor are unchanged.
+    expect(MAX_SUBAGENT_HANDOFF_RUNTIME_SECONDS).toBe(18_000);
+    expect(DEFAULT_SUBAGENT_HANDOFF_RUNTIME_SECONDS).toBe(900);
+    expect(MIN_SUBAGENT_HANDOFF_RUNTIME_SECONDS).toBe(60);
+    expect(subagentSelfHandoffBounds("runtime")).toEqual([
+      MIN_SUBAGENT_HANDOFF_RUNTIME_SECONDS,
+      MAX_SUBAGENT_HANDOFF_RUNTIME_SECONDS,
+    ]);
+    expect(
+      normalizeSubagentSelfHandoffSettings({ kind: "runtime", value: 18_000 }),
+    ).toEqual({ kind: "runtime", value: 18_000 });
+    expect(
+      normalizeSubagentSelfHandoffSettings({ kind: "runtime", value: 17_999 }),
+    ).toEqual({ kind: "runtime", value: 17_999 });
+    expect(
+      normalizeSubagentSelfHandoffSettings({ kind: "runtime", value: 18_001 }),
+    ).toEqual({ kind: "runtime", value: 18_000 });
+    // The other triggers keep their own ceilings.
+    expect(subagentSelfHandoffBounds("tool-calls")).toEqual([1, 10_000]);
+    expect(subagentSelfHandoffBounds("context-tokens")).toEqual([1_000, 1_000_000]);
   });
 });
