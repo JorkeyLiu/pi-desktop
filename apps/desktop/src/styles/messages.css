@@ -1557,7 +1557,7 @@
    adds one disclosure whose body is the free-form handoff the delegate
    wrote. Nothing here is editable and the row owns no actions. Both the
    row and its head are shrinkable so a narrow work panel ellipsises the
-   preview instead of overflowing the transcript column. */
+   title instead of overflowing the transcript column. */
 .transcript-handoff-row {
   min-width: 0;
   margin: 14px 0;
@@ -1566,15 +1566,19 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The head is one full-width button, so the whole divider row is the control
+   and its label — the checkpoint's title — sits at the centre of the
+   transcript column. The inline padding reserves the caret's lane on both
+   sides, so the title stays centred whether or not the caret is showing. */
 .transcript-handoff-head {
+  position: relative;
   display: flex;
   width: 100%;
   min-width: 0;
   align-items: center;
   justify-content: center;
-  gap: 8px;
   overflow: hidden;
-  padding: 2px 6px;
+  padding: 2px 22px;
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
@@ -1593,8 +1597,8 @@
   outline-offset: -2px;
 }
 
-/* The label identifies the checkpoint, so it keeps its line: only the
-   preview next to it gives way as the panel narrows. */
+/* The label is the row's whole statement, so it keeps its line and gives way
+   only to the column's width. */
 .transcript-handoff-label {
   flex: 0 0 auto;
   max-width: 100%;
@@ -1603,26 +1607,19 @@
   white-space: nowrap;
 }
 
-/* The handoff preview is the one thing the collapsed row says beyond its label:
-   a long preview stays on the divider's single line instead of wrapping it
-   into a paragraph. */
-.transcript-handoff-summary {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--ds-text-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* The caret stays out of the way until the row is engaged, as tool rows do. */
+/* The caret stays out of the way until the row is engaged, as tool rows do.
+   It is out of the flex line and pinned to the trailing edge, so revealing it
+   never shifts the centred title. */
 .transcript-handoff-caret {
+  position: absolute;
+  top: 50%;
+  inset-inline-end: 6px;
   display: inline-flex;
-  flex: 0 0 auto;
   width: 12px;
   align-items: center;
   justify-content: center;
   opacity: 0;
+  transform: translateY(-50%);
   transition:
     opacity var(--motion-duration-fast) var(--motion-ease-out),
     transform var(--motion-duration-fast) var(--motion-ease-out);
@@ -1635,7 +1632,7 @@
 }
 
 .transcript-handoff-head[aria-expanded="true"] .transcript-handoff-caret {
-  transform: rotate(90deg);
+  transform: translateY(-50%) rotate(90deg);
 }
 
 .transcript-handoff-body {
