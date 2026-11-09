@@ -2227,11 +2227,17 @@ replaced.
   that is preparing, running, or was refused is not one, and keeps the ordinary
   tool row with that row's own lifecycle state. No status is encoded in the
   checkpoint's text.
-- `--ds-text-muted` at `--text-2xs` with tabular numerals, like 8.4a. The
-  label states the checkpoint and its position among the accepted handoffs of
-  the tab being read; the second muted segment previews the handoff the
-  delegate wrote — its own opening words, whitespace flattened onto one
-  ellipsised line. It never restates pending/completed state.
+- `--ds-text-muted` at `--text-2xs` with tabular numerals, like 8.4a. The row
+  says only which checkpoint it is: one label stating the checkpoint and its
+  position among the accepted handoffs of the tab being read. No second
+  segment previews the handoff — the delegate's words belong to the body, not
+  to the collapsed line — and the label never restates pending/completed
+  state.
+- The label is centred on the transcript column, and it is the head's only
+  in-flow content: the caret is drawn outside that flow, pinned to the row's
+  trailing edge with its lane reserved by symmetric inline padding. Revealing
+  the caret on hover, focus, or open therefore never shifts the title off
+  centre, and expanding leaves the title where it was, above the body.
 - The row is a disclosure: the head is one button with `aria-expanded` and an
   `aria-controls` relationship to the body, reachable and activatable from the
   keyboard, with the caret revealed only when the row is engaged or open. It
@@ -2245,8 +2251,8 @@ replaced.
   line breaks, indentation, and list markers are preserved
   (`white-space: pre-wrap`) instead of being interpreted. The submitted text
   is untrusted model output, so it reaches the reader as a React text node,
-  never as HTML or parsed Markdown. Only the collapsed preview is clamped, and
-  that clamp is the UI's: the expanded body always shows every character.
+  never as HTML or parsed Markdown. Nothing in the row is shortened or
+  clamped: the body always shows every character the delegate submitted.
 - Wire field names, raw arguments, and result JSON are never printed; the row
   reads the call's `handoff` argument and the result's `accepted` flag only.
 - The ordinary tool row above and below it is unaffected, including its

@@ -18895,20 +18895,22 @@ host-created files. The full app's file-preview viewer is covered separately.
   2. Compare the accepted calls against the ordinary rows, then open one
      checkpoint.
 - **Expected**: Only the accepted calls become checkpoints, numbered by their
-  order in the tab's own transcript; each states its title and previews the
-  delegate's own handoff text on one clamped line, never a lifecycle status and
-  never argument or result JSON. The running and refused calls keep the tool
-  row and its own state (spinner, `Failed`) and their disclosed details.
-  Opening a checkpoint shows the whole authored handoff as plain text with its
-  own line breaks and bullets preserved — no field labels, no section list, no
-  per-field structure — and model-authored markup in it renders as text, not
-  HTML.
+  order in the tab's own transcript; each collapsed row states only its title —
+  no snippet of the delegate's text, never a lifecycle status, never argument
+  or result JSON — and that title is centred on the transcript column at both
+  wide and narrow pane widths, opening or not. The running and refused calls
+  keep the tool row and its own state (spinner, `Failed`) and their disclosed
+  details. Opening a checkpoint shows the whole authored handoff as plain text
+  with its own line breaks and bullets preserved — no field labels, no section
+  list, no per-field structure — and model-authored markup in it renders as
+  text, not HTML.
 - **Specs linked**: `04-ux/08-component-spec.md` (8.4a, 8.4b),
   `04-ux/02-i18n-english-first.md`.
 - **Status**: Automated render coverage plus a hidden-Electron click/Space probe
   in `apps/desktop/test/subagent-handoff-checkpoint.test.mjs`; the probe
-  asserts the expanded body equals the authored handoff character for
-  character.
+  asserts the title is centred on the column at a wide and a narrow width, that
+  the collapsed row carries no snippet of the handoff, and that the expanded
+  body equals the authored handoff character for character.
 
 ### E2E-SUBAGENT-handoff-keeps-steering
 

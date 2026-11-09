@@ -9,14 +9,15 @@
  * not a checkpoint at all: it keeps the ordinary tool row and whatever
  * lifecycle status that row states.
  *
- * The handoff itself is one free-form text the delegate authored, never a set
- * of runtime-named fields: the collapsed line previews that text, the expanded
- * body shows all of it, and both are the delegate's own words. The rendered
- * frames below come from the production `SubagentTranscriptTab` and its real
- * store/i18n wiring through server rendering, so the collapsed line, the
- * numbering, the affordance, and the body are the ones the renderer produces.
- * The expanded body is rendered from the same exported component the row
- * mounts when opened.
+ * The collapsed row is informational and says only which checkpoint it is: its
+ * title and its position among the tab's accepted handoffs, centred on the
+ * transcript column, with no snippet of the handoff. The handoff itself is one
+ * free-form text the delegate authored, and opening the checkpoint shows all
+ * of it. The rendered frames below come from the production
+ * `SubagentTranscriptTab` and its real store/i18n wiring through server
+ * rendering, so the collapsed line, the numbering, the affordance, and the
+ * body are the ones the renderer produces. The expanded body is rendered from
+ * the same exported component the row mounts when opened.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -127,9 +128,6 @@ const HANDOFF = [
   "- Open: rewrite the writer, then delete the adapter",
 ].join("\n");
 
-/** The first line, flattened — what the collapsed row says. */
-const HANDOFF_HEAD = "Migrated cache reads onto the new layer;";
-
 async function setup() {
   const vite = await createServer({
     root, configFile: false,
@@ -148,7 +146,7 @@ async function setup() {
   const { SubagentTranscriptTab } = await vite.ssrLoadModule(
     "/src/components/workpanel/SubagentTranscriptTab.tsx",
   );
-  const { HandoffCheckpointBody, handoffCheckpoint, handoffCheckpointPreview } =
+  const { HandoffCheckpointBody, handoffCheckpoint } =
     await vite.ssrLoadModule("/src/features/chat/transcript/SubagentHandoffCheckpoint.tsx");
   const { SlotSessionProvider } = await vite.ssrLoadModule(
     "/src/plugins/renderer-slots/use-slots.tsx",
@@ -175,15 +173,7 @@ async function setup() {
   };
   const renderBody = (text) =>
     renderToStaticMarkup(withProviders(createElement(HandoffCheckpointBody, { text })));
-  return { vite, render, renderBody, handoffCheckpoint, handoffCheckpointPreview };
-}
-
-/** The text a rendered element of `className` carries, markup removed. */
-function textOf(html, className) {
-  const match = html.match(
-    new RegExp(`<[a-z]+ class="${className}[^"]*"[^>]*>([\\s\\S]*?)</[a-z]+>`),
-  );
-  return match ? match[1] : null;
+  return { vite, render, renderBody, handoffCheckpoint };
 }
 
 test("an accepted handoff renders as a numbered checkpoint, not as a tool row", async () => {
@@ -206,26 +196,32 @@ test("an accepted handoff renders as a numbered checkpoint, not as a tool row", 
     // Numbered by their order in this tab's own filtered transcript.
     assert.match(html, /Context handoff · #1/);
     assert.match(html, /Context handoff · #2/);
-    // The collapsed line previews the delegate's own handoff text.
-    const summary = textOf(html, "transcript-handoff-summary");
-    assert.ok(summary, "the collapsed row has no preview");
-    // It is a prefix of what the delegate wrote, clamped on one line.
-    assert.ok(summary.startsWith(HANDOFF_HEAD), `unexpected preview: ${summary}`);
-    assert.equal(summary.at(-1), "…");
-    assert.doesNotMatch(summary, /\n/);
-    assert.ok(summary.length <= 161);
-    assert.ok(!summary.includes("delete the adapter"), "the preview is not clamped");
+    // The collapsed row states only the checkpoint's title: no snippet of the
+    // handoff stands next to it.
+    // A title is all the head carries, so nothing of the delegate's text can
+    // stand beside it.
+    assert.ok(!html.includes("Migrated cache reads"), "the collapsed row previews the handoff");
+    assert.ok(!html.includes("Then rerun the full suite."), "the collapsed row previews the handoff");
+    // The head's whole text is that title, so its accessible name is the title
+    // alone — the position stays part of it, the expand state is the button's.
+    const head = html.match(
+      /<button[^>]*class="transcript-handoff-head"[^>]*>([\s\S]*?)<\/button>/,
+    );
+    assert.ok(head, "checkpoint head is not a button");
+    const headText = head[1].replace(/<[^>]+>/g, "").trim();
+    assert.equal(headText.split(/\s*·\s*/).length, 2);
+    assert.match(headText, /^Context handoff · #\d$/);
+    assert.equal((head[1].match(/transcript-handoff-label/g) ?? []).length, 1);
     const firstCheckpoint = html.slice(html.indexOf("transcript-handoff-row"));
     assert.doesNotMatch(firstCheckpoint.slice(0, 600), /Running|Completed|Done|Pending/);
     // The affordance is a real keyboard-reachable control with the required
     // expanded/controls relationship, collapsed by default.
-    const button = html.match(/<button[^>]*class="transcript-handoff-head"[^>]*>/)?.[0] ?? "";
-    assert.ok(button, "checkpoint head is not a button");
+    const button = head[0];
     assert.match(button, /type="button"/);
     assert.match(button, /aria-expanded="false"/);
     assert.match(button, /aria-controls="[^"]+"/);
     // Nothing is expanded on first paint, and no argument or result JSON is
-    // printed as the row's body or summary.
+    // printed as the row's body or title.
     assert.doesNotMatch(html, /transcript-handoff-body/);
     assert.doesNotMatch(html, /&quot;|handoff&quot;|accepted&quot;|\{&quot;/);
     // The ordinary child tool row in the same turn is untouched.
@@ -233,19 +229,16 @@ test("an accepted handoff renders as a numbered checkpoint, not as a tool row", 
   } finally { await vite.close(); }
 });
 
-test("a long handoff is previewed, never truncated at the source", async () => {
+test("a long handoff stays whole without appearing in the collapsed row", async () => {
   const { vite, render, handoffCheckpoint } = await setup();
   try {
     const long = `${"Working through the migration in order. ".repeat(20)}Final detail: keep the adapter until the release lands.`;
     const html = render([taskCall(), acceptedHandoff("h1", "c1", long)]);
-    const summary = textOf(html, "transcript-handoff-summary");
-    assert.ok(summary, "the collapsed row has no preview");
-    // The UI clamps the preview to one short line...
-    assert.ok(summary.length <= 161, `preview is ${summary.length} characters`);
-    assert.ok(summary.endsWith("…"), "a clamped preview states that it is clamped");
-    assert.doesNotMatch(summary, /\n/);
+    // The collapsed row shows the title and nothing from the delegate's text.
+    // The collapsed row shows the title and nothing from the delegate's text.
+    assert.ok(!html.includes("Working through the migration"), "the collapsed row previews the handoff");
+    assert.match(html, /Context handoff · #1/);
     // ...while the checkpoint still holds every character the delegate wrote.
-    assert.ok(long.startsWith(summary.slice(0, -1)));
     const view = handoffCheckpoint(acceptedHandoff("h1", "c1", long));
     assert.equal(view.text, long);
     assert.match(view.text, /Final detail: keep the adapter until the release lands\.$/);
@@ -265,6 +258,7 @@ test("pending and rejected handoffs keep the ordinary tool row and its status", 
     const html = render([taskCall(), running, rejected]);
     // Neither call is a checkpoint: the acceptance is what makes one.
     assert.doesNotMatch(html, /transcript-handoff-row/);
+    assert.doesNotMatch(html, /transcript-handoff-label/);
     assert.doesNotMatch(html, /Context handoff/);
     // Each keeps the existing lifecycle presentation the tool row owns.
     assert.match(html, /data-message-id="h-run"/);
@@ -272,9 +266,10 @@ test("pending and rejected handoffs keep the ordinary tool row and its status", 
     assert.match(html, /data-message-id="h-error"/);
     assert.match(html, /status-error/);
     assert.match(html, /Failed/);
-    // The refusal is an error tool row like any other: its own explanation
-    // stays behind that row's disclosure, and no status is re-encoded as text.
-    assert.doesNotMatch(html, /transcript-handoff-summary/);
+    // The refusal is an error tool row like any other — its own explanation
+    // stays behind that row's disclosure — and not a checkpoint, so no
+    // checkpoint title or affordance is drawn for it.
+    assert.doesNotMatch(html, /transcript-handoff-head/);
   } finally { await vite.close(); }
 });
 
@@ -328,31 +323,21 @@ test("model-authored markup in a handoff stays text", async () => {
   } finally { await vite.close(); }
 });
 
-test("the checkpoint summary never re-encodes a lifecycle state", async () => {
-  const { vite, handoffCheckpointPreview } = await setup();
-  try {
-    // The preview is the delegate's text and nothing else, whatever the row's
-    // own tool status is: acceptance is `details.accepted`, not prose.
-    assert.ok(handoffCheckpointPreview(HANDOFF).startsWith(HANDOFF_HEAD));
-    assert.equal(handoffCheckpointPreview(HANDOFF).at(-1), "…");
-    assert.equal(handoffCheckpointPreview("  one   line \n only "), "one line only");
-    assert.equal(handoffCheckpointPreview("short"), "short");
-  } finally { await vite.close(); }
-});
-
 /**
- * The disclosure's *activation* — the one thing static markup cannot prove.
+ * The disclosure's *activation* and the collapsed row's *layout* — the things
+ * static markup cannot prove.
  *
  * A real Chromium renderer is the lightest harness in this repository that can
  * answer a mouse click and Enter/Space (the existing `scripts/e2e-subagent-*`
  * probes drive an isolated Electron window the same way: an esbuild bundle of
  * production sources, a hidden window, real input events). The fixture mounts
  * the production checkpoint row inside the same disclosure provider the
- * transcript tab wraps it in, so the open/collapse path under test is the
- * production one; real `sendInputEvent` mouse and key events are what press the
- * control, not synthetic DOM events.
+ * transcript tab wraps it in, with the production divider stylesheet, so the
+ * open/collapse path and the title's centring under test are the production
+ * ones; real `sendInputEvent` mouse and key events are what press the control,
+ * not synthetic DOM events.
  */
-test("the checkpoint disclosure opens and collapses by real click and Space", async (t) => {
+test("the checkpoint title is centred and the disclosure opens by click and Space", async (t) => {
   const repoRoot = join(root, "..", "..");
   const electronBinary = join(
     root,
@@ -419,9 +404,18 @@ void i18n
       },
       nodePaths: [join(root, "node_modules")],
     });
+    // The divider row's own rules, from the stylesheet the renderer ships. The
+    // token values live in the Tailwind layer and are absent here, which does
+    // not affect the layout invariants under test: the head is a flex row whose
+    // single in-flow child is the title.
+    await build({
+      entryPoints: [join(root, "src/styles/messages.css")],
+      outfile: join(temp, "messages.css"),
+      bundle: true,
+    });
     await writeFile(
       join(temp, "index.html"),
-      `<!doctype html><meta charset="utf-8"><title>handoff checkpoint</title><div id="root"></div><script src="renderer.js"></script>`,
+      `<!doctype html><meta charset="utf-8"><title>handoff checkpoint</title><link rel="stylesheet" href="messages.css"><div id="root"></div><script src="renderer.js"></script>`,
     );
     await writeFile(
       join(temp, "main.cjs"),
@@ -432,16 +426,27 @@ app.setPath("userData", path.join(__dirname, "profile"));
 const READ = ${JSON.stringify(`(() => {
   const row = document.querySelector(".transcript-handoff-row");
   const head = row && row.querySelector(".transcript-handoff-head");
+  const labels = row ? row.querySelectorAll(".transcript-handoff-label") : [];
+  const label = labels.length === 1 ? labels[0] : null;
+  const caret = row && row.querySelector(".transcript-handoff-caret");
   const body = row && row.querySelector(".transcript-handoff-body");
   if (!head) return null;
   const prose = body && body.querySelector(".transcript-handoff-prose");
+  const headRect = head.getBoundingClientRect();
+  const labelRect = label ? label.getBoundingClientRect() : null;
   return {
     expanded: head.getAttribute("aria-expanded"),
     tag: head.tagName,
     hasBody: Boolean(body),
     controlsMatch: Boolean(body) && head.getAttribute("aria-controls") === body.id,
-    preview: row.querySelector(".transcript-handoff-summary")?.textContent ?? null,
-    label: row.querySelector(".transcript-handoff-label")?.textContent ?? null,
+    rowText: row.innerText.trim(),
+    labelCount: labels.length,
+    label: label ? label.textContent : null,
+    headText: head.textContent.trim(),
+    headWidth: Math.round(headRect.width),
+    labelLeft: labelRect ? Math.round((labelRect.left - headRect.left) * 100) / 100 : null,
+    labelRight: labelRect ? Math.round((headRect.right - labelRect.right) * 100) / 100 : null,
+    caretOpacity: caret ? getComputedStyle(caret).opacity : null,
     text: prose ? prose.textContent : null,
     matchesAuthored: Boolean(prose) && prose.textContent === window.__expected,
     lines: prose ? prose.textContent.split(String.fromCharCode(10)).length : 0,
@@ -451,7 +456,8 @@ const READ = ${JSON.stringify(`(() => {
     documentFocused: document.hasFocus(),
     raw: body ? /[{}]|&quot;/.test(body.innerText) : false,
   };
-})()`)};\napp.whenReady().then(async () => {
+})()`)}
+app.whenReady().then(async () => {
   const win = new BrowserWindow({
     show: false,
     width: 720,
@@ -461,7 +467,10 @@ const READ = ${JSON.stringify(`(() => {
   win.webContents.on("console-message", (event) => console.error("[renderer] " + event.message));
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const read = () => win.webContents.executeJavaScript(READ);
-  const click = async (point) => {
+  const clickHead = async () => {
+    const point = await win.webContents.executeJavaScript(
+      '(() => { const r = document.querySelector(".transcript-handoff-head").getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()',
+    );
     win.webContents.sendInputEvent({ type: "mouseMove", x: point.x, y: point.y });
     win.webContents.sendInputEvent({ type: "mouseDown", x: point.x, y: point.y, button: "left", clickCount: 1 });
     win.webContents.sendInputEvent({ type: "mouseUp", x: point.x, y: point.y, button: "left", clickCount: 1 });
@@ -473,17 +482,21 @@ const READ = ${JSON.stringify(`(() => {
     await pause(80);
     return () => key("keyUp", keyCode);
   };
+  const resize = async (width) => { win.setContentSize(width, 600); await pause(200); };
   const steps = {};
   try {
     await win.loadFile(path.join(__dirname, "index.html"));
     for (let i = 0; i < 100 && !(await read()); i += 1) await pause(50);
     steps.mounted = await read();
-    const point = await win.webContents.executeJavaScript(
-      '(() => { const r = document.querySelector(".transcript-handoff-head").getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()',
-    );
-    await click(point);
+    await resize(420);
+    steps.narrow = await read();
+    await resize(720);
+    await clickHead();
     steps.afterClick = await read();
-    await click(point);
+    await resize(420);
+    steps.afterClickNarrow = await read();
+    await resize(720);
+    await clickHead();
     steps.afterSecondClick = await read();
     // Native key activation is delivered to the focused webContents; the window
     // itself stays hidden so nothing appears on the desktop.
@@ -537,23 +550,60 @@ const READ = ${JSON.stringify(`(() => {
     const result = JSON.parse(line.slice("SUBAGENT_HANDOFF_PROBE ".length));
     assert.equal(code, 0, output.slice(-4000));
     assert.equal(result.ok, true);
-    const { mounted, afterClick, afterSecondClick, focused, afterSpaceDown, afterSpaceOpen, afterSpaceClose } = result.steps;
-    // Collapsed on first paint: a real button, no body in the tree.
+    const {
+      mounted, narrow, afterClick, afterClickNarrow, afterSecondClick,
+      focused, afterSpaceDown, afterSpaceOpen, afterSpaceClose,
+    } = result.steps;
+    // Collapsed on first paint: a real button, no body in the tree, and one
+    // title — the generation, not the delegate's prose.
     assert.equal(mounted.tag, "BUTTON");
     assert.equal(mounted.expanded, "false");
     assert.equal(mounted.hasBody, false);
+    assert.equal(mounted.labelCount, 1);
     assert.equal(mounted.label, "上下文交接 · 第 1 次");
+    // Nothing of the handoff stands next to the title: the row's rendered
+    // text is the title alone, and the head states nothing else.
+    assert.equal(mounted.rowText, mounted.label);
+    assert.equal(mounted.headText, mounted.label);
+    // The title is centred on the transcript column — the same gap on both
+    // sides of the head — and the hidden caret does not take part in that flow.
+    assert.ok(mounted.headWidth > 300, `head is only ${mounted.headWidth}px wide`);
+    assert.ok(
+      Math.abs(mounted.labelLeft - mounted.labelRight) <= 1,
+      `title is off centre: left=${mounted.labelLeft} right=${mounted.labelRight}`,
+    );
+    assert.equal(mounted.caretOpacity, "0");
+    // A narrow panel keeps the title centred instead of pushing it aside.
+    assert.ok(narrow.headWidth > 300 && narrow.headWidth < mounted.headWidth);
+    assert.ok(
+      Math.abs(narrow.labelLeft - narrow.labelRight) <= 1,
+      `title is off centre when narrow: left=${narrow.labelLeft} right=${narrow.labelRight}`,
+    );
+    // The collapsed row's rendered text is the title alone — the delegate's
+    // prose is not on the line.
+    assert.equal(narrow.rowText, narrow.label);
+    assert.equal(narrow.headText, narrow.label);
     // A real mouse click opens it: aria-expanded flips, the body mounts with
     // the whole authored handoff, a real painted height, and the controls
     // relation holds.
     assert.equal(afterClick.expanded, "true");
     assert.equal(afterClick.hasBody, true);
     assert.equal(afterClick.controlsMatch, true);
+    assert.equal(afterClick.caretOpacity, "1");
     assert.ok(afterClick.bodyHeight > 0, "expanded body has no painted height");
     assert.equal(afterClick.matchesAuthored, true, "the expanded body must equal the authored handoff");
     assert.equal(afterClick.lines, HANDOFF.split("\n").length, "authored line breaks are preserved");
     assert.equal(afterClick.raw, false);
     assert.equal(afterClick.elementChildren, 0, "the handoff must render as text, not markup");
+    // The body keeps its content and the title keeps its centre while open,
+    // including at a narrow width.
+    assert.equal(afterClickNarrow.expanded, "true");
+    assert.equal(afterClickNarrow.matchesAuthored, true);
+    assert.ok(afterClickNarrow.bodyHeight > 0);
+    assert.ok(
+      Math.abs(afterClickNarrow.labelLeft - afterClickNarrow.labelRight) <= 1,
+      `title is off centre while open and narrow: left=${afterClickNarrow.labelLeft} right=${afterClickNarrow.labelRight}`,
+    );
     // A second click collapses it again.
     assert.equal(afterSecondClick.expanded, "false");
     assert.equal(afterSecondClick.hasBody, false);

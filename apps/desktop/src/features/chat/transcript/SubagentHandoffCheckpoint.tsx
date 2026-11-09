@@ -13,16 +13,6 @@ import { disclosureKey, useAutomaticDisclosure } from "./disclosure";
  */
 const HANDOFF_TOOL_NAME = "SubagentHandoff";
 
-/**
- * How much of the handoff the collapsed line previews.
- *
- * A handoff is written to be read whole, so the preview exists only to identify
- * which checkpoint the row is. It is a UI clamp on the delegate's text: the
- * submitted handoff is never shortened at its source, and the expanded body
- * always shows all of it.
- */
-const HANDOFF_PREVIEW_CHARS = 160;
-
 /** One accepted handoff: the text its author wrote for its future self. */
 export type HandoffCheckpointView = {
   /** The whole authored handoff, exactly as submitted. */
@@ -62,20 +52,6 @@ export function handoffCheckpoint(message: UiMessage): HandoffCheckpointView | n
 }
 
 /**
- * What the collapsed line states: the delegate's own opening words, flattened
- * to one line and clamped by the UI.
- *
- * Whitespace is collapsed so a handoff written as a plan does not turn the row
- * into a paragraph, and the clamp is the only truncation anywhere: the
- * checkpoint's own text, and the body that shows it, stay complete.
- */
-export function handoffCheckpointPreview(text: string): string {
-  const flattened = text.replace(/\s+/g, " ").trim();
-  if (flattened.length <= HANDOFF_PREVIEW_CHARS) return flattened;
-  return `${flattened.slice(0, HANDOFF_PREVIEW_CHARS).trimEnd()}…`;
-}
-
-/**
  * One accepted context rollover in a delegate's transcript, drawn in the
  * context-compaction row's visual pattern: a centred muted label between the
  * rows it separates.
@@ -87,8 +63,9 @@ export function handoffCheckpointPreview(text: string): string {
  * is reachable and activatable from the keyboard.
  *
  * The row carries no tool arguments and no result text: the collapsed line
- * previews the handoff the delegate wrote, and the body is that same text in
- * full. Nothing here is editable, and the row owns no actions.
+ * says only which checkpoint it is — its title and its position among the
+ * tab's accepted handoffs — and the body is the authored handoff in full.
+ * Nothing here is editable, and the row owns no actions.
  */
 export function SubagentHandoffCheckpointRow({
   message,
@@ -112,7 +89,6 @@ export function SubagentHandoffCheckpointRow({
     times === undefined
       ? t("chat.subagentHandoffCheckpoint")
       : t("chat.subagentHandoffCheckpointCount", { times });
-  const summary = handoffCheckpointPreview(view.text);
   return (
     <div className="transcript-handoff-row" role="group" aria-label={title}>
       <button
@@ -124,7 +100,6 @@ export function SubagentHandoffCheckpointRow({
         onClick={toggle}
       >
         <span className="transcript-handoff-label">{title}</span>
-        <span className="transcript-handoff-summary">{summary}</span>
         <span className="transcript-handoff-caret" aria-hidden="true">
           <IconChevronRight size={12} />
         </span>
