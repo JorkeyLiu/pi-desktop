@@ -11,6 +11,7 @@ import {
   createSubagentHandoffState,
   createSubagentHandoffTool,
   decideSubagentHandoff,
+  handoffSteeringMessages,
   normalizeHandoffPayload,
   renderSubagentHandoffRequest,
   renderSubagentHandoffSummary,
@@ -229,6 +230,11 @@ describe("renderSubagentHandoffRequest", () => {
     expect(text).toContain("what is left to do");
     expect(text).toContain("still pending or running");
     expect(text).toContain("include only what this task actually needs");
+    // The prompt must not claim that everything outside the handoff is lost:
+    // the original task and the user's directions survive every rollover.
+    expect(text).toContain(
+      "The original task and every direction the user sent to this run are kept verbatim",
+    );
     // The delegate checks its own handoff before submitting.
     expect(text).toContain("check your own handoff");
     expect(text).toContain("could you resume this task from it alone");
@@ -306,6 +312,10 @@ describe("renderSubagentHandoffSummary", () => {
     expect(text).toContain(AUTHORED);
     expect(text).toContain("which you wrote");
     expect(text).toContain("The task, the tools, and the permissions are unchanged");
+    // The rebuilt context carries the user's own directions ahead of it, and a
+    // later generation says so instead of claiming the handoff is all that is
+    // left of the user's instruction.
+    expect(text).toContain("the directions the user sent to this run are kept above it");
   });
 
   it("adds no field headings of its own", () => {
@@ -381,5 +391,76 @@ describe("createSubagentHandoffTool", () => {
       minLength: 1,
       maxLength: MAX_SUBAGENT_HANDOFF_CHARS,
     });
+  });
+});
+
+describe("handoffSteeringMessages", () => {
+  const header = [{ role: "user" as const, content: "dispatch task", timestamp: 1 }];
+
+  it("keeps the delivered directions in delivery order, once each", () => {
+    const first = { role: "user" as const, content: "first direction", timestamp: 2 };
+    const second = { role: "user" as const, content: "second direction", timestamp: 3 };
+    // The ledger is in delivery order; the context also holds rows the
+    // runtime did not author (assistant turns, tool results).
+    const messages = [
+      { role: "system" as const, content: "prompt", timestamp: 0 },
+      header[0]!,
+      first,
+      {
+        role: "assistant" as const,
+        content: [{ type: "text" as const, text: "working" }],
+        timestamp: 4,
+      },
+      second,
+    ] as never[];
+
+    expect(
+      handoffSteeringMessages({ ledger: [first, second], messages, header }),
+    ).toEqual([first, second]);
+  });
+
+  it("keeps two identical directions as two distinct rows", () => {
+    const repeated = "Run the suite twice.";
+    const first = { role: "user" as const, content: repeated, timestamp: 2 };
+    const second = { role: "user" as const, content: repeated, timestamp: 3 };
+    const messages = [header[0]!, first, second] as never[];
+
+    expect(
+      handoffSteeringMessages({
+        ledger: [first, second],
+        messages,
+        header,
+      }),
+    ).toEqual([first, second]);
+  });
+
+  it("drops a direction the context does not hold", () => {
+    // Queued-but-not-yet-delivered steering, and a direction a lossy
+    // protection pass absorbed, are both absent from the context: the
+    // replacement must not invent them.
+    const delivered = { role: "user" as const, content: "delivered", timestamp: 2 };
+    const queued = { role: "user" as const, content: "queued", timestamp: 3 };
+    const messages = [header[0]!, delivered] as never[];
+
+    expect(
+      handoffSteeringMessages({
+        ledger: [delivered, queued],
+        messages,
+        header,
+      }),
+    ).toEqual([delivered]);
+  });
+
+  it("never repeats a row that is already part of the header", () => {
+    // A resumed chain can seed the same object the ledger holds.
+    const row = { role: "user" as const, content: "earlier direction", timestamp: 2 };
+    const messages = [
+      row,
+      { role: "assistant" as const, content: [], timestamp: 3 },
+    ] as never[];
+
+    expect(
+      handoffSteeringMessages({ ledger: [row], messages, header: [row] }),
+    ).toEqual([]);
   });
 });

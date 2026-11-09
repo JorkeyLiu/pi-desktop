@@ -7,10 +7,11 @@
  * durable transcript — and the model answers by calling
  * `SUBAGENT_HANDOFF_TOOL_NAME` with one free-form text: the handoff it wants
  * its future self to read. A valid submission is held until the next boundary,
- * where it replaces the previous handoff and the execution segment it absorbed
- * while the original dispatch header stays untouched. The run, its identity,
- * its worktree, its cancellation handle, and its single report relationship
- * are all unaffected: a handoff is a context operation, not a lifecycle event.
+ * where it replaces the previous handoff and the execution segment it absorbed,
+ * while the original dispatch header and every user direction the delegate was
+ * given stay in place. The run, its identity, its worktree, its cancellation
+ * handle, and its single report relationship are all unaffected: a handoff is a
+ * context operation, not a lifecycle event.
  *
  * The submission is deliberately unstructured. What a continuation needs
  * depends on the task, so the runtime does not impose a field list: the
@@ -228,7 +229,7 @@ export function renderSubagentHandoffRequest(input: {
     `[Context handoff required] This delegated run reached ${measured}.`,
     `Call the \`${SUBAGENT_HANDOFF_TOOL_NAME}\` tool now and write, in whatever form you like, the handoff your future self needs to continue this task.`,
     `Any length up to ${MAX_SUBAGENT_HANDOFF_CHARS} characters in any structure — prose, bullets, notes, a plan — is accepted. There is no required outline. Facts that still matter, decisions and constraints that bind the remaining work, the files and state involved, what you verified and how, what is left to do, and anything still pending or running are the usual content of a handoff, but include only what this task actually needs and leave out the rest.`,
-    "Before you submit, check your own handoff: could you resume this task from it alone, with none of the earlier history? The run continues with the same task, tools, and permissions, and everything you do not write is gone. Keep it concise, but do not leave out something you would have to rediscover.",
+    "Before you submit, check your own handoff: could you resume this task from it alone, with none of the earlier history? The run continues with the same task, tools, and permissions. The original task and every direction the user sent to this run are kept verbatim and replayed to you after the rollover, so do not restate them; say what they now mean only where a later direction changed the earlier one. Everything else you do not write is gone. Keep it concise, but do not leave out something you would have to rediscover.",
     "Do not start new work before submitting it.",
   ].join("\n");
 }
@@ -291,26 +292,80 @@ export function normalizeHandoffPayload(args: unknown): NormalizedHandoff {
  * is visibly not the earlier one. It is a user message: the delegate is being
  * handed its own state back, and no assistant turn was produced that could own
  * it.
+ *
+ * The framing says the user's directions are above it because the rebuilt
+ * context really does place them there: a delegate reading a later generation
+ * must know that the raw directions still bind it, and that the handoff is the
+ * place where they are reconciled with what was learned since.
  */
 export function renderSubagentHandoffSummary(input: {
   payload: SubagentHandoffPayload;
   generation: number;
 }): string {
   return [
-    `[Delegated-task handoff ${input.generation}] Your earlier working history for this delegated task was replaced by the handoff below, which you wrote. The task, the tools, and the permissions are unchanged. Continue from it and do not redo what it records as done.`,
+    `[Delegated-task handoff ${input.generation}] Your earlier working history for this delegated task was replaced by the handoff below, which you wrote. The task, the tools, and the permissions are unchanged. The original task and the directions the user sent to this run are kept above it, unchanged; follow the latest of them where they differ. Continue from the handoff and do not redo what it records as done.`,
     "",
     input.payload.text,
   ].join("\n");
 }
 
 /**
- * The replacement context: the immutable dispatch header followed by exactly
- * one handoff summary. Rebuilding from the header is what keeps handoff
- * generations from concatenating — the previous summary and the segment it
- * absorbed are dropped, never stacked.
+ * The runtime-authored directions still in the delegate's context.
+ *
+ * A direction is recognized by provenance, never by inspection: the runtime
+ * records the exact message object it handed to the child loop's `steer()`,
+ * so a row is a direction because the runtime created it — not because it is a
+ * user message, and not because its text looks like an instruction.
+ *
+ * Two consequences follow, and both are load-bearing:
+ *
+ * - **Identity, not text.** A user may legitimately send the same sentence
+ *   twice; each delivery is its own row and neither is deduplicated away.
+ * - **Presence, not queue state.** Steering that pi drained at the end of a
+ *   turn but has not yet handed to the model is absent from `messages`. Such a
+ *   row stays absent here, so the loop delivers it after the rollover through
+ *   its own mechanism — exactly once, never twice. Rows a lossy protection
+ *   pass removed are absent as well, so a handoff never resurrects history that
+ *   compaction deliberately summarized.
+ *
+ * A row already sitting in the header is skipped too: rebuilding must never
+ * duplicate the dispatch turn into a direction.
+ */
+export function handoffSteeringMessages(input: {
+  /** Rows the runtime authored through `steer()`, in delivery order. */
+  ledger: readonly AgentMessage[];
+  /** The delegate's current context. */
+  messages: readonly AgentMessage[];
+  /** The dispatch header the context is rebuilt from. */
+  header: readonly AgentMessage[];
+}): AgentMessage[] {
+  const present = new Set<AgentMessage>(input.messages);
+  const inHeader = new Set<AgentMessage>(input.header);
+  const kept: AgentMessage[] = [];
+  const seen = new Set<AgentMessage>();
+  for (const message of input.ledger) {
+    if (seen.has(message)) continue;
+    if (!present.has(message) || inHeader.has(message)) continue;
+    seen.add(message);
+    kept.push(message);
+  }
+  return kept;
+}
+
+/**
+ * The replacement context: the immutable dispatch header, the user directions
+ * the delegate was given, then exactly one handoff summary.
+ *
+ * Rebuilding from the header is what keeps handoff generations from
+ * concatenating — the previous summary and the segment it absorbed are dropped,
+ * never stacked. The directions between them are the one thing a rollover must
+ * not absorb: they are the user's own instruction to this run, so they survive
+ * every generation, in the order they were delivered and each exactly once.
  */
 export function buildSubagentHandoffContext(input: {
   header: readonly AgentMessage[];
+  /** Delivered user directions, in delivery order. See `handoffSteeringMessages`. */
+  steering?: readonly AgentMessage[];
   summary: string;
   now: number;
 }): AgentMessage[] {
@@ -319,7 +374,7 @@ export function buildSubagentHandoffContext(input: {
     content: input.summary,
     timestamp: input.now,
   };
-  return [...input.header, handoff];
+  return [...input.header, ...(input.steering ?? []), handoff];
 }
 
 /**
