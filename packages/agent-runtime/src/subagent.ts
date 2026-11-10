@@ -89,6 +89,8 @@ import {
   renderSubagentHandoffRequest,
   renderSubagentHandoffSummary,
   type SubagentHandoffPayload,
+  type InstalledSubagentHandoff,
+  type SubagentHandoffPersistenceError,
   type SubagentHandoffSnapshot,
   type SubagentHandoffState,
 } from "./subagent-handoff.js";
@@ -142,6 +144,15 @@ export type SubagentRunResult = {
   outputTruncated?: boolean;
   /** Context handoffs this run performed on its own context. */
   handoffs?: number;
+  /**
+   * Set when a handoff was installed but its checkpoint could not be written.
+   *
+   * The context change stands — the delegate keeps working — while the durable
+   * boundary does not. A later resume then falls back to the previous
+   * checkpoint or the full history, and this reports that the boundary is
+   * not what the run installed rather than claiming it was saved.
+   */
+  handoffCheckpointError?: SubagentHandoffPersistenceError;
   /** File path in session scratch where the unclipped report was preserved (ADR 0062). */
   scratchReportPath?: string;
   error?: {
@@ -222,6 +233,37 @@ export type SubagentRunOptions = {
    * request message at the turn boundaries that cross the threshold.
    */
   selfHandoff?: SubagentSelfHandoffSettings;
+
+  /**
+   * The fixed instruction header this run rebuilds a rollover from.
+   *
+   * Exactly the chain's delivered instructions — its original task and every
+   * `Task`/steering direction delivered before this run — in delivery order,
+   * each once, and nothing else. The run appends its own opening directive (the
+   * current `Task` task) itself. This is a *different* list from the messages
+   * `initialMessages` replays: a replayed summary and its post-checkpoint tail
+   * are context for the first request only and are never pinned into a header.
+   */
+  handoffDirectives?: readonly AgentMessage[];
+  /**
+   * Persist one installed handoff boundary.
+   *
+   * Called only after this run has actually replaced its in-memory context, so
+   * a durable checkpoint can never describe a rollover that did not happen. A
+   * rejection means the boundary was not written: the run keeps working on the
+   * context it installed, reports `handoffCheckpointError`, and a later resume
+   * falls back to the previous checkpoint or the full history.
+   */
+  onHandoffInstalled?: (installed: InstalledSubagentHandoff) => Promise<void>;
+
+  /**
+   * Highest handoff generation already installed on this chain.
+   *
+   * A resumed run continues the chain's numbering instead of restarting at 1,
+   * so a newer install always orders after the one it superseded and a reader
+   * can see how many rollovers the conversation actually had.
+   */
+  handoffGenerationBase?: number;
 };
 
 /**
@@ -281,6 +323,12 @@ function scratchPathSegment(value: string): string {
 
 export { addUsage };
 
+/** One user direction this run delivered through the child loop's `steer()`. */
+type SubagentSteeringEntry = {
+  message: AgentMessage;
+  /** Id of the persisted child row that echoes it, when the caller had one. */
+  rowId?: string;
+};
 /** One delegate execution. A resumed run is still a new instance; it is
  * seeded with the prior chain's messages rather than kept warm in memory. */
 export class SubagentRun {
@@ -342,7 +390,11 @@ export class SubagentRun {
   private readonly handoffState: SubagentHandoffState;
   /** A validated submission waiting for the next safe turn boundary. */
   private pendingHandoff?: SubagentHandoffPayload;
-  /** The dispatch turn, kept verbatim across every handoff generation. */
+  /**
+   * The fixed instruction header a rollover rebuilds from: the chain's
+   * delivered directives plus this run's opening task. Never a replayed
+   * summary or execution history.
+   */
   private handoffHeader?: AgentMessage[];
   /**
    * The rows this runtime authored through the child loop's `steer()`, in the
@@ -356,7 +408,20 @@ export class SubagentRun {
    * identity-based and duplicate-free; `handoffSteeringMessages` decides which
    * of them the current context actually holds.
    */
-  private readonly steeringLedger: AgentMessage[] = [];
+  private readonly steeringLedger: SubagentSteeringEntry[] = [];
+  /**
+   * Id of the last persisted transcript row this run emitted.
+   *
+   * This is the run-side half of a handoff boundary cursor: the runtime turns
+   * it (plus the directions the boundary actually kept) into the persisted id
+   * the checkpoint records, so the boundary is an identity over rows, never a
+   * timestamp comparison.
+   */
+  private lastPersistedRowId?: string;
+  /** Set when an install succeeded but its durable checkpoint did not. */
+  private handoffCheckpointError?: SubagentHandoffPersistenceError;
+  /** Highest handoff generation already installed on this chain. */
+  private readonly handoffGenerationBase: number;
   /**
    * The transient request the next provider request carries.
    *
@@ -373,7 +438,14 @@ export class SubagentRun {
     this.provider = opts.provider;
     this.thinkingLevel = opts.thinkingLevel;
     this.selfHandoff = normalizeSubagentSelfHandoffSettings(opts.selfHandoff);
+    this.handoffGenerationBase = Math.max(
+      0,
+      Math.floor(opts.handoffGenerationBase ?? 0),
+    );
     this.handoffState = createSubagentHandoffState(Date.now());
+    // A resumed run continues the chain's numbering; a cold start begins at 1
+    // on its first rollover.
+    this.handoffState.handoffs = this.handoffGenerationBase;
     const tools = this.selfHandoff.kind === "off" ? opts.tools : this.toolsWithHandoff(opts.tools);
     this.attemptedModels.add(`${opts.provider.id}/${opts.provider.modelId}`);
     const binding = this.modelBinding();
@@ -464,16 +536,15 @@ export class SubagentRun {
         this.installContextOutcome(initialContext);
       }
       if (this.selfHandoff.kind !== "off") {
-        // The dispatch header is fixed here, before the opening turn joins the
-        // transcript: every handoff generation rebuilds from exactly these
-        // rows, so the original task can never be summarized away by a model
-        // that forgot to preserve it. Directions the user sends to this run
-        // later are not part of the header — they are kept by the run's own
-        // steering ledger, which the rebuild replays after it.
+        // The fixed header is the delivered instructions only, plus this run's
+        // own opening task. The context `initialMessages` replays is never
+        // copied here: a resumed seed may begin with an older summary and the
+        // execution tail after its checkpoint, and those are absorbed by this
+        // run's first rollover exactly like any other history. Directions the
+        // user sends to this run are carried by the steering ledger, which the
+        // rebuild replays after the header.
         this.handoffHeader = [
-          ...(agentState?.messages ?? []).filter(
-            (message) => message.role !== "system",
-          ),
+          ...(this.opts.handoffDirectives ?? []),
           initialTaskMessage,
         ];
       }
@@ -593,7 +664,12 @@ export class SubagentRun {
    * Throws when the run already settled, so a stale steer fails loudly
    * instead of queuing onto a dead loop.
    */
-  steer(text: string, images: readonly ImageContent[] = []): void {
+  steer(
+    text: string,
+    images: readonly ImageContent[] = [],
+    /** Persisted echo row the runtime wrote for this direction. */
+    rowId?: string,
+  ): void {
     if (this.finished) {
       throw new Error("The subagent run already settled.");
     }
@@ -606,8 +682,9 @@ export class SubagentRun {
     // Recorded only after the loop accepted it: this row is now this runtime's
     // own user direction, and each rollover has to carry it forward. The
     // message object is the identity a later rebuild recognizes, so an
-    // identical sentence sent twice stays two distinct directions.
-    this.steeringLedger.push(message);
+    // identical sentence sent twice stays two distinct directions; its row id
+    // is the persisted identity a durable checkpoint records.
+    this.steeringLedger.push(rowId ? { message, rowId } : { message });
   }
 
   /**
@@ -873,7 +950,7 @@ export class SubagentRun {
    * replacement: that one arrives through the loop's own delivery right after
    * this boundary.
    */
-  private installPendingHandoff(): boolean {
+  private async installPendingHandoff(): Promise<boolean> {
     const payload = this.pendingHandoff;
     if (!payload) return false;
     this.pendingHandoff = undefined;
@@ -881,7 +958,7 @@ export class SubagentRun {
     this.handoffState.handoffs += 1;
     const header = this.handoffHeader ?? this.dispatchHeader();
     const steering = handoffSteeringMessages({
-      ledger: this.steeringLedger,
+      ledger: this.steeringLedger.map((entry) => entry.message),
       messages: this.agent.state.messages,
       header,
     });
@@ -889,6 +966,10 @@ export class SubagentRun {
       payload,
       generation: this.handoffState.handoffs,
     });
+    // The context is replaced first, synchronously. Only an installed context
+    // can have a boundary, so the durable checkpoint is attempted afterwards;
+    // a persistence failure never rolls the delegate back to history it has
+    // already been told is gone.
     this.agent.state.messages = replaceContextMessages({
       messages: this.agent.state.messages,
       replacement: buildSubagentHandoffContext({ header, steering, summary, now }),
@@ -915,15 +996,78 @@ export class SubagentRun {
       occupancy >= threshold
         ? this.handoffState.noProgress + 1
         : 0;
+    await this.persistInstalledHandoff({
+      generation: this.handoffState.handoffs,
+      summary,
+      absorbedRowIds: this.absorbedRowIds(steering),
+      installedAt: now,
+    });
     return true;
   }
 
-  /** The dispatch turn as recorded at run start; a fallback for older runs. */
+  /**
+   * The persisted rows the replaced context absorbed: the last row this run
+   * wrote plus every delivered direction the boundary kept.
+   *
+   * The runtime resolves these into one boundary cursor by transcript order;
+   * sending the whole set is what stops a direction that was already in the
+   * context from being replayed a second time after the summary.
+   */
+  private absorbedRowIds(steering: readonly AgentMessage[]): string[] {
+    const kept = new Set<AgentMessage>(steering);
+    const ids: string[] = [];
+    for (const entry of this.steeringLedger) {
+      if (!entry.rowId || !kept.has(entry.message)) continue;
+      if (ids.includes(entry.rowId)) continue;
+      ids.push(entry.rowId);
+    }
+    // The header is not persisted here: the original task and the directions
+    // are restored from their own provenance. A run-emitted row is the last
+    // persisted identity of this segment.
+    if (this.lastPersistedRowId) ids.push(this.lastPersistedRowId);
+    return ids;
+  }
+
+  /**
+   * Persist the installed boundary. A failure is reported on the run and never
+   * silently treated as installed: the delegate keeps its new context, and a
+   * later resume falls back to the previous checkpoint or full history.
+   */
+  private async persistInstalledHandoff(
+    installed: InstalledSubagentHandoff,
+  ): Promise<void> {
+    if (!this.opts.onHandoffInstalled) return;
+    try {
+      await this.opts.onHandoffInstalled(installed);
+    } catch (error) {
+      this.handoffCheckpointError = {
+        code: "SUBAGENT_HANDOFF_CHECKPOINT_FAILED",
+        message:
+          error instanceof Error && error.message
+            ? error.message
+            : "The installed handoff boundary could not be saved.",
+      };
+    }
+  }
+
+  /**
+   * The fixed header for a boundary that ran before `run()` captured one.
+   *
+   * Used only by a caller driving a boundary directly (tests, a resumed run
+   * that never started its loop). The delivered directives are the header; a
+   * run without them falls back to the first user row of its seed, which is
+   * always its opening task — never the whole context, so a replayed summary
+   * and execution tail can never become the fixed header.
+   */
   private dispatchHeader(): AgentMessage[] {
-    const task = this.agent.state.messages.find(
+    const opening = this.agent.state.messages.find(
       (message) => message.role === "user",
     );
-    this.handoffHeader = task ? [task] : [];
+    this.handoffHeader = this.opts.handoffDirectives?.length
+      ? [...this.opts.handoffDirectives]
+      : opening
+        ? [opening]
+        : [];
     return this.handoffHeader;
   }
 
@@ -951,7 +1095,9 @@ export class SubagentRun {
     turn: PrepareNextTurnContext,
     signal?: AbortSignal,
   ): Promise<AgentLoopTurnUpdate | undefined> {
-    const handedOff = this.installPendingHandoff();
+    // Install first: a handoff that lands here changes the context the rest of
+    // this boundary measures, compacts, and asks about.
+    const handedOff = await this.installPendingHandoff();
     const snapshot = this.handoffSnapshot();
     const requested = this.scheduleHandoffRequest(snapshot);
     const outcome: DelegateTurnUpdate =
@@ -1218,7 +1364,14 @@ export class SubagentRun {
       ...(this.contextCompactions > 0 ? { contextCompactions: this.contextCompactions } : {}),
       ...(this.contextDegraded ? { contextDegraded: true } : {}),
       ...(this.lastReportTruncated ? { outputTruncated: true } : {}),
-      ...(this.handoffState.handoffs > 0 ? { handoffs: this.handoffState.handoffs } : {}),
+      ...(this.handoffState.handoffs > this.handoffGenerationBase
+        ? {
+            handoffs: this.handoffState.handoffs - this.handoffGenerationBase,
+          }
+        : {}),
+      ...(this.handoffCheckpointError
+        ? { handoffCheckpointError: this.handoffCheckpointError }
+        : {}),
       ...(scratchReportPath ? { scratchReportPath } : {}),
       ...(error ? { error } : {}),
     };
@@ -1238,17 +1391,6 @@ export class SubagentRun {
     };
   }
 
-  private emit(event: AgentEventEnvelope["event"]): void {
-    this.opts.onEvent({
-      sessionId: this.opts.sessionId,
-      turnId: this.opts.turnId,
-      ts: Date.now(),
-      event,
-      parentToolCallId: this.opts.parentToolCallId,
-      agentName: this.opts.definition.name,
-    });
-  }
-
   /**
    * Idle and duration watchdogs are withdrawn (D328). Stopping a delegate is
    * the parent agent's `TaskStop` or the user's Stop, not a timer, so the
@@ -1260,6 +1402,29 @@ export class SubagentRun {
         ? [this.opts.signal, this.runAbortController.signal]
         : [this.runAbortController.signal],
     );
+  }
+
+  private emit(event: AgentEventEnvelope["event"]): void {
+    // The persisted-row cursor moves only on a row that was actually written:
+    // a settled assistant row (`message_end`) or a tool row (`tool_end`).
+    // Streaming frames and preparations are not rows the transcript keeps by
+    // that identity, so they never move a handoff boundary. Both identities are
+    // the ones the host actually persists — the assistant row's own id and the
+    // bare tool call id — so a live transcript and a `session.get` replay locate
+    // the same boundary row.
+    if (event.type === "message_end" && event.message.id) {
+      this.lastPersistedRowId = event.message.id;
+    } else if (event.type === "tool_end" && event.toolCallId) {
+      this.lastPersistedRowId = event.toolCallId;
+    }
+    this.opts.onEvent({
+      sessionId: this.opts.sessionId,
+      turnId: this.opts.turnId,
+      ts: Date.now(),
+      event,
+      parentToolCallId: this.opts.parentToolCallId,
+      agentName: this.opts.definition.name,
+    });
   }
 
   private newAssistantRow(): UiMessage {

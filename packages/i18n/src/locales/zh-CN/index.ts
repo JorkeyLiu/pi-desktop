@@ -496,6 +496,7 @@ export const zhCN = {
     compactionRowSummaryFailed: "摘要生成失败 · 已保留近期上下文",
     subagentHandoffCheckpoint: "上下文交接",
     subagentHandoffCheckpointCount: "上下文交接 · 第 {{times}} 次",
+    subagentHandoffCheckpointBody: "交接摘要",
     scrollToBottom: "回到最新",
     minimap: "对话大纲",
     resultNeedsAttention: "这次任务需要处理一下",

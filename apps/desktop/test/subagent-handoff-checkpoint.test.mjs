@@ -12,12 +12,14 @@
  * The collapsed row is informational and says only which checkpoint it is: its
  * title and its position among the tab's accepted handoffs, centred on the
  * transcript column, with no snippet of the handoff. The handoff itself is one
- * free-form text the delegate authored, and opening the checkpoint shows all
- * of it. The rendered frames below come from the production
- * `SubagentTranscriptTab` and its real store/i18n wiring through server
- * rendering, so the collapsed line, the numbering, the affordance, and the
- * body are the ones the renderer produces. The expanded body is rendered from
- * the same exported component the row mounts when opened.
+ * free-form text the delegate authored, and opening the checkpoint shows all of
+ * it under the standard tool detail section head — a localized heading and a
+ * copy control that hands over the whole text. The rendered frames below come
+ * from the production `SubagentTranscriptTab` and its real store/i18n wiring
+ * through server rendering, so the collapsed line, the numbering, the
+ * affordance, its centred title, the section head, and the body are the ones
+ * the renderer produces. The expanded body is rendered from the same exported
+ * component the row mounts when opened.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -280,11 +282,16 @@ test("the expanded checkpoint shows the whole authored handoff as plain text", a
     const view = handoffCheckpoint(accepted);
     assert.ok(view, "an accepted submission must produce a checkpoint view");
     const html = renderBody(view.text);
-    // Plain text, not markup: the delegate's formatting is preserved by CSS,
-    // so the body is one text node with its own line breaks and bullets.
-    assert.match(html, /^<div class="transcript-handoff-prose selectable">/);
-    assert.ok(html.includes(HANDOFF), "the body does not carry the authored text verbatim");
-    assert.match(html, /\n\n- Verified: pnpm --filter cache test passes \(42 tests\)/);
+    // The standard detail section head opens the body, as it does over every
+    // other tool detail block...
+    assert.match(html, /^<div class="tool-row-section-head">/);
+    // ...and the text below it is plain text, not markup: the delegate's
+    // formatting is preserved by CSS, so the body is one text node with its
+    // own line breaks and bullets.
+    const prose = html.slice(html.indexOf('<div class="transcript-handoff-prose'));
+    assert.match(prose, /^<div class="transcript-handoff-prose selectable">/);
+    assert.ok(prose.includes(HANDOFF), "the body does not carry the authored text verbatim");
+    assert.match(prose, /\n\n- Verified: pnpm --filter cache test passes \(42 tests\)/);
     // No field labels, no wire field name, no JSON, no per-field structure.
     for (const label of ["Next step", "Completed", "Files", "Checks", "Remaining"]) {
       assert.doesNotMatch(html, new RegExp(`>${label}<`), `field label ${label} leaked`);
@@ -308,6 +315,32 @@ test("the expanded checkpoint shows the whole authored handoff as plain text", a
       }),
       null,
     );
+  } finally { await vite.close(); }
+});
+
+/**
+ * The section head Read and Edit detail blocks carry: a translated heading with
+ * a copy control over the bytes below it. The handoff body is a tool detail
+ * section like any other, so it reads the same way instead of presenting a bare
+ * box of text.
+ */
+test("the expanded body carries the standard section head and copy control", async () => {
+  const { vite, renderBody } = await setup();
+  try {
+    const html = renderBody(HANDOFF);
+    // Exactly one head row, above the prose and inside the same body.
+    assert.equal((html.match(/tool-row-section-head/g) ?? []).length, 1);
+    const head = html.slice(0, html.indexOf('<div class="transcript-handoff-prose'));
+    const label = head.match(/<span>([^<]*)<\/span>/);
+    assert.equal(label?.[1], "Handoff summary");
+    // The shared copy control, named after the bytes it hands over.
+    const copy = head.match(/<button([^>]*)>/);
+    assert.ok(copy, "the section head has no copy control");
+    assert.match(copy[1], /class="tool-row-copy"/);
+    assert.match(copy[1], /aria-label="Copy Handoff summary"/);
+    // The head names the bytes; it never repeats the checkpoint title that
+    // already sits above the body, and introduces no second disclosure.
+    assert.doesNotMatch(head, /Context handoff|transcript-handoff-label|aria-expanded/);
   } finally { await vite.close(); }
 });
 
@@ -335,9 +368,11 @@ test("model-authored markup in a handoff stays text", async () => {
  * transcript tab wraps it in, with the production divider stylesheet, so the
  * open/collapse path and the title's centring under test are the production
  * ones; real `sendInputEvent` mouse and key events are what press the control,
- * not synthetic DOM events.
+ * not synthetic DOM events. The section head's copy control is pressed the same
+ * way, with the clipboard API stubbed at that external boundary so the exact
+ * text it is handed can be compared with the authored handoff.
  */
-test("the checkpoint title is centred and the disclosure opens by click and Space", async (t) => {
+test("the checkpoint title is centred, the disclosure opens by click and Space, and the section head copies the handoff", async (t) => {
   const repoRoot = join(root, "..", "..");
   const electronBinary = join(
     root,
@@ -368,6 +403,17 @@ import { SubagentHandoffCheckpointRow } from ${JSON.stringify(join(root, "src/fe
 
 const message = ${JSON.stringify(handoff)};
 const expected = ${JSON.stringify(HANDOFF)};
+// The copy control writes to the clipboard. Stub that external boundary so the
+// exact text it is handed can be compared, and so a hidden window needs no
+// clipboard permission.
+window.__copies = [];
+Object.defineProperty(navigator, "clipboard", {
+  configurable: true,
+  value: {
+    writeText: async (text) => { window.__copies.push(text); },
+    readText: async () => window.__copies[0] ?? "",
+  },
+});
 const i18n = createInstance();
 void i18n
   .init({
@@ -432,6 +478,11 @@ const READ = ${JSON.stringify(`(() => {
   const body = row && row.querySelector(".transcript-handoff-body");
   if (!head) return null;
   const prose = body && body.querySelector(".transcript-handoff-prose");
+  const sectionHead = body && body.querySelector(".tool-row-section-head");
+  const copyButton = body && body.querySelector(".tool-row-copy");
+  const sectionLabel = sectionHead && sectionHead.querySelector("span");
+  const sectionRect = sectionHead ? sectionHead.getBoundingClientRect() : null;
+  const proseRect = prose ? prose.getBoundingClientRect() : null;
   const headRect = head.getBoundingClientRect();
   const labelRect = label ? label.getBoundingClientRect() : null;
   return {
@@ -447,6 +498,24 @@ const READ = ${JSON.stringify(`(() => {
     labelLeft: labelRect ? Math.round((labelRect.left - headRect.left) * 100) / 100 : null,
     labelRight: labelRect ? Math.round((headRect.right - labelRect.right) * 100) / 100 : null,
     caretOpacity: caret ? getComputedStyle(caret).opacity : null,
+    sectionCount: body ? body.querySelectorAll(".tool-row-section-head").length : 0,
+    sectionLabel: sectionLabel ? sectionLabel.textContent : null,
+    copyCount: body ? body.querySelectorAll(".tool-row-copy").length : 0,
+    copyLabel: copyButton ? copyButton.getAttribute("aria-label") : null,
+    copyClass: copyButton ? copyButton.className : null,
+    copies: window.__copies ? window.__copies.slice() : null,
+    sectionWidth: sectionRect ? Math.round(sectionRect.width) : 0,
+    proseWidth: proseRect ? Math.round(proseRect.width) : 0,
+    // The standard head sits above the box it labels and spans it, as it does
+    // over every other tool detail block.
+    sectionAboveProse: Boolean(
+      sectionRect && proseRect && sectionRect.bottom <= proseRect.top + 1,
+    ),
+    sectionAlignsProse: Boolean(
+      sectionRect && proseRect &&
+      Math.abs(sectionRect.left - proseRect.left) <= 1 &&
+      Math.abs(sectionRect.right - proseRect.right) <= 1,
+    ),
     text: prose ? prose.textContent : null,
     matchesAuthored: Boolean(prose) && prose.textContent === window.__expected,
     lines: prose ? prose.textContent.split(String.fromCharCode(10)).length : 0,
@@ -476,6 +545,15 @@ app.whenReady().then(async () => {
     win.webContents.sendInputEvent({ type: "mouseUp", x: point.x, y: point.y, button: "left", clickCount: 1 });
     await pause(120);
   };
+  const clickCopy = async () => {
+    const point = await win.webContents.executeJavaScript(
+      '(() => { const r = document.querySelector(".transcript-handoff-body .tool-row-copy").getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()',
+    );
+    win.webContents.sendInputEvent({ type: "mouseMove", x: point.x, y: point.y });
+    win.webContents.sendInputEvent({ type: "mouseDown", x: point.x, y: point.y, button: "left", clickCount: 1 });
+    win.webContents.sendInputEvent({ type: "mouseUp", x: point.x, y: point.y, button: "left", clickCount: 1 });
+    await pause(150);
+  };
   const key = (type, keyCode) => win.webContents.sendInputEvent({ type, keyCode });
   const press = async (keyCode) => {
     key("keyDown", keyCode);
@@ -493,6 +571,13 @@ app.whenReady().then(async () => {
     await resize(720);
     await clickHead();
     steps.afterClick = await read();
+    // The section head's copy control is a real button in the expanded body:
+    // pressing it hands over the whole authored handoff and reports the copy
+    // without closing the row.
+    await clickCopy();
+    steps.afterCopy = await read();
+    await pause(1700);
+    steps.afterCopySettled = await read();
     await resize(420);
     steps.afterClickNarrow = await read();
     await resize(720);
@@ -551,7 +636,8 @@ app.whenReady().then(async () => {
     assert.equal(code, 0, output.slice(-4000));
     assert.equal(result.ok, true);
     const {
-      mounted, narrow, afterClick, afterClickNarrow, afterSecondClick,
+      mounted, narrow, afterClick, afterCopy, afterCopySettled,
+      afterClickNarrow, afterSecondClick,
       focused, afterSpaceDown, afterSpaceOpen, afterSpaceClose,
     } = result.steps;
     // Collapsed on first paint: a real button, no body in the tree, and one
@@ -595,6 +681,34 @@ app.whenReady().then(async () => {
     assert.equal(afterClick.lines, HANDOFF.split("\n").length, "authored line breaks are preserved");
     assert.equal(afterClick.raw, false);
     assert.equal(afterClick.elementChildren, 0, "the handoff must render as text, not markup");
+    // The expanded body carries the same section head Read and Edit details do:
+    // a translated label over the bytes, one shared copy control, named after
+    // the text it hands over.
+    assert.equal(afterClick.sectionCount, 1);
+    assert.equal(afterClick.copyCount, 1);
+    assert.equal(afterClick.sectionLabel, "交接摘要");
+    assert.equal(afterClick.copyLabel, "复制 交接摘要");
+    // The head sits above the handoff box and spans it, as the head of any
+    // other tool detail block does over the bytes it labels.
+    assert.equal(afterClick.sectionAboveProse, true, "the section head is not above the handoff box");
+    assert.equal(afterClick.sectionAlignsProse, true, "the section head does not span the handoff box");
+    assert.ok(
+      Math.abs(afterClick.sectionWidth - afterClick.proseWidth) <= 1,
+      `section head ${afterClick.sectionWidth}px vs handoff box ${afterClick.proseWidth}px`,
+    );
+    assert.deepEqual(afterClick.copies, [], "the control writes only when pressed");
+    // Pressing that control hands over the whole handoff — every character,
+    // untruncated — and reports the copy without collapsing the row.
+    assert.equal(afterCopy.expanded, "true");
+    assert.equal(afterCopy.hasBody, true);
+    assert.equal(afterCopy.matchesAuthored, true);
+    assert.deepEqual(afterCopy.copies, [HANDOFF], "the copy must carry the whole authored handoff");
+    assert.equal(afterCopy.copyClass, "tool-row-copy copied");
+    // The feedback is transient: the shared control returns to rest while the
+    // row stays open on the same text.
+    assert.equal(afterCopySettled.copyClass, "tool-row-copy");
+    assert.equal(afterCopySettled.expanded, "true");
+    assert.equal(afterCopySettled.matchesAuthored, true);
     // The body keeps its content and the title keeps its centre while open,
     // including at a narrow width.
     assert.equal(afterClickNarrow.expanded, "true");

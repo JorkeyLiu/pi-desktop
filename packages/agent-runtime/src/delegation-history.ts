@@ -34,8 +34,13 @@ import type {
 } from "@earendil-works/pi-ai";
 import {
   MAX_RESUMABLE_LISTED_FILES,
+  isDelegationHandoffCheckpoint,
+  isDelegationHandoffDirective,
   normalizeSubagentName,
   splitInlineContent,
+  type DelegationHandoffCheckpoint,
+  type DelegationHandoffDirective,
+  type MessageAttachment,
   type UiMessage,
 } from "@pi-desktop/shared";
 import { isRecord, timestampMs, toJsonObject, toJsonValue, usageToPi } from "./agent-messages.js";
@@ -71,6 +76,15 @@ export type DelegationChain = {
   /** Settled status of the latest run; `running` while it works. Historical
    * context only: no status bans continuation (ADR 0279). */
   latestStatus?: string;
+  /**
+   * Installed self-handoff checkpoints on this chain, newest first.
+   *
+   * A resume restores the newest one whose boundary cursor still exists in the
+   * persisted rows; older entries stay as the fallback when the newest cannot
+   * be placed. Empty means no handoff was ever installed — the pre-checkpoint
+   * full-history seed applies exactly as before.
+   */
+  handoffCheckpoints?: DelegationHandoffCheckpoint[];
   /** Latest activity timestamp; orders the prompt listing, newest first. */
   lastActivityAt: number;
 };
@@ -207,6 +221,196 @@ export function taskObjectiveFromArgs(args: unknown): string {
   if (description) return description;
   const task = typeof args.task === "string" ? args.task.trim() : "";
   return task;
+}
+
+
+/**
+ * One delivered instruction of a chain, with the persisted row that carried it.
+ *
+ * A `Task` invocation delivers the chain's opening task and every later
+ * `Task(resume)` directive; a user continuation of the chain is the same
+ * instruction delivered twice in the transcript — a parent `Task` marker row
+ * and its tagged child echo row. Identity, not text, decides which is which:
+ * the invocation's `toolCallId` and the echo's `parentToolCallId` are the same
+ * value, so one instruction stays one directive while two intentionally
+ * identical instructions stay two.
+ */
+export type DelegationDirective = {
+  /** `Task` toolCallId that delivered the instruction, when one did. */
+  toolCallId?: string;
+  /** Persisted child row that delivered the instruction, when one exists. */
+  rowId?: string;
+  /** The instruction exactly as delivered; images ride in `attachments`. */
+  text: string;
+  /** Durable attachment refs (no inline bytes). */
+  attachments?: MessageAttachment[];
+  /** True for the chain's opening instruction, which is preserved once. */
+  opening: boolean;
+  /** Row this directive renders through; hydrated by the resume caller. */
+  row: UiMessage;
+};
+
+function directiveAttachmentRefs(
+  row: UiMessage,
+): MessageAttachment[] | undefined {
+  const images = row.attachments?.filter((attachment) => attachment.kind === "image");
+  if (!images?.length) return undefined;
+  return images.map(({ data: _data, ...rest }) => rest);
+}
+
+function directiveKey(directive: {
+  toolCallId?: string;
+  rowId?: string;
+}): string | undefined {
+  return directive.toolCallId ?? directive.rowId;
+}
+
+/**
+ * Every instruction this chain delivered, in transcript order, each once.
+ *
+ * Sources are provenance only — a successful `Task` invocation row, or a
+ * tagged child row the runtime itself created for a delivered direction. A
+ * plain user row is never classified as an instruction. The child echo row of
+ * a user continuation is matched to its `Task` invocation by identity
+ * (`parentToolCallId` equals `toolCallId`), never by text, so the same words
+ * sent twice stay two directives and one continuation is never doubled.
+ */
+export function chainDeliveryDirectives(
+  transcript: readonly UiMessage[],
+  chain: Pick<DelegationChain, "toolCallIds" | "agentName">,
+): DelegationDirective[] {
+  const ordered: Array<{
+    directive: DelegationDirective;
+    position: number;
+    order: number;
+  }> = [];
+  const consumedRows = new Set<string>();
+  for (const toolCallId of chain.toolCallIds) {
+    const call = transcript.find(
+      (row) =>
+        row.role === "tool" && row.toolName === "Task" && row.toolCallId === toolCallId,
+    );
+    // A failed invocation never delivered work to a delegate, so it is not an
+    // instruction of the chain.
+    if (!call || call.isError || call.toolStatus === "error") continue;
+    const args = isRecord(call.toolArgs) ? call.toolArgs : undefined;
+    const text = typeof args?.task === "string" ? args.task : "";
+    const echo = transcript.find(
+      (row) =>
+        row.role === "user" &&
+        row.parentToolCallId === toolCallId &&
+        row.steering === true,
+    );
+    if (echo) consumedRows.add(echo.id);
+    const body = echo?.content ?? text;
+    const attachments = echo ? directiveAttachmentRefs(echo) : undefined;
+    if (!body.trim() && !attachments?.length) continue;
+    const row: UiMessage = echo ?? {
+      id: `handoff-task-${toolCallId}`,
+      role: "user",
+      content: text,
+      createdAt: call.createdAt,
+      status: "complete",
+    };
+    ordered.push({
+      directive: {
+        toolCallId,
+        ...(echo ? { rowId: echo.id } : {}),
+        text: body,
+        ...(attachments?.length ? { attachments } : {}),
+        opening: false,
+        row,
+      },
+      position: transcript.indexOf(call),
+      order: ordered.length,
+    });
+  }
+  // A direction the runtime delivered through child steering keeps its own
+  // persisted row; the opening task above is the only instruction that has no
+  // row of its own.
+  for (const row of selectChainRows(transcript, chain)) {
+    if (row.role !== "user" || row.steering !== true) continue;
+    if (consumedRows.has(row.id)) continue;
+    const attachments = directiveAttachmentRefs(row);
+    if (!row.content?.trim() && !attachments?.length) continue;
+    ordered.push({
+      directive: {
+        rowId: row.id,
+        text: row.content ?? "",
+        ...(attachments?.length ? { attachments } : {}),
+        opening: false,
+        row,
+      },
+      position: transcript.indexOf(row),
+      order: ordered.length,
+    });
+  }
+  return ordered
+    .sort(
+      (left, right) => left.position - right.position || left.order - right.order,
+    )
+    .map((entry, index) => ({ ...entry.directive, opening: index === 0 }));
+}
+
+/**
+ * The chain's delivered instructions, with a checkpoint's recorded list as the
+ * durable base.
+ *
+ * A record outlives the rows it was built from (a truncated branch keeps the
+ * checkpoint, not the transcript), so recorded entries come first and any
+ * live instruction the record does not know about is appended in transcript
+ * order. Matching is by identity again, so a record and its live row are one
+ * directive and two identical texts remain two.
+ */
+export function mergeDeliveryDirectives(
+  recorded: readonly unknown[],
+  live: readonly DelegationDirective[],
+): DelegationDirective[] {
+  const liveByKey = new Map<string, DelegationDirective>();
+  for (const directive of live) {
+    const key = directiveKey(directive);
+    if (key) liveByKey.set(key, directive);
+  }
+  const used = new Set<string>();
+  const merged: DelegationDirective[] = [];
+  for (const record of recorded) {
+    if (!isDelegationHandoffDirective(record)) continue;
+    const key = directiveKey(record);
+    const liveEntry = key ? liveByKey.get(key) : undefined;
+    if (liveEntry) used.add(key!);
+    merged.push(liveEntry ?? directiveFromRecord(record, merged.length));
+  }
+  for (const directive of live) {
+    const key = directiveKey(directive);
+    if (key && used.has(key)) continue;
+    merged.push(directive);
+  }
+  return merged.map((directive, index) => ({ ...directive, opening: index === 0 }));
+}
+
+function directiveFromRecord(
+  record: DelegationHandoffDirective,
+  index: number,
+): DelegationDirective {
+  const attachments = record.attachments?.filter(
+    (attachment) => attachment.kind === "image",
+  );
+  const row: UiMessage = {
+    id: record.rowId ?? `handoff-directive-${index}`,
+    role: "user",
+    content: record.text,
+    createdAt: "",
+    status: "complete",
+    ...(attachments?.length ? { attachments } : {}),
+  };
+  return {
+    ...(record.toolCallId ? { toolCallId: record.toolCallId } : {}),
+    ...(record.rowId ? { rowId: record.rowId } : {}),
+    text: record.text,
+    ...(attachments?.length ? { attachments } : {}),
+    opening: Boolean(record.opening),
+    row,
+  };
 }
 
 /**
@@ -433,6 +637,81 @@ export function seedDelegateMessages(options: {
 }
 
 /**
+ * The newest installed checkpoint whose boundary still exists in the persisted
+ * rows, or `undefined` when none can be placed.
+ *
+ * Validity is checked against what the resume actually holds, not against the
+ * record alone: a checkpoint whose `throughRowId` was lost to a truncated
+ * branch describes a boundary this transcript no longer has, so the next older
+ * checkpoint (or the pre-checkpoint full-history seed) is used instead.
+ */
+export function restorableHandoffCheckpoint(
+  checkpoints: readonly DelegationHandoffCheckpoint[] | undefined,
+  rows: readonly UiMessage[],
+): DelegationHandoffCheckpoint | undefined {
+  for (const checkpoint of checkpoints ?? []) {
+    if (rows.some((row) => row.id === checkpoint.throughRowId)) return checkpoint;
+  }
+  return undefined;
+}
+
+/**
+ * Seed a resumed run from an installed handoff checkpoint: the runtime-owned
+ * system prompt stays where it is, then the chain's original task, the
+ * delivered directions in order, the installed summary, and only the persisted
+ * rows that came after the boundary — the execution history the handoff already
+ * absorbed is never replayed.
+ *
+ * Returns `undefined` when the boundary row is missing, which is the caller's
+ * signal to fall back to the full-history seed rather than install half a
+ * context. The head and summary are protected from truncation (ADR 0299 §7
+ * still bounds the whole seed); only the replayed tail is reduced.
+ */
+export function seedHandoffCheckpointMessages(options: {
+  checkpoint: DelegationHandoffCheckpoint;
+  /** This chain's persisted rows, hydrated, in transcript order. */
+  rows: readonly UiMessage[];
+  /** Delivered directions resolved (and hydrated) in delivery order. */
+  directives: readonly UiMessage[];
+  provider: RuntimeProviderConfig;
+  model: Model<Api>;
+  budget: ContextBudgetLimits;
+}): Message[] | undefined {
+  const cursor = options.rows.findIndex(
+    (row) => row.id === options.checkpoint.throughRowId,
+  );
+  if (cursor < 0) return undefined;
+  const head: Message[] = [];
+  const originalTask = options.checkpoint.originalTask.trim();
+  if (originalTask) {
+    head.push({
+      role: "user",
+      content: [{ type: "text", text: options.checkpoint.originalTask }],
+      timestamp: timestampMs(options.rows[0]?.createdAt) || Date.now(),
+    });
+  }
+  head.push(
+    ...chainRowsToMessages(options.directives, options.provider, options.model),
+  );
+  const installedAt = timestampMs(options.checkpoint.installedAt) || Date.now();
+  const summary: UserMessage = {
+    role: "user",
+    content: options.checkpoint.summary,
+    timestamp: installedAt,
+  };
+  const tail = chainRowsToMessages(
+    options.rows.slice(cursor + 1),
+    options.provider,
+    options.model,
+  );
+  return truncateSeededMessages(
+    [...head, summary, ...tail],
+    options.budget.hardLimit,
+    head.length + 1,
+  );
+}
+
+/**
  * Bring a seeded chain under the delegate's hard limit (ADR 0299 §7).
  *
  * `messages[0]` is the original task brief and is never dropped. The oldest
@@ -453,6 +732,12 @@ export function seedDelegateMessages(options: {
 function truncateSeededMessages(
   messages: Message[],
   hardLimit: number,
+  /**
+   * Leading messages a checkpoint seed must keep: the original task, the
+   * delivered directions, and the installed summary. The default protects only
+   * the original task brief, which is the pre-checkpoint behavior.
+   */
+  protectedPrefix = 1,
 ): Message[] {
   const kept = [...messages];
   const tokenCounts = kept.map((message) => estimateTokens(message));
@@ -460,7 +745,7 @@ function truncateSeededMessages(
   if (total < hardLimit) return kept;
 
   // Phase 1: strip tool call/result pairs, oldest first.
-  for (let i = 1; i < kept.length && total >= hardLimit; ) {
+  for (let i = protectedPrefix; i < kept.length && total >= hardLimit; ) {
     const message = kept[i];
     if (message.role !== "assistant") {
       i += 1;
@@ -497,7 +782,7 @@ function truncateSeededMessages(
 
   // Phase 2: no pairs remain; drop whole messages oldest-first down to the
   // brief.
-  for (let i = 1; i < kept.length && total >= hardLimit; ) {
+  for (let i = protectedPrefix; i < kept.length && total >= hardLimit; ) {
     total -= tokenCounts[i];
     kept.splice(i, 1);
     tokenCounts.splice(i, 1);
@@ -598,6 +883,8 @@ export type RebuiltTaskCall = {
   createdAt: number;
   /** Settled status this call's `Task` row recorded, when it recorded one. */
   status?: string;
+  /** Installed self-handoff checkpoint this `Task` row recorded, when any. */
+  handoffCheckpoint?: unknown;
 };
 /**
  * Status a rebuilt chain carries after a restart (ADR 0279 §12). The settled
@@ -671,6 +958,9 @@ export function rebuildChainsFromTranscript(
       ...(task ? { task } : {}),
       ...(modelId ? { modelId } : {}),
       status: chainStatusFromDetail(details, row),
+      ...(details?.handoffCheckpoint !== undefined
+        ? { handoffCheckpoint: details.handoffCheckpoint }
+        : {}),
       createdAt: timestampMs(row.createdAt) || Date.now(),
     };
     // Settling a delegation rewrites its `Task` row in place, so a transcript
@@ -720,6 +1010,7 @@ export function rebuildChainsFromTranscript(
       agentName: root.agentName,
     });
     const reads = extractReadFiles(rows);
+    const checkpoints = rebuiltHandoffCheckpoints(ordered);
     const latest = ordered[ordered.length - 1];
     chains.push({
       delegateSessionId: root.delegationId,
@@ -734,9 +1025,32 @@ export function rebuildChainsFromTranscript(
       latestModelId: latest?.modelId,
       latestStatus: latest?.status,
       lastActivityAt: latest?.createdAt ?? root.createdAt,
+      ...(checkpoints.length > 0 ? { handoffCheckpoints: checkpoints } : {}),
     });
   }
   return chains;
+}
+
+/**
+ * Every installed checkpoint the chain's own `Task` rows recorded, newest
+ * first. One delegation installs at most one boundary per generation, and a
+ * repeated call id keeps only its newest copy, so the same record can never
+ * appear twice.
+ */
+function rebuiltHandoffCheckpoints(
+  calls: readonly RebuiltTaskCall[],
+): DelegationHandoffCheckpoint[] {
+  const kept: DelegationHandoffCheckpoint[] = [];
+  for (const call of calls) {
+    if (!isDelegationHandoffCheckpoint(call.handoffCheckpoint)) continue;
+    const candidate = call.handoffCheckpoint;
+    const existing = kept.findIndex(
+      (entry) => entry.delegationId === candidate.delegationId,
+    );
+    if (existing >= 0) kept.splice(existing, 1);
+    kept.push(candidate);
+  }
+  return kept.sort((left, right) => right.generation - left.generation);
 }
 
 export function listedReadFiles(

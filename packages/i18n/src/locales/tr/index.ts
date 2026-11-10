@@ -503,6 +503,7 @@ export const tr = {
     compactionRowSummaryFailed: "özet oluşturulamadı · son bağlam korundu",
     subagentHandoffCheckpoint: "Bağlam devri",
     subagentHandoffCheckpointCount: "Bağlam devri · #{{times}}",
+    subagentHandoffCheckpointBody: "Devir özeti",
     scrollToBottom: "En sona atla",
     minimap: "Sohbet özeti",
     resultNeedsAttention: "Bu görevin ilgiye ihtiyacı var",

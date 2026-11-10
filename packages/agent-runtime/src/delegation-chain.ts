@@ -6,7 +6,10 @@
  * only ever passes a `delegationId`, and the reverse map finds the chain.
  */
 
-import { MAX_RESUMABLE_CHAINS_PER_AGENT } from "@pi-desktop/shared";
+import {
+  MAX_RESUMABLE_CHAINS_PER_AGENT,
+  type DelegationHandoffCheckpoint,
+} from "@pi-desktop/shared";
 import {
   formatResumableList,
   type DelegationChain,
@@ -145,6 +148,32 @@ export class DelegationChainRegistry {
       ...chain,
       ...(binding.modelKey ? { latestModelKey: binding.modelKey } : {}),
       latestModelId: binding.modelId,
+      lastActivityAt: Date.now(),
+    });
+  }
+
+  /**
+   * Record one installed handoff checkpoint on its chain.
+   *
+   * Called only after its durable write succeeded, so a resume in this process
+   * and a resume after a restart agree on the boundary. The newest valid entry
+   * wins; older generations stay as the fallback when a newer boundary row is
+   * gone from the transcript.
+   */
+  noteHandoffCheckpoint(
+    delegateSessionId: string,
+    checkpoint: DelegationHandoffCheckpoint,
+  ): void {
+    const chain = this.chains.get(delegateSessionId);
+    if (!chain) return;
+    const kept = (chain.handoffCheckpoints ?? []).filter(
+      (entry) => entry.delegationId !== checkpoint.delegationId,
+    );
+    this.chains.set(delegateSessionId, {
+      ...chain,
+      handoffCheckpoints: [checkpoint, ...kept].sort(
+        (left, right) => right.generation - left.generation,
+      ),
       lastActivityAt: Date.now(),
     });
   }

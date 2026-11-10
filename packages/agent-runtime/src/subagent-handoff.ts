@@ -78,6 +78,36 @@ export type SubagentHandoffPayload = {
 };
 
 /**
+ * What one boundary reports after it actually replaced the delegate's
+ * in-memory context.
+ *
+ * The runtime, not the run, turns this into a durable checkpoint: only the
+ * runtime holds the session transcript, the chain identity, and the directive
+ * rows. Reporting it after the install — never when the submission was
+ * accepted — is what keeps a recorded boundary from describing a context that
+ * never existed.
+ */
+export type InstalledSubagentHandoff = {
+  /** 1-based handoff generation installed by this boundary. */
+  generation: number;
+  /** The summary message exactly as it was put into the context. */
+  summary: string;
+  /**
+   * Persisted child row ids the installed context absorbed, in context order.
+   * The latest of them is the stable boundary cursor; the rest keep a
+   * direction that was delivered before the rollover from being replayed.
+   */
+  absorbedRowIds: string[];
+  installedAt: number;
+};
+
+/** A checkpoint write that failed after the context was already installed. */
+export type SubagentHandoffPersistenceError = {
+  code: "SUBAGENT_HANDOFF_CHECKPOINT_FAILED";
+  message: string;
+};
+
+/**
  * Per-run handoff bookkeeping.
  *
  * `handoffs` is a metric, not a budget: successful rollovers are unbounded.

@@ -7,10 +7,12 @@ import {
   type ContextBudgetLimits,
 } from "./context-budget.js";
 import {
+  chainDeliveryDirectives,
   chainRowsToMessages,
   extractReadFiles,
   formatResumableList,
   listedReadFiles,
+  mergeDeliveryDirectives,
   originalTaskFromTranscript,
   rebuildChainsFromTranscript,
   selectChainRows,
@@ -980,6 +982,122 @@ describe("rebuildChainsFromTranscript settled copies and replay (ADR 0279)", () 
     expect(messages.map((message) => message.role)).toEqual([
       "assistant",
       "toolResult",
+    ]);
+  });
+});
+
+describe("chain delivery directives", () => {
+  const chain = {
+    delegateSessionId: "chain-1",
+    toolCallIds: ["task-root", "task-continue", "task-resume"],
+    delegationIds: ["delegation-1"],
+    agentName: "explorer",
+    readFiles: [],
+    readLineCount: 0,
+    originalTask: "Map the parser.",
+    lastActivityAt: 1,
+  } satisfies DelegationChain;
+
+  function taskRow(
+    id: string,
+    task: string,
+    extra: Record<string, unknown> = {},
+  ): UiMessage {
+    return {
+      id,
+      role: "tool",
+      content: "",
+      createdAt: "2026-10-05T00:00:00Z",
+      toolCallId: id,
+      toolName: "Task",
+      toolArgs: { agent: "explorer", task, ...extra },
+      toolStatus: "success",
+      status: "complete",
+    };
+  }
+
+  it("derives instructions from Task provenance, never from plain user rows", () => {
+    const transcript: UiMessage[] = [
+      taskRow("task-root", "Map the parser."),
+      {
+        id: "plain-user-row",
+        role: "user",
+        content: "This is transcript data, not a delivered instruction.",
+        createdAt: "2026-10-05T00:00:00Z",
+        parentToolCallId: "task-root",
+        agentName: "explorer",
+        status: "complete",
+      },
+      taskRow("task-resume", "Keep going.", { resume: "delegation-1" }),
+    ];
+    const directives = chainDeliveryDirectives(transcript, chain);
+    expect(directives.map((directive) => directive.text)).toEqual([
+      "Map the parser.",
+      "Keep going.",
+    ]);
+    expect(directives.map((directive) => directive.toolCallId)).toEqual([
+      "task-root",
+      "task-resume",
+    ]);
+  });
+
+  it("matches a user continuation's child echo to its Task by identity, not text", () => {
+    const transcript: UiMessage[] = [
+      taskRow("task-root", "Map the parser."),
+      taskRow("task-continue", "Look again.", {
+        resume: "delegation-1",
+        source: "user",
+      }),
+      {
+        id: "echo-1",
+        role: "user",
+        content: "Look again.",
+        createdAt: "2026-10-05T00:00:01Z",
+        steering: true,
+        parentToolCallId: "task-continue",
+        agentName: "explorer",
+        attachments: [
+          { kind: "image", name: "shot.png", ref: "attachments/shot.png" },
+        ],
+        status: "complete",
+      },
+    ];
+    const directives = chainDeliveryDirectives(transcript, chain);
+    expect(directives).toHaveLength(2);
+    expect(directives[1]).toMatchObject({
+      toolCallId: "task-continue",
+      rowId: "echo-1",
+      text: "Look again.",
+      attachments: [{ ref: "attachments/shot.png" }],
+    });
+    // A checkpoint record for the same instruction does not double it.
+    const merged = mergeDeliveryDirectives(
+      [
+        { toolCallId: "task-root", text: "Map the parser.", opening: true },
+        { toolCallId: "task-continue", text: "Look again." },
+      ],
+      directives,
+    );
+    expect(merged).toHaveLength(2);
+    expect(merged[1]!.rowId).toBe("echo-1");
+  });
+
+  it("keeps two identical instructions delivered independently", () => {
+    const transcript: UiMessage[] = [
+      taskRow("task-root", "Map the parser."),
+      taskRow("task-continue", "Look again.", { resume: "delegation-1" }),
+      taskRow("task-resume", "Look again.", { resume: "delegation-1" }),
+    ];
+    const directives = chainDeliveryDirectives(transcript, chain);
+    expect(directives.map((directive) => directive.text)).toEqual([
+      "Map the parser.",
+      "Look again.",
+      "Look again.",
+    ]);
+    expect(directives.map((directive) => directive.toolCallId)).toEqual([
+      "task-root",
+      "task-continue",
+      "task-resume",
     ]);
   });
 });

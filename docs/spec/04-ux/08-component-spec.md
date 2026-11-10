@@ -2240,19 +2240,25 @@ replaced.
   centre, and expanding leaves the title where it was, above the body.
 - The row is a disclosure: the head is one button with `aria-expanded` and an
   `aria-controls` relationship to the body, reachable and activatable from the
-  keyboard, with the caret revealed only when the row is engaged or open. It
-  carries no actions and nothing in it is editable.
+  keyboard, with the caret revealed only when the row is engaged or open.
+  Nothing in it is editable; the expanded body's copy control is the row's only
+  action.
 - Semantics: a labelled `role="group"`, not 8.4a's `role="separator"`. A
   separator makes its content presentational, which would remove the expand
   control from the accessibility tree.
-- Body: the whole handoff the delegate authored and submitted, as plain text.
-  The delegate wrote it in whatever form it chose — prose, bullets, a plan —
-  so there is no field list and no localized label per section: the authored
-  line breaks, indentation, and list markers are preserved
-  (`white-space: pre-wrap`) instead of being interpreted. The submitted text
-  is untrusted model output, so it reaches the reader as a React text node,
-  never as HTML or parsed Markdown. Nothing in the row is shortened or
-  clamped: the body always shows every character the delegate submitted.
+- Body: the whole handoff the delegate authored and submitted, under the same
+  labeled section head every tool detail block carries (§9.3): a localized
+  heading that names the bytes and one compact copy control that copies the
+  full handoff — every character the delegate submitted, never the visible
+  slice — with the shared copied feedback. The heading never repeats the
+  checkpoint title that already sits above the body. The delegate wrote the
+  handoff in whatever form it chose — prose, bullets, a plan — so there is no
+  field list and no localized label per section: the authored line breaks,
+  indentation, and list markers are preserved (`white-space: pre-wrap`)
+  instead of being interpreted. The submitted text is untrusted model output,
+  so it reaches the reader as a React text node, never as HTML or parsed
+  Markdown. Nothing in the row is shortened or clamped: the body always shows
+  every character the delegate submitted.
 - Wire field names, raw arguments, and result JSON are never printed; the row
   reads the call's `handoff` argument and the result's `accepted` flag only.
 - The ordinary tool row above and below it is unaffected, including its

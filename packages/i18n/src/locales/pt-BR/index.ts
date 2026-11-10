@@ -493,6 +493,7 @@ export const ptBR = {
     compactionRowSummaryFailed: "Falha ao gerar o resumo · contexto recente mantido",
     subagentHandoffCheckpoint: "Passagem de contexto",
     subagentHandoffCheckpointCount: "Passagem de contexto · #{{times}}",
+    subagentHandoffCheckpointBody: "Resumo da passagem",
     scrollToBottom: "Ir para a mensagem mais recente",
     minimap: "Visão geral da conversa",
     resultNeedsAttention: "Esta tarefa requer atenção",

@@ -506,6 +506,7 @@ export const en = {
     compactionRowSummaryFailed: "summary generation failed · recent context retained",
     subagentHandoffCheckpoint: "Context handoff",
     subagentHandoffCheckpointCount: "Context handoff · #{{times}}",
+    subagentHandoffCheckpointBody: "Handoff summary",
     scrollToBottom: "Jump to latest",
     minimap: "Conversation outline",
     resultNeedsAttention: "This task needs attention",

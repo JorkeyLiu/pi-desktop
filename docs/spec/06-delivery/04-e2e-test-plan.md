@@ -18895,24 +18895,29 @@ host-created files. The full app's file-preview viewer is covered separately.
      call carries a free-form `handoff` text — prose, bullets, and a blank
      line, with no field names the runtime asked for.
   2. Compare the accepted calls against the ordinary rows, then open one
-     checkpoint.
+     checkpoint and press the copy control in its section head.
 - **Expected**: Only the accepted calls become checkpoints, numbered by their
   order in the tab's own transcript; each collapsed row states only its title —
   no snippet of the delegate's text, never a lifecycle status, never argument
   or result JSON — and that title is centred on the transcript column at both
   wide and narrow pane widths, opening or not. The running and refused calls
   keep the tool row and its own state (spinner, `Failed`) and their disclosed
-  details. Opening a checkpoint shows the whole authored handoff as plain text
-  with its own line breaks and bullets preserved — no field labels, no section
-  list, no per-field structure — and model-authored markup in it renders as
-  text, not HTML.
+  details. Opening a checkpoint shows the standard tool detail section head —
+  a translated heading naming the bytes and one copy control — above the whole
+  authored handoff, as plain text with its own line breaks and bullets
+  preserved — no field labels, no section list, no per-field structure.
+  Model-authored markup in it renders as text, not HTML, and the copy control
+  hands over every character of the handoff while reporting the copy without
+  collapsing the row.
 - **Specs linked**: `04-ux/08-component-spec.md` (8.4a, 8.4b),
   `04-ux/02-i18n-english-first.md`.
 - **Status**: Automated render coverage plus a hidden-Electron click/Space probe
   in `apps/desktop/test/subagent-handoff-checkpoint.test.mjs`; the probe
   asserts the title is centred on the column at a wide and a narrow width, that
-  the collapsed row carries no snippet of the handoff, and that the expanded
-  body equals the authored handoff character for character.
+  the collapsed row carries no snippet of the handoff, that the expanded body
+  equals the authored handoff character for character under the standard
+  section head, and that pressing the head's copy control hands the renderer
+  the whole authored handoff and shows the copied feedback.
 
 ### E2E-SUBAGENT-handoff-keeps-steering
 
@@ -18955,3 +18960,76 @@ host-created files. The full app's file-preview viewer is covered separately.
   `packages/agent-runtime/src/subagent-handoff.test.ts` for the provenance
   rules. No Electron journey is required because the behavior is internal to
   the child's model context and adds no rendered or persisted state.
+
+### E2E-SUBAGENT-handoff-checkpoint-durable
+
+- **Preconditions**: A delegated chain with at least one installed handoff
+  checkpoint, a persisted `Task` row, and child rows whose ids are exactly the
+  ones host-core writes. No provider, paid API, or user desktop instance is
+  used; the provider transport of a resumed `SubagentRun` is scripted while its
+  real `run()` entry, turn boundary, handoff tool, checkpoint writer, and
+  `TaskWait` result are production code. Data directories and provider
+  fixtures are temporary.
+- **Steps**:
+  1. Resume the chain from its checkpoint (`seedResumedDelegateContext`) and
+     inspect the replay seed: it must contain the installed summary and the
+     post-boundary tail.
+  2. Drive the resumed run's first rollover (`SubagentHandoff` submission at a
+     `tool-calls` boundary) and inspect the installed context.
+  3. Repeat from a chain without any checkpoint (legacy full-history seed) and
+     from a chain with two identical `Task(resume)` texts and an image-carrying
+     user continuation.
+  4. Emit a delegate tool row through the production event shape, take the
+     boundary cursor the run reports, and rebuild the chain from a persisted
+     `Task` row + a persisted tool row carrying that cursor, then seed it.
+  5. Make `session.appendMessage` reject the checkpoint append and read the
+     live `delegationSummary` and the public `TaskWait` result.
+  6. In host-core, append a checkpoint-bearing `Task` snapshot and then an
+     older queued snapshot of the same row (with and without a checkpoint),
+     including the order a window close produces when the outbox drains later.
+- **Expected**: The first rollover installs the runtime system prompt, the
+  chain's original task, every `Task`/steering directive in delivery order, and
+  exactly one new summary. The previous summary and every absorbed execution
+  row are gone, including when the seed was a legacy full history. Identical
+  directives stay distinct by `toolCallId`, the user-continuation child echo is
+  paired to its `Task` marker by identity (not text) and is never doubled, and
+  an image carried by a continuation reaches the rebuilt context as an image.
+  The cursor is the bare tool call id the host persisted, so the rebuilt chain
+  locates the same boundary and a restart replays only post-boundary rows.
+  A failed checkpoint append is visible as `handoffCheckpointError`
+  (`SUBAGENT_HANDOFF_CHECKPOINT_FAILED`, with the host message) in the live
+  `Task` row summary and in `TaskWait` details, the run result carries it, and
+  the chain keeps its previous checkpoint or none. An acknowledged checkpoint
+  is never erased by a later-arriving older snapshot; only a higher generation
+  replaces it.
+- **Specs linked**: `03-runtime/02-agent-runtime.md` (installed handoff
+  checkpoint, delegate resume seed), ADR 0333, ADR 0279, ADR 0299.
+- **Acceptance criterion**: B — Agent execution; C — Conversation & stream
+- **Milestone**: M6+
+- **Status**: Headless-covered. `packages/agent-runtime/src/subagent-handoff-checkpoint.test.ts`
+  drives a real `SubagentRun` through its `run()` entry and boundary on a
+  checkpoint-restored seed, a legacy seed, repeated/image resume directives, a
+  persisted bare tool id, and a rejecting checkpoint append observed through
+  the real runtime's `TaskWait` tool; `delegation-history.test.ts` covers the
+  provenance and identity rules. Host-core's
+  `delegation_handoff_checkpoint_survives_a_stale_snapshot` covers the ordered
+  snapshot cases. Relevant suites run on the change: `test:e2e:subagents`,
+  `test:e2e:subagent-lifecycle`, and `test:e2e:send-now-subagents` (see the
+  entry below). No Electron journey is required: the behavior is internal to
+  the child's model context and a persisted `Task` row, with no new rendered
+  surface.
+
+### E2E-SUBAGENT-handoff-checkpoint-durable — run record
+
+- **Tested source**: uncommitted working tree of `jorkey/integration` on
+  `46b4cc248` (durable checkpoint corrections plus another specialist's UI/i18n
+  changes).
+- **Base**: `46b4cc248`.
+- **E2E suites**: `node scripts/e2e-subagents.mjs` (34/34 checks),
+  `node scripts/e2e-subagent-lifecycle.mjs` (7-phase lifecycle report),
+  `node scripts/e2e-send-now-subagents.mjs` (2/2 checks).
+- **Result**: PASS.
+- **Environment**: macOS host, isolated temporary HOME/data directories, local
+  SSE provider fixture, freshly built `target/debug/pi-desktop-host-core` and
+  `packages/agent-runtime/dist-bundle` from this tree. No `verify:ui:*`, user
+  desktop instance, or paid provider was used.

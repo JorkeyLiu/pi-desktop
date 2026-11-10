@@ -21,9 +21,7 @@ import { withPiFileOpToolNames } from "./pi-file-ops.js";
 import { remoteMutationIdentity } from "./remote-workspace.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import {
-  taskMessageSnapshot,
-} from "./delegation-message.js";
+import { taskMessageSnapshot } from "./delegation-message.js";
 import {
   Agent,
   type AgentContext,
@@ -122,6 +120,8 @@ import {
   subagentToolsLabel,
   normalizeSubagentSelfHandoffSettings,
   normalizeSubagentWakeupSettings,
+  type DelegationHandoffDirective,
+  type DelegationHandoffCheckpoint,
   type ProposalKind,
   type ResolvedSubagentSelfHandoffSettings,
   type ResolvedSubagentWakeupSettings,
@@ -196,7 +196,10 @@ import {
 } from "./context-budget.js";
 import { PathMutex } from "./path-lock.js";
 import { DelegationChainRegistry } from "./delegation-chain.js";
-import { rebuildChainsFromTranscript } from "./delegation-history.js";
+import {
+  rebuildChainsFromTranscript,
+  type DelegationChain,
+} from "./delegation-history.js";
 import {
   clampOutputToContext,
   effectiveModelContextWindow,
@@ -212,6 +215,11 @@ import {
   type SubagentRunResult,
   type SubagentToolOutcome,
 } from "./subagent.js";
+import type {
+  InstalledSubagentHandoff,
+  SubagentHandoffPersistenceError,
+} from "./subagent-handoff.js";
+import { writeInstalledHandoffCheckpoint } from "./subagent-handoff-persistence.js";
 import {
   createDelegationCoordinator,
   markProgramDelivery,
@@ -254,7 +262,7 @@ import {
   noHistoryResumeErrorMessage,
   resolveResumeChain,
   resumedChainProvider,
-  seedResumedDelegate,
+  seedResumedDelegateContext,
   type ResumeModelContext,
 } from "./subagent-resume.js";
 import {
@@ -601,6 +609,24 @@ export type DelegationRecord = {
   /** `toolCallId`s of this run's calls that have not ended yet: dropped when the
    * run settles, so an aborted call cannot pin its captured arguments. */
   pendingToolCallIds?: Set<string>;
+  /**
+   * Newest installed self-handoff boundary of this run, once its checkpoint
+   * write succeeded. Included in every later `Task` row snapshot, so a settled
+   * row still names the boundary the chain honours.
+   */
+  handoffCheckpoint?: DelegationHandoffCheckpoint;
+  /**
+   * An installed boundary whose durable write failed. Kept on the record so
+   * the live `Task` row and `TaskWait` report the fallback, not only the run
+   * result that no snapshot reads yet.
+   */
+  handoffCheckpointError?: SubagentHandoffPersistenceError;
+  /**
+   * Delivered instructions this run was given, as durable records. The next
+   * installed checkpoint carries them forward, so a later resume restores
+   * every `Task` directive instead of only the ones with a child row.
+   */
+  handoffDirectiveRecords?: DelegationHandoffDirective[];
   /** Accepted child-steer message ids: a retried id is already applied. */
   steeredMessageIds?: Set<string>;
   /** Report owner: `parent` delivers via TaskWait/idle; `user` never auto-delivers. */
@@ -4728,13 +4754,14 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           resumedChain?.latestModelId && !resumedProvider
             ? resumedChain.latestModelId
             : undefined;
-        const initialMessages = resumedChain
-          ? await seedResumedDelegate(this.transcriptHistory, resumedChain, provider, {
+        const resumedContext = resumedChain
+          ? await seedResumedDelegateContext(this.transcriptHistory, resumedChain, provider, {
               scratchDir: this.scratchDir,
               projectPath: this.remoteWorkspace ? undefined : this.projectPath,
               attachmentsDir: this.attachmentsDir,
             })
           : undefined;
+        const initialMessages = resumedContext?.replay;
         if (resume && !initialMessages) {
           // The chain resolved but its original brief is gone from the
           // transcript (a truncated or malformed branch), so nothing can seed
@@ -4861,6 +4888,23 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           ...(modelChangedFrom ? { modelChangedFrom } : {}),
         };
         this.delegations.set(delegationId, record);
+        // Every instruction this run and its chain received, as durable
+        // records. A checkpoint carries them forward, so a later resume keeps
+        // each `Task(resume)` directive even though only a child-steering row
+        // has a persisted child row of its own. The current task is the last
+        // one, and it is the chain's opening instruction only when nothing came
+        // before it.
+        const currentDirective: DelegationHandoffDirective = {
+          toolCallId,
+          text: task,
+          ...(resumedContext?.directiveRecords.length
+            ? {}
+            : { opening: true }),
+        };
+        record.handoffDirectiveRecords = [
+          ...(resumedContext?.directiveRecords ?? []),
+          currentDirective,
+        ];
         let subagentRun: SubagentRun;
         try {
           const scopedTools = scopeDelegateTools(tools, definition, delegationId, worktreeKey, {
@@ -4913,6 +4957,17 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             resolveToolOutcome: (context) => this.resolveOwnToolOutcome(context),
             signal: abortSignal,
             selfHandoff: this.sessionSelfHandoff,
+            // A continuation keeps the chain's handoff numbering, so one chain
+            // never restarts its generations at 1 after a resume.
+            handoffGenerationBase: Math.max(
+              0,
+              ...(chain.handoffCheckpoints ?? []).map((entry) => entry.generation),
+            ),
+            // The fixed header a rollover rebuilds from: delivered directives
+            // only, never the replayed summary or its post-checkpoint tail.
+            handoffDirectives: resumedContext?.directives ?? [],
+            onHandoffInstalled: (installed) =>
+              this.persistInstalledHandoffCheckpoint(record, chain, installed),
             ...(initialMessages ? { initialMessages } : {}),
             // A user continuation's own images open the new run's turn; the
             // parent's `Task` brief never carries attachments.
@@ -5095,6 +5150,61 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
   private publishDelegationSettlement(record: DelegationRecord): void {
     const emission = settlementSnapshotEvent(record);
     if (emission) this.emit(emission.event, emission.turnId);
+  }
+
+  /**
+   * Turn one installed handoff into the chain's durable boundary.
+   *
+   * Called only after the delegate replaced its in-memory context, so the
+   * record describes a context that existed. The boundary, the instruction
+   * records, and the `Task`-row append live in
+   * `subagent-handoff-persistence.ts`; this method owns the live record and the
+   * chain registry.
+   *
+   * A failed write is thrown back to the run, which reports it on the result,
+   * and is also kept on the record so live snapshots and `TaskWait` name the
+   * fallback. The chain keeps its previous checkpoint (or none).
+   */
+  private async persistInstalledHandoffCheckpoint(
+    record: DelegationRecord,
+    chain: DelegationChain,
+    installed: InstalledSubagentHandoff,
+  ): Promise<void> {
+    const previous = record.handoffCheckpoint;
+    try {
+      const written = await writeInstalledHandoffCheckpoint({
+        host: this.host,
+        sessionId: this.sessionId,
+        transcriptHistory: this.transcriptHistory,
+        chain,
+        task: {
+          delegationId: record.delegationId,
+          sourceToolCallId: record.parentToolCallId,
+          turnId: record.taskTurnId,
+          ...(record.taskMessage ? { taskMessage: record.taskMessage } : {}),
+          details: delegationSummary(record),
+        },
+        recorded: record.handoffDirectiveRecords ?? [],
+        installed,
+      });
+      record.handoffCheckpoint = written.checkpoint;
+      record.taskMessage = written.taskMessage;
+      record.handoffCheckpointError = undefined;
+      this.delegationChains.noteHandoffCheckpoint(
+        chain.delegateSessionId,
+        written.checkpoint,
+      );
+    } catch (error) {
+      record.handoffCheckpoint = previous;
+      record.handoffCheckpointError = {
+        code: "SUBAGENT_HANDOFF_CHECKPOINT_FAILED",
+        message:
+          error instanceof Error && error.message
+            ? error.message
+            : "The installed handoff boundary could not be saved.",
+      };
+      throw error;
+    }
   }
 
   /** Cap retained history so a long session cannot grow the registry forever.
@@ -5662,7 +5772,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       ownerTurnId: ownerTurnId!,
       parentToolCallId: target.parentToolCallId,
       agentName: target.agentName,
-      steerLoop: (text, images) => target.run!.steer(text, images),
+      steerLoop: (text, images, rowId) => target.run!.steer(text, images, rowId),
       markSteered: (id) => {
         (target.steeredMessageIds as Set<string>).add(id);
       },

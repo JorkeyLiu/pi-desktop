@@ -1099,6 +1099,36 @@ rejected), on the sidecar launch/runtime options,
 and through the live `setSubagentSelfHandoff` setter; there is no Rust or storage-schema
 change.
 
+**Installed handoff checkpoint (ADR 0333).** A handoff is durable only when the
+context was actually replaced. After the boundary installs the replacement, the
+runtime writes one record to the delegating `Task` row's open `details`
+(`handoffCheckpoint`), through the existing `session.appendMessage` path, and
+records it on the live chain only after that write succeeded. The record carries
+the chain (`delegateSessionId`), the installing `delegationId` and its source
+`Task` call, the normalized agent name, the handoff `generation` (continued
+across resumes), a boundary cursor `throughRowId` naming the last persisted
+child row the installed context absorbed — an identity over rows, never a
+timestamp — the installed summary verbatim, the chain's original task, and the
+delivered directions in order (`toolCallId` for a `Task` invocation, `rowId` for a
+persisted child row, text, and durable image refs, with the chain's task marked
+`opening`). `toolCallId` is required identity, not decoration: a parent
+`Task(resume)` delivers its text as the resumed run's opening turn and has no
+child row of its own, so two identical resume directives stay two records.
+A submission that was accepted but never installed leaves no record. A write that
+fails after the install leaves the delegate working on its new context and
+reports `handoffCheckpointError` (`SUBAGENT_HANDOFF_CHECKPOINT_FAILED`) in the run
+result, the live record's lifecycle details and the `TaskWait` result; the chain
+keeps its previous checkpoint or none, so a resume falls back rather than
+claiming an unsaved boundary. Later progress snapshots and settlement carry the
+record forward, so a settled row still names the boundary. Host-core treats that
+record as monotonic when it rewrites the row: an incoming snapshot that carries
+no checkpoint or an older generation keeps the stored one, because the runtime's
+direct append and the renderer's ordered persistence outbox are not ordered
+against each other (a snapshot queued before the boundary can land after it,
+including across a window close). Only a higher generation replaces it. There is
+no schema change, migration, or new event type, and the parent's model context
+never contains the record.
+
 **State ownership.** Execution (`running`), result (`pending` vs `delivered`), and turn
 liveness are distinct: a delegate can be settled-pending while the parent turn stays open;
 parent `waiting` means the model is active inside a durable open turn, not blocked on a
@@ -1248,6 +1278,31 @@ Seeding is transcript-backed: the chain's rows are exactly those carrying
 into provider messages with the delegate's own binding (a pinned delegation
 model is not the session model). Nothing is kept warm in memory and no new
 event type, storage schema, or tool parameter is introduced.
+
+When the chain carries an installed handoff checkpoint (ADR 0333), that
+checkpoint governs the seed instead: the original task, the delivered
+directions recorded before the boundary in delivery order and once each
+(identity by `toolCallId` or row id, images hydrated, text kept as fallback),
+the installed summary, then only the rows after `throughRowId`; the new `task`
+follows as the next user turn. The rows the handoff absorbed are not replayed.
+The runtime-owned system prompt is composed exactly as for any run and is not
+part of the seeded messages. The newest checkpoint whose boundary row still
+exists wins; an earlier generation, or the pre-checkpoint full-history seed
+above, applies when it is unplaceable (`toolResult.details.handoffCheckpoint`
+is also restored with the chain on restart).
+
+The seed is **replay only**. A run's fixed handoff header is a separate typed
+list — `SubagentRunOptions.handoffDirectives`, built from the same delivered
+instructions (the original task plus every `Task` and child-steering direction
+before this run) — and the run appends its own opening directive. A rollover
+therefore installs the runtime system prompt, the original task, every delivered
+direction in order, and exactly one new summary. It never copies the messages
+`initialMessages` replayed: an older summary restored by a checkpoint, the
+execution tail after its boundary, and a legacy seed's full history are absorbed
+by the first rollover like any other history and never pinned into the header.
+The current `Task(resume)` task and every earlier resume directive survive
+because each is a recorded instruction with its own identity, not part of the
+absorbed segment.
 
 A chain is the sequence of `Task` calls that share one delegate session: the
 first call, plus every later call that passed the earlier `delegationId` as

@@ -2457,6 +2457,19 @@ fn indexed_message_record(
     })
 }
 
+/// Generation of an installed handoff checkpoint, when the value records one.
+///
+/// An absent, malformed, or non-object value is "no checkpoint": the caller
+/// treats it as replaceable rather than inventing a boundary.
+fn checkpoint_generation(checkpoint: &serde_json::Value) -> Option<i64> {
+    if !checkpoint.is_object() {
+        return None;
+    }
+    checkpoint["generation"]
+        .as_i64()
+        .filter(|generation| *generation >= 1)
+}
+
 /// Task is already a completed tool call while its delegated work is running.
 /// Its durable row carries the latest delegation summary: the runtime
 /// re-snapshots it once per child turn, and settlement sends the terminal one.
@@ -2465,6 +2478,10 @@ fn indexed_message_record(
 /// neither reopen a settled delegate nor overwrite another call's metadata. The
 /// persistence outbox keeps one entry per message id in emission order, so the
 /// last snapshot to arrive is also the newest.
+///
+/// The installed handoff checkpoint (ADR 0333) is the exception that is never
+/// the loser of that ordering: it is monotonic per row, so a stale queued
+/// snapshot cannot erase a boundary the runtime already wrote and acknowledged.
 fn update_delegation_snapshot(
     db: &Database,
     session_id: &str,
@@ -2512,7 +2529,27 @@ fn update_delegation_snapshot(
     {
         return Ok(());
     }
-    block["result"] = next["result"].clone();
+    // An installed handoff checkpoint is monotonic. The runtime appends it
+    // directly once the delegate's context was replaced, while progress snapshots
+    // travel through the renderer's ordered outbox: a snapshot queued before
+    // that write can still arrive after it, including across a window close
+    // that drains the outbox on the next boot. Replacing the whole result then
+    // would erase a boundary the runtime already acknowledged. Carry the
+    // stored checkpoint into the incoming snapshot unless the incoming one is
+    // a newer generation.
+    let stored_checkpoint = block["result"]["details"]["handoffCheckpoint"].clone();
+    let stored_generation = checkpoint_generation(&stored_checkpoint);
+    let incoming_generation =
+        checkpoint_generation(&next["result"]["details"]["handoffCheckpoint"]);
+    let keep_stored = match stored_generation {
+        Some(stored) => !matches!(incoming_generation, Some(incoming) if incoming > stored),
+        None => false,
+    };
+    let mut result = next["result"].clone();
+    if keep_stored {
+        result["details"]["handoffCheckpoint"] = stored_checkpoint;
+    }
+    block["result"] = result;
     block["text"] = next["text"].clone();
     if !transcripts::update_message(db.data_dir(), session_id, &existing)? {
         return Err(anyhow!(
@@ -5442,6 +5479,113 @@ mod tests {
         assert_eq!(
             still_settled[0].tool_result.as_ref().unwrap()["details"]["turns"],
             json!(5)
+        );
+    }
+
+    /// An acknowledged handoff checkpoint is never erased by a snapshot that was
+    /// queued before it. The runtime appends the boundary directly once the
+    /// delegate's context was installed; a progress snapshot already in the
+    /// renderer's outbox can arrive afterwards — including after a window close
+    /// that drains the outbox on the next boot — and must not replace the whole
+    /// result with a copy that never knew the boundary.
+    #[test]
+    fn delegation_handoff_checkpoint_survives_a_stale_snapshot() {
+        let db = test_db();
+        let session = create_session(&db, None, None, None, None, None).unwrap();
+        let task_row = |status: &str, turns: i64, checkpoint: Option<Value>| {
+            let mut row = user_msg(
+                "task-checkpoint",
+                "Delegation delegate-checkpoint started.",
+                "2026-10-05T00:00:00Z",
+            );
+            row.role = "tool".into();
+            row.tool_name = Some("Task".into());
+            row.tool_call_id = Some("call-checkpoint".into());
+            row.status = Some("complete".into());
+            row.tool_args = Some(json!({ "agent": "explorer" }));
+            let mut details = json!({
+                "delegationId": "delegate-checkpoint",
+                "agent": "explorer",
+                "status": status,
+                "turns": turns,
+            });
+            if let Some(checkpoint) = checkpoint {
+                details["handoffCheckpoint"] = checkpoint;
+            }
+            row.tool_result = Some(json!({ "details": details }));
+            row
+        };
+        let checkpoint = |generation: i64| {
+            json!({
+                "version": 1,
+                "delegateSessionId": "chain-1",
+                "delegationId": "delegate-checkpoint",
+                "sourceToolCallId": "call-checkpoint",
+                "agentName": "explorer",
+                "generation": generation,
+                "throughRowId": format!("row-{generation}"),
+                "summary": format!("[Delegated-task handoff {generation}]"),
+                "originalTask": "Map the parser.",
+                "directives": [{ "rowId": "direction-1", "text": "Keep going." }],
+                "installedAt": "2026-10-05T00:00:01Z"
+            })
+        };
+        let read = || get_session(&db, &session.id).unwrap().unwrap().messages;
+        // Launch, then a progress snapshot that was already queued.
+        append_message(&db, &session.id, &task_row("running", 0, None), None).unwrap();
+        append_message(&db, &session.id, &task_row("running", 2, None), None).unwrap();
+        // The runtime's direct checkpoint append is acknowledged.
+        append_message(
+            &db,
+            &session.id,
+            &task_row("running", 2, Some(checkpoint(1))),
+            None,
+        )
+        .unwrap();
+        let acknowledged = read();
+        assert_eq!(
+            acknowledged[0].tool_result.as_ref().unwrap()["details"]["handoffCheckpoint"]
+                ["generation"],
+            json!(1)
+        );
+        // The older queued snapshot arrives later and cannot erase it.
+        append_message(&db, &session.id, &task_row("running", 1, None), None).unwrap();
+        let after_stale = read();
+        assert_eq!(
+            after_stale[0].tool_result.as_ref().unwrap()["details"]["handoffCheckpoint"]
+                ["generation"],
+            json!(1)
+        );
+        // A newer install still replaces the boundary.
+        append_message(
+            &db,
+            &session.id,
+            &task_row("running", 3, Some(checkpoint(2))),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            read()[0].tool_result.as_ref().unwrap()["details"]["handoffCheckpoint"]["generation"],
+            json!(2)
+        );
+        // Settlement is accepted, keeps the newest boundary, and a replayed
+        // running launch row cannot reopen it.
+        append_message(
+            &db,
+            &session.id,
+            &task_row("completed", 3, Some(checkpoint(2))),
+            None,
+        )
+        .unwrap();
+        append_message(&db, &session.id, &task_row("running", 0, None), None).unwrap();
+        let settled = read();
+        assert_eq!(
+            settled[0].tool_result.as_ref().unwrap()["details"]["status"],
+            json!("completed")
+        );
+        assert_eq!(
+            settled[0].tool_result.as_ref().unwrap()["details"]["handoffCheckpoint"]["generation"],
+            json!(2)
         );
     }
 

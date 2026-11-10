@@ -23,6 +23,7 @@ import { extractReadFiles, isReadOnlyToolName } from "./delegation-history.js";
 import type { DelegationRecord } from "./runtime.js";
 import type { SubagentRun } from "./subagent.js";
 import { settledDelegationMessage } from "./delegation-message.js";
+import type { SubagentHandoffPersistenceError } from "./subagent-handoff.js";
 
 /**
  * A `TaskWait` result is the parent's context; like a delegate's report, it
@@ -104,6 +105,22 @@ export function delegationSummary(record: DelegationRecord): Record<string, unkn
     ...(record.modelChangedFrom
       ? { modelChangedFrom: record.modelChangedFrom }
       : {}),
+    // The installed handoff boundary survives every later snapshot of this
+    // row, so a settled `Task` row still names the boundary its chain honours.
+    ...(record.handoffCheckpoint
+      ? { handoffCheckpoint: record.handoffCheckpoint }
+      : {}),
+    // A boundary the run installed but could not persist is part of the run's
+    // observable state, not a write-time footnote: both the live summary and
+    // the settled one name it, so `TaskWait` and any lifecycle consumer see
+    // that the durable chain fell back to an older boundary or full history.
+    ...(record.handoffCheckpointError ?? record.result?.handoffCheckpointError
+      ? {
+          handoffCheckpointError:
+            record.handoffCheckpointError ??
+            record.result!.handoffCheckpointError,
+        }
+      : {}),
     // User-owned runs carry their delivery explicitly; parent-owned records
     // omit it (backward-compatible `parent` default).
     ...((record.delivery ?? "parent") === "user" ? { delivery: "user" as const } : {}),
@@ -148,6 +165,8 @@ export type WaitResultSnapshot = {
   toolCalls: number;
   turns: number;
   error?: { code: string; message: string };
+  /** An installed handoff whose durable checkpoint write failed. */
+  handoffCheckpointError?: SubagentHandoffPersistenceError;
   scratchReportPath?: string;
   usage?: MessageUsage;
   contextTokens?: number;
@@ -167,6 +186,13 @@ export function snapshotWaitRecord(record: DelegationRecord): WaitResultSnapshot
     toolCalls: record.result?.toolCalls ?? record.toolCalls,
     turns: record.result?.turns ?? record.turns,
     ...(record.result?.error ? { error: record.result.error } : {}),
+    ...(record.handoffCheckpointError ?? record.result?.handoffCheckpointError
+      ? {
+          handoffCheckpointError:
+            record.handoffCheckpointError ??
+            record.result!.handoffCheckpointError,
+        }
+      : {}),
     ...(record.result?.scratchReportPath
       ? { scratchReportPath: record.result.scratchReportPath }
       : {}),
@@ -270,7 +296,10 @@ export function toolRowFromEnvelope(
   const call = host.delegateToolCalls.get(event.toolCallId);
   const ts = new Date(envelope.ts ?? Date.now()).toISOString();
   return {
-    id: `delegate-tool-${event.toolCallId}`,
+    // The durable tool row's own identity (host-side persistence writes the
+    // bare call id too), so a live transcript and a `session.get` replay agree
+    // on which row a handoff boundary names.
+    id: event.toolCallId,
     role: "tool",
     content: "",
     createdAt: ts,

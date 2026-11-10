@@ -1,3 +1,5 @@
+import type { MessageAttachment } from "./types.js";
+
 /**
  * Subagent self-handoff: a running delegate rolls its own model context over,
  * on its own terms, without ending the delegation.
@@ -205,4 +207,175 @@ export function subagentHandoffSecondsToMinutes(seconds: number): number {
 /** The minute figure the settings UI edits → stored seconds. */
 export function subagentHandoffMinutesToSeconds(minutes: number): number {
   return Math.round(minutes * SECONDS_PER_MINUTE);
+}
+
+/**
+ * One user instruction a durable checkpoint restores verbatim.
+ *
+ * `text` is carried so a restored run still receives the instruction when its
+ * persisted row is gone; `rowId` is the provenance of the row that actually
+ * delivered it, so two intentionally identical instructions stay two rows in
+ * delivery order. Attachments ride as durable refs only — never bytes — and a
+ * resume hydrates them exactly like a replayed child row.
+ *
+ * A `Task` invocation is itself an instruction, and its `toolCallId` is the
+ * identity that survives while a run has no child row of its own (a parent
+ * `Task(resume)` delivers its text as the resumed run's opening turn). Two
+ * independently delivered instructions with the same text therefore stay two
+ * directives even when neither has a child echo row.
+ */
+export type DelegationHandoffDirective = {
+  /** `Task` toolCallId that delivered this instruction, when one did. */
+  toolCallId?: string;
+  /** Id of the persisted child row that delivered this instruction. */
+  rowId?: string;
+  /** The instruction exactly as delivered. */
+  text: string;
+  /** Durable attachment refs (no inline bytes). */
+  attachments?: MessageAttachment[];
+  /** True for the chain's opening task, which is not a persisted child row. */
+  opening?: boolean;
+};
+
+/**
+ * The durable record of one installed self-handoff — the boundary a later
+ * `Task(resume)` must honour.
+ *
+ * It is written only after the delegate's in-memory context was actually
+ * replaced, never when a submission was merely accepted, so the recorded
+ * boundary always describes a context that existed. `throughRowId` is a stable
+ * cursor over persisted child rows: the last absorbed row, by identity, not by
+ * timestamp. The head (`originalTask` + `directives` + `summary`) and the rows
+ * after the cursor reconstruct the installed context without replaying the
+ * execution history the handoff already absorbed.
+ *
+ * The record lives on the delegation's `Task` row details (open JSON that the
+ * host already persists and rewrites in place), so it needs no schema change,
+ * no migration, and never enters the parent's model context.
+ */
+export type DelegationHandoffCheckpoint = {
+  /** Record version; an unknown version is not restored. */
+  version: typeof DELEGATION_HANDOFF_CHECKPOINT_VERSION;
+  /** Chain identity: stable across every `Task(resume)` of this conversation. */
+  delegateSessionId: string;
+  /** The delegation whose run installed this context. */
+  delegationId: string;
+  /** The `Task` toolCallId that started that run — the source request. */
+  sourceToolCallId: string;
+  agentName: string;
+  /** 1-based generation of the installed handoff within the chain. */
+  generation: number;
+  /** Last persisted child row the installed context absorbed. */
+  throughRowId: string;
+  /** The summary message exactly as installed (framing plus authored text). */
+  summary: string;
+  /** The chain's original task, replayed first on resume. */
+  originalTask: string;
+  /** Delivered user directions in delivery order, each exactly once. */
+  directives: DelegationHandoffDirective[];
+  /** RFC3339 stamp of the install, for ordering two checkpoints. */
+  installedAt: string;
+};
+
+/** The checkpoint record shape this build reads and writes. */
+export const DELEGATION_HANDOFF_CHECKPOINT_VERSION = 1;
+
+/**
+ * Shape check for one directive a stored or incoming checkpoint records.
+ *
+ * A directive needs the text it restores; its identity and durable refs are
+ * optional because an opening task has no child row and a text-only direction
+ * has no attachments.
+ */
+export function isDelegationHandoffDirective(
+  value: unknown,
+): value is DelegationHandoffDirective {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.text !== "string") return false;
+  for (const key of ["toolCallId", "rowId"] as const) {
+    if (candidate[key] !== undefined && typeof candidate[key] !== "string") {
+      return false;
+    }
+  }
+  if (candidate.attachments !== undefined) {
+    if (!Array.isArray(candidate.attachments)) return false;
+    for (const attachment of candidate.attachments) {
+      if (!attachment || typeof attachment !== "object") return false;
+      const a = attachment as Record<string, unknown>;
+      if (typeof a.kind !== "string" || typeof a.name !== "string") return false;
+      if (typeof a.ref !== "string") return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Shape check for a stored or incoming checkpoint.
+ *
+ * A record that fails this check is not a boundary this build can restore: an
+ * unknown version, a missing cursor, an empty summary, or a malformed
+ * directive all read as "no checkpoint", which keeps the pre-checkpoint
+ * full-history seed as the fallback instead of installing half a context.
+ */
+export function isDelegationHandoffCheckpoint(
+  value: unknown,
+): value is DelegationHandoffCheckpoint {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.version !== DELEGATION_HANDOFF_CHECKPOINT_VERSION) return false;
+  for (const key of [
+    "delegateSessionId",
+    "delegationId",
+    "sourceToolCallId",
+    "agentName",
+    "throughRowId",
+    "summary",
+    "installedAt",
+  ] as const) {
+    if (typeof candidate[key] !== "string" || !(candidate[key] as string).trim()) {
+      return false;
+    }
+  }
+  if (typeof candidate.originalTask !== "string") return false;
+  if (
+    typeof candidate.generation !== "number" ||
+    !Number.isInteger(candidate.generation) ||
+    candidate.generation < 1
+  ) {
+    return false;
+  }
+  const directives = candidate.directives;
+  if (!Array.isArray(directives)) return false;
+  return directives.every(isDelegationHandoffDirective);
+}
+
+/**
+ * The latest checkpoint a caller may restore, or `undefined` when none is
+ * valid. Consecutive generations are ordered by `generation` first and
+ * `installedAt` second, so a record rebuilt from a transcript picks the newest
+ * install regardless of the order the `Task` rows appear in.
+ */
+export function latestDelegationHandoffCheckpoint(
+  values: readonly unknown[],
+): DelegationHandoffCheckpoint | undefined {
+  let latest: DelegationHandoffCheckpoint | undefined;
+  for (const value of values) {
+    if (!isDelegationHandoffCheckpoint(value)) continue;
+    if (!latest) {
+      latest = value;
+      continue;
+    }
+    if (value.generation > latest.generation) {
+      latest = value;
+      continue;
+    }
+    if (
+      value.generation === latest.generation &&
+      value.installedAt > latest.installedAt
+    ) {
+      latest = value;
+    }
+  }
+  return latest;
 }

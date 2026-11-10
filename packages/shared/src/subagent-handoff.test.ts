@@ -12,6 +12,8 @@ import {
   MIN_SUBAGENT_HANDOFF_TOOL_CALLS,
   SUBAGENT_HANDOFF_TOKENS_PER_K,
   isSubagentSelfHandoffSettings,
+  isDelegationHandoffCheckpoint,
+  latestDelegationHandoffCheckpoint,
   normalizeSubagentSelfHandoffSettings,
   subagentHandoffKTokensToTokens,
   subagentHandoffMinutesToSeconds,
@@ -267,5 +269,68 @@ describe("self-handoff runtime ceiling", () => {
     // The other triggers keep their own ceilings.
     expect(subagentSelfHandoffBounds("tool-calls")).toEqual([1, 10_000]);
     expect(subagentSelfHandoffBounds("context-tokens")).toEqual([1_000, 1_000_000]);
+  });
+});
+
+describe("delegation handoff checkpoint records", () => {
+  const valid = {
+    version: 1 as const,
+    delegateSessionId: "chain-1",
+    delegationId: "delegation-1",
+    sourceToolCallId: "task-1",
+    agentName: "explorer",
+    generation: 1,
+    throughRowId: "row-1",
+    summary: "[Delegated-task handoff 1]\ntext",
+    originalTask: "Find the dialog.",
+    directives: [{ rowId: "direction-1", text: "Look again." }],
+    installedAt: "2026-10-01T00:00:00.000Z",
+  };
+
+  it("accepts the persisted shape and rejects a record this build cannot restore", () => {
+    expect(isDelegationHandoffCheckpoint(valid)).toBe(true);
+    expect(isDelegationHandoffCheckpoint({ ...valid, version: 2 })).toBe(false);
+    expect(isDelegationHandoffCheckpoint({ ...valid, throughRowId: "" })).toBe(
+      false,
+    );
+    expect(isDelegationHandoffCheckpoint({ ...valid, summary: "  " })).toBe(false);
+    expect(isDelegationHandoffCheckpoint({ ...valid, generation: 0 })).toBe(
+      false,
+    );
+    expect(
+      isDelegationHandoffCheckpoint({ ...valid, directives: [{ text: 5 }] }),
+    ).toBe(false);
+    expect(isDelegationHandoffCheckpoint(null)).toBe(false);
+  });
+
+  it("keeps directive identity in toolCallId so repeated text stays distinct", () => {
+    const withIdentity = {
+      ...valid,
+      directives: [
+        { toolCallId: "task-1", text: "Look again.", opening: true },
+        { toolCallId: "task-2", text: "Look again." },
+      ],
+    };
+    expect(isDelegationHandoffCheckpoint(withIdentity)).toBe(true);
+    expect(
+      isDelegationHandoffCheckpoint({
+        ...withIdentity,
+        directives: [{ toolCallId: 5, text: "Look again." }],
+      }),
+    ).toBe(false);
+  });
+
+  it("selects the newest generation, then the newest install", () => {
+    const older = { ...valid, generation: 1 };
+    const newer = { ...valid, generation: 2, delegationId: "delegation-2" };
+    expect(latestDelegationHandoffCheckpoint([older, newer])?.generation).toBe(2);
+    expect(latestDelegationHandoffCheckpoint([newer, older])?.generation).toBe(2);
+    expect(latestDelegationHandoffCheckpoint([])).toBeUndefined();
+    expect(
+      latestDelegationHandoffCheckpoint([
+        { ...valid, installedAt: "2026-10-01T00:00:00.000Z" },
+        { ...valid, installedAt: "2026-10-02T00:00:00.000Z" },
+      ])?.installedAt,
+    ).toBe("2026-10-02T00:00:00.000Z");
   });
 });

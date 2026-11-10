@@ -258,7 +258,12 @@ export function applyValidatedSteer(
     parentToolCallId: string;
     agentName: string;
     /** Hands the input to the child loop: text plus any image blocks. */
-    steerLoop: (text: string, images: readonly ImageContent[]) => void;
+    /** Hands the input to the child loop: text, image blocks, and echo row id. */
+    steerLoop: (
+      text: string,
+      images: readonly ImageContent[],
+      rowId: string,
+    ) => void;
     markSteered: (messageId: string) => void;
     appendRow: (envelope: AgentEventEnvelope, message: UiMessage) => void;
     emit: (envelope: AgentEventEnvelope) => void;
@@ -273,7 +278,7 @@ export function applyValidatedSteer(
     agentName: deps.agentName,
   });
   try {
-    deps.steerLoop(validated.text, validated.images);
+    deps.steerLoop(validated.text, validated.images, validated.message.id);
   } catch {
     throw codedError(
       `Delegation "${validated.delegationId}" settled before the steering arrived; continue it with Task(resume: "${validated.delegationId}").`,

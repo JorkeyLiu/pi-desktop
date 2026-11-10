@@ -503,6 +503,7 @@ export const ko = {
     compactionRowSummaryFailed: "요약 생성 실패 · 최근 컨텍스트 유지됨",
     subagentHandoffCheckpoint: "컨텍스트 인계",
     subagentHandoffCheckpointCount: "컨텍스트 인계 · #{{times}}",
+    subagentHandoffCheckpointBody: "인계 요약",
     scrollToBottom: "최신 항목으로 이동",
     minimap: "대화 개요",
     resultNeedsAttention: "이 작업을 확인해야 합니다",

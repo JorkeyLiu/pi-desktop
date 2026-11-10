@@ -491,6 +491,7 @@ export const de = {
     "compactionRowSummaryFailed": "Zusammenfassung fehlgeschlagen · aktueller Kontext beibehalten",
     "subagentHandoffCheckpoint": "Kontext-Übergabe",
     "subagentHandoffCheckpointCount": "Kontext-Übergabe · #{{times}}",
+    "subagentHandoffCheckpointBody": "Übergabe-Zusammenfassung",
     "entryExtraExpand": "Block vollständig anzeigen",
     "entryExtraCollapse": "Block einklappen",
     "actionSlotMore": "Weitere Aktionen",

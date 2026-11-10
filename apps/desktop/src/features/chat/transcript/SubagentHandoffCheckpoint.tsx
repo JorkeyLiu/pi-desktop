@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useId } from "react";
 import type { UiMessage } from "@pi-desktop/shared";
 import { IconChevronRight } from "../../../components/icons";
+import { BlockHead } from "../../../components/tool/BlockHead";
 import { toolResultPayload } from "../../../lib/tool-presentation";
 import { disclosureKey, useAutomaticDisclosure } from "./disclosure";
 
@@ -65,7 +66,7 @@ export function handoffCheckpoint(message: UiMessage): HandoffCheckpointView | n
  * The row carries no tool arguments and no result text: the collapsed line
  * says only which checkpoint it is — its title and its position among the
  * tab's accepted handoffs — and the body is the authored handoff in full.
- * Nothing here is editable, and the row owns no actions.
+ * Nothing here is editable; the body's one action copies the handoff verbatim.
  */
 export function SubagentHandoffCheckpointRow({
   message,
@@ -119,7 +120,13 @@ export function SubagentHandoffCheckpointRow({
 }
 
 /**
- * The whole authored handoff, as plain text.
+ * The whole authored handoff, presented like any other tool detail section: a
+ * translated section heading with a copy control, then the text itself.
+ *
+ * The heading names what the box holds rather than repeating the checkpoint
+ * title that already sits above it, and the copy control hands the reader every
+ * character the delegate submitted — the whole string, never a shortened or
+ * clamped view — with the shared copied feedback of `BlockHead`.
  *
  * The text was written by a model, so it is untrusted input: it reaches the
  * reader as a React text node, never as HTML or as parsed markdown. Authored
@@ -128,5 +135,11 @@ export function SubagentHandoffCheckpointRow({
  * organized as bullets still reads as the author wrote it.
  */
 export function HandoffCheckpointBody({ text }: { text: string }) {
-  return <div className="transcript-handoff-prose selectable">{text}</div>;
+  const { t } = useTranslation();
+  return (
+    <>
+      <BlockHead label={t("chat.subagentHandoffCheckpointBody")} copy={text} />
+      <div className="transcript-handoff-prose selectable">{text}</div>
+    </>
+  );
 }

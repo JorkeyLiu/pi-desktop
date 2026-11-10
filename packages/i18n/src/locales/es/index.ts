@@ -491,6 +491,7 @@ export const es = {
     "compactionRowSummaryFailed": "falló la generación del resumen · se conservó el contexto reciente",
     "subagentHandoffCheckpoint": "Traspaso de contexto",
     "subagentHandoffCheckpointCount": "Traspaso de contexto · #{{times}}",
+    "subagentHandoffCheckpointBody": "Resumen del traspaso",
     "entryExtraExpand": "Mostrar el bloque completo",
     "entryExtraCollapse": "Contraer el bloque",
     "actionSlotMore": "Más acciones",

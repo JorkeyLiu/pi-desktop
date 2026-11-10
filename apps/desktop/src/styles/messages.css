@@ -1555,9 +1555,10 @@
 /* An accepted self-handoff is a persisted checkpoint, not a tool invocation:
    it borrows the context-compaction row's centred, muted divider language and
    adds one disclosure whose body is the free-form handoff the delegate
-   wrote. Nothing here is editable and the row owns no actions. Both the
-   row and its head are shrinkable so a narrow work panel ellipsises the
-   title instead of overflowing the transcript column. */
+   wrote. Nothing in it is editable; only the expanded body's copy control
+   acts on the text. Both the row and its head are shrinkable so a narrow
+   work panel ellipsises the title instead of overflowing the transcript
+   column. */
 .transcript-handoff-row {
   min-width: 0;
   margin: 14px 0;
@@ -1635,14 +1636,12 @@
   transform: translateY(-50%) rotate(90deg);
 }
 
+/* The body is the framed detail region the standard section head labels: the
+   head sits above the box on the transcript surface, exactly as it does over
+   any other tool detail, and the tile belongs to the text box below it. */
 .transcript-handoff-body {
-  display: grid;
-  gap: 10px;
   max-width: var(--chat-prose-max-width, 720px);
   margin: 8px auto 0;
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  background: var(--ds-tile);
   color: var(--ds-text-secondary);
   font-size: var(--text-xs);
   line-height: var(--leading-compact);
@@ -1652,6 +1651,9 @@
 
 .transcript-handoff-prose {
   margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--ds-tile);
   color: var(--ds-text-primary);
   /* The handoff is plain text: its author's line breaks, indentation, and list
      markers are formatting to keep, not markup to interpret. */

@@ -8,13 +8,24 @@
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { SubagentDefinition, UiMessage } from "@pi-desktop/shared";
+import {
+  latestDelegationHandoffCheckpoint,
+  type DelegationHandoffCheckpoint,
+  type DelegationHandoffDirective,
+  type SubagentDefinition,
+  type UiMessage,
+} from "@pi-desktop/shared";
 import { hydrateAttachmentHistory } from "./attachment-history.js";
 import type { DelegationChainRegistry } from "./delegation-chain.js";
 import {
+  chainDeliveryDirectives,
+  chainRowsToMessages,
+  mergeDeliveryDirectives,
   originalTaskFromTranscript,
-  selectChainRows,
+  restorableHandoffCheckpoint,
   seedDelegateMessages,
+  seedHandoffCheckpointMessages,
+  selectChainRows,
   type DelegationChain,
 } from "./delegation-history.js";
 import { contextBudgetLimitsFor } from "./context-budget.js";
@@ -197,24 +208,39 @@ async function hydrateResumedRows(
   });
 }
 
+export type ResumedDelegateContext = {
+  /**
+   * Context this run replays for its first request.
+   *
+   * A checkpoint restores the installed context; a chain without one replays
+   * its full history. It is replayed, never pinned: a later rollover rebuilds
+   * from `directives`, so an old summary or an execution tail cannot survive one.
+   */
+  replay: AgentMessage[];
+  /**
+   * The fixed instruction header: the chain's original task and every delivered
+   * `Task` or child-steering direction, in delivery order, each exactly once.
+   *
+   * This is what a rollover replaces the context with, together with the new
+   * summary. It deliberately contains no summary and no execution history.
+   */
+  directives: AgentMessage[];
+  /** The same instructions as durable records the next checkpoint carries. */
+  directiveRecords: DelegationHandoffDirective[];
+};
+
 /**
- * Rebuild the delegate's prior conversation from its transcript rows. The
- * rows carry `parentToolCallId` for exactly the chain's `Task` calls, so the
- * replay never picks up the parent's own rows or a sibling delegate's.
+ * The chain's replay seed plus the fixed instruction header a rollover needs.
  *
- * A run stopped before it emitted a single child event leaves no rows, but the
- * chain's original brief still seeds the continued run: the seed is that
- * brief alone, with no fabricated history. A chain that began with an
- * image-only input has no brief at all, so its hydrated image row is the
- * seed. Only a chain with neither text nor a recoverable image has nothing to
- * continue from, and returns `undefined`.
+ * `undefined` means nothing can be continued: no text brief and no recoverable
+ * image. The caller reports that as an unresumable chain.
  */
-export async function seedResumedDelegate(
+export async function seedResumedDelegateContext(
   transcriptHistory: readonly UiMessage[],
   chain: DelegationChain,
   provider: RuntimeProviderConfig,
   roots: ResumeAttachmentRoots = {},
-): Promise<AgentMessage[] | undefined> {
+): Promise<ResumedDelegateContext | undefined> {
   // A chain begun with an image-only input has no text brief in either the
   // live chain or its `Task` row. The hydrated rows are then the whole seed;
   // only a chain with no text and no recoverable image has nothing to resume.
@@ -232,11 +258,167 @@ export async function seedResumedDelegate(
   // derived from the same model the resumed run will use, so the first
   // request fits the window instead of overflowing on arrival.
   const model = buildProviderModel(provider);
-  return seedDelegateMessages({
-    originalTask,
+  const budget = contextBudgetLimitsFor(model);
+  // An installed handoff is the boundary this resume must honour: the context
+  // it restores is the original task, the delivered directions, the installed
+  // summary, then only the rows written after that boundary. The execution
+  // history the handoff absorbed is never replayed. A checkpoint whose
+  // boundary row is gone is skipped, and when none can be placed the seed is
+  // exactly the pre-checkpoint full history.
+  const checkpoint = restorableHandoffCheckpoint(chain.handoffCheckpoints, rows);
+  const installed = checkpoint
+    ? seedHandoffCheckpointMessages({
+        checkpoint,
+        rows,
+        directives: checkpointDirectiveRows(checkpoint, rows),
+        provider,
+        model,
+        budget,
+      })
+    : undefined;
+  const replay =
+    installed ??
+    seedDelegateMessages({ originalTask, rows, provider, model, budget });
+  const fixed = await resumedHandoffDirectives({
+    transcriptHistory,
+    chain,
     rows,
     provider,
     model,
-    budget: contextBudgetLimitsFor(model),
+    roots,
   });
+  return { replay, ...fixed };
+}
+
+/**
+ * Replay seed only, for callers that do not install a handoff header.
+ *
+ * A run that rolls its context over needs the split form above; keeping this
+ * entry point means a caller without self-handoff sees exactly the previous
+ * seed.
+ */
+export async function seedResumedDelegate(
+  transcriptHistory: readonly UiMessage[],
+  chain: DelegationChain,
+  provider: RuntimeProviderConfig,
+  roots: ResumeAttachmentRoots = {},
+): Promise<AgentMessage[] | undefined> {
+  const context = await seedResumedDelegateContext(
+    transcriptHistory,
+    chain,
+    provider,
+    roots,
+  );
+  return context?.replay;
+}
+
+/**
+ * The chain's fixed instruction header, as provider messages and durable
+ * records.
+ *
+ * The live derivation reads the transcript by provenance (a successful `Task`
+ * invocation, or a tagged child row), and the newest checkpoint's recorded
+ * list supplies instructions whose rows a truncated branch no longer holds.
+ * Merging is identity-based, so a checkpoint and its live row never double and
+ * two intentionally identical texts stay two instructions.
+ */
+async function resumedHandoffDirectives(options: {
+  transcriptHistory: readonly UiMessage[];
+  chain: DelegationChain;
+  /** Hydrated chain rows, so a direction reuses the seed's own image bytes. */
+  rows: readonly UiMessage[];
+  provider: RuntimeProviderConfig;
+  model: ReturnType<typeof buildProviderModel>;
+  roots: ResumeAttachmentRoots;
+}): Promise<Pick<ResumedDelegateContext, "directives" | "directiveRecords">> {
+  const live = chainDeliveryDirectives(options.transcriptHistory, options.chain);
+  const known = new Map<string, UiMessage>();
+  for (const row of options.rows) known.set(row.id, row);
+  for (const directive of live) {
+    const hydrated = known.get(directive.row.id);
+    if (hydrated) directive.row = hydrated;
+  }
+  const recorded =
+    latestDelegationHandoffCheckpoint(options.chain.handoffCheckpoints ?? [])
+      ?.directives ?? [];
+  const merged = mergeDeliveryDirectives(recorded, live);
+  // A recorded instruction whose row is gone still restores its text and refs;
+  // hydrate those refs exactly like a replayed child row.
+  const missing = merged
+    .map((directive) => directive.row)
+    .filter((row) => !known.has(row.id));
+  if (missing.length) {
+    for (const row of await hydrateResumedRows(missing, options.roots)) {
+      known.set(row.id, row);
+    }
+  }
+  const directives = chainRowsToMessages(
+    merged.map((directive) => known.get(directive.row.id) ?? directive.row),
+    options.provider,
+    options.model,
+  );
+  const directiveRecords = merged.map(
+    (directive, index): DelegationHandoffDirective => ({
+      ...(directive.toolCallId ? { toolCallId: directive.toolCallId } : {}),
+      ...(directive.rowId ? { rowId: directive.rowId } : {}),
+      text: directive.text,
+      ...(directive.attachments?.length
+        ? { attachments: directive.attachments }
+        : {}),
+      ...(index === 0 ? { opening: true } : {}),
+    }),
+  );
+  return { directives, directiveRecords };
+}
+
+/**
+ * The delivered directions a checkpoint restores, as rows: the persisted row
+ * that delivered each one when it still exists and lies before the boundary,
+ * otherwise a synthesized row carrying what the checkpoint recorded.
+ *
+ * Identity, not text, decides which row is which — two intentionally identical
+ * instructions stay two rows — and a direction whose row already sits after
+ * the boundary is left out, because the restored tail replays it there.
+ */
+function checkpointDirectiveRows(
+  checkpoint: DelegationHandoffCheckpoint,
+  rows: readonly UiMessage[],
+): UiMessage[] {
+  const cursor = rows.findIndex((row) => row.id === checkpoint.throughRowId);
+  const kept: UiMessage[] = [];
+  for (const [index, directive] of checkpoint.directives.entries()) {
+    const row = directive.rowId
+      ? rows.find((candidate) => candidate.id === directive.rowId)
+      : directive.toolCallId
+        ? rows.find(
+            (candidate) =>
+              candidate.role === "user" &&
+              candidate.parentToolCallId === directive.toolCallId &&
+              candidate.steering === true,
+          )
+        : undefined;
+    if (directive.opening) {
+      // The original task is seeded first from the record's own text; its row
+      // is only needed when the opening instruction carried images.
+      if (!checkpoint.originalTask.trim() && row) kept.push(row);
+      continue;
+    }
+    if (row && cursor >= 0) {
+      if (rows.indexOf(row) > cursor) continue;
+      kept.push(row);
+      continue;
+    }
+    if (!row && !directive.text.trim() && !directive.attachments?.length) continue;
+    kept.push({
+      id: directive.rowId ?? `handoff-directive-${index}`,
+      role: "user",
+      content: directive.text,
+      createdAt: checkpoint.installedAt,
+      status: "complete",
+      ...(directive.attachments?.length
+        ? { attachments: directive.attachments }
+        : {}),
+    });
+  }
+  return kept;
 }
