@@ -27,6 +27,7 @@ export const frEntries: ChangelogEntry[] = [
       "Un appel d’outil apparaît désormais à sa place dans la conversation dès qu’il commence à être diffusé, avant la fin de ses arguments, avec une pulsation discrète sur son icône et son nom au lieu d’un indicateur rotatif.",
       "La transcription d’un sous-agent affiche l’indicateur de travail tant que l’enfant travaille, au lieu d’une liste figée entre deux mises à jour.",
       "Un long texte collé parvient désormais au modèle sous la forme du texte collé, à l'endroit où vous l'avez collé, au lieu d'un chemin de fichier qu'il devait ouvrir. Le brouillon et l'historique conservent la puce compacte, et chaque envoi — nouvelle tentative, message en file d'attente ou conversation réouverte — transporte le même texte.",
+      "Consulter les sous-agents en cours répond immédiatement : la liste des tâches renvoie l’état actuel au lieu d’attendre la fin de l’un d’eux, et l’attente reste une étape distincte.",
     ],
   },
   {

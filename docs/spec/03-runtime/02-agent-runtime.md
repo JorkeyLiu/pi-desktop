@@ -969,9 +969,10 @@ core set rather than the on-demand catalog of §7.1:
   tool call); the idle-await is the parent-model-loop-ended path with the durable parent turn
   still open — either way the wake continues the SAME turn via the tool return or a runtime
   prompt. `timeout` / progress / `wait-any` never detach unfinished delegates.
-- `TaskList()` — fresh-progress read under the same program coordinator gate while the parent
-  expects running children; settled re-read is cheap. It never starts, restarts, or shortens
-  the program cadence.
+- `TaskList()` — current-snapshot read, answered immediately even while the parent still
+  expects running children; it never waits, never starts, restarts, or shortens the program
+  cadence, and never stops or consumes a delegate. Convergence stays `TaskWait`'s job, so a
+  query can never hold the parent turn open.
 - `TaskStop(delegationIds?)` — cancels obsolete work (defaults to all running);
   waits for each abort to settle, then persists `status: "stopped"` with
   `completedAt` on `details.stopped[]`. Stopped delegations read as `stopped`.
@@ -1019,9 +1020,9 @@ context size → tool calls → elapsed time → off; selecting a kind in Settin
 kind's remembered default — 200000 tokens, 50 calls, 900 s — while a value saved
 explicitly is never rewritten by the default change (the read-time normalizer keeps its
 documented fallback to the product default for a malformed canonical value). `off` disables progress resumption only. The program owns when
-the model resumes: one cadence/checkpoint applies uniformly across explicit `TaskWait`,
-`TaskList` fresh-progress reads while the parent expects running children, and the implicit
-idle resume. Child tool/context callbacks update coordinator state only — they never trigger
+the model resumes: one cadence/checkpoint applies uniformly across explicit `TaskWait` and the
+implicit idle resume, and the model-facing `TaskList` is only a snapshot read that never
+enters the gate. Child tool/context callbacks update coordinator state only — they never trigger
 the model early and never bypass the gate. The model carries no timing: `Task` / `TaskWait` /
 `TaskList` accept no `timeoutSeconds` or per-call wake override, and any legacy timing args
 persisted in older provider tool calls are ignored safely without reintroducing an override.
@@ -1035,7 +1036,12 @@ accepts the legacy stored shape and clamps out-of-range values on read; a legacy
 session base is normalized at launch by Electron main (`session-launch`) and the headless
 `launch-resolver`, validated by shape at the settings-set boundary (mistyped values rejected,
 out-of-range values persist and read back clamped), and carried as sidecar launch/runtime
-options plus a live setter for settings changes. There is no Rust or storage-schema change:
+options plus a live setter for settings changes. A save forwards the two delegation triggers
+(`subagentWakeup`, `subagentSelfHandoff`) to the agent sidecar only when it touched them, and
+every live runtime rebinds through that setter (in-flight `TaskWait` / idle waits re-evaluate,
+delegates spawned afterwards inherit the new self-handoff trigger); the forwarded value is the
+validated write itself, because host-core acknowledges `settings.set` with `{ ok: true }` rather
+than the stored settings. There is no Rust or storage-schema change:
 unknown settings fields pass through host-core untouched. The live sidebar streams the same
 metrics independently and never requires model inference.
 

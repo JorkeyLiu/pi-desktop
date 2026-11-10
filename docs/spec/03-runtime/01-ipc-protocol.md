@@ -388,8 +388,9 @@ settled `stopped` / `aborted` was already retired by Stop, so it never
 attaches); detached (`user`) otherwise, which includes every continuation of a
 `stopped` or `aborted` source. Steering a running delegate keeps it attached; a
 program wake, `any` threshold, or progress checkpoint never detaches unfinished
-delegates. A `TaskWait` / `TaskList` wait carries no model timeout (`timeoutSeconds`)
-and no per-call wake override — legacy timing args in older provider tool calls are
+delegates. A `TaskWait` wait carries no model timeout (`timeoutSeconds`) and no
+per-call wake override, and the model-facing `TaskList` is a snapshot read that
+never waits at all — legacy timing args in older provider tool calls are
 ignored. After the source report was delivered or its owning turn ended, the
 continuation is `user`-owned with no parent model prompt, context, wake, or
 charge to the old parent turn; a `user`-owned continuation never resurrects the

@@ -27,6 +27,7 @@ export const ptBREntries: ChangelogEntry[] = [
       "Uma chamada de ferramenta agora aparece no lugar dela na conversa assim que começa a ser transmitida, antes de os argumentos terminarem, com um pulso discreto no ícone e no nome em vez de um indicador giratório.",
       "A transcrição de um subagente mostra o indicador de trabalho enquanto o filho trabalha, em vez de uma lista que fica parada entre atualizações.",
       "Um texto longo colado agora chega ao modelo como o próprio texto colado, no ponto em que você colou, em vez de um caminho de arquivo que ele precisaria abrir. O rascunho e o histórico mantêm o chip compacto, e todo caminho de envio — repetir, uma mensagem na fila ou uma conversa reaberta — leva o mesmo texto.",
+      "Consultar os subagentes em execução responde na hora: a lista de tarefas mostra o estado atual em vez de esperar que um deles termine, e aguardar continua sendo um passo separado.",
     ],
   },
   {

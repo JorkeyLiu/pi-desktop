@@ -253,7 +253,6 @@ import {
   applyValidatedSteer,
   finalizeWaitResult,
   listDelegationRecords,
-  programWaitResult,
   settleDelegationRecord,
   stopSubagentRecords,
   validateSubagentSteer,
@@ -5636,60 +5635,22 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     };
   }
 
-  /** `TaskList`: report on the session's delegations (ADR 0089). */
+  /**
+   * `TaskList`: report the session's delegations (ADR 0089). Looking is one
+   * round trip: the call answers the current snapshot even while children
+   * still run, never waits, and leaves the children untouched. Convergence
+   * stays `TaskWait`'s job; this read touches no program checkpoint and
+   * neither stops nor consumes a delegate.
+   */
   private buildSubagentListTool(): AgentTool {
     return {
       name: SUBAGENT_LIST_TOOL_NAME,
       label: "Task List",
       description:
-        "List the subagents started by Task in this session with their status. With expected pending delegates it waits through the program wait and returns with their reports; otherwise it reports the current snapshot without waiting. Use it to check progress, or before TaskStop to choose what to stop.",
+        "List the subagents started by Task in this session with their status and live progress. Returns the current snapshot immediately, even while subagents run, and never waits; call TaskWait to converge on their reports. Use it to check progress, or before TaskStop to choose what to stop.",
       parameters: Type.Object({}),
       executionMode: "sequential",
-      execute: async (_toolCallId, params, signal) => {
-        void params;
-        void signal;
-        const pending = this.pendingCurrentTurnDelegations();
-        if (!pending.some((record) => !record.reportDelivered)) {
-          return listDelegationRecords([...this.delegations.values()]);
-        }
-        const targets = [...pending];
-        this.beginDelegationWait(targets);
-        const waitAbort = new AbortController();
-        this.steeringWaitAbort = waitAbort;
-        let wakeOutcome: WakeWaitOutcome = {
-          timedOut: false,
-          deadlineKind: null,
-          wakeDelegationIds: [],
-        };
-        try {
-          if (!this.pendingSteering.size) {
-            wakeOutcome = await this.programCoordinator().waitForProgramTargets(
-              { mode: "any", minCompleted: 1 },
-              {
-                registerWakeWaiter: (listener) =>
-                  this.wakeWaiters.register(listener),
-                signal: waitAbort.signal,
-              },
-            );
-          }
-        } finally {
-          if (this.steeringWaitAbort === waitAbort) this.steeringWaitAbort = undefined;
-          this.endDelegationWait();
-        }
-        const interrupted = this.pendingSteering.size > 0 &&
-          !this.runCancelled && !this.disposed && !this.turnHadError;
-        const plan = this.programCoordinator().planProgramWait({
-          mode: "any",
-          minCompleted: 1,
-        });
-        return programWaitResult({
-          targets,
-          wakeOutcome,
-          planDeadlineKind: plan.deadlineKind,
-          planWakeSeconds: plan.wake.kind === "time" ? (plan.wake.value ?? null) : null,
-          interrupted,
-        });
-      },
+      execute: async () => listDelegationRecords([...this.delegations.values()]),
     };
   }
 

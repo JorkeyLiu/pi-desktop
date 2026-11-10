@@ -12,8 +12,9 @@
   program-owned coordinator (`AppSettings.subagentWakeup` in
   `03-runtime/02-agent-runtime.md` §5f). Running delegates are no longer aborted when
   the parent stops calling tools: the runtime keeps the durable turn open, the program
-  coordinator carries the single user-selected cadence into `TaskWait`, `TaskList`, and
-  the idle resume, and only `TaskStop` (cancel obsolete work), user Stop,
+  coordinator carries the single user-selected cadence into `TaskWait` and the
+  idle resume (`TaskList` is an immediate snapshot read and never waits), and
+  only `TaskStop` (cancel obsolete work), user Stop,
   disposal, or a terminal parent error ends them. The model carries no timing:
   `Task` / `TaskWait` / `TaskList` accept no `timeoutSeconds` or per-call wake override
   (legacy args ignored safely). Original wording is preserved and annotated in place.
@@ -55,7 +56,10 @@ tool set beside `Task`:
   on running delegations (all by default) and returns their reports;
   `mode: "any"` + `minCompleted` converges as soon as the first N finish, and
   settled delegations return immediately so reports can be re-read by id.
-- `TaskList()` reports the session's delegations with status.
+- `TaskList()` reports the session's delegations with status. (Amendment
+  2026-11: it answers the current snapshot immediately, even while delegates
+  run — looking never enters the program wait, so it can never hold the parent
+  turn; convergence stays `TaskWait`'s job.)
 - `TaskStop(delegationIds?)` stops running delegations; stopped reads as
   `stopped`.
 

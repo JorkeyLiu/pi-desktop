@@ -793,7 +793,8 @@ system while preserving their different data ownership:
   keeps its figure;
   `off` disables progress resumption only). The user selects ONE kind; the
   program owns when the model resumes under one cadence across explicit
-  `TaskWait`, `TaskList` fresh-progress reads, and the implicit idle resume —
+  `TaskWait` and the implicit idle resume (`TaskList` is a snapshot read and
+  never enters that cadence) —
   child callbacks never trigger the model early. An attached child's result /
   completion delivery always resumes the parent and has no off switch. The
   context kind is edited in `k tokens` (1–1000, step 1) while the persisted

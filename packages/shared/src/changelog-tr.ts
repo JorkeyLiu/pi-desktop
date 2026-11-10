@@ -27,6 +27,7 @@ export const trEntries: ChangelogEntry[] = [
       "Bir araç çağrısı, bağımsız değişkenleri tamamlanmadan akış başlar başlamaz konuşmadaki yerinde görünür; dönen bir simge yerine simgesi ve adı hafifçe nabız atar.",
       "Bir alt ajanın dökümü, alt ajan çalışırken çalışma göstergesini gösterir; güncellemeler arasında hareketsiz kalan bir satır listesi kalmaz.",
       "Uzun bir yapıştırma artık modele açması gereken bir dosya yolu yerine, yapıştırdığınız konumda yapıştırdığınız metnin kendisi olarak ulaşıyor. Taslak ve geçmiş kompakt çipi korur; yeniden deneme, kuyruktaki mesaj ve yeniden açılan sohbet dahil her gönderim yolu aynı metni taşır.",
+      "Çalışan alt ajanları kontrol etmek artık anında yanıtlanır: görev listesi bir ajanın bitmesini beklemek yerine güncel durumu gösterir; bekleme ayrı bir adım olarak kalır.",
     ],
   },
   {

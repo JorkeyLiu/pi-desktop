@@ -8557,6 +8557,12 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   10. Fail one save (host refusal) and confirm the selector reverts to the
       stored value, the toast reports the failure, and the typed draft is not
       silently replaced by a different unit.
+  11. Keep an Agent session open with a delegate still running, then change
+     its check-progress kind from Settings. Confirm the waiting session
+     follows the new trigger on its next check (and further checks stop when
+     the kind is `Off`) without reopening it or restarting the app; repeat for
+     self-handoff and confirm a delegate started after the save uses the new
+     trigger while one already running keeps its own.
 - **Expected**: Both rows use one compact row on the control line, flush to the
   row's right edge — a compact spinner-free numeric field on the shared field
   height, its unit, then the kind selector last, each in its own reserved
@@ -8605,6 +8611,13 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   with the selector as its rightmost control on every kind (value → unit →
   selector, in DOM order as well, `off` reserving the columns to the left), and
   neither the rows nor the page overflow horizontally.
+  A save also applies live: the shell forwards the validated write (never the
+  `settings.set` ack) to the sidecar and every running session rebinds through
+  its own setter, so an in-flight wait re-evaluates and a delegate started after
+  the save inherits the new self-handoff trigger, with step 11 covered by
+  `node --test apps/desktop/test/settings-subagent-live-forward.test.mjs` (real
+  handler, real wire line, real apply helpers) and the idle cadence by
+  `packages/agent-runtime/src/runtime.test.ts`.
 
 #### E2E-SUBAGENT-inherit-parent-tools
 
@@ -13165,10 +13178,10 @@ This test plan spec is accepted when:
   existing card's identity. 6) Repeat in Chinese.
 - **Expected**: Every lifecycle row summarizes by agent name — never by its
   `delegationIds` argument, and no bare UUID appears in a collapsed row. A
-  `TaskList` that blocked through the program coordinator reads the same
-  backend-owned wait outcome as a `TaskWait` (results arrived vs progress
-  checkpoint vs interrupted); a cheap snapshot with no pending delegates has no
-  wait lifecycle and stays a roster check. Its
+  `TaskList` never blocks: called while delegates run, it returns the current
+  roster snapshot at once, carries no wait lifecycle (no `status` /
+  `wakeReason`), and leaves the children running; convergence is `TaskWait`'s
+  row. Its
   badge uses the shared subagent status vocabulary: running while any member
   runs, `Failed` / “失败” once a member failed even though a sibling completed,
   and `Stopped by request` / “已按请求停止” for the stopped delegate — including
@@ -13207,9 +13220,9 @@ This test plan spec is accepted when:
    explicitly — once by parent `Task(resume)` and once by direct user continue —
    and confirm each starts a new run: the parent resume's report delivers once,
    while the direct user continue runs detached with zero parent provider requests
-   and cannot resurrect the stopped run's waiting or delivery. 4) `TaskList` a running delegate under the same program gate and confirm
-   fresh elapsed / last-tool fields plus cheap settled re-read. 5) `TaskStop` (cancel
-   obsolete work) and user Stop still abort the running execution; restart hydrates
+   and cannot resurrect the stopped run's waiting or delivery. 4) Call `TaskList` while a delegate runs and confirm the snapshot
+  returns at once with fresh elapsed / last-tool fields and no wait lifecycle, plus a cheap settled re-read. 5) `TaskStop` (cancel
+  obsolete work) and user Stop still abort the running execution; restart hydrates
    the retained chain — including a `stopped` / `aborted` chain — as continuable with
    no parent messages. 6) Run a delegate whose
   document declares `maxTurns: 2` and let it pass two tool-calling turns;

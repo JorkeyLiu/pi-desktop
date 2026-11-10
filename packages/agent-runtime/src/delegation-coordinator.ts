@@ -1,6 +1,6 @@
 /**
  * Program delegation coordinator: one shared progress checkpoint per parent
- * expectation across explicit wait / TaskList / idle.
+ * expectation across explicit wait / idle.
  *
  * Contract:
  * - The selected session wakeup `{kind, value}` exclusively owns timing.
@@ -14,7 +14,7 @@
  * - Threshold watermarks stay on the record-owned `wake` objects (same
  *   references), so consecutive waits never spin on one progress twice.
  * - Completion always wins (via `evaluateSubagentWake` /
- *   `waitForWakeTargets`). Observing (poll/TaskList) never consumes delivery;
+ *   `waitForWakeTargets`). A snapshot read never consumes delivery;
  *   only `markProgramDelivery` with an explicit included set marks, and only
  *   the included settled parent-owned records.
  * - Event-driven only: waits delegate to `waitForWakeTargets` (settlement
@@ -150,7 +150,7 @@ export function createDelegationCoordinator(options: {
   getRecords: () => readonly CoordinatorRecord[];
   now?: () => number;
 }): {
-  /** Expected (parent-owned) targets for one query; TaskList gating uses this. */
+  /** Expected (parent-owned) targets for one query; TaskWait uses this. */
   selectProgramTargets: (query?: ProgramWaitQuery) => CoordinatorRecord[];
   planProgramWait: (
     query?: ProgramWaitQuery,

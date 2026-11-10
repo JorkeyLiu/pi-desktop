@@ -103,18 +103,25 @@ export function registerSettingsIpc({
         // Forward persistent wake defaults only when this save touched them:
         // the sidecar then refreshes every live runtime (in-flight waits
         // rebind) while future launches read the same persisted values.
+        // `settings.set` answers `{"ok": true}`, not the merged settings, so
+        // the forwarded values come from the validated write itself.
+        const provisionedSettings =
+          validatedSettings !== null && typeof validatedSettings === "object"
+            ? (validatedSettings as Partial<AppSettings>)
+            : null;
         const hasWakeupWrite =
-          validatedSettings !== null &&
-          typeof validatedSettings === "object" &&
-          Object.prototype.hasOwnProperty.call(validatedSettings, "subagentWakeup");
+          provisionedSettings !== null &&
+          Object.prototype.hasOwnProperty.call(
+            provisionedSettings,
+            "subagentWakeup",
+          );
         // The self-handoff trigger follows the same rule: forwarded only when
         // this save touched it, so an unrelated save leaves live sessions on
         // the trigger they already inherited.
         const hasSelfHandoffWrite =
-          validatedSettings !== null &&
-          typeof validatedSettings === "object" &&
+          provisionedSettings !== null &&
           Object.prototype.hasOwnProperty.call(
-            validatedSettings,
+            provisionedSettings,
             "subagentSelfHandoff",
           );
         await sidecar.call("sidecar.configure", {
@@ -123,17 +130,10 @@ export function registerSettingsIpc({
           networkProxy: currentNetworkProxy(),
           systemProxyRelayUrl: currentSystemProxyRelayUrl(),
           ...(hasWakeupWrite
-            ? {
-                subagentWakeup: (result as { subagentWakeup?: unknown })
-                  .subagentWakeup,
-              }
+            ? { subagentWakeup: provisionedSettings?.subagentWakeup }
             : {}),
           ...(hasSelfHandoffWrite
-            ? {
-                subagentSelfHandoff: (
-                  result as { subagentSelfHandoff?: unknown }
-                ).subagentSelfHandoff,
-              }
+            ? { subagentSelfHandoff: provisionedSettings?.subagentSelfHandoff }
             : {}),
         });
       } catch {

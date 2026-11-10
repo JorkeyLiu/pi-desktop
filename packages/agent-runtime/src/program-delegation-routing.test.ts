@@ -8,11 +8,11 @@ import type {
 } from "@pi-desktop/shared";
 
 /**
- * Program delegation routing: TaskWait -> TaskList -> idle share one
- * coordinator time checkpoint; TaskList waits through the same coordinator
- * when expected delegates pend (otherwise cheap snapshot); idle resumes via
- * the same coordinator with an any/min1 query; delivery marks only
- * actually-included settled records; detached user runs never list/deliver.
+ * Program delegation routing: TaskWait -> idle share one coordinator time
+ * checkpoint; TaskList answers the current delegation snapshot at once and
+ * never waits; idle resumes via the same coordinator with an any/min1 query;
+ * delivery marks only actually-included settled records; detached user runs
+ * never list/deliver.
  */
 const subagentRuns = vi.hoisted(() => ({
   calls: [] as any[],
@@ -147,6 +147,10 @@ function listTool(runtime: DesktopAgentRuntime): AgentTool {
   return (runtime as any).agent.state.tools.find((tool: any) => tool.name === "TaskList");
 }
 
+function stopTool(runtime: DesktopAgentRuntime): AgentTool {
+  return (runtime as any).agent.state.tools.find((tool: any) => tool.name === "TaskStop");
+}
+
 async function settleStatus(runtime: DesktopAgentRuntime, delegationId: string) {
   await vi.waitFor(() => {
     expect((runtime as any).delegations.get(delegationId).status).toBe("completed");
@@ -166,7 +170,7 @@ beforeEach(() => {
 });
 
 describe("program delegation routing", () => {
-  it("TaskWait anchors the checkpoint; TaskList reuses it and cannot progress-return before 900", async () => {
+  it("TaskList answers the current snapshot while a delegate still runs", async () => {
     vi.useFakeTimers();
     const runtime = createRuntime({ subagentWakeup: { kind: "time", value: 900 } });
     (runtime as any).agent.prompt = vi.fn(async () => undefined);
@@ -177,30 +181,82 @@ describe("program delegation routing", () => {
       const second = await taskTool(runtime).execute("task-2", { agent: "explorer", task: "B." });
       const firstId = (first.details as any).delegationId as string;
       const secondId = (second.details as any).delegationId as string;
-      // Anchor the shared checkpoint with an explicit TaskWait pass.
-      const waiting = waitTool(runtime).execute("wait-1", { delegationIds: [firstId, secondId] });
-      let waitSettled = false;
-      void waiting.then(() => { waitSettled = true; });
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(waitSettled).toBe(false);
-      // TaskList enters while the same checkpoint is armed: it must not
-      // progress-return early on the shared cadence.
+      // Looking is one round trip: pending children never turn the read into a
+      // program wait, and the query itself moves no clock.
       const listing = listTool(runtime).execute("list-1", {});
       let listSettled = false;
       void listing.then(() => { listSettled = true; });
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(listSettled).toBe(false);
-      expect(waitSettled).toBe(false);
-      // Finish both after the checkpoint fires; the wait converges and the
-      // list carries the same completed roster.
-      await vi.advanceTimersByTimeAsync(780_000);
-      const woken = await waiting;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(listSettled).toBe(true);
       const listed = await listing;
+      // Full roster in launch order with live progress: the same snapshot the
+      // read already returned when nothing was pending.
+      expect(listed.details.delegations.map((entry: any) => entry.delegationId)).toEqual([
+        firstId,
+        secondId,
+      ]);
+      expect(listed.details.delegations).toMatchObject([
+        { status: "running", agent: "explorer" },
+        { status: "running", agent: "explorer" },
+      ]);
+      // A snapshot is not a wait outcome: no lifecycle status, no wake reason.
+      expect((listed.details as any).status).toBeUndefined();
+      expect((listed.details as any).wakeReason).toBeUndefined();
+      const text = (listed.content[0] as { text: string }).text;
+      expect(text).toContain("running");
+      expect(text).toContain(firstId);
+      expect(text).toContain(secondId);
+      // The read observes and never stops or consumes the children.
+      for (const delegationId of [firstId, secondId]) {
+        expect((runtime as any).delegations.get(delegationId).status).toBe("running");
+        expect((runtime as any).delegations.get(delegationId).reportDelivered).toBe(false);
+      }
+      // The same turn can stop what the snapshot named without steering the
+      // child, waiting for it to settle, or advancing the clock.
+      const stopped = await stopTool(runtime).execute("stop-1", {
+        delegationIds: [firstId],
+      });
+      expect(
+        (stopped.details as any).stopped.map((entry: any) => entry.delegationId),
+      ).toEqual([firstId]);
+      expect((runtime as any).delegations.get(firstId).status).toBe("stopped");
+      const afterStop = await listTool(runtime).execute("list-2", {});
+      expect(afterStop.details.delegations).toMatchObject([
+        { delegationId: firstId, status: "stopped" },
+        { delegationId: secondId, status: "running" },
+      ]);
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("repeated TaskList reads neither hold nor move the shared TaskWait checkpoint", async () => {
+    vi.useFakeTimers();
+    const runtime = createRuntime({ subagentWakeup: { kind: "time", value: 900 } });
+    (runtime as any).agent.prompt = vi.fn(async () => undefined);
+    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
+    subagentRuns.deferred = true;
+    try {
+      const started = await taskTool(runtime).execute("task-1", { agent: "explorer", task: "A." });
+      const delegationId = (started.details as any).delegationId as string;
+      // Two reads at the same clock, both answered at once.
+      await listTool(runtime).execute("list-1", {});
+      await listTool(runtime).execute("list-2", {});
+      const waiting = waitTool(runtime).execute("wait-1", { delegationIds: [delegationId] });
+      let waitSettled = false;
+      void waiting.then(() => { waitSettled = true; });
+      // The configured 900 s cadence keeps its anchor: the reads neither
+      // shortened it nor armed a checkpoint of their own.
+      await vi.advanceTimersByTimeAsync(899_000);
+      expect(waitSettled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const woken = await waiting;
       expect(woken.details.status).toBe("wakeup");
-      expect(listed.details.status).toBe("wakeup");
-      expect(listed.details.delegations.map((entry: any) => entry.delegationId).sort()).toEqual(
-        [firstId, secondId].sort(),
-      );
+      expect(woken.details.wakeReason).toBe("time");
+      expect(woken.details.delegations[0].status).toBe("running");
+      expect((runtime as any).delegations.get(delegationId).reportDelivered).toBe(false);
     } finally {
       subagentRuns.deferred = false;
       await runtime.dispose();
@@ -278,6 +334,12 @@ describe("program delegation routing", () => {
     const runtime = createRuntime({ subagentWakeup: { kind: "off" } });
     subagentRuns.deferred = true;
     try {
+      // An empty session reads as an empty roster, answered at once.
+      const none = await listTool(runtime).execute("list-0", {});
+      expect(none.details.delegations).toEqual([]);
+      expect((none.content[0] as { text: string }).text).toBe(
+        "No subagents have been started in this session.",
+      );
       const started = await taskTool(runtime).execute("task-1", { agent: "explorer", task: "A." });
       const delegationId = (started.details as any).delegationId as string;
       subagentRuns.resolveRun!(completedResult("done src/app.ts:9"));

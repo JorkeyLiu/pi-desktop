@@ -276,9 +276,13 @@ type AgentContinueSubagentRequest = {
 且其所属回合仍存活——已结算为 `stopped` / `aborted` 的来源早已被 Stop 退役，因此绝不
 附加），才为附加（`parent`）；否则为分离（`user`），这包括对 `stopped` 或 `aborted`
 来源的每一次继续。对正在运行的委托补充指令会使其保持附加；程序唤醒、`any` 阈值或进度
-检查点绝不会让未完成的委托分离。`TaskWait` / `TaskList` 的等待不带模型超时
-（`timeoutSeconds`），也没有逐调用唤醒覆盖——旧提供商工具调用中的遗留计时参数会被
-忽略。来源报告已投递或其所属回合结束后，继续运行归 `user` 所有，没有父级模型提示、
+检查点绝不会让未完成的委托分离。
+
+A `TaskWait` wait carries no model timeout (`timeoutSeconds`) and no per-call
+wake override, and the model-facing `TaskList` is a snapshot read that never
+waits at all — legacy timing args in older provider tool calls are ignored.
+
+来源报告已投递或其所属回合结束后，继续运行归 `user` 所有，没有父级模型提示、
 上下文、唤醒，也不记到旧父回合账上；`user` 所有的继续绝不会复活原父级的等待或投递。
 分离的来源绝不附加到不相关的存活父回合——请求以 `AGENT_BUSY` 失败并保留草稿。该派生复用
 `Task(resume)` 工具路径（相同模型、工具、权限、worktree、链预算、幂等 UUID）；仍在运行

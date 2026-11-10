@@ -8701,6 +8701,245 @@ describe("DesktopAgentRuntime subagents", () => {
     }
   });
 
+  it("answers a prompt's TaskList with the running snapshot so TaskStop can end it", async () => {
+    // The representative user path: one parent turn whose model asks for a
+    // delegate, then looks at the list, then stops it. Progress wakeups are
+    // off, the mock child settles only when aborted, and nothing advances a
+    // clock or steers the child — so a list that waited could never return.
+    const runtime = createRuntime({ subagents: [explorer], subagentWakeup: { kind: "off" } });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    const requests: AgentMessage[][] = [];
+    /**
+     * Captured at the exact moment the model asks for round 3 — i.e. after
+     * `TaskList` returned and before `TaskStop` ran — so the observation cannot
+     * race the stop.
+     */
+    let looked:
+      | { delegationId: string; status: string; reportDelivered?: boolean; settled: boolean }
+      | undefined;
+    let listResult: { text: string; details: any } | undefined;
+    const internals = runtime as unknown as {
+      models: {
+        streamSimple: (
+          model: unknown,
+          context: { messages: AgentMessage[] },
+        ) => ReturnType<typeof createAssistantMessageEventStream>;
+      };
+    };
+    internals.models = {
+      streamSimple: (_model, context) => {
+        requests.push([...context.messages]);
+        const round = requests.length;
+        if (round === 3) {
+          const row = context.messages.find(
+            (message: any) => message.role === "toolResult" && message.toolName === "TaskList",
+          ) as any;
+          const record = [...(runtime as any).delegations.values()][0] as {
+            delegationId: string;
+            status: string;
+            reportDelivered?: boolean;
+          };
+          listResult = { text: row?.content?.[0]?.text ?? "", details: row?.details };
+          looked = {
+            delegationId: record.delegationId,
+            status: record.status,
+            reportDelivered: record.reportDelivered,
+            settled: subagentRuns.instances[0]?.settled === true,
+          };
+        }
+        const message = assistantMessage({
+          content: round === 1
+            ? [{ type: "toolCall", id: "delegate", name: "Task", arguments: { agent: "explorer", task: "Inspect the fixture." } }]
+            : round === 2
+              ? [{ type: "toolCall", id: "list", name: "TaskList", arguments: {} }]
+              : round === 3
+                ? [{ type: "toolCall", id: "stop", name: "TaskStop", arguments: {} }]
+                : [{ type: "text", text: "Stopped the delegate." }],
+          stopReason: round <= 3 ? "toolUse" : "stop",
+        }) as unknown as AssistantMessage;
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          stream.push({ type: "start", partial: message });
+          stream.push({ type: "done", reason: round <= 3 ? "toolUse" : "stop", message });
+          stream.end(message);
+        });
+        return stream;
+      },
+    };
+    const running = runtime.prompt("Start the inspection.", "initial-user", "active-turn");
+    try {
+      await running;
+      // Round 3 exists, so TaskList answered without waiting on the running
+      // child: no clock advance, no steer, no child settlement.
+      expect(requests).toHaveLength(4);
+      expect(listResult?.text).toContain("running");
+      expect(listResult?.text).toContain("explorer");
+      // A snapshot is not a wait outcome.
+      expect(listResult?.details.status).toBeUndefined();
+      expect(listResult?.details.wakeReason).toBeUndefined();
+      // Looking neither stopped nor consumed the child: it was still running,
+      // unsettled, and its report was still owed to the parent.
+      expect(looked).toMatchObject({
+        status: "running",
+        reportDelivered: false,
+        settled: false,
+      });
+      expect((listResult?.details.delegations as any[])[0].delegationId).toBe(
+        looked?.delegationId,
+      );
+      // The same turn stops what the snapshot named, and the mock child settles
+      // only because TaskStop aborted it.
+      expect(subagentRuns.instances[0]?.settled).toBe(true);
+      expect((runtime as any).delegations.get(looked?.delegationId).status).toBe("stopped");
+      expect((runtime as any).keepTurnOpenForDelegates()).toBe(false);
+      // The turn ends on the model's own answer, in the real transcript.
+      const transcript = (runtime as any).agent.state.messages as AgentMessage[];
+      expect(JSON.stringify(transcript.at(-1)).includes("Stopped the delegate.")).toBe(true);
+    } finally {
+      await runtime.abort();
+      await runtime.dispose();
+      subagentRuns.deferred = false;
+    }
+  });
+
+  it("heartbeats a preconfigured time wakeup on the idle path and delivers the report once", async () => {
+    // The proactive check on the real user path: turn 1 starts a delegate,
+    // turn 2 answers with plain text, and the durable turn stays open with a
+    // `time` base of 900s. Only the model gateway and `SubagentRun` are
+    // replaced (their real external boundaries); the turn owner, the
+    // coordinator, the wake wait and `resumeAfterDelegations` are real. A
+    // `TaskList` read in the middle proves the snapshot never disturbs that
+    // cadence.
+    vi.useFakeTimers();
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    const runtime = createRuntime({
+      subagents: [explorer],
+      subagentWakeup: { kind: "time", value: 900 },
+    });
+    const requests: AgentMessage[][] = [];
+    const internals = runtime as unknown as {
+      models: {
+        streamSimple: (
+          model: unknown,
+          context: { messages: AgentMessage[] },
+        ) => ReturnType<typeof createAssistantMessageEventStream>;
+      };
+      wakeWaiters: { size: number };
+      programCoordinator: () => { peekPolicyDeadline: () => number | null };
+      delegations: Map<string, { reportDelivered: boolean; status: string }>;
+    };
+    internals.models = {
+      streamSimple: (_model, context) => {
+        requests.push(context.messages.map((message) => structuredClone(message)));
+        const round = requests.length;
+        const message = assistantMessage({
+          content: round === 1
+            ? [{ type: "toolCall", id: "task-1", name: "Task", arguments: { agent: "explorer", task: "Inspect the fixture." } }]
+            : [{ type: "text", text: "Waiting for the delegate to finish." }],
+          stopReason: round === 1 ? "toolUse" : "stop",
+        }) as unknown as AssistantMessage;
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          stream.push({ type: "start", partial: message });
+          stream.push({ type: "done", reason: round === 1 ? "toolUse" : "stop", message });
+          stream.end(message);
+        });
+        return stream;
+      },
+    };
+    /** Flush queued work without moving the fake clock forward. */
+    const flush = async (condition: () => boolean, label: string) => {
+      for (let step = 0; step < 400; step += 1) {
+        if (condition()) return;
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      throw new Error(`never reached: ${label}`);
+    };
+    const clock = Date.now();
+    const running = runtime.prompt("Inspect the fixture.", "user-1", "turn-1");
+    try {
+      await flush(
+        () => requests.length === 2 && internals.wakeWaiters.size > 0,
+        "idle wait installed",
+      );
+      const delegationId = [...internals.delegations.keys()][0];
+      expect(delegationId).toBeTruthy();
+      const record = internals.delegations.get(delegationId)!;
+      expect(record.status).toBe("running");
+      expect(record.reportDelivered).toBe(false);
+      const deadline = internals.programCoordinator().peekPolicyDeadline();
+      expect(deadline).toBe(clock + 900_000);
+
+      // A snapshot read at 300s answers at once and arms nothing.
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(requests).toHaveLength(2);
+      const listed = await runtimeTool(runtime, "TaskList").execute("list-mid", {});
+      const listText = (listed.content[0] as { text: string }).text;
+      expect(listText).toContain("explorer");
+      expect(listText).toContain("running");
+      expect((listed.details as { status?: unknown }).status).toBeUndefined();
+      expect(internals.programCoordinator().peekPolicyDeadline()).toBe(deadline);
+      expect(requests).toHaveLength(2);
+      expect(record.status).toBe("running");
+      expect(record.reportDelivered).toBe(false);
+
+      // t < 900s: the main model gets no request at all.
+      await vi.advanceTimersByTimeAsync(599_000);
+      expect(requests).toHaveLength(2);
+      expect(record.status).toBe("running");
+      expect(record.reportDelivered).toBe(false);
+
+      // t = 900s: exactly one heartbeat request reaches the main model.
+      await vi.advanceTimersByTimeAsync(1_000);
+      await flush(() => requests.length >= 3, "heartbeat request");
+      expect(requests).toHaveLength(3);
+      const heartbeat = JSON.stringify(requests[2]);
+      expect(heartbeat).toContain("Subagent progress update");
+      expect(heartbeat).toContain("This is not a completion");
+      expect(heartbeat).toContain("explorer");
+      expect(record.reportDelivered).toBe(false);
+      expect(record.status).toBe("running");
+
+      // The report arrives exactly once when the delegate finishes.
+      // The mock assigns `resolveRun` asynchronously, so control flow here cannot
+      // know the hook exists; read it at call time and fail loudly instead.
+      const settle = (runs: { resolveRun: ((result: unknown) => void) | undefined }) => {
+        if (typeof runs.resolveRun !== "function") {
+          throw new Error("no deferred delegate run to settle");
+        }
+        return runs.resolveRun;
+      };
+      settle(subagentRuns)({
+        agentName: "explorer",
+        status: "completed",
+        report: "Found it in src/app.ts:12.",
+        turns: 1,
+        toolCalls: 1,
+      });
+      await flush(() => requests.length >= 4, "completion delivery");
+      await running;
+      expect(requests).toHaveLength(4);
+      const deliveries = requests.filter((request) =>
+        JSON.stringify(request).includes("Found it in src/app.ts:12."),
+      );
+      expect(deliveries).toHaveLength(1);
+      expect(JSON.stringify(requests[3])).toContain("Found it in src/app.ts:12.");
+      expect(record.reportDelivered).toBe(true);
+      expect(record.status).toBe("completed");
+    } finally {
+      vi.useRealTimers();
+      await runtime.dispose();
+      subagentRuns.deferred = false;
+    }
+  }, 30_000);
+
+
   it("converges through TaskWait with reports and statuses", async () => {
     const runtime = createRuntime({ subagents: [explorer] });
     subagentRuns.calls.length = 0;
@@ -9326,25 +9565,20 @@ describe("DesktopAgentRuntime subagents", () => {
       (candidate: { name: string }) => candidate.name === "TaskList",
     );
 
-    vi.useFakeTimers();
-    try {
-      const started = await task.execute("task-1", {
-        agent: "explorer",
-        task: "Find it.",
-      });
-      // TaskList waits on the pending delegate: the configured 1s period
-      // returns the interim heartbeat without settling or consuming it.
-      const listing = list.execute("list-1", {});
-      await vi.advanceTimersByTimeAsync(1_000);
-      const listed = await listing;
-      expect(listed.content[0].text).toContain("running");
-      expect(listed.content[0].text).toContain("explorer");
-      expect(listed.content[0].text).toContain(
-        (started.details as { delegationId: string }).delegationId,
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    const started = await task.execute("task-1", {
+      agent: "explorer",
+      task: "Find it.",
+    });
+    // TaskList answers the live snapshot at once: the running delegate's
+    // heartbeat is reported without settling or consuming it.
+    const listed = await list.execute("list-1", {});
+    expect(listed.content[0].text).toContain("running");
+    expect(listed.content[0].text).toContain("explorer");
+    expect(listed.content[0].text).toContain(
+      (started.details as { delegationId: string }).delegationId,
+    );
+    // No wait lifecycle: the read did not enter the program wait.
+    expect(listed.details.status).toBeUndefined();
 
     subagentRuns.deferred = false;
     await runtime.dispose();
@@ -11842,8 +12076,8 @@ describe("DesktopAgentRuntime subagent wakeup, progress and child steer", () => 
   }
 
   it("reports launch metrics and live progress on TaskList", async () => {
-    // TaskList waits on the pending delegate through the shared coordinator;
-    // a crossed tool threshold returns the interim heartbeat immediately.
+    // TaskList answers the current snapshot at once: the child's live
+    // progress is reported without entering the program wait.
     const runtime = createRuntime({
       subagents: [explorer],
       subagentWakeup: { kind: "tool-calls", value: 2 },

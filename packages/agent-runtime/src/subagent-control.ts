@@ -342,11 +342,12 @@ export function applyDelegationActivity(
 }
 
 /**
- * Read-only delegation listing for the parent model's `TaskList`.
- * User-owned runs are the user's own followups, not the parent's delegates:
- * the parent neither waits on them nor resumes them implicitly, so they stay
- * out of its listing (an explicit parent `Task(resume)` reattaches the chain
- * as a new parent-owned run, which lists normally).
+ * Read-only delegation listing for the parent model's `TaskList`: the current
+ * snapshot, answered without waiting. User-owned runs are the user's own
+ * followups, not the parent's delegates: the parent neither waits on them nor
+ * resumes them implicitly, so they stay out of its listing (an explicit parent
+ * `Task(resume)` reattaches the chain as a new parent-owned run, which lists
+ * normally).
  */
 export function listDelegationRecords(records: DelegationRecord[]): {
   content: [{ type: "text"; text: string }];
@@ -703,51 +704,6 @@ export function finalizeWaitResult(options: {
       delegations: assembled.delegations,
     },
   };
-}
-
-/**
- * Shared small result builder for program waits (TaskList active path and
- * any future coordinator consumer): maps one coordinator wake outcome onto
- * `finalizeWaitResult` inputs with mode `any`. The runtime supplies the
- * coordinator plan + outcome; delivery marking stays inside the finalizer.
- */
-export function programWaitResult(options: {
-  targets: DelegationRecord[];
-  wakeOutcome: {
-    timedOut: boolean;
-    deadlineKind: "timeout" | "time" | null;
-    wakeReason?: SubagentWakeReason;
-    wakeDelegationIds: string[];
-  };
-  planDeadlineKind: "time" | null;
-  planWakeSeconds: number | null;
-  interrupted: boolean;
-}): {
-  content: [{ type: "text"; text: string }];
-  details: {
-    status: SubagentWaitStatus;
-    wakeReason?: SubagentWakeReason;
-    wakeDelegationIds?: string[];
-    unknownIds?: string[];
-    delegations: Array<WaitResultSnapshot & { metrics: string }>;
-  };
-} {
-  const effectiveKind = options.wakeOutcome.deadlineKind ?? options.planDeadlineKind;
-  const wakeReason = options.interrupted
-    ? undefined
-    : (options.wakeOutcome.wakeReason ??
-      (options.wakeOutcome.timedOut && effectiveKind === "time" ? "time" : undefined));
-  return finalizeWaitResult({
-    targets: options.targets,
-    snapshots: options.targets.map(snapshotWaitRecord),
-    interrupted: options.interrupted,
-    timedOut: !options.interrupted && options.wakeOutcome.timedOut,
-    deadlineSeconds: options.planWakeSeconds,
-    ...(wakeReason ? { wakeReason } : {}),
-    wakeDelegationIds: options.wakeOutcome.wakeDelegationIds,
-    mode: "any",
-    unknownIds: [],
-  });
 }
 
 /**

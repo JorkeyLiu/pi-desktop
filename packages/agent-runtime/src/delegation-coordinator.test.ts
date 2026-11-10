@@ -145,8 +145,8 @@ describe("delegation coordinator time cadence (selected wake only)", () => {
   });
 });
 
-describe("delegation coordinator shared checkpoint across wait/list/idle", () => {
-  it("wait -> TaskList gate -> idle reuses the checkpoint (no restart, no shorten)", () => {
+describe("delegation coordinator shared checkpoint across wait/idle", () => {
+  it("wait -> default selection -> idle reuses the checkpoint (no restart, no shorten)", () => {
     const selected = normalizeSubagentWakeupSettings({ kind: "time", value: 900 });
     const records = [record("a"), record("b")];
     let now = 1_000_000;
@@ -157,9 +157,9 @@ describe("delegation coordinator shared checkpoint across wait/list/idle", () =>
     });
     const first = coordinator.planProgramWait({});
     expect(first.deadline).toBe(1_000_000 + 900_000);
-    // TaskList gating only selects; it never touches the checkpoint.
-    const listed = coordinator.selectProgramTargets({});
-    expect(listed.map((entry) => entry.delegationId).sort()).toEqual(["a", "b"]);
+    // Default selection only selects; it never touches the checkpoint.
+    const selectedTargets = coordinator.selectProgramTargets({});
+    expect(selectedTargets.map((entry) => entry.delegationId).sort()).toEqual(["a", "b"]);
     expect(coordinator.peekPolicyDeadline()).toBe(first.deadline);
     // A later query (subset, idle-style) reuses it instead of restarting.
     now = 1_060_000;
@@ -291,7 +291,7 @@ describe("delegation coordinator completion and delivery marking", () => {
       reason: "completion",
       delegationIds: ["b"],
     });
-    // Gating/observing (TaskList path) leaves delivery untouched.
+    // Observing without a wait (selection and a plain poll) leaves delivery untouched.
     coordinator.selectProgramTargets({});
     coordinator.pollProgramWake({});
     expect(records[0].reportDelivered).toBeUndefined();

@@ -27,6 +27,7 @@ export const esEntries: ChangelogEntry[] = [
       "Una llamada de herramienta aparece ahora en su lugar de la conversación en cuanto empieza a transmitirse, antes de que terminen sus argumentos, con un pulso sutil en su icono y su nombre en lugar de un indicador giratorio.",
       "La transcripción de un subagente muestra el indicador de trabajo mientras el hijo trabaja, en vez de una lista que se queda quieta entre actualizaciones.",
       "Un texto largo pegado llega ahora al modelo como el texto que pegaste, en el punto donde lo pegaste, en lugar de una ruta de archivo que debía abrir. El borrador y el historial conservan el chip compacto, y cada vía de envío —reintentar, un mensaje en cola o una conversación reabierta— lleva el mismo texto.",
+      "Consultar los subagentes en ejecución responde al instante: la lista de tareas muestra el estado actual en lugar de esperar a que uno termine, y esperar sigue siendo un paso aparte.",
     ],
   },
   {
