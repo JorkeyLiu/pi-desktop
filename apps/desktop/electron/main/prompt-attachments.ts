@@ -23,7 +23,7 @@ import {
   formatFileInsert,
   formatPromptPathText,
   isSvgAttachment,
-  locateInlinePromptPaths,
+  locateInlineAttachmentPlacements,
   MAX_INLINE_IMAGE_BYTES,
   MAX_INLINED_IMAGE_HISTORY_BYTES,
   SVG_MIME_TYPE,
@@ -279,11 +279,9 @@ export async function preparePromptAttachments(
 ): Promise<PreparedPromptAttachment[]> {
   const prepared: PreparedPromptAttachment[] = [];
   // Reference order is the user's order, so each entry takes the next matching
-  // `@path` text the prompt holds.
-  const inlineSpans = locateInlinePromptPaths(
-    promptContent,
-    attachments.map((attachment) => attachment.path),
-  );
+  // `@path` text the prompt holds: the placement a resent message recorded, or
+  // the entry's own path for a draft that has not been placed yet.
+  const inlineSpans = locateInlineAttachmentPlacements(promptContent, attachments);
   for (const [index, attachment] of attachments.entries()) {
     const source = resolvePromptPath(dataRoot, sessionId, projectPath, attachment.path);
     if (!source) {
@@ -320,11 +318,9 @@ export async function preparePromptAttachments(
           ? ensureAttachmentBlob(dataRoot, bytes)
           : await ensureAttachmentBlobFromFile(dataRoot, source.absolute);
     // The user's own position for this image: the draft named its path between
-    // words, so the text stays in the prompt and the transcript renders the
-    // image there.
-    const inlinePath = inlineSpans[index]
-      ? formatPromptPathText(attachment.path)
-      : undefined;
+    // words and a resend carries that recorded text, so it stays in the prompt
+    // and the transcript renders the image there.
+    const inlinePath = inlineSpans[index]?.marker;
     const fallbackPath = inline
       ? displayPromptPath(source, projectPath)
       : await fallbackPathForStoredAttachment(
@@ -508,10 +504,7 @@ export async function prepareSubagentPromptAttachments(
       { errorCode: ErrorCodes.INVALID_ARGUMENT },
     );
   }
-  const inlineSpans = locateInlinePromptPaths(
-    promptContent,
-    attachments.map((attachment) => attachment.path),
-  );
+  const inlineSpans = locateInlineAttachmentPlacements(promptContent, attachments);
   const prepared: PreparedSubagentAttachment[] = [];
   let totalBytes = 0;
   for (const [index, attachment] of attachments.entries()) {
@@ -564,9 +557,7 @@ export async function prepareSubagentPromptAttachments(
       source.root === "attachment" && attachment.path.trim().startsWith("attachments/")
         ? attachment.path.trim()
         : ensureAttachmentBlob(dataRoot, bytes);
-    const inlinePath = inlineSpans[index]
-      ? formatPromptPathText(attachment.path)
-      : undefined;
+    const inlinePath = inlineSpans[index]?.marker;
     prepared.push({
       message: {
         kind: "image",

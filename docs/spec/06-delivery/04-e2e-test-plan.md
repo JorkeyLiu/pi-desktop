@@ -6196,7 +6196,9 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   `08-meta/decisions-log.md` (D137, D274)
 - **Acceptance**: C (chat stream), F (persistence), Quality
 - **Milestone**: M5
-- **Status**: Unit-covered (`transcript-style.test.mjs`); full UI scenario Draft
+- **Status**: Unit-covered (`transcript-style.test.mjs`); full UI scenario Draft,
+  with the Edit → resend rendering regression (long text, attachments, inline
+  image placement, switch/round-trip) automated in `pnpm test:e2e:transcript`
 
 - **Long-message regression**: Send a log longer than 65,536 characters as
   message text, reopen the saved chat, then Edit and resend with a short
@@ -6207,6 +6209,17 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   not open a stale editor or publish stale history. A fresh Edit after returning
   must still load the complete text and resend successfully. Automated coverage also
   preserves attachments and the typed slash-command seed.
+
+- **Inline-image resend regression**: Send a prompt with an image chip placed
+  inline between words, then Edit and resend it, retry the answer, and edit the
+  text so the `@path` marker is removed. The resent turn must keep exactly one
+  image representation: at the marker's position while the text still names it,
+  and in the trailing attachment position once it does not — never the path text
+  plus a trailing chip. The request keeps the stored `attachments/<sha256>` ref
+  and sends the recorded `inlinePath`, so the position survives without
+  re-deriving it from the ref. Automated via the rendered Edit → resend probe in
+  `scripts/e2e/transcript-edit.tsx` (`pnpm test:e2e:transcript`) with the
+  preparation boundary covered by `apps/desktop/test/prompt-inline-attachments.test.mjs`.
 
 #### E2E-069: Platform-specific sidebar header behavior
 

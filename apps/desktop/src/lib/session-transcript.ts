@@ -2,9 +2,8 @@ import { preservePlanHistory } from "./plan-history";
 import type { AgentEvent, MessageAttachment, UiMessage } from "@pi-desktop/shared";
 import type { ToolPreparationScope } from "@pi-desktop/shared";
 import {
-  formatPromptPathText,
   isUnexecutedTool,
-  locateInlinePromptPaths,
+  locateInlineAttachmentPlacements,
   toolPreparationMatches,
 } from "@pi-desktop/shared";
 import {
@@ -21,6 +20,11 @@ type OptimisticFileReference = {
   mimeType?: string;
   /** Large-text paste tokens travel inline in the text, not as attachments. */
   token?: string;
+  /**
+   * The `@path` text a resent message recorded for this attachment. Its own
+   * path is the stored blob on that send, so only that text places it.
+   */
+  inlinePath?: string;
 };
 
 const OPTIMISTIC_USER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -48,16 +52,19 @@ export function optimisticUserMessage(
       (IMAGE_PATH_PATTERN.test(reference.path) ? ("image" as const) : ("file" as const));
     return reference.token && kind !== "image" ? [] : [{ reference, kind }];
   });
-  const spans = locateInlinePromptPaths(
+  const spans = locateInlineAttachmentPlacements(
     content,
-    rendered.map(({ reference }) => reference.path),
+    rendered.map(({ reference }) => ({
+      path: reference.path,
+      inlinePath: reference.inlinePath,
+    })),
   );
   const attachments: MessageAttachment[] = rendered.map(({ reference, kind }, index) => ({
     kind,
     name: reference.name,
     ref: reference.path,
     ...(reference.mimeType ? { mimeType: reference.mimeType } : {}),
-    ...(spans[index] ? { inlinePath: formatPromptPathText(reference.path) } : {}),
+    ...(spans[index] ? { inlinePath: spans[index].marker } : {}),
   }));
   return {
     id,

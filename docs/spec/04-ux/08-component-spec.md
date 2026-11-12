@@ -4031,7 +4031,12 @@ Anatomy:
   inline bound is met; otherwise it appends a safe `@path` fallback. An image the
   draft named inline records that text on the attachment (`inlinePath`), which is
   what places the model-facing image block at the user's position and what the
-  transcript and a restored session read back. SVG inputs
+  transcript and a restored session read back. Editing and resending that turn,
+  regenerating it, and retrying the answer all send the recorded `inlinePath`
+  with the stored `attachments/<sha256>` ref, so the resent turn still shows one
+  image at its original place instead of the path text plus a trailing chip;
+  an edit that removes the text keeps the attachment in the trailing position,
+  never in both. SVG inputs
   (`image/svg+xml` or `.svg` extension) are always classified as files, never
   as model images, regardless of vision capability (see
   `03-runtime/svg-attachment-input.md`). Removing
