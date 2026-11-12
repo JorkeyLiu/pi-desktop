@@ -3999,6 +3999,24 @@ Anatomy:
   main selects image blocks or path fallbacks from the exact model capability.
   Reference-only drafts are sendable. Builtin/plugin dispatch still bypasses
   the model-ready gate when no prompt text or file reference is sent.
+- Copying or cutting a draft selection that contains an attachment chip
+  describes that selection itself: `text/plain` carries the readable text the
+  send path would write (`@path`, a session link, or a plugin mark's send text)
+  and never a renderer sentinel, while a versioned application-internal format
+  carries the ordered text/reference parts. A selection without a chip keeps
+  the browser's native copy and cut. An internal paste is handled before the
+  plain-text and file paths and restores the text, attachment identity, and
+  order with fresh chip sentinels on every repeat, for subset and select-all
+  selections alike. Cut deletes through the browser's native editing command
+  only after the clipboard write succeeded, so undo and redo restore the cut
+  text, chips, and reference metadata. The internal format is untrusted input:
+  version, session owner, part/character/reference bounds, exact fields, and
+  reference kinds are validated, and an absent, malformed, unsupported, or
+  oversized payload falls back to its plain text without creating an
+  attachment, plugin authority, or filesystem access. A scratch-absolute
+  reference becomes readable text when it would be restored in another draft
+  whose session cannot resolve it; workspace-relative and shared
+  `attachments/` references keep their chips.
 - A `pi-desktop://session/<id>` link in the draft is the reference itself: no
   new trigger symbol joins `@` files and `/` commands, and the link stays
   visible plaintext while the draft is unsent. Immediately before dispatch,

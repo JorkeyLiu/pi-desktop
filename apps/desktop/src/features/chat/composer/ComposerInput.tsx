@@ -28,6 +28,9 @@ export type ComposerInputProps = {
   composerAc?: CompletionController;
   /** Hover text for a blocked editor explaining why it cannot be typed into. */
   title?: string;
+  /** A selection holding attachment chips describes its own clipboard content. */
+  onCopy?: (event: ClipboardEvent<HTMLDivElement>) => void;
+  onCut?: (event: ClipboardEvent<HTMLDivElement>) => void;
   onPaste: (event: ClipboardEvent<HTMLDivElement>) => void;
   onAcceptCompletion?: (index: number) => void;
   onSubmit: (steering?: boolean) => void;
@@ -61,6 +64,8 @@ export function ComposerInput({
   runActive,
   composerAc,
   title,
+  onCopy,
+  onCut,
   onPaste,
   onAcceptCompletion,
   onSubmit,
@@ -99,6 +104,8 @@ export function ComposerInput({
           autoCorrect="off"
           autoCapitalize="off"
           translate="no"
+          onCopy={onCopy}
+          onCut={onCut}
           onPaste={onPaste}
           onBeforeInput={(event) => {
             const native = event.nativeEvent as InputEvent;

@@ -72,11 +72,12 @@ export function isPluginMark(reference: { plugin?: ComposerPluginPart } | undefi
 
 const CHIP_TOKEN_BASE = 0xe000;
 const CHIP_TOKEN_END = 0xf8ff;
+/** How many distinct chip sentinels exist; a draft may hold at most this many. */
+export const CHIP_TOKEN_COUNT = CHIP_TOKEN_END - CHIP_TOKEN_BASE + 1;
 let chipTokenSequence = 0;
 
 export function nextChipToken(): string {
-  const range = CHIP_TOKEN_END - CHIP_TOKEN_BASE + 1;
-  chipTokenSequence = (chipTokenSequence + 1) % range;
+  chipTokenSequence = (chipTokenSequence + 1) % CHIP_TOKEN_COUNT;
   return String.fromCodePoint(CHIP_TOKEN_BASE + chipTokenSequence);
 }
 
@@ -85,7 +86,6 @@ export function isChipTokenChar(char: string): boolean {
   const code = char.codePointAt(0) ?? 0;
   return code >= CHIP_TOKEN_BASE && code <= CHIP_TOKEN_END;
 }
-
 function isChipElement(node: Node): boolean {
   return (
     node.nodeType === Node.ELEMENT_NODE &&

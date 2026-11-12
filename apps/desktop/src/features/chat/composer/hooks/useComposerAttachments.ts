@@ -32,6 +32,14 @@ import {
   readEditorValue,
   type ComposerFileReference,
 } from "../editor";
+import {
+  COMPOSER_CLIPBOARD_MIME,
+  allocateChipTokens,
+  parseComposerClipboard,
+  placeComposerPaste,
+  planComposerPaste,
+  type ComposerPastePlan,
+} from "../clipboard";
 import type { ComposerDraftController } from "./useComposerDraft";
 
 type UseComposerAttachmentsOptions = {
@@ -211,6 +219,49 @@ export function useComposerAttachments({
     draft.applyEditorDraft(nextText, nextReferences, selectionStart + pasted.length);
   };
 
+  /**
+   * Paste a selection this application copied: readable text and portable
+   * references keep their order, and each reference receives a fresh chip
+   * token so a repeated paste never collides with the draft it landed in.
+   */
+  const pasteComposerPayload = (plan: ComposerPastePlan) => {
+    const editor = draft.ref.current;
+    const sourceValue = editor ? readEditorValue(editor) : draft.valueRef.current;
+    const { start: selectionStart, end: selectionEnd } = editor
+      ? editorSelectionRange(editor)
+      : { start: sourceValue.length, end: sourceValue.length };
+    const ownerSessionId = activeSessionId ?? "";
+    const previousReferences = snapshotReferences(ownerSessionId);
+    const tokens = allocateChipTokens(
+      plan.referenceCount,
+      sourceValue,
+      previousReferences,
+    );
+    const placed = placeComposerPaste(plan, tokens, ownerSessionId);
+    const nextText =
+      sourceValue.slice(0, selectionStart) +
+      placed.inserted +
+      sourceValue.slice(selectionEnd);
+    const nextReferences = [
+      ...previousReferences.map((reference) =>
+        createFileReference(reference.path, reference.name, ownerSessionId, reference),
+      ),
+      ...placed.references,
+    ];
+    writeComposerDraft(ownerSessionId || draftKey, {
+      text: nextText,
+      fileReferences: [
+        ...previousReferences,
+        ...placed.references.map((reference) => draftFileReference(reference)),
+      ],
+    });
+    draft.applyEditorDraft(
+      nextText,
+      nextReferences,
+      selectionStart + placed.inserted.length,
+    );
+  };
+
   const pasteClipboardFiles = async (event: ClipboardEvent<HTMLDivElement>) => {
     if (!attachmentsAllowed) {
       event.preventDefault();
@@ -225,6 +276,21 @@ export function useComposerAttachments({
       return;
     }
     if (isInputBlocked) return;
+    // A selection copied inside this application travels as ordered parts, so
+    // it is restored before any plain-text, file, or large-paste path could
+    // downgrade its chips. An absent, malformed, or unsupported payload falls
+    // through to those paths and therefore never creates an attachment.
+    const composerPayload = parseComposerClipboard(
+      event.clipboardData.getData(COMPOSER_CLIPBOARD_MIME),
+    );
+    if (composerPayload.ok) {
+      const plan = planComposerPaste(composerPayload.payload, activeSessionId ?? "");
+      if (plan.referenceCount > 0) {
+        event.preventDefault();
+        pasteComposerPayload(plan);
+        return;
+      }
+    }
     const text = event.clipboardData.getData("text/plain");
     const pastedFiles = clipboardFiles(event.clipboardData);
     const files = preferClipboardText(text, pastedFiles, api.getDroppedFilePath)

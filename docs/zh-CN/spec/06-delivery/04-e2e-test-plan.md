@@ -236,7 +236,7 @@ E2E 从工作检出运行，并使用其中已经准备好的宿主开发环境�
   包括合成大列表的响应性检查。
 - 设置/输入框/插件搜索的主题表面：先运行 `pnpm build:js`，再运行
   `pnpm test:e2e:theme-surfaces`。
-- 输入框剪贴板表示与文本插入：`pnpm test:e2e:composer-paste`。
+- 输入框剪贴板表示、附件选区复制/剪切/粘贴与文本插入：`pnpm test:e2e:composer-paste`。
 - 输入框斜杠菜单名称/描述布局：先运行 `pnpm build:js`，再运行
   `pnpm test:e2e:composer-autocomplete`。
 - 聊天记录渲染边界和跨活动段委派显示：`pnpm test:e2e:transcript`。
@@ -799,6 +799,27 @@ E2E 从工作检出运行，并使用其中已经准备好的宿主开发环境�
   `reentered` 即使最终文字与提交值相同，成功后仍显示 `/compact`；未编辑的提交草稿则正常清空。
 - **覆盖**：`scripts/e2e/composer-submission.tsx`，由
   `pnpm test:e2e:composer-paste` 执行；真实桌面录屏使用隔离数据，以及响应时间受控的本地模型。
+
+#### E2E-011c-2：输入框附件的剪贴板复制、剪切与粘贴
+
+- **先决条件**：会话 A、B 均存在。A 的草稿包含文字、一个内联图片芯片和一个工作区相对路径的文件芯片；
+  同样的草稿文字也可通过编辑器选区取得。不使用操作系统剪贴板内容。
+- **步骤**： 1) 全选草稿并派发 `copy`，读取 `text/plain` 与应用内部剪贴板格式。 2) 在草稿末尾连续粘贴两次
+  复制得到的数据。 3) 只选中一个芯片并复制/粘贴。 4) 全选后派发 `cut`，随后撤销、重做、再撤销。
+  5) 把剪切数据粘贴进会话 B 的空草稿。 6) 粘贴带未知字段的载荷和一个超出分段上限的载荷。
+- **预期**：`text/plain` 包含可读的 `@path` 文字且不含渲染层哨兵；内部格式带版本号，并承载有序的
+  文字/引用分段。每次粘贴都恢复文字、附件身份与顺序，并生成互不冲突的新芯片令牌，覆盖重复粘贴、
+  子集粘贴和全选粘贴。剪切只删除选中内容，先发布可读内容，原生撤销/重做按顺序恢复并再次移除
+  文字、芯片与元数据。会话 B 保留工作区相对路径芯片，但把 A 的 scratch 绝对路径作为可读文字接收，
+  因为它的宿主会话无法解析该 scratch 文件。畸形与超限载荷回退为各自的纯文本且不添加附件。
+  纯文本、原生文件和外部剪贴板粘贴保持既有行为。
+- **关联规范**：`04-ux/08-component-spec.md`（输入框草稿模型与 §11.8 剪贴板/引用规则）
+- **验收标准**：C — 对话与流（输入框与附件身份）
+- **里程碑**：M2
+- **状态**：在 `scripts/e2e/composer-paste.tsx` 中由
+  `pnpm test:e2e:composer-paste` 自动覆盖，针对真实 `ComposerInput`、
+  `useComposerDraft` 与 `useComposerAttachments` 使用渲染后的 `ClipboardEvent`/`DataTransfer` 探针。
+  操作系统剪贴板是唯一被 mock 的边界。
 
 #### E2E-SESSION-reference-conversation-link：粘贴的会话链接把那段对话带进本轮
 
@@ -5760,7 +5781,7 @@ eleven-tool-round desktop paths are verified by
 | A — 应用程序启动 | E2E-001、E2E-002、E2E-003、E2E-004、E2E-067、E2E-076、E2E-079、E2E-092、E2E-097、E2E-143、E2E-150、E2E-168、E2E-204、E2E-217 |
 | B——模型配置 | E2E-005、E2E-005G、E2E-006、E2E-007、E2E-038、E2E-050、E2E-052、E2E-055、E2E-066、E2E-080、E2E-082、E2E-151、E2E-005J、E2E-199、E2E-201、E2E-202、E2E-203、E2E-209、E2E-166 |
 | C — 对话和直播 | E2E-CHAT-running-status-survives-output-pauses、E2E-008、E2E-008d、E2E-008a、E2E-009、E2E-010、E2E-011、E2E-011a、E2E-011b、E2E-031、E2E-040、E2E-047、E2E-048、E2E-048c、E2E-048A、E2E-049、E2E-052、 E2E-053、E2E-054、E2E-055、E2E-059、E2E-059a、E2E-060c、E2E-060d、E2E-061、E2E-061a、E2E-062、E2E-064、E2E-065、E2E-068、E2E-071、 E2E-073、E2E-074、E2E-075、E2E-081、E2E-083、E2E-084、E2E-086、E2E-087、E2E-088、E2E-088b、E2E-089、E2E-090、E2E-094、E2E-095、E2E-096、 E2E-097、E2E-098、E2E-099、E2E-102、E2E-102a、E2E-102b、E2E-106、E2E-109、E2E-111、E2E-114、E2E-116、E2E-117、E2E-118、E2E-119、 E2E-120、E2E-121、E2E-代理-001、E2E-142、E2E-144、E2E-145、E2E-146、E2E-147、E2E-151、E2E-199、E2E-250、E2E-166、E2E-SUBAGENT-resume-a-settled-delegation |
-| C — 对话和直播（输入框草稿） | E2E-011c、E2E-011c-1 |
+| C — 对话和直播（输入框草稿） | E2E-011c、E2E-011c-1、E2E-011c-2 |
 | A / C / F / Quality — Tray session navigation | E2E-TRAY-bounded-session-navigation |
 | D——工作区 | E2E-012、E2E-013、E2E-022B、E2E-024I、E2E-047、E2E-049、E2E-057、E2E-058、E2E-060、E2E-068、E2E-075、E2E-078、E2E-153 |
 | D——工作区（项目排序） | E2E-253 |

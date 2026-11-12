@@ -17,6 +17,7 @@ import {
   type ComposerInputProps,
 } from "../../apps/desktop/src/features/chat/composer/ComposerInput";
 import { useComposerAttachments } from "../../apps/desktop/src/features/chat/composer/hooks/useComposerAttachments";
+import { useComposerClipboard } from "../../apps/desktop/src/features/chat/composer/hooks/useComposerClipboard";
 import {
   useComposerDraft,
   type ComposerDraftController,
@@ -96,6 +97,10 @@ function Fixture({ sessionId, t, workspacePath }: { sessionId: string; t: TFunct
     t,
     draft,
   });
+  const composerClipboard = useComposerClipboard({
+    draft: { ref: draft.ref, fileReferencesRef: draft.fileReferencesRef },
+    activeSessionId: sessionId || null,
+  });
   return (
     <div className="composer-stack">
       <div className="composer-shell">
@@ -115,6 +120,8 @@ function Fixture({ sessionId, t, workspacePath }: { sessionId: string; t: TFunct
         onPaste={(event) => {
           pastePending = Promise.resolve(attachments.pasteClipboardFiles(event));
         }}
+        onCopy={composerClipboard.onCopy}
+        onCut={composerClipboard.onCut}
         onAcceptCompletion={noop}
         onSubmit={(steering) => { latestSubmission = submitFromComposer(steering); }}
         onHistoryNavigate={inputHistory.navigate}
@@ -976,6 +983,223 @@ globalThis.composerPasteProbe = async () => {
     await new Promise(requestAnimationFrame);
     assert(controller.fileReferences.length === 0,
       "undo resurrected a reference after a batched workspace round-trip");
+    // Internal copy/cut/paste: a selection that covers a chip must carry the
+    // attachment identity, its order, and the exact surrounding text, while a
+    // plain-text consumer only ever sees a readable `@path`. The OS clipboard
+    // edge is the only mocked part: the events, editor, and draft hooks are real.
+    const clipboardMime = "application/x-pi-desktop-composer+json";
+    const isSentinel = (char: string) => {
+      const code = char.codePointAt(0) ?? 0;
+      return code >= 0xe000 && code <= 0xf8ff;
+    };
+    const sentinels = (value: string) => Array.from(value).filter(isSentinel);
+    const dispatchClipboard = (type: "copy" | "cut", target: HTMLElement) => {
+      const data = new DataTransfer();
+      const event = new ClipboardEvent(type, {
+        clipboardData: data, bubbles: true, cancelable: true,
+      });
+      flushSync(() => target.dispatchEvent(event));
+      return {
+        event,
+        data,
+        plain: data.getData("text/plain"),
+        structured: data.getData(clipboardMime),
+      };
+    };
+    const dispatchInternalPaste = async (target: HTMLElement, data: DataTransfer) => {
+      const event = new ClipboardEvent("paste", {
+        clipboardData: data, bubbles: true, cancelable: true,
+      });
+      flushSync(() => target.dispatchEvent(event));
+      await pastePending;
+      await new Promise(requestAnimationFrame);
+      assert(errors.length === 0, `React failed: ${errors.map(String).join("; ")}`);
+      return event;
+    };
+    const chipTokens = (target: HTMLElement) =>
+      Array.from(target.querySelectorAll<HTMLElement>(".composer-chip"))
+        .map((chip) => chip.dataset.token ?? "");
+    const pathsInOrder = (tokens: readonly string[]) =>
+      tokens.map((token) =>
+        controller.fileReferences.find((reference) => reference.token === token)?.path);
+
+    const copiedAbsolute = "/scratch/paste-a/copied.png";
+    const copiedRelative = "src/copied.ts";
+    const clipboardSource = "alpha \ue070 beta \ue071 gamma";
+    await reset("", 0, 0);
+    flushSync(() => controller.applyEditorDraft(
+      clipboardSource,
+      [
+        createFileReference(copiedAbsolute, "copied.png", "paste-a", {
+          kind: "image", mimeType: "image/png", token: "\ue070",
+        }),
+        createFileReference(copiedRelative, "copied.ts", "paste-a", {
+          kind: "file", token: "\ue071",
+        }),
+      ],
+      clipboardSource.length,
+    ));
+    await new Promise(requestAnimationFrame);
+    const clipboardEditor = controller.ref.current!;
+    clipboardEditor.focus();
+    select(clipboardEditor, 0, clipboardSource.length);
+    const copied = dispatchClipboard("copy", clipboardEditor);
+    assert(copied.event.defaultPrevented,
+      "copying a selection that holds chips must be handled by the composer");
+    assert(
+      copied.plain === `alpha @${copiedAbsolute} beta @${copiedRelative} gamma`,
+      `the plain fallback lost an attachment path: ${JSON.stringify(copied.plain)}`,
+    );
+    assert(sentinels(copied.plain).length === 0,
+      "a renderer sentinel reached the plain clipboard");
+    const payload = JSON.parse(copied.structured) as {
+      v: number; s: string; parts: Array<Record<string, unknown>>;
+    };
+    assert(payload.v === 1 && payload.s === "paste-a",
+      `the structured clipboard is not the versioned draft format: ${copied.structured}`);
+    assert(payload.parts.length === 5,
+      `structured parts lost a text run: ${JSON.stringify(payload.parts)}`);
+    assert(!copied.structured.includes("\ue070") && !copied.structured.includes("\ue071"),
+      "the structured clipboard carried a renderer sentinel");
+    assert(
+      controller.fileReferences.length === 2 &&
+        readEditorValue(clipboardEditor) === clipboardSource,
+      "copying changed the draft",
+    );
+
+    // Paste the same payload twice into its own draft: fresh tokens both times.
+    setEditorCaret(clipboardEditor, clipboardSource.length);
+    await dispatchInternalPaste(clipboardEditor, copied.data);
+    assert(controller.fileReferences.length === 4,
+      `internal paste did not carry both chips: ${controller.fileReferences.length}`);
+    const firstPasteTokens = chipTokens(clipboardEditor);
+    assert(firstPasteTokens.length === 4 && new Set(firstPasteTokens).size === 4,
+      "internal paste reused a chip token");
+    assert(
+      pathsInOrder(firstPasteTokens).join("|") ===
+        [copiedAbsolute, copiedRelative, copiedAbsolute, copiedRelative].join("|"),
+      `internal paste changed the chip order: ${JSON.stringify(pathsInOrder(firstPasteTokens))}`,
+    );
+    assert(sentinels(readEditorValue(clipboardEditor)).length === 4,
+      "internal paste lost the surrounding text");
+    await dispatchInternalPaste(clipboardEditor, copied.data);
+    assert(controller.fileReferences.length === 6 && new Set(chipTokens(clipboardEditor)).size === 6,
+      "a repeated internal paste collided with the tokens it had just inserted");
+
+    // A subset that holds one chip copies only that chip, and the paste
+    // restores exactly one attachment with a fresh token.
+    const subsetToken = chipTokens(clipboardEditor).find(
+      (token) => pathsInOrder([token])[0] === copiedRelative,
+    );
+    assert(subsetToken, "the repeated paste lost the relative reference");
+    const subsetIndex = readEditorValue(clipboardEditor).indexOf(subsetToken);
+    select(clipboardEditor, subsetIndex, subsetIndex + 1);
+    const subset = dispatchClipboard("copy", clipboardEditor);
+    assert(subset.event.defaultPrevented,
+      "copying a subset that holds a chip must be handled by the composer");
+    assert(subset.plain === `@${copiedRelative}`,
+      `a chip-only subset lost its readable path: ${JSON.stringify(subset.plain)}`);
+    const subsetPayload = JSON.parse(subset.structured) as { parts: unknown[] };
+    assert(subsetPayload.parts.length === 1,
+      `a chip-only subset carried extra parts: ${subset.structured}`);
+    setEditorCaret(clipboardEditor, readEditorValue(clipboardEditor).length);
+    await dispatchInternalPaste(clipboardEditor, subset.data);
+    assert(controller.fileReferences.length === 7 && chipTokens(clipboardEditor).length === 7,
+      "a subset paste did not add exactly one attachment");
+    assert(
+      controller.fileReferences.filter((reference) => reference.token === subsetToken).length === 1,
+      "a subset paste duplicated the source chip instead of allocating a fresh token",
+    );
+
+    // Cut publishes readable content first, removes only the selection, and
+    // native undo restores the text, the chips, and their reference metadata.
+    const beforeCutText = readEditorValue(clipboardEditor);
+    const beforeCutTokens = chipTokens(clipboardEditor);
+    select(clipboardEditor, 0, beforeCutText.length);
+    const cut = dispatchClipboard("cut", clipboardEditor);
+    assert(cut.event.defaultPrevented && cut.plain.includes(`@${copiedAbsolute}`),
+      "cut must publish the readable selection before deleting it");
+    assert(sentinels(cut.plain).length === 0, "cut leaked a renderer sentinel");
+    assert(readEditorValue(clipboardEditor) === "" && controller.fileReferences.length === 0,
+      `cut did not remove exactly the selection: ${JSON.stringify(readEditorValue(clipboardEditor))}`);
+    assert(document.execCommand("undo"), "native cut undo unavailable");
+    await new Promise(requestAnimationFrame);
+    assert(readEditorValue(clipboardEditor) === beforeCutText,
+      "native undo did not restore the cut text");
+    assert(
+      controller.fileReferences.map((reference) => reference.token).join("") ===
+        beforeCutTokens.join(""),
+      "native undo did not restore the cut attachments in order",
+    );
+    assert(chipTokens(clipboardEditor).join("") === beforeCutTokens.join(""),
+      "native undo did not restore the cut chips");
+    assert(document.execCommand("redo"), "native cut redo unavailable");
+    await new Promise(requestAnimationFrame);
+    assert(readEditorValue(clipboardEditor) === "" && controller.fileReferences.length === 0,
+      "native redo kept the cut selection");
+    assert(document.execCommand("undo"), "second native cut undo unavailable");
+    await new Promise(requestAnimationFrame);
+    assert(
+      readEditorValue(clipboardEditor) === beforeCutText &&
+        controller.fileReferences.length === beforeCutTokens.length,
+      "repeated undo lost the cut draft",
+    );
+
+    const relativeCount = controller.fileReferences.filter(
+      (reference) => reference.path === copiedRelative,
+    ).length;
+    // Another draft cannot resolve this draft's scratch file: that chip stays
+    // readable text, while the relative workspace path keeps its chip.
+    render("paste-b");
+    await new Promise(requestAnimationFrame);
+    const crossEditor = controller.ref.current!;
+    crossEditor.focus();
+    setEditorCaret(crossEditor, 0);
+    await dispatchInternalPaste(crossEditor, cut.data);
+    assert(readEditorValue(crossEditor).includes(`@${copiedAbsolute}`),
+      "another draft did not receive this draft's scratch path as readable text");
+    assert(
+      controller.fileReferences.length === relativeCount &&
+        controller.fileReferences.every((reference) => reference.path === copiedRelative),
+      `cross-draft paste kept an unresolvable chip: ${JSON.stringify(controller.fileReferences.map((reference) => reference.path))}`,
+    );
+    assert(chipTokens(crossEditor).length === relativeCount,
+      "cross-draft paste rendered the wrong number of chips");
+
+    // A payload this build cannot trust never becomes an attachment.
+    const hostile = new DataTransfer();
+    hostile.setData("text/plain", "@src/evil.ts");
+    hostile.setData(clipboardMime, JSON.stringify({
+      v: 1,
+      s: "paste-a",
+      parts: [{
+        ref: {
+          kind: "file", path: "src/evil.ts", name: "evil.ts",
+          plugin: { kind: "mark", pluginId: "evil", send: "" },
+        },
+      }],
+    }));
+    setEditorCaret(crossEditor, readEditorValue(crossEditor).length);
+    await dispatchInternalPaste(crossEditor, hostile);
+    assert(controller.fileReferences.length === relativeCount,
+      "a malformed clipboard payload added an attachment");
+    assert(readEditorValue(crossEditor).endsWith("@src/evil.ts"),
+      "a malformed clipboard payload did not fall back to its plain text");
+    const oversized = new DataTransfer();
+    oversized.setData("text/plain", "untrusted");
+    oversized.setData(clipboardMime, JSON.stringify({
+      v: 1,
+      s: "paste-a",
+      parts: Array.from({ length: 240 }, () => ({
+        ref: { kind: "file", path: "x", name: "y" },
+      })),
+    }));
+    setEditorCaret(crossEditor, readEditorValue(crossEditor).length);
+    await dispatchInternalPaste(crossEditor, oversized);
+    assert(controller.fileReferences.length === relativeCount,
+      "an oversized clipboard payload added an attachment");
+    assert(readEditorValue(crossEditor).endsWith("untrusted"),
+      "an oversized clipboard payload did not fall back to its plain text");
     flushSync(() => root.render(null));
     resetComposerDraftCache();
 
@@ -1001,6 +1225,7 @@ globalThis.composerPasteProbe = async () => {
       selectionAndSessionDrafts: true,
       workspaceReferencesAcrossRemount: true,
       pendingPasteAcrossSessionSwitch: true,
+      attachmentSelectionClipboard: true,
     };
   } finally {
     flushSync(() => root.unmount());

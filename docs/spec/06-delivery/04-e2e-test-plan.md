@@ -813,7 +813,8 @@ The minimum selection is:
   `pnpm test:e2e:boot`, including the synthetic large-list responsiveness check.
 - Settings/composer/plugin search theme surfaces: `pnpm build:js` followed by
   `pnpm test:e2e:theme-surfaces`.
-- Composer clipboard representation and text insertion: `pnpm test:e2e:composer-paste`.
+- Composer clipboard representation, attachment-selection copy/cut/paste, and
+  text insertion: `pnpm test:e2e:composer-paste`.
 - Composer newlines, empty last line, caret placement, and the draft/DOM
   serialization agreement: `pnpm test:e2e:composer-caret`.
 - Composer slash-menu name/description layout: `pnpm build:js` followed by
@@ -2171,6 +2172,38 @@ validation still needed.
 - **Coverage**: `scripts/e2e/composer-submission.tsx`, executed by
   `pnpm test:e2e:composer-paste`; real desktop recording uses isolated data and
   a local model with a controlled response delay.
+
+#### E2E-011c-2: Composer attachment clipboard
+
+- **Preconditions**: Sessions A and B exist. A's draft holds text with an inline
+  image chip and a workspace-relative file chip; the same draft text is also
+  reachable through the editor selection. No OS clipboard content is used.
+- **Steps**: 1) Select the whole draft and dispatch `copy`; read `text/plain`
+  and the application-internal clipboard format. 2) Paste the copied data twice
+  at the draft end. 3) Select one chip only and copy/paste it. 4) Select all and
+  dispatch `cut`; undo, redo, and undo again. 5) Paste the cut data into session
+  B's empty draft. 6) Paste a payload with an unknown field and one past the
+  part bound.
+- **Expected**: `text/plain` contains the readable `@path` text and no renderer
+  sentinel; the internal format is versioned and carries the ordered
+  text/reference parts. Each paste restores the text, attachment identity, and
+  order with fresh non-colliding chip tokens, including repeated, subset, and
+  select-all pastes. Cut removes only the selection, publishes the readable
+  content first, and native undo/redo restores and removes the text, chips, and
+  metadata in order. Session B keeps workspace-relative chips but receives A's
+  scratch-absolute path as readable text, because its host session cannot
+  resolve that scratch file. The malformed and oversized payloads fall back to
+  their plain text and add no attachment. Plain-text, native file, and external
+  clipboard pastes keep their existing behavior.
+- **Specs linked**: `04-ux/08-component-spec.md` (composer draft model and
+  §11.8 clipboard/reference rules)
+- **Acceptance**: C (composer input and attachment identity)
+- **Milestone**: M2
+- **Status**: Automated inside `scripts/e2e/composer-paste.tsx` by
+  `pnpm test:e2e:composer-paste`, against the real `ComposerInput`,
+  `useComposerDraft`, and `useComposerAttachments` with rendered
+  `ClipboardEvent`/`DataTransfer` probes. The OS clipboard is the only mocked
+  boundary.
 
 #### E2E-SESSION-reference-conversation-link: A pasted conversation link carries that conversation into the turn
 
@@ -10693,7 +10726,7 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 | A / C / F / Quality — Tray session navigation | E2E-TRAY-bounded-session-navigation |
 | B — Model config | E2E-005, E2E-PROVIDER-custom-endpoint-no-api-key, E2E-006, E2E-007, E2E-038, E2E-050, E2E-052, E2E-055, E2E-066, E2E-080, E2E-082, E2E-102c, E2E-102d, E2E-102e, E2E-151, E2E-154, E2E-163, E2E-166, E2E-172, E2E-174, E2E-197, E2E-005G, E2E-005J, E2E-199, E2E-201, E2E-202, E2E-203, E2E-205, E2E-206, E2E-209, E2E-PLUGIN-provider-catalog-add-service |
 | C — Conversation & stream | E2E-CHAT-long-history-stream-keeps-responsive, E2E-CHAT-running-status-survives-output-pauses, E2E-008, E2E-008d, E2E-008e, E2E-008a, E2E-009, E2E-010, E2E-011, E2E-011a, E2E-011b, E2E-011d, E2E-011e, E2E-011g, E2E-031, E2E-040, E2E-047, E2E-048, E2E-048A, E2E-049, E2E-052, E2E-053, E2E-054, E2E-055, E2E-059, E2E-059a, E2E-060c, E2E-060d, E2E-061, E2E-061a, E2E-062, E2E-064, E2E-065, E2E-068, E2E-071, E2E-073, E2E-074, E2E-075, E2E-081, E2E-083, E2E-084, E2E-086, E2E-087, E2E-088, E2E-088b, E2E-089, E2E-090, E2E-COMPOSER-narrow-controls, E2E-094, E2E-095, E2E-096, E2E-097, E2E-098, E2E-099, E2E-102, E2E-102a, E2E-102b, E2E-102c, E2E-102d, E2E-102g, E2E-106, E2E-109, E2E-111, E2E-114, E2E-116, E2E-117, E2E-118, E2E-119, E2E-120, E2E-121, E2E-218, E2E-259, E2E-219, E2E-AGENTS-001, E2E-142, E2E-144, E2E-145, E2E-146, E2E-146a, E2E-147, E2E-151, E2E-154, E2E-155, E2E-158, E2E-159, E2E-161, E2E-162, E2E-166, E2E-172, E2E-173, E2E-174, E2E-177, E2E-178, E2E-179, E2E-180, E2E-182, E2E-183, E2E-187, E2E-198, E2E-199, E2E-202, E2E-203, E2E-207, E2E-208, E2E-CHAT-content-width-handles, E2E-250, E2E-102i, E2E-PLUGIN-session-orchestrator-real-workers, E2E-SUBAGENT-settlement-updates-before-parent-poll, E2E-SUBAGENT-resume-a-settled-delegation |
-| C — Conversation & stream (composer drafts) | E2E-011c, E2E-011c-1 |
+| C — Conversation & stream (composer drafts) | E2E-011c, E2E-011c-1, E2E-011c-2 |
 | D — Workspace | E2E-012, E2E-013, E2E-022B, E2E-024I, E2E-047, E2E-049, E2E-057, E2E-058, E2E-060, E2E-068, E2E-075, E2E-078, E2E-153, E2E-158, E2E-182, E2E-187, E2E-252 |
 | C / D / Quality — Project session history resets after collapse | E2E-263 |
 | D — Workspace (project ordering) | E2E-253 |
