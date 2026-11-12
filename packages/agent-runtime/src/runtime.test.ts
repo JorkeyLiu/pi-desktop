@@ -34,6 +34,7 @@ import {
   type RuntimeProviderConfig,
 } from "./runtime.js";
 import { estimateOutputCapInputTokens } from "./output-cap.js";
+import { genericModelConfig } from "./model-capabilities.js";
 
 import { COMPACTION_SUMMARY_MAX_RETRIES } from "./compaction-summary-input.js";
 import { loadInstructionChain, type ProjectInstructions } from "./project-instructions.js";
@@ -3782,6 +3783,90 @@ describe("DesktopAgentRuntime thinking configuration", () => {
 
     expect(agent.state.thinkingLevel).toBe("off");
     expect(agent.state.model.reasoning).toBe(false);
+
+    await runtime.dispose();
+  });
+
+  it("sends an explicitly selected level for a model with unknown reasoning support", async () => {
+    const unknown: RuntimeProviderConfig = {
+      ...provider,
+      modelId: "route/unknown",
+      supportsReasoning: false,
+      supportedThinkingLevels: [],
+      modelConfig: genericModelConfig("route/unknown", provider.baseUrl),
+    };
+    const runtime = createRuntime({ provider: unknown, thinkingLevel: "high" });
+    const agent = (runtime as any).agent;
+
+    expect(agent.state.thinkingLevel).toBe("high");
+    expect(agent.state.model.reasoning).toBe(true);
+    expect(agent.state.model.supportedThinkingLevels).toEqual(["high"]);
+
+    const requests: Record<string, unknown>[] = [];
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(typeof init?.body === "string" ? init.body : "{}"));
+      return new Response("bad request", { status: 400 });
+    });
+    const stream = agent.streamFunction(
+      agent.state.model,
+      { systemPrompt: "system", messages: [], tools: [] },
+      { fetch, reasoning: agent.state.thinkingLevel },
+    );
+    await stream.result();
+    expect(requests).toHaveLength(1);
+    expect(requests[0].reasoning_effort).toBe("high");
+
+    await runtime.dispose();
+  });
+
+  it("keeps the unselected default off for a model with unknown reasoning support", async () => {
+    const unknown: RuntimeProviderConfig = {
+      ...provider,
+      modelId: "route/unknown",
+      supportsReasoning: false,
+      supportedThinkingLevels: [],
+      modelConfig: genericModelConfig("route/unknown", provider.baseUrl),
+    };
+    const runtime = createRuntime({ provider: unknown, thinkingLevel: "off" });
+    const agent = (runtime as any).agent;
+
+    expect(agent.state.thinkingLevel).toBe("off");
+    expect(agent.state.model.reasoning).toBe(false);
+
+    const requests: Record<string, unknown>[] = [];
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(typeof init?.body === "string" ? init.body : "{}"));
+      return new Response("bad request", { status: 400 });
+    });
+    const stream = agent.streamFunction(
+      agent.state.model,
+      { systemPrompt: "system", messages: [], tools: [] },
+      { fetch },
+    );
+    await stream.result();
+    expect(requests).toHaveLength(1);
+    expect(requests[0].reasoning_effort).toBeUndefined();
+
+    await runtime.dispose();
+  });
+
+  it("keeps a configured binding ladder authoritative over an unselected level", async () => {
+    const configured: RuntimeProviderConfig = {
+      ...provider,
+      modelId: "route/unknown",
+      supportsReasoning: true,
+      supportedThinkingLevels: ["medium"],
+      modelConfig: {
+        ...genericModelConfig("route/unknown", provider.baseUrl),
+        reasoning: true,
+        supportedThinkingLevels: ["medium"],
+      },
+    };
+    const runtime = createRuntime({ provider: configured, thinkingLevel: "high" });
+    const agent = (runtime as any).agent;
+
+    expect(agent.state.thinkingLevel).toBe("medium");
+    expect(agent.state.model.reasoning).toBe(true);
 
     await runtime.dispose();
   });

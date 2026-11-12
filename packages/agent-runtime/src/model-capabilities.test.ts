@@ -4,6 +4,8 @@ import {
   clampThinkingLevel,
   genericModelConfig,
   modelConfigWithBinding,
+  resolveThinkingIntent,
+  thinkingCapabilityIsUnknown,
   visionFromModelConfig,
   type ModelCapabilities,
 } from "./model-capabilities.js";
@@ -323,6 +325,83 @@ describe("unmatched model effective thinking policy", () => {
     const trusted = { ...generic, source: "models.dev" as const };
     expect(capabilitiesFromModelConfig(modelConfigWithBinding(trusted)).supportsReasoning).toBe(false);
     expect(capabilitiesFromModelConfig(modelConfigWithBinding(trusted, { ...binding, thinkingLevels: [] })).supportsReasoning).toBe(false);
+  });
+
+  it("keeps the operational off default when no level was selected", () => {
+    const effective = modelConfigWithBinding(generic);
+    const intent = resolveThinkingIntent(
+      { ...capabilitiesFromModelConfig(effective), modelConfig: effective },
+      "off",
+    );
+    expect(intent.level).toBe("off");
+    expect(intent.modelConfig).toBe(effective);
+    expect(capabilitiesFromModelConfig(intent.modelConfig)).toEqual({
+      supportsReasoning: false,
+      supportedThinkingLevels: ["off"],
+    });
+    // `omit` asks to leave the provider default untouched, so it stays clamped.
+    const omitted = resolveThinkingIntent(
+      { ...capabilitiesFromModelConfig(effective), modelConfig: effective },
+      "omit",
+    );
+    expect(omitted.level).toBe("off");
+    expect(omitted.modelConfig).toBe(effective);
+  });
+
+  it("carries an explicitly selected level on an unclassified model as request intent", () => {
+    const effective = modelConfigWithBinding(generic);
+    expect(thinkingCapabilityIsUnknown(effective)).toBe(true);
+    const intent = resolveThinkingIntent(
+      { ...capabilitiesFromModelConfig(effective), modelConfig: effective },
+      "high",
+    );
+    expect(intent.level).toBe("high");
+    expect(intent.modelConfig).toEqual({
+      ...effective,
+      reasoning: true,
+      supportedThinkingLevels: ["high"],
+    });
+    // The source row is untouched: this is an adapter projection, not a claim.
+    expect(effective.reasoning).toBe(false);
+    expect(effective.supportedThinkingLevels).toEqual([]);
+  });
+
+  it("maps an explicitly selected extended level without publishing a ladder", () => {
+    const effective = modelConfigWithBinding(generic);
+    const intent = resolveThinkingIntent(
+      { ...capabilitiesFromModelConfig(effective), modelConfig: effective },
+      "xhigh",
+    );
+    expect(intent.level).toBe("xhigh");
+    expect(intent.modelConfig?.supportedThinkingLevels).toEqual(["xhigh"]);
+    expect(intent.modelConfig?.thinkingLevelMap).toEqual({ xhigh: "xhigh" });
+    expect(capabilitiesFromModelConfig(intent.modelConfig)).toEqual({
+      supportsReasoning: true,
+      supportedThinkingLevels: ["xhigh"],
+    });
+  });
+
+  it("still clamps to a metadata claim or a configured binding ladder", () => {
+    const trusted = { ...generic, source: "models.dev" as const };
+    const trustedIntent = resolveThinkingIntent(
+      { ...capabilitiesFromModelConfig(trusted), modelConfig: trusted },
+      "high",
+    );
+    expect(trustedIntent.level).toBe("off");
+    expect(trustedIntent.modelConfig).toBe(trusted);
+
+    const configured = modelConfigWithBinding(generic, {
+      contextWindow: 128_000,
+      maxTokens: 8_192,
+      thinkingLevels: ["medium"],
+    });
+    expect(capabilitiesFromModelConfig(configured).supportsReasoning).toBe(true);
+    const configuredIntent = resolveThinkingIntent(
+      { ...capabilitiesFromModelConfig(configured), modelConfig: configured },
+      "high",
+    );
+    expect(configuredIntent.level).toBe("medium");
+    expect(configuredIntent.modelConfig).toBe(configured);
   });
 });
 

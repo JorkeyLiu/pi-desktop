@@ -283,7 +283,11 @@ import {
   harvestRetainedReasoning,
   type ReasoningReplayIdentity,
 } from "./reasoning-replay.js";
-import { genericModelConfig } from "./model-capabilities.js";
+import {
+  capabilitiesFromModelConfig,
+  genericModelConfig,
+  resolveThinkingIntent,
+} from "./model-capabilities.js";
 import type { ProjectInstructions } from "./project-instructions.js";
 import { projectInstructionsPrompt } from "./project-instructions-prompt.js";
 import type { CustomSystemPrompt } from "./custom-system-prompt.js";
@@ -2052,7 +2056,22 @@ export class DesktopAgentRuntime {
     this.mode = opts.mode;
     this.planningState = proposalKindForMode(this.mode) ? "planning" : "inactive";
     this.provider = opts.provider;
-    this.thinkingLevel = clampThinkingLevel(opts.provider, opts.thinkingLevel);
+    const thinkingIntent = resolveThinkingIntent(
+      opts.provider,
+      opts.thinkingLevel,
+    );
+    this.thinkingLevel = thinkingIntent.level;
+    if (thinkingIntent.modelConfig !== opts.provider.modelConfig) {
+      const thinkingCapabilities = capabilitiesFromModelConfig(
+        thinkingIntent.modelConfig,
+      );
+      this.provider = {
+        ...opts.provider,
+        modelConfig: thinkingIntent.modelConfig,
+        supportsReasoning: thinkingCapabilities.supportsReasoning,
+        supportedThinkingLevels: [...thinkingCapabilities.supportedThinkingLevels],
+      };
+    }
     this.infiniteProviderRetry = opts.infiniteProviderRetry === true;
     this.jevApiKey = opts.jevApiKey;
     this.host = opts.host;
@@ -2746,7 +2765,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       this.mode === config.mode &&
       this.jevApiKey === config.jevApiKey &&
       this.thinkingLevel ===
-        clampThinkingLevel(config.provider, config.thinkingLevel) &&
+        resolveThinkingIntent(config.provider, config.thinkingLevel).level &&
       current === next &&
       safeJson(this.commandShell) === safeJson(config.commandShell) &&
       safeJson(this.baseProjectInstructions ?? null) ===

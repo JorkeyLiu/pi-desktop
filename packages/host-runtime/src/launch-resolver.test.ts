@@ -106,6 +106,38 @@ describe("createHeadlessLaunchResolver", () => {
     expect(unbound.sidecarParams.provider.modelId).toBe(routedId);
   });
 
+  it("carries an explicitly selected thinking level for a model with no catalog claim", async () => {
+    const routedId = "proxy/model";
+    const row: HostProviderRecord = {
+      ...provider,
+      models: [
+        { id: "model", contextWindow: 16_000, contextWindowSource: "user", maxTokens: 2_048, thinkingLevels: ["off"] },
+      ],
+    };
+    const { host } = hostWith([row], { p1: "sk-test" });
+    const resolver = createHeadlessLaunchResolver({ getHost: () => host, dataDir: "/data", log: () => undefined });
+
+    const selected = await resolver.resolve(
+      "s1",
+      { providerId: "p1", modelId: routedId, thinkingLevel: "high" },
+      {},
+    );
+    expect(selected.sidecarParams.thinkingLevel).toBe("high");
+    expect(selected.sidecarParams.provider.supportsReasoning).toBe(true);
+    expect(selected.sidecarParams.provider.supportedThinkingLevels).toEqual(["high"]);
+    expect(selected.sidecarParams.provider.modelConfig).toMatchObject({
+      name: routedId,
+      reasoning: true,
+      supportedThinkingLevels: ["high"],
+    });
+
+    // No selection keeps the persisted operational default.
+    const unselected = await resolver.resolve("s1", { providerId: "p1", modelId: routedId }, {});
+    expect(unselected.sidecarParams.thinkingLevel).toBe("off");
+    expect(unselected.sidecarParams.provider.supportsReasoning).toBe(false);
+    expect(unselected.sidecarParams.provider.modelConfig?.reasoning).toBe(false);
+  });
+
   it("forwards the opt-in infinite provider retry setting", async () => {
     const { host } = hostWith([provider], { p1: "sk-test" });
     const resolver = createHeadlessLaunchResolver({ getHost: () => host, dataDir: "/data", log: () => undefined });

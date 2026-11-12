@@ -5,8 +5,13 @@ import {
   type ModelBinding,
   type ModelInfo,
   type ModelModality,
+  type SessionThinkingLevel,
 } from "@pi-desktop/shared";
-import type { ModelConfig, ThinkingCapabilitySet } from "./thinking-level.js";
+import {
+  clampThinkingLevel,
+  type ModelConfig,
+  type ThinkingCapabilitySet,
+} from "./thinking-level.js";
 export { transcriptConfigFromPi } from "./transcript-compat.js";
 
 export {
@@ -17,6 +22,96 @@ export {
   type ModelConfig,
   type ThinkingCapabilitySet,
 } from "./thinking-level.js";
+
+/**
+ * True when neither the catalog nor a binding states whether this model
+ * reasons. Only a wire protocol may be configured: it states how a level
+ * would be sent, not that the model is or is not reasoning-capable.
+ * An `off`-only capability projection for such a model is the absence of a
+ * claim, not a claim that the model is non-reasoning.
+ */
+export function thinkingCapabilityIsUnknown(
+  model:
+    | Pick<
+        ModelConfig,
+        | "source"
+        | "reasoning"
+        | "supportedThinkingLevels"
+        | "thinkingLevelMap"
+        | "reasoningOptions"
+      >
+    | null
+    | undefined,
+): boolean {
+  return (
+    model?.source === "generic" &&
+    model.reasoning !== true &&
+    (model.supportedThinkingLevels?.length ?? 0) === 0 &&
+    model.thinkingLevelMap === undefined &&
+    (model.reasoningOptions?.length ?? 0) === 0
+  );
+}
+
+/**
+ * Project one explicit request level onto an otherwise unclassified model.
+ *
+ * This is adapter intent, not a capability claim: the catalog still knows
+ * nothing about the model, and only the level the user selected is enabled.
+ */
+function modelConfigForExplicitThinking(
+  model: ModelConfig,
+  level: SessionThinkingLevel,
+): ModelConfig {
+  if (level === "off" || level === "omit") return model;
+  const thinkingLevelMap = { ...(model.thinkingLevelMap ?? {}) };
+  // pi-ai only accepts xhigh/max when the adapter-facing mapping exists.
+  if (
+    (level === "xhigh" || level === "max") &&
+    thinkingLevelMap[level] == null
+  ) {
+    thinkingLevelMap[level] = level;
+  }
+  return {
+    ...model,
+    reasoning: true,
+    supportedThinkingLevels: [level],
+    ...(Object.keys(thinkingLevelMap).length > 0 ? { thinkingLevelMap } : {}),
+  };
+}
+
+export type ThinkingIntentResolution = {
+  level: SessionThinkingLevel;
+  /** Adapter-facing model; replaced only for an explicit level on an unknown model. */
+  modelConfig: ModelConfig | undefined;
+};
+
+/**
+ * Resolve a session's selected level against what the metadata actually claims.
+ *
+ * An unknown model defaults to `off` because the persisted default is `off`;
+ * any other persisted value is a user selection and must reach the adapter
+ * instead of being silently replaced by an absent capability claim. Known
+ * restrictions (catalog records, explicit binding ladders, protocols) still
+ * clamp through the nearest-supported-level rule.
+ */
+export function resolveThinkingIntent(
+  source: ThinkingCapabilitySet & { modelConfig?: ModelConfig | null },
+  requested: SessionThinkingLevel,
+): ThinkingIntentResolution {
+  const modelConfig = source.modelConfig ?? undefined;
+  if (
+    requested !== "off" &&
+    requested !== "omit" &&
+    modelConfig &&
+    thinkingCapabilityIsUnknown(modelConfig)
+  ) {
+    return {
+      level: requested,
+      modelConfig: modelConfigForExplicitThinking(modelConfig, requested),
+    };
+  }
+  return { level: clampThinkingLevel(source, requested), modelConfig };
+}
 
 /** Read-only, credential-free projection of a resolved Pi chat model. */
 export function modelConfigFromPi(model: Model<Api>): ModelConfig {

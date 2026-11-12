@@ -23,7 +23,7 @@ import {
 } from "@pi-desktop/shared";
 import {
   capabilitiesFromModelConfig,
-  clampThinkingLevel,
+  resolveThinkingIntent,
   loadCustomSystemPrompt,
   loadInstructionChain,
   loadSubagentDefinitions,
@@ -411,15 +411,17 @@ export function createSessionLaunchRuntime({
         modelId,
       });
     const modelConfig = catalogModelConfig;
-    const thinkingCapabilities = capabilitiesFromModelConfig(modelConfig);
-    const thinkingLevel = clampThinkingLevel(
-      thinkingCapabilities,
+    const thinkingIntent = resolveThinkingIntent(
+      { ...capabilitiesFromModelConfig(modelConfig), modelConfig },
       normalizeThinkingLevel(
         overrides.thinkingLevel ??
           (provider.id === requestedProviderId ? session.thinkingLevel : undefined) ??
           storedModel?.defaultThinkingLevel,
       ),
     );
+    const thinkingLevel = thinkingIntent.level;
+    const thinkingModelConfig = thinkingIntent.modelConfig ?? modelConfig;
+    const thinkingCapabilities = capabilitiesFromModelConfig(thinkingModelConfig);
     const projectPath =
       typeof session.projectPath === "string" && session.projectPath.trim()
         ? session.projectPath.trim()
@@ -746,7 +748,7 @@ export function createSessionLaunchRuntime({
           supportsReasoning: thinkingCapabilities.supportsReasoning,
           supportsVision: visionFromModelConfig(modelConfig),
           supportedThinkingLevels: [...thinkingCapabilities.supportedThinkingLevels],
-          ...(modelConfig ? { modelConfig } : {}),
+          ...(thinkingModelConfig ? { modelConfig: thinkingModelConfig } : {}),
         },
         pluginTools: [
           ...plugins

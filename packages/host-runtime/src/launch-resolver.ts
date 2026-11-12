@@ -22,13 +22,13 @@ import {
 } from "@pi-desktop/shared";
 import {
   capabilitiesFromModelConfig,
-  clampThinkingLevel,
   genericModelConfig,
   loadInstructionChain,
   loadSubagentDefinitions,
   modelConfigWithBinding,
   optionalProviderHeaders,
   resolveSubagentProviders,
+  resolveThinkingIntent,
   visionFromModelConfig,
   type RuntimeProviderConfig,
   type UserSubagentDocument,
@@ -251,14 +251,17 @@ export function createHeadlessLaunchResolver(options: HeadlessLaunchResolverOpti
     if (!modelId) throw launchError("No model selected for provider", ErrorCodes.MODEL_NOT_CONFIGURED);
 
     const { modelConfig, capabilities, storedModel } = effectiveModelConfig(provider, modelId, provider.baseUrl);
-    const thinkingLevel = clampThinkingLevel(
-      capabilities,
+    const thinkingIntent = resolveThinkingIntent(
+      { ...capabilities, modelConfig },
       normalizeThinkingLevel(
         overrides.thinkingLevel ??
           (provider.id === requestedProviderId ? session.thinkingLevel : undefined) ??
           storedModel?.defaultThinkingLevel,
       ),
     );
+    const thinkingLevel = thinkingIntent.level;
+    const thinkingModelConfig = thinkingIntent.modelConfig ?? modelConfig;
+    const thinkingCapabilities = capabilitiesFromModelConfig(thinkingModelConfig);
     const projectPath =
       typeof session.projectPath === "string" && session.projectPath.trim() ? session.projectPath.trim() : undefined;
     let projectInstructions = await loadInstructionChain(projectPath);
@@ -405,10 +408,10 @@ export function createHeadlessLaunchResolver(options: HeadlessLaunchResolverOpti
           authKind: provider.authKind,
           apiStyle: provider.apiStyle,
           ...optionalProviderHeaders(provider.headers),
-          supportsReasoning: capabilities.supportsReasoning,
+          supportsReasoning: thinkingCapabilities.supportsReasoning,
           supportsVision: visionFromModelConfig(modelConfig),
-          supportedThinkingLevels: [...capabilities.supportedThinkingLevels],
-          modelConfig,
+          supportedThinkingLevels: [...thinkingCapabilities.supportedThinkingLevels],
+          modelConfig: thinkingModelConfig,
         },
         pluginTools: [],
         pluginSkills,
