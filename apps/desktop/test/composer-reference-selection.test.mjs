@@ -4,7 +4,13 @@ import test from "node:test";
 
 register(new URL("./helpers/ts-import-hooks.mjs", import.meta.url));
 const {
+  CARET_MARK,
+  caretHostConsumed,
+  caretHostDraftLength,
+  caretHostDraftText,
+  caretHostTextOffset,
   caretIndexForPoint,
+  isCaretHostLead,
   referenceDeletionSpan,
   selectionEndForPoint,
   selectionRangeFromPoints,
@@ -159,4 +165,32 @@ test("Backspace and Delete remove the whole adjacent token", () => {
   assert.equal(referenceDeletionSpan(value, 1, -1), null);
   assert.equal(referenceDeletionSpan(value, 2, 1), null);
   assert.deepEqual(referenceDeletionSpan(tokenChar, 1, -1), { start: 0, end: 1 });
+});
+
+test("a caret host hides its mark from the draft it stands for", () => {
+  assert.equal(caretHostDraftText(CARET_MARK), "");
+  assert.equal(caretHostDraftText(`${CARET_MARK}ab`), "ab");
+  assert.equal(caretHostDraftLength(`${CARET_MARK}ab`), 2);
+  assert.equal(caretHostDraftLength("ab"), 2);
+});
+
+test("a caret host point never sits on its leading mark", () => {
+  // Offset 0 sits before the mark, which Chromium canonicalizes back into the
+  // adjacent token; the nearest safe point is one step past the mark.
+  assert.equal(caretHostTextOffset(CARET_MARK, 0), 1);
+  assert.equal(caretHostTextOffset(`${CARET_MARK}ab`, 0), 1);
+  assert.equal(caretHostTextOffset(`${CARET_MARK}ab`, 1), 2);
+  assert.equal(caretHostTextOffset(`${CARET_MARK}ab`, 2), 3);
+  assert.equal(caretHostTextOffset(`${CARET_MARK}ab`, 5), 3, "past the end clamps");
+  assert.equal(caretHostTextOffset("ab", 0), 0, "a host without a mark keeps offset 0");
+});
+
+test("a caret host offset counts only draft characters", () => {
+  assert.equal(caretHostConsumed(CARET_MARK, 0), 0);
+  assert.equal(caretHostConsumed(CARET_MARK, 1), 0, "the mark is not a draft character");
+  assert.equal(caretHostConsumed(`${CARET_MARK}ab`, 2), 1);
+  assert.equal(caretHostConsumed(`${CARET_MARK}ab`, 3), 2);
+  assert.equal(isCaretHostLead(`${CARET_MARK}ab`, 0), true);
+  assert.equal(isCaretHostLead(`${CARET_MARK}ab`, 1), false);
+  assert.equal(isCaretHostLead("ab", 0), false);
 });

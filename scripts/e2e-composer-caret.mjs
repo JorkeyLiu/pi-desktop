@@ -229,6 +229,62 @@ try {
     { op: "caret", caret: 2 },
     { op: "key", key: "Delete" },
     { op: "step", label: "delete removed the whole token" },
+
+    // N. A reference that ends the draft: a real CDP insertion and an emulated
+    // IME composition at its trailing boundary must land outside the token, in
+    // the draft, and reach what the composer submits.
+    { op: "tokenLast", text: "a.png" },
+    { op: "step", label: "sole token, caret after it" },
+    { op: "cdpInsert", text: "hi" },
+    { op: "step", label: "cdp insert after the token" },
+    { op: "cdpInsert", text: "😀" },
+    { op: "step", label: "cdp emoji insert after the token" },
+    { op: "tokenLast", text: "a.png" },
+    { op: "step", label: "token reattached at the draft end" },
+    { op: "cdpCompose", text: "ni", commit: "你" },
+    { op: "step", label: "cdp composition after the token" },
+    { op: "tokenLast", text: "a.png" },
+    { op: "caret", caret: 0 },
+    { op: "cdpInsert", text: "before" },
+    { op: "step", label: "cdp insert before the token" },
+
+    // O. Native typing on both sides of a token is one undo stack: the last
+    // boundary edit is what undo removes, not an earlier one.
+    { op: "tokenMid", text: "notes.txt" },
+    { op: "caret", caret: 2 },
+    { op: "type", text: "d" },
+    { op: "step", label: "typed before the token" },
+    { op: "pointer", target: "tail" },
+    { op: "step", label: "clicked the text after the token" },
+    { op: "type", text: "Z" },
+    { op: "step", label: "typed after the token" },
+    { op: "undo" },
+    { op: "step", label: "undo after boundary typing" },
+
+    // P. The token is a keyboard-reachable link: Tab focuses it, Enter runs the
+    // same action a click does, and a later keystroke still edits the draft.
+    { op: "tokenMid", text: "notes.txt" },
+    { op: "step", label: "token before keyboard focus" },
+    { op: "key", key: "Tab" },
+    { op: "step", label: "tab focused the token" },
+    { op: "key", key: "Return" },
+    { op: "step", label: "enter activated the focused token" },
+    { op: "type", text: "k" },
+    { op: "step", label: "typed after keyboard activation" },
+    { op: "tokenImage", text: "photo.png" },
+    { op: "step", label: "image token" },
+    { op: "key", key: "Tab" },
+    { op: "step", label: "tab focused the image token" },
+    { op: "key", key: "Return" },
+    { op: "step", label: "enter activated the image token" },
+    // Space must activate the focused token instead of typing a space into
+    // the draft, and must leave the draft byte-identical.
+    { op: "tokenMid", text: "notes.txt" },
+    { op: "step", label: "token before space activation" },
+    { op: "key", key: "Tab" },
+    { op: "step", label: "tab focused the token again" },
+    { op: "key", key: "Space" },
+    { op: "step", label: "space activated the focused token" },
   ];
 
   await writeFile(
@@ -275,6 +331,21 @@ app.whenReady().then(async () => {
       }
       await pause(120);
       await window.webContents.executeJavaScript("globalThis.composerCaretPointerDone()");
+      return;
+    }
+    if (event.message.startsWith("PI_CARET_CDP:")) {
+      const spec = JSON.parse(event.message.slice("PI_CARET_CDP:".length));
+      if (spec.op === "insertText") {
+        await window.webContents.debugger.sendCommand("Input.insertText", { text: spec.text });
+      } else if (spec.op === "compose") {
+        await window.webContents.debugger.sendCommand("Input.imeSetComposition", {
+          text: spec.text, selectionStart: spec.text.length, selectionEnd: spec.text.length,
+        });
+        await pause(120);
+        await window.webContents.debugger.sendCommand("Input.insertText", { text: spec.commit });
+      }
+      await pause(150);
+      await window.webContents.executeJavaScript("globalThis.composerCaretCdpDone()");
       return;
     }
     logs.push(event.message);
@@ -329,8 +400,12 @@ app.whenReady().then(async () => {
     "COMPOSER_CARET_TRACE " +
       JSON.stringify(
         result.trace.map(
-          ({ label, draft, live, caret, caretEnd, cursor, point, caretLine, lastTextLine, lastChild, html }) => ({
-            label, draft, live, caret, caretEnd, cursor, point, caretLine, lastTextLine, lastChild, html,
+          ({
+            label, draft, live, caret, caretEnd, cursor, point, caretLine, lastTextLine, lastChild,
+            html, references, labels, referenceAria, focused, activations,
+          }) => ({
+            label, draft, live, caret, caretEnd, cursor, point, caretLine, lastTextLine, lastChild,
+            html, references, labels, referenceAria, focused, activations,
           }),
         ),
       ),
@@ -612,6 +687,141 @@ app.whenReady().then(async () => {
   assert.equal(deletedToken.draft, "见 后面", `Delete must remove the whole token: ${deletedToken.html}`);
   assert.equal(deletedToken.references.length, 0, `Delete left a token behind: ${deletedToken.html}`);
 
+
+  // N. A reference at the draft end accepts real input on its boundary: the
+  // character lands in the draft, outside the label, and reaches submission.
+  const soleToken = step("sole token, caret after it");
+  assert.equal(soleToken.references.length, 1, `token missing: ${soleToken.html}`);
+  assert.equal(soleToken.draft, soleToken.references[0], `sole token draft: ${soleToken.html}`);
+  assert.deepEqual(
+    soleToken.referenceAria.map((aria) => aria.role),
+    ["link"],
+    `token role: ${JSON.stringify(soleToken.referenceAria)}`,
+  );
+  const cdpAfter = step("cdp insert after the token");
+  assert.equal(
+    cdpAfter.draft,
+    `${cdpAfter.references[0]}hi`,
+    `a real Chromium insertion at the token boundary edited the label: ${cdpAfter.html}`,
+  );
+  assert.equal(cdpAfter.submission, cdpAfter.draft, "the inserted text must be submitted");
+  assert.equal(cdpAfter.labels.length, 1);
+  const cdpEmoji = step("cdp emoji insert after the token");
+  assert.equal(
+    cdpEmoji.draft,
+    `${cdpEmoji.references[0]}hi😀`,
+    `an emoji at the token boundary must stay outside the token: ${cdpEmoji.html}`,
+  );
+  assert.equal(cdpEmoji.submission, cdpEmoji.draft);
+  assert.equal(
+    cdpEmoji.labels[0],
+    "@a.png",
+    `an emoji at the token boundary corrupted the label: ${cdpEmoji.html}`,
+  );
+  const reattached = step("token reattached at the draft end");
+  assert.equal(reattached.draft, reattached.references[0], `reattach: ${reattached.html}`);
+  const composed = step("cdp composition after the token");
+  assert.equal(
+    composed.draft,
+    `${composed.references[0]}你`,
+    `an emulated IME composition at the token boundary edited the label: ${composed.html}`,
+  );
+  assert.equal(composed.submission, composed.draft);
+  const insertBefore = step("cdp insert before the token");
+  assert.equal(
+    insertBefore.draft,
+    `before${insertBefore.references[0]}`,
+    `a real Chromium insertion before the token: ${insertBefore.html}`,
+  );
+
+  // O. Typing on both sides of a token is native editing: undo removes the last
+  // boundary edit and leaves the earlier one in place.
+  const typedBefore = step("typed before the token");
+  assert.equal(typedBefore.draft, `见 d${typedBefore.references[0]}后面`, `type before: ${typedBefore.html}`);
+  const clickedAfter = step("clicked the text after the token");
+  assert.equal(clickedAfter.activations.length, 0, "a click past the token is no activation");
+  const typedAfter = step("typed after the token");
+  assert.equal(typedAfter.draft, `见 d${typedAfter.references[0]}Z后面`, `type after: ${typedAfter.html}`);
+  const afterUndo = step("undo after boundary typing");
+  assert.equal(
+    afterUndo.draft,
+    `见 d${afterUndo.references[0]}后面`,
+    `undo must remove the latest boundary edit, not an earlier one: ${afterUndo.html}`,
+  );
+  assert.equal(afterUndo.references.length, 1, `undo lost the token: ${afterUndo.html}`);
+
+  // P. The token is a keyboard-reachable link with an accessible name.
+  const beforeKeyboard = step("token before keyboard focus");
+  const aria = beforeKeyboard.referenceAria[0];
+  assert.equal(aria.role, "link", `role: ${JSON.stringify(aria)}`);
+  assert.equal(aria.tabIndex, 0, `tabIndex: ${JSON.stringify(aria)}`);
+  assert.ok(
+    aria.label?.includes("notes.txt") && aria.label?.includes("/caret-workspace/notes.txt"),
+    `accessible name must carry the file and its path: ${JSON.stringify(aria)}`,
+  );
+  assert.equal(aria.title, "/caret-workspace/notes.txt", `title: ${JSON.stringify(aria)}`);
+  const tabFocus = step("tab focused the token");
+  assert.equal(
+    tabFocus.focused?.token,
+    tabFocus.references[0],
+    `Tab must reach the token: ${JSON.stringify(tabFocus.focused)}`,
+  );
+  const enterActivated = step("enter activated the focused token");
+  assert.deepEqual(
+    enterActivated.activations,
+    [enterActivated.references[0]],
+    `Enter on a focused token must run its action: ${enterActivated.html}`,
+  );
+  assert.equal(
+    enterActivated.draft,
+    `见 ${enterActivated.references[0]}后面`,
+    `Enter on a focused token must not edit the draft: ${enterActivated.html}`,
+  );
+  const typedAfterActivation = step("typed after keyboard activation");
+  assert.equal(
+    typedAfterActivation.labels[0],
+    "@notes.txt",
+    `typing after a keyboard activation corrupted the label: ${typedAfterActivation.html}`,
+  );
+  assert.equal(typedAfterActivation.references.length, 1);
+  // Focus returns to the composer, so the next keystroke is ordinary draft
+  // text instead of a lost character or a mangled label.
+  assert.equal(
+    typedAfterActivation.draft,
+    `见 ${typedAfterActivation.references[0]}后面k`,
+    `typing must continue in the draft after keyboard activation: ${typedAfterActivation.html}`,
+  );
+  const imageToken = step("image token");
+  assert.equal(imageToken.referenceAria[0]?.role, "link", `image role: ${JSON.stringify(imageToken.referenceAria)}`);
+  assert.ok(
+    imageToken.referenceAria[0]?.label?.includes("photo.png") &&
+      imageToken.referenceAria[0]?.label?.includes("/caret-workspace/photo.png"),
+    `image accessible name: ${JSON.stringify(imageToken.referenceAria)}`,
+  );
+  const imageActivated = step("enter activated the image token");
+  assert.deepEqual(
+    imageActivated.activations,
+    [imageActivated.references[0]],
+    `Enter on a focused image token must open its preview: ${imageActivated.html}`,
+  );
+  const beforeSpace = step("token before space activation");
+  const spaceTabFocus = step("tab focused the token again");
+  assert.equal(
+    spaceTabFocus.focused?.token,
+    spaceTabFocus.references[0],
+    `Tab must reach the token again: ${JSON.stringify(spaceTabFocus.focused)}`,
+  );
+  const spaceActivated = step("space activated the focused token");
+  assert.deepEqual(
+    spaceActivated.activations,
+    [spaceActivated.references[0]],
+    `Space on a focused token must run its action: ${spaceActivated.html}`,
+  );
+  assert.equal(
+    spaceActivated.draft,
+    beforeSpace.draft,
+    `Space after activation must not type a space into the draft: ${spaceActivated.html}`,
+  );
   console.log("COMPOSER_CARET_PROBE " + JSON.stringify({ ok: true, steps: result.trace.length }));
 } finally {
   await rm(temp, { recursive: true, force: true });

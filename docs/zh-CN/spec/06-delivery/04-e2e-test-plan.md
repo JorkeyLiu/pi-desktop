@@ -237,6 +237,9 @@ E2E 从工作检出运行，并使用其中已经准备好的宿主开发环境�
 - 设置/输入框/插件搜索的主题表面：先运行 `pnpm build:js`，再运行
   `pnpm test:e2e:theme-surfaces`。
 - 输入框剪贴板表示、附件选区复制/剪切/粘贴与文本插入：`pnpm test:e2e:composer-paste`。
+- 输入框换行、空最后一行、插入符位置、草稿与 DOM 序列化一致、引用令牌边界上的
+  真实 CDP 文本插入与模拟输入法合成、边界撤销，以及令牌的键盘激活：
+  `pnpm test:e2e:composer-caret`。
 - 输入框斜杠菜单名称/描述布局：先运行 `pnpm build:js`，再运行
   `pnpm test:e2e:composer-autocomplete`。
 - 聊天记录渲染边界和跨活动段委派显示：`pnpm test:e2e:transcript`。

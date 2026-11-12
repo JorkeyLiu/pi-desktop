@@ -1,6 +1,6 @@
 import type { ComposerFileReference } from "./model";
 import { isEditableTextReference, isPluginMark } from "./reference-model";
-
+import { CARET_MARK } from "./reference-selection";
 /**
  * The inline element one draft reference paints. It is ordinary text inside the
  * contenteditable — no icon, capsule, or remove button — so the visible `@name`
@@ -54,9 +54,11 @@ function referenceOrigin(reference: ComposerFileReference): string {
 }
 
 /**
- * Build the inline token for one reference. `title` carries the full path the
- * visible label leaves out; the element text is that label and nothing else, so
- * the browser can select, wrap and copy it as text.
+ * Build the inline token for one reference. `title` and the accessible name
+ * carry the full path the visible label leaves out; the element text is that
+ * label and nothing else, so the browser can select, wrap and copy it as text.
+ * An active reference is a link: it is reachable with Tab, named by its file and
+ * path, and Enter activates the same action a pointer click does.
  */
 export function buildReferenceElement(
   reference: ComposerFileReference,
@@ -69,10 +71,35 @@ export function buildReferenceElement(
   if (isImageReferenceLabel(reference)) element.dataset.image = "";
   if (reference.kind === "session") element.dataset.sessionId = reference.path;
   const action = referenceAction(reference);
-  if (action) element.dataset.action = action;
-  element.title = referenceOrigin(reference);
+  const origin = referenceOrigin(reference);
+  element.title = origin;
+  element.setAttribute("aria-label", `${reference.name} — ${origin}`);
+  if (action) {
+    element.dataset.action = action;
+    element.setAttribute("role", "link");
+    element.tabIndex = 0;
+  }
   element.textContent = referenceLabel(reference);
   return element;
+}
+
+/**
+ * Build one caret host: a text node that opens with the invisible mark.
+ *
+ * A reference token is real text, so a caret on either side of one sits on a
+ * DOM boundary the browser canonicalizes into the label. The mark is a real
+ * character ahead of the draft text in the same text node, which keeps the
+ * browser's insertion point inside that text node — outside the token — while
+ * native typing, composition, paste, and undo keep working. The walk reads the
+ * mark as scaffolding, never as a draft character.
+ */
+export function buildCaretHost(): Text {
+  return document.createTextNode(CARET_MARK);
+}
+
+/** Whether one node is a caret host: a text run that opens with the mark. */
+export function isCaretHost(node: Node | null | undefined): boolean {
+  return node?.nodeType === Node.TEXT_NODE && (node.nodeValue ?? "").startsWith(CARET_MARK);
 }
 
 /** Whether one node is a painted reference token (a plain boolean, not a narrowing). */

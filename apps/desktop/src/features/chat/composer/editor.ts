@@ -12,12 +12,23 @@ import {
   nextChipToken,
 } from "./reference-model";
 import {
+  CARET_MARK,
+  caretHostConsumed,
+  caretHostDraftLength,
+  caretHostDraftText,
+  caretHostTextOffset,
   caretIndexForPoint,
+  isCaretHostLead,
   selectionEndForPoint,
   selectionRangeFromPoints,
   selectionStartForPoint,
 } from "./reference-selection";
-import { buildReferenceElement, isReferenceElement } from "./reference-tokens";
+import {
+  buildCaretHost,
+  buildReferenceElement,
+  isCaretHost,
+  isReferenceElement,
+} from "./reference-tokens";
 
 export type { ComposerFileReference } from "./model";
 export {
@@ -75,8 +86,15 @@ export function createFileReference(
 }
 
 /** Rendered length of a node in draft-string characters (a reference = 1 char). */
+/** The draft characters one text node contributes (a caret host hides its mark). */
+function editorTextValue(node: Node): string {
+  const text = node.nodeValue ?? "";
+  return isCaretHost(node) ? caretHostDraftText(text) : text;
+}
+
+/** Rendered length of a node in draft-string characters (a reference = 1 char). */
 function editorNodeLength(node: Node): number {
-  if (node.nodeType === Node.TEXT_NODE) return (node.nodeValue ?? "").length;
+  if (node.nodeType === Node.TEXT_NODE) return editorTextValue(node).length;
   if (isReferenceElement(node)) return 1;
   if (node.nodeType === Node.ELEMENT_NODE) {
     const element = node as HTMLElement;
@@ -197,9 +215,14 @@ function walkEditorValue(
       const element = child.nodeType === Node.ELEMENT_NODE ? (child as HTMLElement) : null;
       if (isTrailingPlaceholderBreak(el, child)) continue;
       if (child.nodeType === Node.TEXT_NODE) {
-        const text = child.nodeValue ?? "";
+        const text = editorTextValue(child);
         if (stop && stop.node === child) {
-          out += text.slice(0, stop.offset);
+          // A caret host's mark is not a draft character, so a DOM offset inside
+          // it counts only the characters after the mark.
+          const consumed = isCaretHost(child)
+            ? caretHostConsumed(child.nodeValue ?? "", stop.offset)
+            : stop.offset;
+          out += text.slice(0, consumed);
           reached = true;
           return false;
         }
@@ -295,6 +318,31 @@ export function editorSelectionRange(el: HTMLElement): { start: number; end: num
   );
 }
 
+
+/** A caret point inside a caret host, after `consumed` of its draft characters. */
+function caretHostPoint(host: Node, consumed: number): EditorPoint {
+  return { node: host, offset: caretHostTextOffset(host.nodeValue ?? "", consumed) };
+}
+
+/**
+ * The DOM point of a draft position after one reference. The browser would
+ * canonicalize the element boundary itself into the label, so the point moves
+ * into the host text node that follows the token.
+ */
+function afterReferencePoint(parent: Node, index: number): EditorPoint {
+  const next = parent.childNodes[index + 1];
+  if (isCaretHost(next)) return caretHostPoint(next, 0);
+  return { node: parent, offset: index + 1 };
+}
+
+/** The DOM point of a draft position before one reference, after its host. */
+function beforeReferencePoint(parent: Node, index: number): EditorPoint {
+  const previous = parent.childNodes[index - 1];
+  if (isCaretHost(previous)) {
+    return caretHostPoint(previous, caretHostDraftLength(previous.nodeValue ?? ""));
+  }
+  return { node: parent, offset: index };
+}
 /** Draft-string index → DOM caret point. */
 function editorCaretPoint(el: HTMLElement, target: number): EditorPoint {
   let remaining = target;
@@ -314,11 +362,28 @@ function editorCaretPoint(el: HTMLElement, target: number): EditorPoint {
       const length = editorNodeLength(child);
       if (child.nodeType === Node.TEXT_NODE) {
         if (point === null && remaining <= length) {
-          point = { node: child, offset: remaining };
+          // Inside a caret host the point must stay after the host's invisible
+          // mark: a caret on the mark's leading edge is the boundary the
+          // browser would canonicalize into the neighbouring label.
+          point = {
+            node: child,
+            offset: isCaretHost(child)
+              ? caretHostTextOffset(child.nodeValue ?? "", remaining)
+              : remaining,
+          };
           return true;
         }
         remaining -= length;
-      } else if (isReferenceElement(child) || (child as HTMLElement).tagName === "BR") {
+      } else if (isReferenceElement(child)) {
+        if (point === null && remaining <= 1) {
+          point =
+            remaining === 0
+              ? beforeReferencePoint(parent, index)
+              : afterReferencePoint(parent, index);
+          return true;
+        }
+        remaining -= 1;
+      } else if ((child as HTMLElement).tagName === "BR") {
         if (point === null && remaining <= 1) {
           point = { node: parent, offset: remaining === 0 ? index : index + 1 };
           return true;
@@ -388,7 +453,13 @@ export function normalizeEditorSelection(el: HTMLElement): boolean {
   if (!el.contains(range.startContainer) || !el.contains(range.endContainer)) return false;
   if (range.collapsed) {
     const point = editorPointAt(el, range.startContainer, range.startOffset);
-    if (!point.inside) return false;
+    // A caret on a host's leading edge, or inside a label, is a point the
+    // browser would edit as the neighbouring token: both are repaired onto the
+    // nearest whole-token draft boundary.
+    const hostLead =
+      range.startContainer.nodeType === Node.TEXT_NODE &&
+      isCaretHostLead(range.startContainer.nodeValue ?? "", range.startOffset);
+    if (!point.inside && !hostLead) return false;
     setEditorCaret(el, caretIndexForPoint(point));
     return true;
   }
@@ -427,18 +498,38 @@ export function paintEditorValue(
 ): void {
   el.replaceChildren();
   let textBuffer = "";
+  let lastKind: "text" | "reference" | "break" | "host" | null = null;
   const flush = () => {
     if (textBuffer) {
       el.appendChild(document.createTextNode(textBuffer));
       textBuffer = "";
+      lastKind = "text";
     }
+  };
+  const appendHost = () => {
+    el.appendChild(buildCaretHost());
+    lastKind = "host";
+  };
+  const hostBeforeReference = () => {
+    // A text node already holds a caret before the token, and a host placed
+    // ahead of it already ends the same way; anything else leaves the boundary
+    // to the browser, which would edit it as the label.
+    return lastKind !== "text" && lastKind !== "host";
   };
   for (const char of Array.from(value)) {
     if (isChipTokenChar(char)) {
       const reference = referenceByToken.get(char);
       if (reference) {
         flush();
+        // A caret of its own needs a real text position whenever the node
+        // before the token cannot hold one: the start of the draft, another
+        // token, or a line break.
+        if (hostBeforeReference()) appendHost();
         el.appendChild(buildReferenceElement(reference, char));
+        lastKind = "reference";
+        // The caret after a token always needs one: the browser's nearest text
+        // node is the token's label, and it would swallow the next insertion.
+        appendHost();
         continue;
       }
       // A private-use code point with no reference behind it is user text (for
@@ -447,6 +538,7 @@ export function paintEditorValue(
     if (char === "\n") {
       flush();
       el.appendChild(document.createElement("br"));
+      lastKind = "break";
       continue;
     }
     textBuffer += char;
@@ -495,16 +587,9 @@ export function normalizeClipboardLineEndings(text: string): string {
 /** Keep native undo while inserting multiline text into the editor's Text/BR
  * model. insertText creates block wrappers whose offsets differ from the draft. */
 export function insertClipboardText(editor: HTMLElement, text: string): boolean {
+  // A caret beside a reference is repaired onto its caret host first, so the
+  // native command below inserts outside the label and keeps the undo stack.
   normalizeEditorSelection(editor);
-  // execCommand never reaches the beforeinput repair, so a caret after a
-  // reference is repaired here instead; the matching input event keeps the
-  // draft state following the DOM exactly as the native edit would.
-  if (insertTextOutsideReference(editor, text)) {
-    editor.dispatchEvent(
-      new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: text }),
-    );
-    return true;
-  }
   if (!/[\r\n]/.test(text)) return document.execCommand("insertText", false, text);
   const before = readEditorValue(editor);
   const { start, end } = editorSelectionRange(editor);
@@ -563,44 +648,6 @@ export function insertNewlineAtCaret(editor: HTMLElement): boolean {
   after.collapse(true);
   selection.removeAllRanges();
   selection.addRange(after);
-  return true;
-}
-
-/**
- * Insert typed or pasted text at a caret that sits directly after a reference.
- *
- * Chromium canonicalizes that caret into the reference's last text position, so
- * its own insertion would land inside the label, where the draft walk cannot see
- * it. Inserting the text node at the exact DOM point keeps it in the draft and
- * outside the token; the caller dispatches the matching input event so the draft
- * state follows. Returns whether it took over the edit.
- */
-export function insertTextOutsideReference(editor: HTMLElement, text: string): boolean {
-  if (!text) return false;
-  const selection = window.getSelection();
-  const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-  if (!selection || !range || !range.collapsed || !editor.contains(range.startContainer)) {
-    return false;
-  }
-  // A caret already inside a text node is a real insertion point for the browser.
-  if (range.startContainer.nodeType === Node.TEXT_NODE) return false;
-  const before = readEditorValue(editor);
-  const { start, end } = editorSelectionRange(editor);
-  if (!isChipTokenChar(before[start - 1] ?? "")) return false;
-  const normalized = normalizeClipboardLineEndings(text);
-  // The caret sits on the element boundary right after a token, which the
-  // browser would canonicalize into the label. Inserting the run at that exact
-  // DOM point keeps it outside the token, and the break slots a multiline run
-  // needs are completed against the value this insertion produces.
-  const fragment = document.createDocumentFragment();
-  normalized.split("\n").forEach((line, index) => {
-    if (index > 0) fragment.append(document.createElement("br"));
-    if (line) fragment.append(document.createTextNode(line));
-  });
-  range.deleteContents();
-  range.insertNode(fragment);
-  completeTrailingBreaks(editor, before.slice(0, start) + normalized + before.slice(end));
-  setEditorCaret(editor, start + normalized.length);
   return true;
 }
 

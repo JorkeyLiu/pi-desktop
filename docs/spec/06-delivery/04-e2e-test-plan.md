@@ -815,8 +815,10 @@ The minimum selection is:
   `pnpm test:e2e:theme-surfaces`.
 - Composer clipboard representation, attachment-selection copy/cut/paste, and
   text insertion: `pnpm test:e2e:composer-paste`.
-- Composer newlines, empty last line, caret placement, and the draft/DOM
-  serialization agreement: `pnpm test:e2e:composer-caret`.
+- Composer newlines, empty last line, caret placement, the draft/DOM
+  serialization agreement, real CDP text insertion and emulated IME composition
+  at a reference token boundary, boundary undo, and keyboard token activation:
+  `pnpm test:e2e:composer-caret`.
 - Composer slash-menu name/description layout: `pnpm build:js` followed by
   `pnpm test:e2e:composer-autocomplete`.
 - Transcript render boundaries and cross-part delegation display: `pnpm test:e2e:transcript`.
@@ -1702,8 +1704,14 @@ validation still needed.
   in the middle of a newline-terminated draft, twice in a row; paste text ending
   with a newline after one and after two existing trailing newlines, and at the
   draft end, including into an empty draft. 8) Put the caret inside a chip's
-  label by a real click, and by a drag from the label to the chip's remove
-  button.
+  label by a real click, and by a drag that starts in the label. 9) Attach one
+  reference token as the whole draft and drive real CDP input at its trailing
+  boundary: `Input.insertText` for plain text and an emoji, then
+  `Input.imeSetComposition` plus a commit for a composed character; reattach
+  the token and repeat before its leading boundary. 10) With a token mid-text,
+  type before it, click the text after it, type again, and undo. 11) Tab to the
+  token and press Enter; on an image token press Tab and Enter; Tab again and
+  press Space.
 - **Expected**: The caret stays on the now-empty second line, the typed
   character lands there (`暂不配置。` newline `a`), and no phantom character or
   extra newline appears. Every step keeps the draft and the editor's DOM
@@ -1717,13 +1725,25 @@ validation still needed.
   chip's markup is stored and used at that chip's boundary, not at the end of
   the draft, so the text after the chip keeps its place. Chips, native undo,
   pasted text, selection deletion, and IME composition keep their behavior.
+- **Expected (token boundary)**: Text inserted by the browser at either token
+  boundary — typed, pasted, emoji, or an emulated IME commit — becomes ordinary
+  draft characters outside the token, the label stays exactly `@name`, the
+  accessible name stays intact, and the inserted text reaches the submitted
+  text. Undo after typing on both sides of a token removes only the most recent
+  boundary edit and leaves the earlier one. Tab reaches each action-bearing
+  token as one focus stop, the focused element carries `role="link"` and an
+  accessible name holding the file name and its path, Enter and Space run the
+  same action a click runs without editing the draft or the label, and the
+  keystroke after the activation still edits the draft.
 - **Specs linked**: `04-ux/08-component-spec.md` §11.3 (composer draft model),
   `04-ux/09-interaction-patterns.md` §1
 - **Acceptance**: C (composer send)
 - **Milestone**: M2
 - **Status**: Automated by `pnpm test:e2e:composer-caret` (real Chromium key
-  events against the real `ComposerInput` + `useComposerDraft`, with rendered
-  line geometry of the typed text). A real OS IME remains manual.
+  events, plus CDP `Input.insertText` and `Input.imeSetComposition` against the
+  real `ComposerInput` + `useComposerDraft`, with rendered line geometry of the
+  typed text, boundary undo, and keyboard token activation). A real OS IME
+  remains manual.
 
 #### E2E-008e: Host speech transcribe and speak
 

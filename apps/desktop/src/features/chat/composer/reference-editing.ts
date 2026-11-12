@@ -1,6 +1,5 @@
 import {
   editorSelectionRange,
-  insertTextOutsideReference,
   normalizeEditorSelection,
   readEditorValue,
   setEditorCaret,
@@ -10,7 +9,7 @@ import {
   referenceDeletionSpan,
   skipReferenceCaret,
 } from "./reference-selection";
-import { referenceElementFor } from "./reference-tokens";
+import { isReferenceElement, referenceElementFor } from "./reference-tokens";
 
 /** A pointer that travels further than this is a selection drag, not a click. */
 const CLICK_SLOP_PX = 4;
@@ -70,28 +69,20 @@ export function installComposerReferenceEditing(
   const onBeforeInput = (event: Event) => {
     if (!(event instanceof InputEvent)) return;
     if (event.isComposing) return;
-    // The selection is repaired before the browser applies the edit, so an
-    // insertion can never land inside a label.
     if (!event.inputType.startsWith("insert") && !event.inputType.startsWith("delete")) return;
     const selection = selectionOf();
     if (!selection) return;
+    // The selection is repaired before the browser applies the edit: a caret
+    // left in a label or on a caret host's leading edge is moved onto the
+    // nearer token boundary, where the native edit lands outside the token and
+    // keeps its own undo step.
     normalizeEditorSelection(editor);
-    // A caret that Blink would place inside a label is repaired here: the edit
-    // is taken over so the text lands after the token instead of in its label.
-    if (
-      event.inputType.startsWith("insert") &&
-      event.data &&
-      insertTextOutsideReference(editor, event.data)
-    ) {
-      event.preventDefault();
-      editor.dispatchEvent(
-        new InputEvent("input", {
-          bubbles: true,
-          inputType: event.inputType,
-          data: event.data,
-        }),
-      );
-    }
+  };
+
+  // An IME composes at the current selection, so a caret that has not been
+  // repaired yet is repaired before the first composed character is inserted.
+  const onCompositionStart = () => {
+    normalizeEditorSelection(editor);
   };
 
   const deleteAcrossReference = (event: KeyboardEvent, direction: -1 | 1): boolean => {
@@ -137,8 +128,38 @@ export function installComposerReferenceEditing(
     return true;
   };
 
+  /**
+   * The reference element keyboard focus is on, when a Tab stop put it there.
+   * A pointer click focuses the token too, so activation stays a link action.
+   */
+  const focusedReference = (): HTMLElement | null => {
+    const active = document.activeElement;
+    if (!isReferenceElement(active)) return null;
+    const element = active as HTMLElement;
+    if (!editor.contains(element)) return null;
+    return element.dataset.action && element.dataset.token ? element : null;
+  };
+
+  /** Enter or Space on a focused reference runs the action a click would. */
+  const activateFocusedReference = (event: KeyboardEvent): boolean => {
+    const element = focusedReference();
+    if (!element) return false;
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+    if (event.key !== "Enter" && event.key !== " ") return false;
+    event.preventDefault();
+    // The editor's own Enter/Space handling must not also run: a draft newline
+    // or a typed space here would edit the text the user only wanted to open.
+    event.stopPropagation();
+    onActivate(element.dataset.token ?? "", element.dataset.action ?? "");
+    // Keyboard activation must leave the composer ready for the next
+    // keystroke: focus returns to the editing host at the draft's own caret
+    // instead of staying on the token.
+    editor.focus();
+    return true;
+  };
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.isComposing || event.keyCode === 229) return;
+    if (activateFocusedReference(event)) return;
     if (event.key === "ArrowLeft") {
       moveAcrossReference(event, -1);
       return;
@@ -224,6 +245,7 @@ export function installComposerReferenceEditing(
   };
 
   document.addEventListener("selectionchange", onSelectionChange);
+  editor.addEventListener("compositionstart", onCompositionStart, true);
   editor.addEventListener("beforeinput", onBeforeInput, true);
   editor.addEventListener("keydown", onKeyDown);
   editor.addEventListener("pointerdown", onPointerDown);
@@ -233,6 +255,7 @@ export function installComposerReferenceEditing(
     press = null;
     finishedPress = null;
     document.removeEventListener("selectionchange", onSelectionChange);
+    editor.removeEventListener("compositionstart", onCompositionStart, true);
     editor.removeEventListener("beforeinput", onBeforeInput, true);
     editor.removeEventListener("keydown", onKeyDown);
     editor.removeEventListener("pointerdown", onPointerDown);

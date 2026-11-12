@@ -1,14 +1,15 @@
 import type { ClipboardEvent } from "react";
 import {
   COMPOSER_CLIPBOARD_MIME,
-  composerClipboardSlice,
   type ComposerClipboardSlice,
+  composerClipboardSlice,
 } from "../clipboard";
 import {
   editorSelectionRange,
   normalizeEditorSelection,
   readEditorValue,
 } from "../editor";
+import { CARET_MARK } from "../reference-selection";
 import type { ComposerDraftController } from "./useComposerDraft";
 
 type UseComposerClipboardOptions = {
@@ -63,12 +64,22 @@ export function useComposerClipboard({
       sessionId,
     );
     // Text and readable text agree only when no chip is inside the selection,
-    // so a plain selection keeps the browser's own copy and cut.
-    if (slice.text === slice.plainText) return;
-    // The composer now owns this edit, so the native action is cancelled before
-    // any write is attempted: a half-written clipboard must not fall back to a
-    // native copy (which drops the chip identity) or a native cut (which would
-    // delete the selection even though the clipboard never received it).
+    // so a plain selection keeps the browser's own copy and cut — unless it
+    // clips a caret host's invisible mark, which is scaffolding and must never
+    // reach the clipboard as text.
+    if (slice.text === slice.plainText) {
+      const nativeText = window.getSelection()?.toString() ?? "";
+      if (!nativeText.includes(CARET_MARK)) return;
+      event.preventDefault();
+      try {
+        data.setData("text/plain", slice.plainText);
+      } catch (error) {
+        console.warn("[composer-clipboard] clipboard write failed; edit cancelled", error);
+        return;
+      }
+      if (cut) document.execCommand("delete");
+      return;
+    }
     event.preventDefault();
     let written = false;
     try {

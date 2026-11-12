@@ -561,12 +561,22 @@ globalThis.composerPasteProbe = async () => {
     const chip = imageChipByToken(controller.fileReferences[0].token!)!;
     assert(chip, "pasted images must render as an inline reference token");
     assert(!document.querySelector(".composer-image-attachments"), "the detached attachment row must be gone");
-    // The token is text: a readable `@name`, no capsule chrome, no icon, and no
-    // focus target of its own. Its label is selectable like any draft character.
+    // The token is text: a readable `@name`, no capsule chrome and no icon.
+    // Its label is selectable like any draft character, and it is a keyboard
+    // reachable link so the action it runs is possible without a pointer.
     assert(chip.textContent === "@native-image.png", `image token label was ${chip.textContent}`);
     assert(chip.title === controller.fileReferences[0].path, "image token lost its full path title");
-    assert(chip.getAttribute("role") === null && chip.tabIndex === -1 && !chip.hasAttribute("aria-label"),
-      "an image token must not be a separate focus target");
+    assert(
+      chip.getAttribute("role") === "link" && chip.tabIndex === 0,
+      "an image token must be a keyboard reachable link",
+    );
+    assert(
+      chip.getAttribute("aria-label") ===
+        `${controller.fileReferences[0].name} — ${controller.fileReferences[0].path}`,
+      `an image token must carry its file name and full path as an accessible name, got ${
+        chip.getAttribute("aria-label")
+      }`,
+    );
     assert(!chip.querySelector("svg") && !chip.querySelector("button") && !chip.querySelector("img"),
       "an image token must not carry chip chrome");
     assert(getComputedStyle(chip).userSelect !== "none", "an image token must stay selectable text");
@@ -665,12 +675,12 @@ globalThis.composerPasteProbe = async () => {
     assert(!dialog() && !isBlockingOverlayActive(), "closing left the modal or native-view blocker active");
     assert(document.activeElement === editor && editorSelectionRange(editor).start === 7,
       "closing did not restore the draft caret");
-    // A reference is draft text, not a separate widget: it owns no focus stop
-    // and no activation key of its own, so Enter and Space keep their textbox
-    // meaning and a pointer click is the activation gesture. Closing the
-    // preview hands focus straight back to the draft caret.
-    assert(chip.tabIndex === -1 && !chip.hasAttribute("role") && !chip.hasAttribute("tabindex"),
-      "an image token became a keyboard focus target");
+    // A reference is draft text that is also a keyboard reachable link: it
+    // carries one focus stop and the action Enter/Space run is the same one a
+    // pointer click runs. Closing the preview hands focus back to the draft
+    // caret.
+    assert(chip.tabIndex === 0 && chip.getAttribute("role") === "link",
+      "an image token must stay a keyboard reachable link");
     assert(document.activeElement === editor && editorSelectionRange(editor).start === 7,
       "closing the preview lost the draft caret");
     assert(readEditorValue(editor) === beforePreview && submitted === 0,
@@ -1749,7 +1759,10 @@ globalThis.composerReferenceTokenProbe = async () => {
   const tokenFor = (token: string) =>
     editor().querySelector<HTMLElement>(`.composer-reference[data-token="${token}"]`);
   const draft = () => readEditorValue(editor());
-  const selected = () => window.getSelection()?.toString() ?? "";
+  // A host text node keeps an invisible zero-width caret mark next to a token;
+  // the browser's selection text includes it, while the user, the clipboard,
+  // and the draft never see it.
+  const selected = () => (window.getSelection()?.toString() ?? "").replaceAll("\u200B", "");
   const caret = () => editorSelectionRange(editor());
   const pointer = async (input: { type: "mousePressed" | "mouseMoved" | "mouseReleased"; x: number; y: number }) => {
     await globalThis.composerPreviewPointer(input);
@@ -1817,7 +1830,13 @@ globalThis.composerReferenceTokenProbe = async () => {
     assert(tokens().length === 1, "a committed file reference must paint one inline token");
     assert(textToken.textContent === "@notes.txt",
       `the visible label must be exactly the filename: ${JSON.stringify(textToken.textContent)}`);
-    assert(editor().textContent === "inspect @notes.txt", "the token label is real draft text");
+    // The host text keeps an invisible zero-width mark that gives the browser
+    // a real caret position next to a token; it is not draft text and must not
+    // reach the draft, the clipboard, or a submission.
+    assert(
+      editor().textContent?.replaceAll("\u200B", "") === "inspect @notes.txt",
+      "the token label is real draft text",
+    );
     assert(textToken.getAttribute("title") === "/scratch/token-a/notes.txt",
       "the full reference stays in the tooltip");
     assert(!textToken.querySelector("svg") && !textToken.querySelector("button"),
@@ -1926,6 +1945,9 @@ globalThis.composerReferenceTokenProbe = async () => {
       caret().start === imageStart && caret().end === imageStart + 1,
       `Shift+ArrowLeft must select the whole token: ${JSON.stringify(caret())}`,
     );
+    // The selection's own text carries the invisible caret mark that keeps the
+    // browser outside the token; the highlight covers the whole label, and the
+    // mark never reaches the clipboard or a submission.
     assert(selected() === "@image.png",
       `the visible highlight must cover the whole label: ${JSON.stringify(selected())}`);
     setEditorCaret(editor(), imageStart);

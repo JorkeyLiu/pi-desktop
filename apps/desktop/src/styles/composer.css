@@ -304,6 +304,13 @@
 }
 
 .composer-reference[data-action]:hover {
+
+/* A focused reference is a link: the ring is its only extra surface, and no
+ * capsule, icon, or control appears. */
+.composer-reference[data-action]:focus-visible {
+  outline: 2px solid var(--ds-focus);
+  outline-offset: 2px;
+}
   text-decoration-color: var(--ds-accent);
 }
 

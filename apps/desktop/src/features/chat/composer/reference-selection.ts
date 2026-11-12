@@ -99,3 +99,55 @@ export function referenceDeletionSpan(
   if (!isReferenceCharAt(value, from)) return null;
   return { start: from, end: from + 1 };
 }
+/**
+ * The invisible mark a caret host keeps ahead of the draft characters it holds.
+ *
+ * A caret may not sit at an element or text-node boundary next to a reference
+ * label: Chromium canonicalizes that point into the label's own text, so typed,
+ * pasted, or composed text would land inside the atomic token. A host text node
+ * whose first character is this mark gives the browser a real, non-empty text
+ * position one step inside the boundary, where a native edit stays outside the
+ * token and on the undo stack. The mark is scaffolding: it is not a draft
+ * character, never reaches a draft read, and never reaches the clipboard.
+ */
+export const CARET_MARK = "\u200B";
+
+/** The draft characters a caret host's text holds, without its mark. */
+export function caretHostDraftText(text: string): string {
+  return text.split(CARET_MARK).join("");
+}
+
+/** How many draft characters a caret host's text holds. */
+export function caretHostDraftLength(text: string): number {
+  return caretHostDraftText(text).length;
+}
+
+/**
+ * The text offset that puts the caret after `consumed` draft characters of a
+ * caret host, and never before its leading mark: a caret on that mark's leading
+ * edge would be canonicalized into the neighbouring label.
+ */
+export function caretHostTextOffset(text: string, consumed: number): number {
+  let remaining = Math.max(0, consumed);
+  for (let offset = 0; offset <= text.length; offset += 1) {
+    if (remaining === 0) {
+      return offset === 0 && text[0] === CARET_MARK ? 1 : offset;
+    }
+    if (text[offset] !== CARET_MARK) remaining -= 1;
+  }
+  return text.length;
+}
+
+/** How many draft characters of a caret host precede one text offset. */
+export function caretHostConsumed(text: string, offset: number): number {
+  let consumed = 0;
+  for (let index = 0; index < offset && index < text.length; index += 1) {
+    if (text[index] !== CARET_MARK) consumed += 1;
+  }
+  return consumed;
+}
+
+/** Whether a text offset is the leading edge a browser edits as the neighbour. */
+export function isCaretHostLead(text: string, offset: number): boolean {
+  return offset === 0 && text.startsWith(CARET_MARK);
+}

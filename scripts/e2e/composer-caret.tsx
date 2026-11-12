@@ -32,6 +32,7 @@ import {
 declare global {
   var composerCaretProbe: (steps: CursorStep[]) => Promise<unknown>;
   var composerCaretPointerDone: () => void;
+  var composerCaretCdpDone: () => void;
 }
 
 type CursorStep = {
@@ -41,7 +42,9 @@ type CursorStep = {
   label?: string;
   caret?: number;
   /** Element a real pointer click is aimed at. */
-  target?: "token";
+  target?: "token" | "tail";
+  /** Text an emulated composition commits after its preedit. */
+  commit?: string;
 };
 
 const noop = () => {};
@@ -136,18 +139,31 @@ const pressKey = (key: string) => {
 };
 
 /** Ask the driver for one real pointer click at the element's centre. */
-const clickPointer = (element: Element) => {
-  const rect = element.getBoundingClientRect();
+const clickPointer = (target: Element | Node, at: "start" | "center" = "center") => {
+  const rect = pointerRect(target);
   const done = new Promise<void>((resolve) => {
     (globalThis as unknown as { composerCaretPointerDone: () => void }).composerCaretPointerDone = resolve;
   });
   console.log(
     "PI_CARET_POINTER:" +
       JSON.stringify({
-        x: Math.round(rect.left + rect.width / 2),
+        x: Math.round(at === "start" ? rect.left + 1 : rect.left + rect.width / 2),
         y: Math.round(rect.top + rect.height / 2),
       }),
   );
+  return done;
+};
+/**
+ * Ask the driver to run one real Chromium input command, so an emulated IME
+ * composition and an `Input.insertText` reach the editing host exactly as an
+ * OS input method would.
+ */
+const requestCdp = (spec: Record<string, string>) => {
+  const done = new Promise<void>((resolve) => {
+    (globalThis as unknown as { composerCaretCdpDone: () => void }).composerCaretCdpDone =
+      resolve;
+  });
+  console.log("PI_CARET_CDP:" + JSON.stringify(spec));
   return done;
 };
 
@@ -215,6 +231,46 @@ const caretLine = (el: HTMLElement) => {
   return rect && rect.height > 0 && (rect.top !== 0 || rect.left !== 0) ? lineOf(el, rect.top) : null;
 };
 
+/** Which element currently owns DOM focus, and whether it is one draft token. */
+const describeNode = (node: Element | null) => {
+  if (!node) return null;
+  const element = node as HTMLElement;
+  return {
+    tag: element.tagName,
+    className: element.className,
+    role: element.getAttribute("role"),
+    token: element.dataset.token ?? null,
+    insideEditor: Boolean(element.closest(".composer-input")),
+  };
+};
+
+/** Bounding box of one element or text run, for a real pointer click. */
+const pointerRect = (target: Element | Node) => {
+  if (target.nodeType === Node.ELEMENT_NODE) return (target as Element).getBoundingClientRect();
+  const range = document.createRange();
+  range.selectNodeContents(target);
+  return range.getBoundingClientRect();
+};
+
+/** The plain text run after the last token, the point a click past it reaches. */
+const tailText = (): Node | null => {
+  let found: Node | null = null;
+  const walk = (parent: Node) => {
+    for (const child of Array.from(parent.childNodes)) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        if (!(child.nodeValue ?? "").startsWith("\u200B") && (child.nodeValue ?? "").length > 0) {
+          found = child;
+        }
+        continue;
+      }
+      if (child.nodeType !== Node.ELEMENT_NODE) continue;
+      if ((child as Element).classList.contains("composer-reference")) continue;
+      walk(child);
+    }
+  };
+  walk(editor());
+  return found;
+};
 const snapshot = (label: string) => {
   const el = editor();
   return {
@@ -236,6 +292,17 @@ const snapshot = (label: string) => {
       (reference) => reference.textContent ?? "",
     ),
     activations: activations.splice(0, activations.length),
+    // The accessible contract of each inline reference: its link role, its
+    // reachable tab stop, and the name and full path it carries.
+    referenceAria: Array.from(el.querySelectorAll<HTMLElement>(".composer-reference")).map(
+      (reference) => ({
+        role: reference.getAttribute("role"),
+        label: reference.getAttribute("aria-label"),
+        tabIndex: reference.tabIndex,
+        title: reference.title,
+      }),
+    ),
+    focused: describeNode(document.activeElement),
     tokens: controller.fileReferences.map((reference) => reference.token ?? ""),
     submission: controller.draftSnapshot(draftValue).text,
     selection: window.getSelection()?.toString() ?? "",
@@ -271,7 +338,6 @@ globalThis.composerCaretProbe = async (steps: CursorStep[]) => {
   };
 
   record("mounted");
-
   for (const step of steps) {
     if (step.op === "set") {
       const text = step.text ?? "";
@@ -318,9 +384,45 @@ globalThis.composerCaretProbe = async (steps: CursorStep[]) => {
     if (step.op === "pointer") {
       // A real click on a token's own label: the browser chooses the selection
       // point, and only a click — never a selection drag — activates.
-      const target = editor().querySelector(".composer-reference");
-      if (!target) throw new Error("pointer target missing: .composer-reference");
-      await clickPointer(target);
+      const target =
+        step.target === "tail" ? tailText() : editor().querySelector(".composer-reference");
+      if (!target) throw new Error("pointer target missing: " + (step.target ?? "token"));
+      await clickPointer(target, step.target === "tail" ? "start" : "center");
+      await settle();
+      continue;
+    }
+    if (step.op === "tokenLast") {
+      // The token is the whole draft, so the caret sits on the boundary right
+      // after its label — the point a real insertion reaches first.
+      const reference = { ...tokenReference(step.text ?? "a.png"), token: "\uE010" };
+      const token = reference.token ?? "";
+      flushSync(() => controller.applyEditorDraft(token, [reference], token.length));
+      await settle();
+      continue;
+    }
+    if (step.op === "cdpInsert" || step.op === "cdpCompose") {
+      // A real Chromium insertion or emulated IME composition at the caret.
+      await requestCdp(
+        step.op === "cdpInsert"
+          ? { op: "insertText", text: step.text ?? "" }
+          : { op: "compose", text: step.text ?? "", commit: step.commit ?? "" },
+      );
+      await settle();
+      continue;
+    }
+    if (step.op === "tokenImage") {
+      // An image reference is the kind whose click opens a preview, so the
+      // keyboard path is checked on it as well.
+      const name = step.text ?? "photo.png";
+      const reference = {
+        ...createFileReference(`/caret-workspace/${name}`, name, "caret-session", {
+          kind: "image",
+          mimeType: "image/png",
+        }),
+        token: "\uE011",
+      };
+      const text = `见 ${reference.token}后面`;
+      flushSync(() => controller.applyEditorDraft(text, [reference], text.length));
       await settle();
       continue;
     }
