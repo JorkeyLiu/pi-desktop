@@ -57,18 +57,24 @@ export function useComposerClipboard({
     // Text and readable text agree only when no chip is inside the selection,
     // so a plain selection keeps the browser's own copy and cut.
     if (slice.text === slice.plainText) return;
-    // A failed clipboard write must leave the draft untouched, so a cut never
-    // deletes content the clipboard did not receive.
+    // The composer now owns this edit, so the native action is cancelled before
+    // any write is attempted: a half-written clipboard must not fall back to a
+    // native copy (which drops the chip identity) or a native cut (which would
+    // delete the selection even though the clipboard never received it).
+    event.preventDefault();
+    let written = false;
     try {
       data.setData("text/plain", slice.plainText);
       if (slice.payload) {
         data.setData(COMPOSER_CLIPBOARD_MIME, JSON.stringify(slice.payload));
       }
-    } catch {
-      return;
+      written = true;
+    } catch (error) {
+      // Cancelled and non-destructive: the draft keeps the text and chips, and
+      // the clipboard is left alone instead of claiming a structured write.
+      console.warn("[composer-clipboard] clipboard write failed; edit cancelled", error);
     }
-    event.preventDefault();
-    if (!cut) return;
+    if (!written || !cut) return;
     // `delete` is the native editing command, not a draft-state replacement:
     // undo and redo keep working on the text and on the restored chips.
     document.execCommand("delete");

@@ -1200,6 +1200,239 @@ globalThis.composerPasteProbe = async () => {
       "an oversized clipboard payload added an attachment");
     assert(readEditorValue(crossEditor).endsWith("untrusted"),
       "an oversized clipboard payload did not fall back to its plain text");
+    // A clipboard write that fails must not let the native action run: a native
+    // cut would delete the selection and its chip metadata, and a native copy
+    // would replace the composer's readable selection with a chip-less fallback.
+    const failingClipboard = (
+      type: "copy" | "cut",
+      failWhen: "first" | "after-plain",
+    ) => {
+      const data = new DataTransfer();
+      const writes: string[] = [];
+      const clipboardData = new Proxy(data, {
+        get(target, property) {
+          if (property === "setData") {
+            return (format: string, value: string) => {
+              if (failWhen === "first" || format !== "text/plain") {
+                throw new Error(`clipboard write failed: ${format}`);
+              }
+              writes.push(format);
+              target.setData(format, value);
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const event = new ClipboardEvent(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", { value: clipboardData });
+      return { event, data, writes };
+    };
+    const execCommands: string[] = [];
+    const nativeExecCommand = document.execCommand;
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      writable: true,
+      value: (command: string) => {
+        execCommands.push(command);
+        return nativeExecCommand.call(document, command);
+      },
+    });
+    try {
+      const failingSource = "before \uE0B0 after";
+      const failingReference = createFileReference(
+        "/scratch/paste-a/failing.png",
+        "failing.png",
+        "paste-a",
+        { kind: "image", mimeType: "image/png", token: "\uE0B0" },
+      );
+      const failingEditor = await reset("", 0, 0);
+      flushSync(() =>
+        controller.applyEditorDraft(failingSource, [failingReference], failingSource.length),
+      );
+      await new Promise(requestAnimationFrame);
+      failingEditor.focus();
+      select(failingEditor, 0, failingSource.length);
+      const failedFirstWrite = failingClipboard("cut", "first");
+      flushSync(() => failingEditor.dispatchEvent(failedFirstWrite.event));
+      assert(
+        failedFirstWrite.event.defaultPrevented,
+        "a handled cut whose clipboard write failed let the native deletion run",
+      );
+      assert(failedFirstWrite.writes.length === 0,
+        "the failing clipboard received a write");
+      assert(
+        readEditorValue(failingEditor) === failingSource &&
+          controller.fileReferences.length === 1 &&
+          controller.fileReferences[0].path === failingReference.path,
+        `a failed clipboard write changed the draft: ${JSON.stringify(readEditorValue(failingEditor))}`,
+      );
+      assert(!execCommands.includes("delete"),
+        "a cut deleted the selection after the clipboard write failed");
+      assert(chipTokens(failingEditor).join("") === "\uE0B0",
+        "a failed cut removed the chip");
+      // The plain write succeeded but the structured one did not: the copy is
+      // cancelled rather than falling back to a native chip-less copy, and the
+      // clipboard is never claimed to hold the structured payload.
+      select(failingEditor, 0, readEditorValue(failingEditor).length);
+      const partiallyWritten = failingClipboard("copy", "after-plain");
+      flushSync(() => failingEditor.dispatchEvent(partiallyWritten.event));
+      assert(
+        partiallyWritten.event.defaultPrevented,
+        "a handled copy whose structured write failed let the native copy replace it",
+      );
+      assert(partiallyWritten.writes.includes("text/plain"),
+        "the failing copy did not attempt its readable text");
+      assert(partiallyWritten.data.getData(clipboardMime) === "",
+        "a failed structured write reported a valid structured clipboard");
+      assert(
+        readEditorValue(failingEditor) === failingSource &&
+          controller.fileReferences.length === 1 &&
+          chipTokens(failingEditor).join("") === "\uE0B0",
+        "a failed copy changed the draft",
+      );
+      assert(!execCommands.includes("delete"),
+        "a copy deleted part of the selection");
+    } finally {
+      Object.defineProperty(document, "execCommand", {
+        configurable: true,
+        writable: true,
+        value: nativeExecCommand,
+      });
+    }
+    // A plain-text selection still belongs to the browser: the composer must
+    // not intercept it, attempt a write, or cancel its native copy.
+    const plainEditor = await reset("native plain copy", 0, 0);
+    select(plainEditor, 0, readEditorValue(plainEditor).length);
+    const plainNative = failingClipboard("copy", "first");
+    flushSync(() => plainEditor.dispatchEvent(plainNative.event));
+    assert(
+      !plainNative.event.defaultPrevented && plainNative.writes.length === 0,
+      "a selection without a chip was intercepted by the composer clipboard",
+    );
+    assert(
+      controller.fileReferences.length === 0 &&
+        readEditorValue(plainEditor) === "native plain copy",
+      "the native plain copy path changed the draft",
+    );
+    await reset("", 0, 0);
+    const replacementToken = "\uE0C0";
+    const replacementPath = "/scratch/paste-a/replaced.png";
+    const replacementSource = `replace ${replacementToken} once`;
+    const replacementEditor = await reset("", 0, 0);
+    flushSync(() =>
+      controller.applyEditorDraft(
+        replacementSource,
+        [
+          createFileReference(replacementPath, "replaced.png", "paste-a", {
+            kind: "image", mimeType: "image/png", token: replacementToken,
+          }),
+        ],
+        replacementSource.length,
+      ),
+    );
+    await new Promise(requestAnimationFrame);
+    replacementEditor.focus();
+    select(replacementEditor, 0, replacementSource.length);
+    const replacementPayload = dispatchClipboard("copy", replacementEditor);
+    assert(replacementPayload.event.defaultPrevented,
+      "copying a draft that holds an image must be handled by the composer");
+    const previousTokens = chipTokens(replacementEditor);
+    select(replacementEditor, 0, readEditorValue(replacementEditor).length);
+    await dispatchInternalPaste(replacementEditor, replacementPayload.data);
+    const replacedTokens = chipTokens(replacementEditor);
+    assert(
+      replacedTokens.length === 1 && controller.fileReferences.length === 1,
+      `a replace-all paste kept the replaced image: ${JSON.stringify(
+        replacedTokens.map((token) =>
+          controller.fileReferences.find((reference) => reference.token === token)?.path,
+        ),
+      )}`,
+    );
+    assert(
+      replacedTokens.every((token) => !previousTokens.includes(token)) &&
+        !sentinels(readEditorValue(replacementEditor)).includes(replacementToken),
+      "a replace-all paste kept the replaced image's token",
+    );
+    assert(
+      readEditorValue(replacementEditor) ===
+          replacementSource.replace(replacementToken, replacedTokens[0]) &&
+        pathsInOrder(replacedTokens).join("|") === replacementPath,
+      `a replace-all paste appended the replaced image: ${JSON.stringify(readEditorValue(replacementEditor))}`,
+    );
+    const replacedCache = readComposerDraft(controller.draftKey);
+    assert(
+      replacedCache?.text === readEditorValue(replacementEditor) &&
+        replacedCache.fileReferences.length === 1 &&
+        replacedCache.fileReferences[0].path === replacementPath &&
+        replacedCache.fileReferences[0].token === replacedTokens[0],
+      `a replace-all paste cached a stale image reference: ${JSON.stringify(replacedCache)}`,
+    );
+    // A partial replacement consumes only the chips it covered: the untouched
+    // image keeps its identity and place instead of being re-inserted.
+    const partialFirst = "\uE0C1";
+    const partialSecond = "\uE0C2";
+    const partialFirstPath = "/scratch/paste-a/partial-first.png";
+    const partialSecondPath = "/scratch/paste-a/partial-second.png";
+    const partialSource = `left ${partialFirst} middle ${partialSecond} right`;
+    const partialEditor = await reset("", 0, 0);
+    flushSync(() =>
+      controller.applyEditorDraft(
+        partialSource,
+        [
+          createFileReference(partialFirstPath, "partial-first.png", "paste-a", {
+            kind: "image", mimeType: "image/png", token: partialFirst,
+          }),
+          createFileReference(partialSecondPath, "partial-second.png", "paste-a", {
+            kind: "image", mimeType: "image/png", token: partialSecond,
+          }),
+        ],
+        partialSource.length,
+      ),
+    );
+    await new Promise(requestAnimationFrame);
+    partialEditor.focus();
+    select(partialEditor, 0, partialSource.length);
+    const partialPayload = dispatchClipboard("copy", partialEditor);
+    const replacedStart = readEditorValue(partialEditor).indexOf(partialFirst);
+    const replacedEnd = readEditorValue(partialEditor).indexOf(partialSecond);
+    select(partialEditor, replacedStart, replacedEnd);
+    await dispatchInternalPaste(partialEditor, partialPayload.data);
+    const partialTokens = chipTokens(partialEditor);
+    const partialPaths = pathsInOrder(partialTokens);
+    assert(
+      partialTokens.length === 3 &&
+        partialPaths.join("|") === [partialFirstPath, partialSecondPath, partialSecondPath].join("|"),
+      `a partial replacement misplaced the remaining image: ${JSON.stringify(partialPaths)}`,
+    );
+    assert(
+      !sentinels(readEditorValue(partialEditor)).includes(partialFirst) &&
+        sentinels(readEditorValue(partialEditor)).includes(partialSecond),
+      `a partial replacement kept the replaced image: ${JSON.stringify(readEditorValue(partialEditor))}`,
+    );
+    assert(
+      controller.fileReferences.some((reference) =>
+        reference.path === partialSecondPath && reference.token === partialSecond,
+      ) && !controller.fileReferences.some((reference) => reference.token === partialFirst),
+      `a partial replacement lost the untouched image's identity: ${JSON.stringify(controller.fileReferences.map((reference) => reference.token))}`,
+    );
+    const partialCache = readComposerDraft(controller.draftKey);
+    assert(
+      partialCache?.text === readEditorValue(partialEditor) &&
+        partialCache.fileReferences.length === 3,
+      `a partial replacement cached stale references: ${JSON.stringify(partialCache)}`,
+    );
+    const restoredText = readEditorValue(partialEditor);
+    flushSync(() => root.render(null));
+    render("paste-a");
+    await new Promise(requestAnimationFrame);
+    const remountedEditor = controller.ref.current!;
+    assert(
+      readEditorValue(remountedEditor) === restoredText &&
+        chipTokens(remountedEditor).length === 3 &&
+        controller.fileReferences.length === 3,
+      `a remount did not restore the replaced draft: ${JSON.stringify(readEditorValue(remountedEditor))}`,
+    );
     flushSync(() => root.render(null));
     resetComposerDraftCache();
 
@@ -1226,6 +1459,8 @@ globalThis.composerPasteProbe = async () => {
       workspaceReferencesAcrossRemount: true,
       pendingPasteAcrossSessionSwitch: true,
       attachmentSelectionClipboard: true,
+      replacementPasteConsumesCoveredChip: true,
+      clipboardWriteFailureCancelsNativeEdit: true,
     };
   } finally {
     flushSync(() => root.unmount());

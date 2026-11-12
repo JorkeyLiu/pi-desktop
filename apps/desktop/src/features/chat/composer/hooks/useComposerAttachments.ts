@@ -242,8 +242,15 @@ export function useComposerAttachments({
       sourceValue.slice(0, selectionStart) +
       placed.inserted +
       sourceValue.slice(selectionEnd);
+    // A selection that covered a chip replaces it: keep only the references
+    // whose token survived in the draft, the same rule the editor reconciliation
+    // applies. An untouched chip keeps its identity and its place, while a
+    // replaced one is neither kept nor re-appended at the end of the draft.
+    const retainedReferences = previousReferences.filter(
+      (reference) => !reference.token || nextText.includes(reference.token),
+    );
     const nextReferences = [
-      ...previousReferences.map((reference) =>
+      ...retainedReferences.map((reference) =>
         createFileReference(reference.path, reference.name, ownerSessionId, reference),
       ),
       ...placed.references,
@@ -251,7 +258,7 @@ export function useComposerAttachments({
     writeComposerDraft(ownerSessionId || draftKey, {
       text: nextText,
       fileReferences: [
-        ...previousReferences,
+        ...retainedReferences,
         ...placed.references.map((reference) => draftFileReference(reference)),
       ],
     });
