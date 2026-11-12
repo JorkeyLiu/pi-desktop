@@ -3981,15 +3981,15 @@ Anatomy:
   only the leaf file or directory name; directories get a trailing `/` and
   continue completion on accept. The complete relative path remains available
   through the row tooltip and accessible name. Accepting a completed file
-  (Enter, Tab, or click) replaces the `@` token with an inline leaf-name chip
-  at the caret — the same sentinel-backed chip as a pasted file — whose
+  (Enter, Tab, or click) replaces the `@` token with an inline `@<leaf name>`
+  reference token at the caret — the same token a pasted file produces — whose
   canonical value is the original `entry.path`; the menu closes and that Enter
   does not send. Accepting a directory keeps the literal path in the draft so
   completion can continue. Entries come from `fs/index` (D124, D209, D362). A
   truncation footnote appears when the index is capped; without a workspace the
   menu shows an "open a project" empty state.
 - Accepting commands and directories inserts text (`/name ` / `@dir/`);
-  accepting a completed file inserts the inline chip rather than deleting the
+  accepting a completed file inserts the inline reference token rather than deleting the
   trigger. Immediately
   before dispatch, ordinary references serialize in stable order after the
   visible draft as complete `@path` text using D124's quoting. A generated
@@ -3999,14 +3999,15 @@ Anatomy:
   main selects image blocks or path fallbacks from the exact model capability.
   Reference-only drafts are sendable. Builtin/plugin dispatch still bypasses
   the model-ready gate when no prompt text or file reference is sent.
-- Copying or cutting a draft selection that contains an attachment chip
-  describes that selection itself: `text/plain` carries the readable text the
-  send path would write (`@path`, a session link, or a plugin mark's send text)
-  and never a renderer sentinel, while a versioned application-internal format
-  carries the ordered text/reference parts. A selection without a chip keeps
+- Copying or cutting a draft selection that contains an attachment reference
+  token describes that selection itself: `text/plain` carries the readable text
+  the send path would write (`@path`, a session link, or a plugin mark's send
+  text) and never a renderer sentinel, while a versioned application-internal
+  format carries the ordered text/reference parts. A selection without a
+  reference keeps
   the browser's native copy and cut. An internal paste is handled before the
   plain-text and file paths and restores the text, attachment identity, and
-  order with fresh chip sentinels on every repeat, for subset and select-all
+  order with fresh reference sentinels on every repeat, for subset and select-all
   selections alike. Cut deletes through the browser's native editing command
   only after the clipboard write succeeded, so undo and redo restore the cut
   text, chips, and reference metadata. The internal format is untrusted input:
@@ -4991,16 +4992,16 @@ Conversation overflow                    Composer draft (unsent)
     use the 13px compact token while primary sidebar actions remain at 14px
 
 
-### Native deletion beside composer file chips
+### Native deletion beside composer reference tokens
 
 Deleting text before an inline file reference must not add a blank line or move
-the chip to the next line. Keep native editing and undo/redo. Before a native
+the token to the next line. Keep native editing and undo/redo. Before a native
 deletion, record the browser's target range and existing BR nodes; after input,
 remove a newly created BR only when removing that exact node makes the draft
 match the requested deletion. Never trim leading newlines or normalize all BRs.
 Remember proven placeholder nodes weakly so native redo cannot restore them.
-Explicit line breaks, IME composition, file references, and chip deletion retain
-their normal behavior. Native undo of chip deletion restores its file-reference metadata
+Explicit line breaks, IME composition, file references, and reference deletion
+retain their normal behavior. Native undo of reference deletion restores its file-reference metadata
 as well as its DOM, so submission and draft caching retain the path. Deleted
 reference history is local to the current draft/workspace and is cleared on send;
 pasting a private-use character alone must not restore an attachment. The input owns and disposes the native event listeners.

@@ -1,5 +1,6 @@
-import { useLayoutEffect } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { installComposerDeletionGuard } from "./native-deletion";
+import { installComposerReferenceEditing } from "./reference-editing";
 import type {
   ClipboardEvent,
   Dispatch,
@@ -36,6 +37,12 @@ export type ComposerInputProps = {
   onSubmit: (steering?: boolean) => void;
   onInsertNewline: () => void;
   onInput: (source: string, caret: number) => void;
+  /**
+   * Run the action the clicked draft reference owns: an image preview, a text
+   * file's editable expansion, or a referenced conversation. A selection drag
+   * over the same token never reaches it.
+   */
+  onActivateReference?: (token: string) => void;
   /** Terminal-style recall; a composer with no history passes none. */
   onHistoryNavigate?: (direction: "older" | "newer") => boolean;
   onCompositionStart: () => void;
@@ -71,6 +78,7 @@ export function ComposerInput({
   onSubmit,
   onInsertNewline,
   onInput,
+  onActivateReference,
   onHistoryNavigate,
   onCompositionStart,
   onCompositionEnd,
@@ -78,9 +86,22 @@ export function ComposerInput({
   onFocus,
   onBlur,
 }: ComposerInputProps) {
+  // The action lives with the draft, so the installer only needs the latest
+  // callback: a stable wrapper keeps it from re-installing every render.
+  const activateReferenceRef = useRef(onActivateReference);
+  activateReferenceRef.current = onActivateReference;
   useLayoutEffect(() => {
     const editor = inputRef.current;
-    return editor ? installComposerDeletionGuard(editor) : undefined;
+    if (!editor) return undefined;
+    const removeDeletionGuard = installComposerDeletionGuard(editor);
+    const removeReferenceEditing = installComposerReferenceEditing(
+      editor,
+      (token) => activateReferenceRef.current?.(token),
+    );
+    return () => {
+      removeReferenceEditing();
+      removeDeletionGuard();
+    };
   }, [inputRef]);
   return (
     <div className="composer-input-wrap">

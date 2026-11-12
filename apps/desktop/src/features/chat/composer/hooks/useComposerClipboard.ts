@@ -4,7 +4,11 @@ import {
   composerClipboardSlice,
   type ComposerClipboardSlice,
 } from "../clipboard";
-import { editorSelectionRange, readEditorValue } from "../editor";
+import {
+  editorSelectionRange,
+  normalizeEditorSelection,
+  readEditorValue,
+} from "../editor";
 import type { ComposerDraftController } from "./useComposerDraft";
 
 type UseComposerClipboardOptions = {
@@ -42,6 +46,10 @@ export function useComposerClipboard({
     const editor = draft.ref.current;
     const data = event.clipboardData;
     if (!editor || !data) return;
+    // A selection that only touches part of a reference expands to the whole
+    // token first, so both the structured write and a delegated native edit
+    // copy or delete the reference as one unit.
+    normalizeEditorSelection(editor);
     const selection = editorSelectionRange(editor);
     if (selection.start === selection.end) return;
     const sessionId = activeSessionId ?? "";

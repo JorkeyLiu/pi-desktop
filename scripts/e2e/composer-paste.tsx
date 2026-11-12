@@ -27,7 +27,9 @@ import {
   editorSelectionRange,
   readEditorValue,
   setEditorCaret,
+  type ComposerFileReference,
 } from "../../apps/desktop/src/features/chat/composer/editor";
+import { COMPOSER_CLIPBOARD_MIME } from "../../apps/desktop/src/features/chat/composer/clipboard";
 import { api } from "../../apps/desktop/src/lib/api";
 import { FilesTab } from "../../apps/desktop/src/components/workpanel/FilesTab";
 import { FileRefChip, MessageAttachmentImage } from "../../apps/desktop/src/features/chat/transcript/shared";
@@ -40,9 +42,11 @@ import { useAppStore } from "../../apps/desktop/src/stores/app-store";
 
 declare global {
   var composerPreviewPointer: (input: { type: "mousePressed" | "mouseMoved" | "mouseReleased"; x: number; y: number }) => Promise<void>;
-  var composerPreviewPressKey: (key: string) => Promise<void>;
+  var composerPreviewDrag: (input: { from: { x: number; y: number }; to: { x: number; y: number } }) => Promise<void>;
+  var composerPreviewPressKey: (input: string | { key: string; modifiers?: string[]; text?: string }) => Promise<void>;
   var composerPreviewCapture: (() => Promise<void>) | undefined;
   var composerPasteProbe: () => Promise<unknown>;
+  var composerReferenceTokenProbe: () => Promise<unknown>;
   var composerHistoryProbe: (phase: "prepare" | "verify") => Promise<unknown>;
 }
 const assert = (value: unknown, message: string) => {
@@ -127,6 +131,11 @@ function Fixture({ sessionId, t, workspacePath }: { sessionId: string; t: TFunct
         onHistoryNavigate={inputHistory.navigate}
         onInsertNewline={draft.insertNewlineInEditor}
         onInput={(source, caret) => { inputHistory.exitBrowsing(); draft.handleInput(source, caret); }}
+        onActivateReference={(token) => {
+          // Optional so the probe also compiles against a build without it.
+          const activate = (draft as Partial<ComposerDraftController>).activateReference;
+          activate?.(token);
+        }}
         onCompositionStart={noop}
         onCompositionEnd={noop}
         onSettledInput={() => draft.setComposing(false)}
@@ -539,7 +548,7 @@ globalThis.composerPasteProbe = async () => {
         controller.fileReferences[0].kind === "image",
       "native image file was mistaken for text",
     );
-    // Pasted images are inline chips in the draft, exactly like a pasted file.
+    // Pasted images paint as inline reference tokens, exactly like a pasted file.
     const draftText = () => {
       let text = readEditorValue(controller.ref.current!);
       for (const reference of controller.fileReferences) {
@@ -548,13 +557,20 @@ globalThis.composerPasteProbe = async () => {
       return text;
     };
     const imageChipByToken = (token: string) => controller.ref.current!
-      .querySelector<HTMLElement>(`.composer-chip[data-image][data-token="${token}"]`);
+      .querySelector<HTMLElement>(`.composer-reference[data-image][data-token="${token}"]`);
     const chip = imageChipByToken(controller.fileReferences[0].token!)!;
-    assert(chip, "pasted images must render as inline chips");
+    assert(chip, "pasted images must render as an inline reference token");
     assert(!document.querySelector(".composer-image-attachments"), "the detached attachment row must be gone");
-    assert(chip.getAttribute("role") === "button" && chip.tabIndex === 0,
-      "image chip must be keyboard accessible");
-    assert(draftText() === "prefix  suffix", "image chip changed the surrounding draft text");
+    // The token is text: a readable `@name`, no capsule chrome, no icon, and no
+    // focus target of its own. Its label is selectable like any draft character.
+    assert(chip.textContent === "@native-image.png", `image token label was ${chip.textContent}`);
+    assert(chip.title === controller.fileReferences[0].path, "image token lost its full path title");
+    assert(chip.getAttribute("role") === null && chip.tabIndex === -1 && !chip.hasAttribute("aria-label"),
+      "an image token must not be a separate focus target");
+    assert(!chip.querySelector("svg") && !chip.querySelector("button") && !chip.querySelector("img"),
+      "an image token must not carry chip chrome");
+    assert(getComputedStyle(chip).userSelect !== "none", "an image token must stay selectable text");
+    assert(draftText() === "prefix  suffix", "image token changed the surrounding draft text");
     // #117: enter through the real chip, read through sandboxed image IPC,
     // and keep the draft, caret, and work-panel state independent of inspection.
     editor = controller.ref.current!;
@@ -649,18 +665,16 @@ globalThis.composerPasteProbe = async () => {
     assert(!dialog() && !isBlockingOverlayActive(), "closing left the modal or native-view blocker active");
     assert(document.activeElement === editor && editorSelectionRange(editor).start === 7,
       "closing did not restore the draft caret");
-    for (const key of ["Enter", " "]) {
-      chip.focus();
-      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
-      flushSync(() => chip.dispatchEvent(event));
-      assert(event.defaultPrevented, "preview key inserted text or sent the draft");
-      await previewReady();
-      assert(readEditorValue(editor) === beforePreview && submitted === 0,
-        "preview key altered or sent the draft");
-      await globalThis.composerPreviewPressKey("Escape");
-      await until(() => !dialog(), "native Escape did not dismiss the preview");
-      assert(!dialog() && document.activeElement === chip, "cancel did not close and restore attachment focus");
-    }
+    // A reference is draft text, not a separate widget: it owns no focus stop
+    // and no activation key of its own, so Enter and Space keep their textbox
+    // meaning and a pointer click is the activation gesture. Closing the
+    // preview hands focus straight back to the draft caret.
+    assert(chip.tabIndex === -1 && !chip.hasAttribute("role") && !chip.hasAttribute("tabindex"),
+      "an image token became a keyboard focus target");
+    assert(document.activeElement === editor && editorSelectionRange(editor).start === 7,
+      "closing the preview lost the draft caret");
+    assert(readEditorValue(editor) === beforePreview && submitted === 0,
+      "preview interaction changed or sent the draft");
     // The isolated host supplies real images within the allowed scratch directory.
     const wide = createFileReference(imageReference.path.replace(/[^/\\]+$/, "wide-fixture.png"), "wide.png", "paste-a", {
       kind: "image", mimeType: "image/png", token: "\ueffe",
@@ -772,19 +786,23 @@ globalThis.composerPasteProbe = async () => {
     await new Promise(requestAnimationFrame);
     editor = controller.ref.current!;
     const currentChip = imageChipByToken(imageReference.token!)!;
-    assert(currentChip, "returning to the session did not restore its image chip");
+    assert(currentChip, "returning to the session did not restore its image reference");
     useAppStore.setState({ activeSessionId: "paste-b" });
     flushSync(() => currentChip.click());
-    assert(!dialog(), "old chip opened in another session");
+    assert(!dialog(), "old reference opened in another session");
     useAppStore.setState({ activeSessionId: "paste-a" });
-    const remove = currentChip.querySelector<HTMLButtonElement>(".composer-chip-remove")!;
-    flushSync(() => {
-      remove.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      remove.click();
-    });
-    assert(!dialog() && submitted === 0, "remove opened the preview or submitted the prompt");
+    // Deleting a reference is one Backspace: the token is atomic, so there is no
+    // per-reference remove control and no label character to delete separately.
+    const tokenIndex = readEditorValue(editor).indexOf(imageReference.token!);
+    assert(tokenIndex >= 0, "the draft no longer holds the image reference token");
+    setEditorCaret(editor, tokenIndex + 1);
+    const backspace = new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true });
+    flushSync(() => editor.dispatchEvent(backspace));
+    assert(backspace.defaultPrevented, "Backspace beside a reference must delete the whole token");
+    await new Promise(requestAnimationFrame);
+    assert(!dialog() && submitted === 0, "reference delete opened the preview or submitted the prompt");
     assert(controller.fileReferences.length === 0 && draftText() === "prefix  suffix",
-      "remove did not preserve the surrounding draft");
+      "reference delete did not preserve the surrounding draft");
 
     // Failed images remain attached, show a retry action, and never blank the draft.
     const missing = createFileReference(`${imageReference.path}.missing.png`, "missing.png", "paste-a", {
@@ -812,12 +830,12 @@ globalThis.composerPasteProbe = async () => {
 
     // An image-only draft remains sendable and survives session switching.
     editor = await paste("", [image], true);
-    assert(controller.ref.current!.querySelectorAll(".composer-chip[data-image]").length === 1 &&
+    assert(controller.ref.current!.querySelectorAll(".composer-reference[data-image]").length === 1 &&
       controller.draftSnapshot(readEditorValue(controller.ref.current!)).fileReferences.length === 1,
       "image-only draft lost its sendable attachment");
     const attachedId = controller.fileReferences[0].path;
     flushSync(() => controller.restoreDraftForKey("paste-a", { text: "older draft", fileReferences: [] }));
-    assert(controller.ref.current!.querySelector(".composer-chip[data-image]") &&
+    assert(controller.ref.current!.querySelector(".composer-reference[data-image]") &&
       controller.fileReferences[0]?.path === attachedId,
       "restoring an old draft overwrote a newer image-only draft");
     render("paste-b");
@@ -828,13 +846,13 @@ globalThis.composerPasteProbe = async () => {
     const restoredDeadline = performance.now() + 2000;
     while (
       (controller.fileReferences[0]?.path !== attachedId ||
-        !controller.ref.current!.querySelector(".composer-chip[data-image]")) &&
+        !controller.ref.current!.querySelector(".composer-reference[data-image]")) &&
       performance.now() < restoredDeadline
     ) {
       await new Promise(requestAnimationFrame);
     }
     assert(controller.fileReferences[0]?.path === attachedId &&
-      controller.ref.current!.querySelector(".composer-chip[data-image]"),
+      controller.ref.current!.querySelector(".composer-reference[data-image]"),
       "image-only draft did not survive session switching");
 
     // A pasted conversation link is an inline chip, and the submitted text
@@ -842,9 +860,9 @@ globalThis.composerPasteProbe = async () => {
     const linkedSession = "session-link-fixture";
     editor = await paste(`continue from ${formatSessionLink(linkedSession)}`, []);
     const linkChip = editor.querySelector<HTMLElement>(
-      `.composer-chip[data-session-id="${linkedSession}"]`,
+      `.composer-reference[data-session-id="${linkedSession}"]`,
     );
-    assert(linkChip, "a pasted conversation link must render as an inline chip");
+    assert(linkChip, "a pasted conversation link must render as an inline reference");
     assert(
       !readEditorValue(editor).includes(formatSessionLink(linkedSession)),
       "the chip replaces the raw link in the draft text",
@@ -855,8 +873,8 @@ globalThis.composerPasteProbe = async () => {
       "the submitted text carries the conversation link",
     );
     assert(
-      linkChip!.querySelector(".composer-chip-name")?.textContent?.includes(linkedSession.slice(0, 8)),
-      "the chip names the conversation it opens",
+      linkChip!.textContent === `@${i18n.t("chat.sessionReference")} · ${linkedSession.slice(0, 8)}`,
+      `the reference names the conversation it opens: ${linkChip!.textContent}`,
     );
 
     await paste("file names", nativeFiles);
@@ -1017,7 +1035,7 @@ globalThis.composerPasteProbe = async () => {
       return event;
     };
     const chipTokens = (target: HTMLElement) =>
-      Array.from(target.querySelectorAll<HTMLElement>(".composer-chip"))
+      Array.from(target.querySelectorAll<HTMLElement>(".composer-reference"))
         .map((chip) => chip.dataset.token ?? "");
     const pathsInOrder = (tokens: readonly string[]) =>
       tokens.map((token) =>
@@ -1184,7 +1202,7 @@ globalThis.composerPasteProbe = async () => {
     assert(controller.fileReferences.length === relativeCount,
       "a malformed clipboard payload added an attachment");
     assert(readEditorValue(crossEditor).endsWith("@src/evil.ts"),
-      "a malformed clipboard payload did not fall back to its plain text");
+      `a malformed clipboard payload did not fall back to its plain text: ${JSON.stringify(readEditorValue(crossEditor))}`);
     const oversized = new DataTransfer();
     oversized.setData("text/plain", "untrusted");
     oversized.setData(clipboardMime, JSON.stringify({
@@ -1546,8 +1564,8 @@ globalThis.composerHistoryProbe = async (phase) => {
       await press("ArrowUp");
       assert(
         controller.fileReferences.some((reference) => reference.path === fileReference.path) &&
-          controller.ref.current!.querySelector(".composer-chip-name")?.textContent === "history.txt",
-        "history recall did not restore and render the file attachment chip",
+          controller.ref.current!.querySelector(".composer-reference")?.textContent === "@history.txt",
+        "history recall did not restore and render the file attachment reference",
       );
 
       render("paste-b");
@@ -1655,7 +1673,7 @@ globalThis.composerHistoryProbe = async (phase) => {
     const recalledText = readEditorValue(controller.ref.current!);
     assert(
       controller.fileReferences.some((reference) => reference.name === "history.txt") &&
-        controller.ref.current!.querySelector(".composer-chip-name")?.textContent === "history.txt",
+        controller.ref.current!.querySelector(".composer-reference")?.textContent === "@history.txt",
       "attachment history did not survive the Electron process restart",
     );
     assert(recalledText === "inspect \uE050", "the latest attached prompt changed after restart");
@@ -1674,6 +1692,393 @@ globalThis.composerHistoryProbe = async (phase) => {
     };
   } finally {
     historySendPrompt = async () => false;
+    flushSync(() => root.unmount());
+    host.remove();
+    resetComposerDraftCache();
+  }
+};
+
+/**
+ * Inline reference tokens: the draft paints every committed attachment as
+ * `@name` text, one atomic token to the caret, selection, deletion and
+ * clipboard, while a plain typed `@…` stays ordinary editable text.
+ *
+ * The pointer cases send real CDP mouse input through the Electron debugger,
+ * and the keyboard cases send real Electron key events, so the browser's own
+ * selection and editing behavior is what the assertions see.
+ */
+globalThis.composerReferenceTokenProbe = async () => {
+  const i18n = createInstance();
+  await i18n.init({
+    lng: "en",
+    resources: { en: { translation: en } },
+    interpolation: { escapeValue: false },
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const errors: unknown[] = [];
+  const root = createRoot(host, { onUncaughtError: (error) => errors.push(error) });
+  const frame = () => new Promise(requestAnimationFrame);
+  const settle = async () => {
+    await frame();
+    await frame();
+  };
+  const assertClean = () => {
+    assert(errors.length === 0, `React failed: ${errors.map(String).join("; ")}`);
+  };
+  let key = 0;
+  const sessionId = "token-a";
+  const render = () => {
+    useAppStore.setState({ activeSessionId: sessionId, workPanelOpen: false, workspace: null });
+    flushSync(() =>
+      root.render(
+        <I18nextProvider i18n={i18n}>
+          <Fixture key={(key += 1)} sessionId={sessionId} t={i18n.t} workspacePath="" />
+        </I18nextProvider>,
+      ),
+    );
+    assertClean();
+  };
+  const draftInto = async (text: string, references: ComposerFileReference[], caret = text.length) => {
+    flushSync(() => controller.applyEditorDraft(text, references, caret));
+    await settle();
+    assertClean();
+  };
+  const editor = () => controller.ref.current!;
+  const tokens = () => Array.from(editor().querySelectorAll<HTMLElement>(".composer-reference"));
+  const tokenFor = (token: string) =>
+    editor().querySelector<HTMLElement>(`.composer-reference[data-token="${token}"]`);
+  const draft = () => readEditorValue(editor());
+  const selected = () => window.getSelection()?.toString() ?? "";
+  const caret = () => editorSelectionRange(editor());
+  const pointer = async (input: { type: "mousePressed" | "mouseMoved" | "mouseReleased"; x: number; y: number }) => {
+    await globalThis.composerPreviewPointer(input);
+    await settle();
+  };
+  const press = async (payload: string | { key: string; modifiers?: string[]; text?: string }) => {
+    await globalThis.composerPreviewPressKey(payload);
+    await settle();
+  };
+  const clickAt = async ({ x, y }: { x: number; y: number }) => {
+    await pointer({ type: "mousePressed", x, y });
+    await pointer({ type: "mouseReleased", x, y });
+  };
+  const dragFromTo = async (from: { x: number; y: number }, to: { x: number; y: number }) => {
+    await globalThis.composerPreviewDrag({ from, to });
+    await settle();
+  };
+  /** Midpoint of one character cell, so a press lands inside real text. */
+  const nodeCharPoint = (node: Node, index: number) => {
+    const length = (node.nodeValue ?? "").length;
+    const size = Math.max(1, length);
+    const range = document.createRange();
+    const start = Math.max(0, Math.min(index, size - 1));
+    range.setStart(node, start);
+    range.setEnd(node, Math.min(length, start + 1));
+    const rect = range.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  };
+  const charPoint = (element: HTMLElement, index: number) => nodeCharPoint(element.firstChild!, index);
+  const selectToken = (token: string) => {
+    const element = tokenFor(token)!;
+    const range = document.createRange();
+    range.selectNode(element);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+  };
+  const clipboard = (type: "copy" | "cut" | "paste") => {
+    const data = new DataTransfer();
+    const event = new ClipboardEvent(type, {
+      clipboardData: data,
+      bubbles: true,
+      cancelable: true,
+    });
+    flushSync(() => editor().dispatchEvent(event));
+    return { event, plain: data.getData("text/plain"), structured: data.getData(COMPOSER_CLIPBOARD_MIME) };
+  };
+  const reference = (
+    path: string,
+    name: string,
+    kind: "file" | "image" | "session",
+    token: string,
+    mimeType?: string,
+  ) => createFileReference(path, name, sessionId, { kind, token, ...(mimeType ? { mimeType } : {}) });
+  try {
+    resetComposerDraftCache();
+    render();
+    await settle();
+
+    // 1. Every committed reference is exactly `@name` text: no icon, capsule,
+    //    remove control, or separate focus target inside the draft.
+    const text = "inspect \uE101";
+    await draftInto(text, [reference("/scratch/token-a/notes.txt", "notes.txt", "file", "\uE101", "text/plain")]);
+    const textToken = tokenFor("\uE101")!;
+    assert(tokens().length === 1, "a committed file reference must paint one inline token");
+    assert(textToken.textContent === "@notes.txt",
+      `the visible label must be exactly the filename: ${JSON.stringify(textToken.textContent)}`);
+    assert(editor().textContent === "inspect @notes.txt", "the token label is real draft text");
+    assert(textToken.getAttribute("title") === "/scratch/token-a/notes.txt",
+      "the full reference stays in the tooltip");
+    assert(!textToken.querySelector("svg") && !textToken.querySelector("button"),
+      "a reference token must not paint an icon or a remove button");
+    assert(editor().querySelectorAll("svg, button, .composer-chip-icon, .composer-chip-remove").length === 0,
+      "the draft must not paint chip chrome inside the editable");
+    const tokenStyle = getComputedStyle(textToken);
+    assert(tokenStyle.backgroundColor === "rgba(0, 0, 0, 0)",
+      `a reference token must have no capsule background: ${tokenStyle.backgroundColor}`);
+    assert(tokenStyle.borderRadius === "0px" || tokenStyle.borderRadius === "",
+      `a reference token must have no capsule radius: ${tokenStyle.borderRadius}`);
+    assert(tokenStyle.userSelect !== "none",
+      "a reference token must stay selectable text");
+    assert(tokenStyle.textDecorationLine.includes("underline"),
+      "a reference token reads as link-style text");
+    // A typed `@…` is not a committed attachment: it stays ordinary text.
+    await draftInto("@notes.txt is just text", []);
+    assert(tokens().length === 0 && draft() === "@notes.txt is just text",
+      "typed @text must stay editable text instead of becoming a token");
+    await draftInto("@src/main", []);
+    assert(tokens().length === 0, "an incomplete @ trigger must not become a token");
+
+    // 2. Untruncated labels: a long name wraps inside the editor width and still
+    //    reads whole, with no ellipsis and no full path in the body.
+    const longName = `${"a".repeat(200)}.png`;
+    const longPath = `/scratch/token-a/${longName}`;
+    await draftInto("", [reference(longPath, longName, "image", "\uE10A", "image/png")]);
+    const longToken = tokenFor("\uE10A")!;
+    assert(longToken.textContent === `@${longName}`, "a long label must render untruncated");
+    assert(getComputedStyle(longToken).textOverflow === "clip",
+      "a reference label must not ellipsize");
+    assert(longToken.getClientRects().length > 1, "a long label must wrap instead of overflowing");
+    assert(longToken.scrollWidth <= longToken.clientWidth + 1,
+      `a wrapped label must not overflow horizontally: ${longToken.scrollWidth}/${longToken.clientWidth}`);
+    assert(!editor().textContent!.includes("/scratch/token-a/"),
+      "the draft body must not show the full reference path");
+    assert(longToken.getAttribute("title") === longPath, "the wrapped label keeps its full path tooltip");
+
+    // 3. The caret never sits inside a label; clicking into the text snaps to a
+    //    boundary, and typing there never edits the label.
+    const notesText = "see \uE102 now";
+    await draftInto(notesText, [reference("/scratch/token-a/image.png", "image.png", "image", "\uE102", "image/png")]);
+    const imageToken = tokenFor("\uE102")!;
+    const imageStart = draft().indexOf("\uE102");
+    assert(imageStart === 4, `unexpected token index ${imageStart}`);
+    const insideLabel = document.createRange();
+    const labelNode = imageToken.firstChild!;
+    insideLabel.setStart(labelNode, 3);
+    insideLabel.collapse(true);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(insideLabel);
+    await settle();
+    assert(!imageToken.contains(window.getSelection()!.anchorNode),
+      "a caret inside a label must snap out of the token");
+    const snappedCaret = caret();
+    assert(
+      snappedCaret.start === imageStart || snappedCaret.start === imageStart + 1,
+      `the snapped caret must sit on a token boundary: ${JSON.stringify(snappedCaret)}`,
+    );
+    await press({ key: "x", text: "x" });
+    assert(tokenFor("\uE102")?.textContent === "@image.png",
+      `typing next to a token must never edit its label: ${JSON.stringify(tokenFor("\uE102")?.textContent)}`);
+    assert(draft() === "see x\uE102 now" || draft() === "see \uE102x now",
+      `typing must stay outside the token: ${JSON.stringify(draft())}`);
+
+    // 4. Backspace/Delete step over the token as one character, and native undo
+    //    restores both the token and its reference metadata.
+    await draftInto(notesText, [reference("/scratch/token-a/image.png", "image.png", "image", "\uE102", "image/png")]);
+    setEditorCaret(editor(), imageStart + 1);
+    await settle();
+    await press("Backspace");
+    assert(draft() === "see  now",
+      `Backspace after a token must remove the whole token: ${JSON.stringify(draft())}`);
+    assert(controller.fileReferences.length === 0,
+      "deleting the token must drop its reference metadata");
+    document.execCommand("undo");
+    await settle();
+    assert(tokenFor("\uE102") && draft() === notesText,
+      "undo must restore the token text in place");
+    assert(controller.fileReferences.some((item) => item.token === "\uE102"),
+      "undo must restore the reference metadata");
+    setEditorCaret(editor(), imageStart);
+    await settle();
+    await press("Delete");
+    assert(draft() === "see  now",
+      `Delete before a token must remove the whole token: ${JSON.stringify(draft())}`);
+    document.execCommand("undo");
+    await settle();
+    assert(tokenFor("\uE102") && draft() === notesText,
+      "undo must restore a forward-deleted token");
+
+    // 5. Arrow keys and Shift+Arrow treat the token as one character.
+    setEditorCaret(editor(), imageStart + 1);
+    await settle();
+    await press("ArrowLeft");
+    assert(caret().start === imageStart && caret().start === caret().end,
+      `ArrowLeft after a token must land before it: ${JSON.stringify(caret())}`);
+    await press("ArrowRight");
+    assert(caret().start === imageStart + 1,
+      `ArrowRight before a token must land after it: ${JSON.stringify(caret())}`);
+    setEditorCaret(editor(), imageStart + 1);
+    await settle();
+    await press({ key: "ArrowLeft", modifiers: ["shift"] });
+    assert(
+      caret().start === imageStart && caret().end === imageStart + 1,
+      `Shift+ArrowLeft must select the whole token: ${JSON.stringify(caret())}`,
+    );
+    assert(selected() === "@image.png",
+      `the visible highlight must cover the whole label: ${JSON.stringify(selected())}`);
+    setEditorCaret(editor(), imageStart);
+    await settle();
+    await press({ key: "ArrowRight", modifiers: ["shift"] });
+    assert(caret().start === imageStart && caret().end === imageStart + 1,
+      "Shift+ArrowRight must select the whole token");
+
+    // 6. A click runs the reference's own action; a drag doesn't.
+    await draftInto("see \uE102 now", [reference("/scratch/token-a/image.png", "image.png", "image", "\uE102", "image/png")]);
+    const dialog = () => document.querySelector<HTMLDialogElement>("dialog.composer-image-preview[open]");
+    await clickAt(charPoint(tokenFor("\uE102")!, 4));
+    await settle();
+    assert(dialog(), "a click on an image reference must open its preview");
+    assert(controller.imagePreview.preview, "the click must use the existing preview action");
+    assert(draft() === "see \uE102 now", "opening a preview must not change the draft");
+    controller.imagePreview.close();
+    await settle();
+
+    // 7. Real pointer drags starting on the token select it whole and never
+    //    preview it: from its leading edge, its trailing edge, inside it, and
+    //    across adjacent tokens.
+    // Press on real glyphs: a press past the last glyph only places a caret, so
+    // Chromium would not start a text selection drag from there. The release
+    // stays inside the editable, or the drag is discarded instead of extended.
+    const labelLength = "@image.png".length;
+    const leading = charPoint(tokenFor("\uE102")!, 0);
+    const trailing = charPoint(tokenFor("\uE102")!, labelLength - 1);
+    const afterToken = nodeCharPoint(editor().lastChild!, 1);
+    const beforeToken = nodeCharPoint(editor().firstChild!, 1);
+    await dragFromTo(leading, afterToken);
+    const afterLeadingDrag = caret();
+    assert(afterLeadingDrag.start === imageStart && afterLeadingDrag.end >= imageStart + 1,
+      `a drag from the leading edge must select the whole token: ${JSON.stringify(afterLeadingDrag)}`);
+    assert(selected().startsWith("@image.png"),
+      `the drag highlight must start with the whole label: ${JSON.stringify(selected())}`);
+    assert(!dialog() && !controller.imagePreview.preview,
+      "a selection drag must not open the preview");
+    // A press inside the previous selection would start a drag of it instead of
+    // a new selection, so each drag begins from a plain collapsed caret.
+    setEditorCaret(editor(), imageStart + 1);
+    await settle();
+    await dragFromTo(trailing, beforeToken);
+    const afterTrailingDrag = caret();
+    assert(afterTrailingDrag.start <= imageStart && afterTrailingDrag.end >= imageStart + 1,
+      `a drag from the trailing edge must cover the whole token: ${JSON.stringify(afterTrailingDrag)}`);
+    assert(!dialog() && !controller.imagePreview.preview,
+      "a backward selection drag must not open the preview");
+
+    // Block-only: drag inside the token selects it whole.
+    await draftInto("\uE102", [reference("/scratch/token-a/image.png", "image.png", "image", "\uE102", "image/png")]);
+    const onlyRect = tokenFor("\uE102")!.getBoundingClientRect();
+    await dragFromTo(
+      { x: onlyRect.left + onlyRect.width * 0.55, y: onlyRect.top + onlyRect.height / 2 },
+      { x: onlyRect.right - 2, y: onlyRect.top + onlyRect.height / 2 },
+    );
+    assert(caret().start === 0 && caret().end === 1,
+      `a drag inside the only token must select it whole: ${JSON.stringify(caret())}`);
+    assert(selected() === "@image.png",
+      `the whole-label highlight must be visible: ${JSON.stringify(selected())}`);
+    const dragSelection = window.getSelection()!;
+    assert(!tokenFor("\uE102")!.contains(dragSelection.anchorNode),
+      "the selection must start at the token boundary, not inside its label");
+    assert(!dialog() && !controller.imagePreview.preview, "dragging inside a token must not preview");
+
+    // Adjacent blocks: a drag from one token into the next covers both whole.
+    await draftInto("\uE102\uE103", [
+      reference("/scratch/token-a/image.png", "image.png", "image", "\uE102", "image/png"),
+      reference("/scratch/token-a/second.png", "second.png", "image", "\uE103", "image/png"),
+    ]);
+    const first = tokenFor("\uE102")!.getBoundingClientRect();
+    const second = tokenFor("\uE103")!.getBoundingClientRect();
+    await dragFromTo(
+      { x: first.left + first.width * 0.5, y: first.top + first.height / 2 },
+      { x: second.left + second.width * 0.5, y: second.top + second.height / 2 },
+    );
+    assert(caret().start === 0 && caret().end === 2,
+      `a drag across adjacent tokens must cover both whole: ${JSON.stringify(caret())}`);
+    assert(selected() === "@image.png@second.png",
+      `both labels must be visibly selected: ${JSON.stringify(selected())}`);
+    assert(!dialog() && !controller.imagePreview.preview, "dragging across tokens must not preview");
+
+    // 8. Copy and cut describe the whole reference, never a label fragment.
+    await draftInto("see \uE102 now", [reference("/scratch/token-a/image.png", "image.png", "image", "\uE102", "image/png")]);
+    const partial = document.createRange();
+    const partialNode = tokenFor("\uE102")!.firstChild!;
+    partial.setStart(partialNode, 4);
+    partial.setEnd(editor(), editor().childNodes.length);
+    const partialSelection = window.getSelection()!;
+    partialSelection.removeAllRanges();
+    partialSelection.addRange(partial);
+    await settle();
+    const expanded = caret();
+    assert(expanded.start === imageStart && expanded.end > imageStart,
+      `a partial token selection must expand to the whole token: ${JSON.stringify(expanded)}`);
+    selectToken("\uE102");
+    await settle();
+    const copied = clipboard("copy");
+    assert(copied.event.defaultPrevented, "copying a token must be composed by the composer");
+    assert(copied.plain === "@/scratch/token-a/image.png",
+      `an external copy must carry the full reference: ${JSON.stringify(copied.plain)}`);
+    assert(copied.structured.includes("/scratch/token-a/image.png"),
+      "the internal clipboard payload must carry the complete reference");
+    assert(copied.structured.includes("@image.png") === false,
+      "the internal payload must not reduce a reference to its label");
+    const cutCopy = clipboard("cut");
+    assert(cutCopy.event.defaultPrevented, "cutting a token must be composed by the composer");
+    await settle();
+    assert(draft() === "see  now",
+      `cutting must remove the whole token: ${JSON.stringify(draft())}`);
+    assert(controller.fileReferences.length === 0, "cutting the token drops its reference");
+    document.execCommand("undo");
+    await settle();
+    assert(tokenFor("\uE102") && draft() === "see \uE102 now",
+      "undo must restore the cut token");
+
+    // 9. Plugin marks and conversation references keep one token path too.
+    await draftInto("mark \uE104", [
+      createFileReference("plugin-mark", "Mark label", sessionId, {
+        token: "\uE104",
+        plugin: { kind: "mark", pluginId: "demo.plugin", send: "plugin text" },
+      }),
+    ]);
+    const markToken = tokenFor("\uE104")!;
+    assert(markToken.textContent === "Mark label",
+      `a plugin mark keeps the label it was given: ${JSON.stringify(markToken.textContent)}`);
+    assert(markToken.getAttribute("data-plugin-mark") === "mark", "a plugin mark stays identifiable");
+    assert(!markToken.getAttribute("data-action"), "a plugin mark has no activation");
+    await draftInto("open \uE105", [
+      reference("session-fixture-abc", "Session · fixture", "session", "\uE105"),
+    ]);
+    const sessionToken = tokenFor("\uE105")!;
+    assert(sessionToken.textContent === "@Session · fixture",
+      `a conversation reference reads @label: ${JSON.stringify(sessionToken.textContent)}`);
+    assert(sessionToken.getAttribute("data-session-id") === "session-fixture-abc",
+      "the conversation reference keeps its target");
+    return {
+      ok: true,
+      visibleLabelText: true,
+      noChipChrome: true,
+      untruncatedWrapping: true,
+      caretAtomic: true,
+      deletionAndUndo: true,
+      arrowTokenSteps: true,
+      pointerClickActivation: true,
+      dragSelectsWholeToken: true,
+      adjacentTokens: true,
+      clipboardWholeReference: true,
+      pluginAndSessionTokens: true,
+    };
+  } catch (error) {
+    return { ok: false, error: String(error), stack: (error as Error)?.stack };
+  } finally {
     flushSync(() => root.unmount());
     host.remove();
     resetComposerDraftCache();

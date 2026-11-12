@@ -537,6 +537,7 @@ export function Composer({
               inputHistory.exitBrowsing();
               completions.handleInput(source, caret);
             }}
+            onActivateReference={draft.activateReference}
             onHistoryNavigate={inputHistory.navigate}
             onCompositionStart={() => setComposing(true)}
             onCompositionEnd={(event) => {

@@ -67,7 +67,7 @@ test("model menu keydown ignores IME composition keystrokes", () => {
 test("an ideographic comma opens the slash menu from an empty draft (D405)", () => {
   const handler = draftSource.slice(
     draftSource.indexOf("const handleInput ="),
-    draftSource.indexOf("removeChipByTokenRef", draftSource.indexOf("const handleInput =")),
+    draftSource.indexOf("const commitEditorDom =", draftSource.indexOf("const handleInput =")),
   );
   assert.match(
     handler,

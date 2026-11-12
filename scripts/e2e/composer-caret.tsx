@@ -8,7 +8,8 @@
  *
  * Only the assertions live in the driver; this fixture reports what the browser
  * did: the draft the app holds, the DOM serialization, the caret offset, the
- * rendered line of the caret and of the last text run, chips, and the text a
+ * rendered line of the caret and of the last text run, reference tokens, and the
+ * text a
  * submission would send.
  */
 import { createRoot } from "react-dom/client";
@@ -40,7 +41,7 @@ type CursorStep = {
   label?: string;
   caret?: number;
   /** Element a real pointer click is aimed at. */
-  target?: "chip-name" | "chip-remove";
+  target?: "token";
 };
 
 const noop = () => {};
@@ -82,6 +83,7 @@ function Fixture() {
         onInput={(source, caret) => {
           draft.handleInput(source, caret);
         }}
+        onActivateReference={(token) => activations.push(token)}
         onCompositionStart={() => draft.setComposing(true)}
         onCompositionEnd={() => draft.setComposing(false)}
         onSettledInput={() => draft.setComposing(false)}
@@ -133,11 +135,7 @@ const pressKey = (key: string) => {
   return done;
 };
 
-/**
- * Ask the driver for one real pointer click at the element's centre. The
- * browser, not the fixture, decides where clicking a non-editable chip puts
- * the selection — which is the reported case.
- */
+/** Ask the driver for one real pointer click at the element's centre. */
 const clickPointer = (element: Element) => {
   const rect = element.getBoundingClientRect();
   const done = new Promise<void>((resolve) => {
@@ -153,20 +151,24 @@ const clickPointer = (element: Element) => {
   return done;
 };
 
-/** Where the browser put the selection, for the chip-boundary assertions. */
+/**
+ * Where the browser put the selection: whether an endpoint landed inside a
+ * reference token's label, which is a point the draft cannot address as its
+ * own character.
+ */
 const selectionPoint = () => {
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0) return null;
   const describe = (node: Node | null, offset: number) => {
     if (!node) return null;
     const element = node.nodeType === Node.ELEMENT_NODE ? (node as HTMLElement) : node.parentElement;
-    const chip = element?.closest(".composer-chip");
+    const reference = element?.closest(".composer-reference");
     return {
       kind: node.nodeType === Node.TEXT_NODE ? "text" : (node as HTMLElement).nodeName,
       parentClass:
         node.nodeType === Node.TEXT_NODE ? (node.parentElement?.className ?? "") : "",
-      insideChip: Boolean(chip),
-      chipPart: element?.className ?? "",
+      insideReference: Boolean(reference),
+      partClass: element?.className ?? "",
       offset,
     };
   };
@@ -227,9 +229,13 @@ const snapshot = (label: string) => {
     caretLine: caretLine(el),
     lastTextLine: lastTextLine(el),
     lastChild: el.lastChild?.nodeName ?? null,
-    chips: Array.from(el.querySelectorAll<HTMLElement>(".composer-chip")).map(
-      (chip) => chip.dataset.token ?? "",
+    references: Array.from(el.querySelectorAll<HTMLElement>(".composer-reference")).map(
+      (reference) => reference.dataset.token ?? "",
     ),
+    labels: Array.from(el.querySelectorAll<HTMLElement>(".composer-reference")).map(
+      (reference) => reference.textContent ?? "",
+    ),
+    activations: activations.splice(0, activations.length),
     tokens: controller.fileReferences.map((reference) => reference.token ?? ""),
     submission: controller.draftSnapshot(draftValue).text,
     selection: window.getSelection()?.toString() ?? "",
@@ -238,8 +244,11 @@ const snapshot = (label: string) => {
   };
 };
 
-const chipReference = (name: string) =>
+const tokenReference = (name: string) =>
   createFileReference(`/caret-workspace/${name}`, name, "caret-session");
+
+/** Tokens activated by a real pointer click, in order. */
+const activations: string[] = [];
 
 globalThis.composerCaretProbe = async (steps: CursorStep[]) => {
   if (!i18n.isInitialized) {
@@ -271,14 +280,10 @@ globalThis.composerCaretProbe = async (steps: CursorStep[]) => {
       await settle();
       continue;
     }
-    if (step.op === "chip") {
-      const reference = chipReference(step.text ?? "notes.txt");
-      const token = "\uE010";
-      const withToken = { ...reference, token };
-      const text = `见 ${token}\n`;
-      flushSync(() =>
-        controller.applyEditorDraft(text, [withToken], text.length),
-      );
+    if (step.op === "token") {
+      const reference = { ...tokenReference(step.text ?? "notes.txt"), token: "\uE010" };
+      const text = `见 ${reference.token}\n`;
+      flushSync(() => controller.applyEditorDraft(text, [reference], text.length));
       await settle();
       continue;
     }
@@ -311,30 +316,28 @@ globalThis.composerCaretProbe = async (steps: CursorStep[]) => {
       continue;
     }
     if (step.op === "pointer") {
-      // A real click on the chip's label or its remove button: the browser
-      // chooses the selection point inside the non-editable chip.
-      const selector =
-        step.target === "chip-remove" ? ".composer-chip-remove" : ".composer-chip-name";
-      const target = editor().querySelector(selector);
-      if (!target) throw new Error("pointer target missing: " + selector);
+      // A real click on a token's own label: the browser chooses the selection
+      // point, and only a click — never a selection drag — activates.
+      const target = editor().querySelector(".composer-reference");
+      if (!target) throw new Error("pointer target missing: .composer-reference");
       await clickPointer(target);
       await settle();
       continue;
     }
-    if (step.op === "chipMid") {
-      // A chip that is not the last thing in the draft, so a point mapped past
+    if (step.op === "tokenMid") {
+      // A token that is not the last thing in the draft, so a point mapped past
       // it is distinguishable from the end of the draft.
-      const reference = { ...chipReference(step.text ?? "notes.txt"), token: "\uE010" };
+      const reference = { ...tokenReference(step.text ?? "notes.txt"), token: "\uE010" };
       const text = `见 ${reference.token}后面`;
       flushSync(() => controller.applyEditorDraft(text, [reference], text.length));
       await settle();
       continue;
     }
-    if (step.op === "innerSelection") {
-      // A collapsed selection inside the chip's own label text: markup the
-      // draft model cannot address, which a click or an assistive caret can.
-      const label = editor().querySelector(".composer-chip-name")?.firstChild;
-      if (!label) throw new Error("chip label missing");
+    if (step.op === "insideToken") {
+      // A collapsed selection inside a token's own label text: a point the draft
+      // model cannot address, which an assistive caret can produce.
+      const label = editor().querySelector(".composer-reference")?.firstChild;
+      if (!label) throw new Error("token label missing");
       const range = document.createRange();
       range.setStart(label, step.caret ?? 2);
       range.collapse(true);
@@ -344,15 +347,17 @@ globalThis.composerCaretProbe = async (steps: CursorStep[]) => {
       await settle();
       continue;
     }
-    if (step.op === "innerSelectionDrag") {
-      // A drag whose anchor is the label text and whose focus is the remove
-      // button: both ends live inside the non-editable chip.
-      const label = editor().querySelector(".composer-chip-name")?.firstChild;
-      const remove = editor().querySelector(".composer-chip-remove");
-      if (!label || !remove) throw new Error("chip markup missing");
+    if (step.op === "insideTokenDrag") {
+      // A selection that starts inside the label and ends in the text after the
+      // token: part of the token is touched, so the whole token must be taken.
+      const label = editor().querySelector(".composer-reference")?.firstChild;
+      const tail = Array.from(editor().childNodes).find(
+        (node) => node.nodeType === Node.TEXT_NODE && (node.nodeValue ?? "").includes("后"),
+      );
+      if (!label || !tail) throw new Error("token markup missing");
       const range = document.createRange();
       range.setStart(label, step.caret ?? 2);
-      range.setEnd(remove, 0);
+      range.setEnd(tail, 1);
       const selection = window.getSelection();
       selection?.removeAllRanges();
       selection?.addRange(range);
@@ -361,7 +366,7 @@ globalThis.composerCaretProbe = async (steps: CursorStep[]) => {
     }
     if (step.op === "recallCaret") {
       // Re-enter the draft at the caret index the app stored — the same index a
-      // completion splice uses — so a chip-interior misread becomes visible.
+      // completion splice uses — so a token-interior misread becomes visible.
       const value = readEditorValue(editor());
       flushSync(() => controller.applyEditorDraft(value, controller.fileReferences, controller.cursor));
       await settle();

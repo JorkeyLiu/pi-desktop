@@ -2176,21 +2176,22 @@ validation still needed.
 #### E2E-011c-2: Composer attachment clipboard
 
 - **Preconditions**: Sessions A and B exist. A's draft holds text with an inline
-  image chip and a workspace-relative file chip; the same draft text is also
-  reachable through the editor selection. No OS clipboard content is used.
+  image reference token and a workspace-relative file reference token; the same
+  draft text is also reachable through the editor selection. No OS clipboard
+  content is used.
 - **Steps**: 1) Select the whole draft and dispatch `copy`; read `text/plain`
   and the application-internal clipboard format. 2) Paste the copied data twice
-  at the draft end. 3) Select one chip only and copy/paste it. 4) Select all and
+  at the draft end. 3) Select one token only and copy/paste it. 4) Select all and
   dispatch `cut`; undo, redo, and undo again. 5) Paste the cut data into session
   B's empty draft. 6) Paste a payload with an unknown field and one past the
   part bound.
 - **Expected**: `text/plain` contains the readable `@path` text and no renderer
   sentinel; the internal format is versioned and carries the ordered
   text/reference parts. Each paste restores the text, attachment identity, and
-  order with fresh non-colliding chip tokens, including repeated, subset, and
-  select-all pastes. Cut removes only the selection, publishes the readable
-  content first, and native undo/redo restores and removes the text, chips, and
-  metadata in order. Session B keeps workspace-relative chips but receives A's
+  order with fresh non-colliding reference tokens, including repeated, subset,
+  and select-all pastes. Cut removes only the selection, publishes the readable
+  content first, and native undo/redo restores and removes the text, reference
+  tokens, and metadata in order. Session B keeps workspace-relative chips but receives A's
   scratch-absolute path as readable text, because its host session cannot
   resolve that scratch file. The malformed and oversized payloads fall back to
   their plain text and add no attachment. Plain-text, native file, and external
@@ -2506,12 +2507,12 @@ validation still needed.
 
 #### Composer file-reference undo regression
 
-- Add a file reference to an unsent draft, select the chip, delete it, then
-  undo and redo with the native editor shortcuts. Undo must restore both the
-  chip and the file path used by submission; redo must remove both.
+- Add a file reference to an unsent draft, select the reference token, delete
+  it, then undo and redo with the native editor shortcuts. Undo must restore
+  both the token and the file path used by submission; redo must remove both.
 - Switch to another chat and back after undo: the other draft stays empty and
-  the source retains the restored reference. Typing a removed chip's private-use
-  token as plain text must not restore the attachment.
+  the source retains the restored reference. Typing a removed reference's
+  private-use sentinel as plain text must not restore the attachment.
 - Automated by `pnpm test:e2e:composer-paste` (`fileReferenceUndoRedo`).
 
 ### Conversation Top Bar
@@ -9087,27 +9088,31 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
      it remains an image attachment.
   2. Paste one local file, then paste multiple files including a spaced name.
   3. Paste an image from the OS screenshot/clipboard provider.
-  4. Inspect the draft before sending: confirm each materialized item is a
-     removable leaf-name chip and no scratch absolute path occupies the
-     textarea. Hover/focus chips to inspect their full paths, remove one, then
-     send the prompt and inspect the session message's attachment metadata.
-    Before sending, verify each image is a compact inline chip in the draft and
-    that hovering it reveals its preview card. Replacing all text removes the
-    inline image chips while undo restores them; image-only drafts must survive
-    session switching and retain submission metadata.
+  4. Inspect the draft before sending: confirm each materialized item is an
+     inline `@<leaf name>` reference token with no icon, capsule background, or
+     remove button, and no scratch absolute path occupies the textarea. Hover
+     each token to inspect its full path, remove one with the caret on a token
+     boundary and one Backspace, then send the prompt and inspect the session
+     message's attachment metadata.
+    Before sending, verify each image is a compact inline reference token in the
+    draft and that hovering it reveals its preview card. Replacing all text
+    removes the inline image reference tokens while undo restores them;
+    image-only drafts must survive session switching and retain submission
+    metadata.
     Mount the complete Composer: click Send for image-only input, verify
     attachment delivery and successful clearing, and immediately reject a
     text-plus-image send to verify full draft restoration. In a narrow pane,
-    prefill 20 images, confirm 20 inline chips inside the composer, and remove
-    one without losing the others.
+    prefill 20 images, confirm 20 inline reference tokens inside the composer,
+    and remove one without losing the others.
     Send a prompt that puts text, an image, then more text in that order:
     confirm the sent message renders the image chip at that position instead of
     after the body, and that an image the draft did not name inline still
     follows the text. The provider-facing prompt keeps the same order; the
     runtime placement tests assert those content blocks.
-    Inspect the chip and open it with click, Enter, and
-     Space. Confirm a centered modal preview opens, the work panel stays
-     unchanged, and the draft is neither edited nor sent. Check small images
+    Inspect the token and open it with a pointer click; a pointer drag
+     that selects the token's label must never open it. Confirm a centered modal
+     preview opens, the work panel stays unchanged, and the draft is neither
+     edited nor sent. Check small images
      stay at natural size, wide images fit without distortion, zoom/reset and
      download target the selected original, and multiple images support button
      and arrow-key navigation with zoom reset. Drag at fit size and after zoom,
@@ -9120,7 +9125,7 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
      nor send. Switch session/project or remove the selected attachment during
      a delayed read; the old preview must close and late results must not
      overwrite a newer image. Missing/undecodable images show retry and keep
-     the draft. Text chips must still expand as editable text.
+     the draft. Text reference tokens must still expand as editable text.
   5. Inspect `<data_dir>/scratch/<sessionId>/pasted/` and compare the saved
      bytes with the source files/image. Check the project `git status`.
   6. Delete the session, then confirm its scratch directory and pasted files
@@ -9130,8 +9135,8 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
     routed through the file bridge. Oversized text behavior is covered by
     E2E-102g.
   - Each file/image is saved with a sanitized, UUID-backed unique name under
-    the session scratch root, while its chip shows only the sanitized original
-    leaf name. Duplicate leaf names remain separate references.
+    the session scratch root, while its token shows only `@<sanitized original
+    leaf name>`. Duplicate leaf names remain separate references.
   - The dispatched prompt carries ordinary files through the existing path
     reference flow and carries pasted files/images as structured attachments;
     the persisted user message contains refs and metadata, never binary bytes.
@@ -9144,8 +9149,8 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
     attachment format and leaves work-panel tabs unchanged. Closing/unmounting
     releases modal/native-view blocking.
   - Deleting the session removes the pasted files with the rest of scratch.
-  - Deleting text immediately before an inline file chip must not insert a
-    blank line or move the chip to the next line; native undo/redo stay intact.
+  - Deleting text immediately before an inline reference token must not insert a
+    blank line or move the token to the next line; native undo/redo stay intact.
 - **Specs linked**: `04-ux/08-component-spec.md` §11.7–11.8,
   `03-runtime/01-ipc-protocol.md` §13c,
   `03-runtime/03-tools-and-permissions.md` §4b,

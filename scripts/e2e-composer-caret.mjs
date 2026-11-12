@@ -10,8 +10,9 @@
  * serialization disagreeing with the draft offsets is an explicit assertion.
  *
  * Enter/Shift+Enter, repeated trailing newlines, selection deletion, native
- * undo, chips, pasted text, and a synthetic IME commit are covered in the same
- * run so the fix cannot trade one of them for the reported case.
+ * undo, inline reference tokens, pasted text, and a synthetic IME commit are
+ * covered in the same run so the fix cannot trade one of them for the reported
+ * case.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -127,11 +128,12 @@ try {
     { op: "undo" },
     { op: "step", label: "after native undo" },
 
-    // G. Chip plus a trailing newline, then typing on the new line.
-    { op: "chip", text: "notes.txt" },
-    { op: "step", label: "chip with trailing newline" },
+    // G. An inline reference token plus a trailing newline, then typing on the
+    // new line: the token paints as the text `@name`.
+    { op: "token", text: "notes.txt" },
+    { op: "step", label: "token with trailing newline" },
     { op: "type", text: "c" },
-    { op: "step", label: "typed after chip newline" },
+    { op: "step", label: "typed after token newline" },
 
     // H. Pasted text ending in a newline, then typing on the fresh line.
     { op: "set", text: "粘贴前" },
@@ -183,35 +185,50 @@ try {
     { op: "paste", text: "line\n\n" },
     { op: "step", label: "pasted two trailing newlines into an empty draft" },
 
-    // L. A selection the browser can put inside non-editable chip markup
-    // normalizes to the chip boundary, never to the end of the draft.
-    { op: "chipMid", text: "notes.txt" },
-    { op: "pointer", target: "chip-name" },
-    { op: "step", label: "clicked the chip label in mid-text" },
-    { op: "chipMid", text: "notes.txt" },
-    { op: "innerSelection" },
-    { op: "step", label: "selection inside the chip label" },
+    // L. A token's label is real text, so the browser can put a caret or a
+    // selection edge inside it. That point is never a draft offset of its own:
+    // it snaps to the nearer token boundary, and a selection that touches part
+    // of the label takes the whole token.
+    { op: "tokenMid", text: "notes.txt" },
+    { op: "pointer", target: "token" },
+    { op: "step", label: "clicked the token in mid-text" },
+    { op: "tokenMid", text: "notes.txt" },
+    { op: "insideToken" },
+    { op: "step", label: "caret inside the token label" },
     { op: "recallCaret" },
     { op: "paste", text: "p" },
-    { op: "step", label: "pasted at the stored chip caret" },
-    { op: "chipMid", text: "notes.txt" },
-    { op: "innerSelectionDrag" },
-    { op: "step", label: "dragged from the chip label to its remove button" },
+    { op: "step", label: "pasted at the stored token caret" },
+    { op: "tokenMid", text: "notes.txt" },
+    { op: "insideTokenDrag" },
+    { op: "step", label: "selected from the token label into the text after it" },
     { op: "recallCaret" },
     { op: "paste", text: "q" },
-    { op: "step", label: "pasted at the stored drag caret" },
-    { op: "chipMid", text: "notes.txt" },
-    { op: "innerSelection" },
+    { op: "step", label: "pasted at the stored selection caret" },
+    { op: "tokenMid", text: "notes.txt" },
+    { op: "insideToken" },
     { op: "paste", text: "r" },
-    { op: "step", label: "pasted while the caret sat inside the chip" },
-    { op: "chipMid", text: "notes.txt" },
+    { op: "step", label: "pasted while the caret sat inside the token label" },
+    { op: "tokenMid", text: "notes.txt" },
     { op: "caret", caret: 2 },
     { op: "paste", text: "B" },
-    { op: "step", label: "pasted just before the chip" },
-    { op: "chipMid", text: "notes.txt" },
+    { op: "step", label: "pasted just before the token" },
+    { op: "tokenMid", text: "notes.txt" },
     { op: "caret", caret: 3 },
     { op: "paste", text: "A" },
-    { op: "step", label: "pasted just after the chip" },
+    { op: "step", label: "pasted just after the token" },
+
+    // M. Backspace and Delete at a token boundary remove the whole token, and
+    // native undo brings the token — and its reference — back.
+    { op: "tokenMid", text: "notes.txt" },
+    { op: "caret", caret: 3 },
+    { op: "key", key: "Backspace" },
+    { op: "step", label: "backspace removed the whole token" },
+    { op: "undo" },
+    { op: "step", label: "undo restored the token" },
+    { op: "tokenMid", text: "notes.txt" },
+    { op: "caret", caret: 2 },
+    { op: "key", key: "Delete" },
+    { op: "step", label: "delete removed the whole token" },
   ];
 
   await writeFile(
@@ -399,16 +416,18 @@ app.whenReady().then(async () => {
   const undid = step("after native undo");
   assert.equal(undid.draft, "撤销\n行", `undo result: ${undid.html}`);
 
-  // G. A chip survives a trailing newline and later typing.
-  const chipLine = step("chip with trailing newline");
-  assert.equal(chipLine.chips.length, 1, `chip missing: ${chipLine.html}`);
-  assert.deepEqual(chipLine.tokens, chipLine.chips);
-  assert.equal(chipLine.draft, `见 ${chipLine.chips[0]}\n`);
-  assert.equal(chipLine.submission, chipLine.draft.trim());
-  const chipTyped = step("typed after chip newline");
-  assert.equal(chipTyped.draft, `见 ${chipTyped.chips[0]}\nc`, `typing after chip: ${chipTyped.html}`);
-  assert.equal(chipTyped.chips.length, 1);
-  assert.equal(chipTyped.lastTextLine, 1);
+  // G. An inline reference token survives a trailing newline and later typing,
+  // and paints its visible label as plain text.
+  const tokenLine = step("token with trailing newline");
+  assert.equal(tokenLine.references.length, 1, `token missing: ${tokenLine.html}`);
+  assert.deepEqual(tokenLine.tokens, tokenLine.references);
+  assert.deepEqual(tokenLine.labels, ["@notes.txt"], `token label: ${tokenLine.html}`);
+  assert.equal(tokenLine.draft, `见 ${tokenLine.references[0]}\n`);
+  assert.equal(tokenLine.submission, tokenLine.draft.trim());
+  const tokenTyped = step("typed after token newline");
+  assert.equal(tokenTyped.draft, `见 ${tokenTyped.references[0]}\nc`, `typing after token: ${tokenTyped.html}`);
+  assert.equal(tokenTyped.references.length, 1);
+  assert.equal(tokenTyped.lastTextLine, 1);
 
   // H. Pasted text that ends with a newline keeps that newline and the caret
   // on the fresh line.
@@ -485,71 +504,113 @@ app.whenReady().then(async () => {
     `paste ending with a newline at the draft end: ${trailingAtEnd.html}`,
   );
 
-  // L. A point inside non-editable chip markup is the chip boundary (its end,
-  // as the browser's own clone of the chip spans it), never the draft end.
-  const clickedChip = step("clicked the chip label in mid-text");
-  assert.equal(clickedChip.chips.length, 1, `chip missing: ${clickedChip.html}`);
+  // L. A click inside a token's label keeps the draft intact, activates the
+  // reference once, and leaves the caret on a token boundary the editor agrees
+  // with. A caret placed inside the label snaps to the nearer boundary.
+  const clickedToken = step("clicked the token in mid-text");
+  assert.equal(clickedToken.references.length, 1, `token missing: ${clickedToken.html}`);
   assert.equal(
-    clickedChip.draft,
-    `见 ${clickedChip.chips[0]}后面`,
-    `a click on the chip changed the draft: ${clickedChip.html}`,
+    clickedToken.draft,
+    `见 ${clickedToken.references[0]}后面`,
+    `a click on the token changed the draft: ${clickedToken.html}`,
+  );
+  assert.deepEqual(
+    clickedToken.activations,
+    [clickedToken.references[0]],
+    `a real click must activate the reference once: ${clickedToken.html}`,
   );
   assert.equal(
-    clickedChip.cursor,
-    clickedChip.caret,
-    `a click on the chip stored a caret the editor does not report: stored ${clickedChip.cursor}, read ${clickedChip.caret}`,
+    clickedToken.cursor,
+    clickedToken.caret,
+    `a click on the token stored a caret the editor does not report: stored ${clickedToken.cursor}, read ${clickedToken.caret}`,
   );
-  const innerPoint = step("selection inside the chip label");
-  assert.equal(innerPoint.point?.collapsed, true, JSON.stringify(innerPoint.point));
   assert.equal(
-    innerPoint.caret,
-    3,
-    `a caret inside the chip label mapped past the chip: caret ${innerPoint.caret} of ${JSON.stringify(innerPoint.draft)} (point=${JSON.stringify(innerPoint.point)})`,
+    clickedToken.caret,
+    2,
+    `a click inside the label must snap to a token boundary: caret ${clickedToken.caret} of ${JSON.stringify(clickedToken.draft)}`,
   );
-  assert.equal(innerPoint.cursor, 3, `cursor stored past the chip: ${innerPoint.cursor}`);
-  const storedPaste = step("pasted at the stored chip caret");
+  const labelPoint = step("caret inside the token label");
+  assert.equal(labelPoint.point?.collapsed, true, JSON.stringify(labelPoint.point));
+  // The label point was repaired to a token boundary, so no endpoint sits in it.
+  assert.equal(labelPoint.point?.anchor?.insideReference, false, JSON.stringify(labelPoint.point));
+  assert.equal(
+    labelPoint.caret,
+    labelPoint.cursor,
+    `a caret inside the label must normalize to the stored boundary: caret ${labelPoint.caret}, cursor ${labelPoint.cursor}`,
+  );
+  assert.equal(
+    labelPoint.references.length,
+    1,
+    `a caret inside the label destroyed the token: ${labelPoint.html}`,
+  );
+  const storedPaste = step("pasted at the stored token caret");
   assert.equal(
     storedPaste.draft,
-    `见 ${storedPaste.chips[0]}p后面`,
-    `the stored caret spliced at the wrong offset: ${storedPaste.html}`,
+    `见 p${storedPaste.references[0]}后面`,
+    `the stored caret spliced inside the token: ${storedPaste.html}`,
   );
-  const dragChip = step("dragged from the chip label to its remove button");
-  assert.equal(dragChip.chips.length, 1, `chip missing: ${dragChip.html}`);
+  const draggingToken = step("selected from the token label into the text after it");
+  assert.equal(draggingToken.references.length, 1, `token missing: ${draggingToken.html}`);
   assert.equal(
-    dragChip.caret,
-    3,
-    `a drag inside the chip mapped past the chip: caret ${dragChip.caret} of ${JSON.stringify(dragChip.draft)}`,
+    draggingToken.caret,
+    2,
+    `a selection touching part of the label must take the whole token: caret ${draggingToken.caret} of ${JSON.stringify(draggingToken.draft)}`,
   );
-  assert.equal(dragChip.caretEnd, 3, `a drag inside the chip produced a range: ${dragChip.caretEnd}`);
-  const dragPaste = step("pasted at the stored drag caret");
-  assert.equal(
-    dragPaste.draft,
-    `见 ${dragPaste.chips[0]}q后面`,
-    `the drag caret spliced at the wrong offset: ${dragPaste.html}`,
+  assert.ok(
+    draggingToken.selection.startsWith("@notes.txt"),
+    `the normalized selection must start at the token: ${JSON.stringify(draggingToken.selection)}`,
   );
-  const liveChipPaste = step("pasted while the caret sat inside the chip");
   assert.equal(
-    liveChipPaste.chips.length,
+    draggingToken.activations.length,
+    0,
+    `a selection must never activate the reference: ${JSON.stringify(draggingToken.activations)}`,
+  );
+  const selectionPaste = step("pasted at the stored selection caret");
+  assert.equal(
+    selectionPaste.draft,
+    `见 q${selectionPaste.references[0]}后面`,
+    `the selection caret spliced inside the token: ${selectionPaste.html}`,
+  );
+  const liveTokenPaste = step("pasted while the caret sat inside the token label");
+  assert.equal(
+    liveTokenPaste.references.length,
     1,
-    `an edit inside the chip destroyed it: ${liveChipPaste.html}`,
+    `an edit derived from a label point destroyed the token: ${liveTokenPaste.html}`,
   );
   assert.equal(
-    liveChipPaste.draft,
-    `见 ${liveChipPaste.chips[0]}r后面`,
-    `an edit inside the chip landed at the wrong offset: ${liveChipPaste.html}`,
+    liveTokenPaste.draft,
+    `见 r${liveTokenPaste.references[0]}后面`,
+    `an edit derived from a label point landed at the wrong offset: ${liveTokenPaste.html}`,
   );
-  const beforeChip = step("pasted just before the chip");
+  const beforeToken = step("pasted just before the token");
   assert.equal(
-    beforeChip.draft,
-    `见 B${beforeChip.chips[0]}后面`,
-    `a point before the chip must stay before it: ${beforeChip.html}`,
+    beforeToken.draft,
+    `见 B${beforeToken.references[0]}后面`,
+    `a point before the token must stay before it: ${beforeToken.html}`,
   );
-  const afterChip = step("pasted just after the chip");
+  const afterToken = step("pasted just after the token");
   assert.equal(
-    afterChip.draft,
-    `见 ${afterChip.chips[0]}A后面`,
-    `a point after the chip must stay after it: ${afterChip.html}`,
+    afterToken.draft,
+    `见 ${afterToken.references[0]}A后面`,
+    `a point after the token must stay after it: ${afterToken.html}`,
   );
+
+  // M. A reference is one atomic character to deletion, and native undo puts
+  // the token back with its reference metadata.
+  const backspaced = step("backspace removed the whole token");
+  assert.equal(backspaced.draft, "见 后面", `backspace must remove the whole token: ${backspaced.html}`);
+  assert.equal(backspaced.references.length, 0, `backspace left a token behind: ${backspaced.html}`);
+  assert.deepEqual(backspaced.tokens, []);
+  const restored = step("undo restored the token");
+  assert.equal(
+    restored.draft,
+    `见 ${restored.references[0]}后面`,
+    `undo must restore the token: ${restored.html}`,
+  );
+  assert.deepEqual(restored.tokens, restored.references, `undo lost the reference: ${restored.html}`);
+  const deletedToken = step("delete removed the whole token");
+  assert.equal(deletedToken.draft, "见 后面", `Delete must remove the whole token: ${deletedToken.html}`);
+  assert.equal(deletedToken.references.length, 0, `Delete left a token behind: ${deletedToken.html}`);
 
   console.log("COMPOSER_CARET_PROBE " + JSON.stringify({ ok: true, steps: result.trace.length }));
 } finally {

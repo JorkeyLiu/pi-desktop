@@ -1,20 +1,19 @@
 import { useEffect, useState, type RefObject } from "react";
+import { IMAGE_REFERENCE_SELECTOR } from "../reference-tokens";
 
 export type ComposerImageHoverTarget = {
   id: string;
-  /** Viewport rect of the hovered chip, used to place the preview card. */
+  /** Viewport rect of the hovered reference, used to place the preview card. */
   anchor: { left: number; top: number; bottom: number; width: number };
 };
 
-/** Pointer dwell before a chip reveals its preview. */
+/** Pointer dwell before an image reference reveals its preview. */
 const HOVER_DELAY_MS = 180;
 
-const IMAGE_CHIP_SELECTOR = ".composer-chip[data-image]";
-
 /**
- * Track the image chip under the pointer inside the composer editor. Chips are
- * painted imperatively, so the editor delegates pointer movement here instead
- * of every chip owning preview state.
+ * Track the image reference under the pointer inside the composer editor.
+ * References are painted imperatively, so the editor delegates pointer movement
+ * here instead of every token owning preview state.
  */
 export function useComposerImageHover(
   editorRef: RefObject<HTMLDivElement | null>,
@@ -36,19 +35,19 @@ export function useComposerImageHover(
       cancel();
       setTarget(null);
     };
-    const chipOf = (node: EventTarget | null): HTMLElement | null =>
-      node instanceof Element ? node.closest<HTMLElement>(IMAGE_CHIP_SELECTOR) : null;
-    const reveal = (chip: HTMLElement, id: string) => {
-      const rect = chip.getBoundingClientRect();
+    const referenceOf = (node: EventTarget | null): HTMLElement | null =>
+      node instanceof Element ? node.closest<HTMLElement>(IMAGE_REFERENCE_SELECTOR) : null;
+    const reveal = (reference: HTMLElement, id: string) => {
+      const rect = reference.getBoundingClientRect();
       setTarget({
         id,
         anchor: { left: rect.left, top: rect.top, bottom: rect.bottom, width: rect.width },
       });
     };
     const onPointerOver = (event: PointerEvent) => {
-      const chip = chipOf(event.target);
-      const id = chip ? idForToken(chip.dataset.token ?? "") : null;
-      if (!chip || !id) {
+      const reference = referenceOf(event.target);
+      const id = reference ? idForToken(reference.dataset.token ?? "") : null;
+      if (!reference || !id) {
         hide();
         return;
       }
@@ -57,18 +56,18 @@ export function useComposerImageHover(
       pending = id;
       timer = window.setTimeout(() => {
         timer = null;
-        if (pending === id) reveal(chip, id);
+        if (pending === id) reveal(reference, id);
       }, HOVER_DELAY_MS);
     };
     const onPointerOut = (event: PointerEvent) => {
-      const chip = chipOf(event.target);
-      if (!chip || chipOf(event.relatedTarget) === chip) return;
+      const reference = referenceOf(event.target);
+      if (!reference || referenceOf(event.relatedTarget) === reference) return;
       hide();
     };
     editor.addEventListener("pointerover", onPointerOver);
     editor.addEventListener("pointerout", onPointerOut);
-    // A chip that moves under the pointer (typing, wrapping, scrolling) must
-    // never leave a stale card behind.
+    // A reference that moves under the pointer (typing, wrapping, scrolling)
+    // must never leave a stale card behind.
     editor.addEventListener("input", hide);
     editor.addEventListener("scroll", hide, true);
     window.addEventListener("resize", hide);

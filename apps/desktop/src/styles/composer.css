@@ -284,7 +284,30 @@
   cursor: text;
 }
 
-/* Atomic inline attachment chip inside the editable draft. */
+/*
+  Inline draft reference: real text inside the editable, one atomic token.
+  The visible label is exactly `@name` — no icon, capsule, or remove control —
+  so it wraps like prose and the browser's own selection covers it. The full
+  reference stays in the tooltip and in the draft's canonical state.
+*/
+.composer-reference {
+  color: var(--ds-accent);
+  cursor: text;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--ds-accent) 55%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.composer-reference[data-action] {
+  cursor: pointer;
+}
+
+.composer-reference[data-action]:hover {
+  text-decoration-color: var(--ds-accent);
+}
+
+/* A sent-message file node keeps the shared chip surface (messages.css). */
 .composer-chip {
   display: inline-flex;
   max-width: min(100%, 240px);
@@ -304,21 +327,6 @@
   -webkit-user-select: none;
 }
 
-.composer-chip[data-action="expand-text-reference"] {
-  cursor: pointer;
-}
-
-.composer-chip[data-action="expand-text-reference"]:focus-visible {
-  outline: 2px solid color-mix(in oklab, var(--ds-accent) 72%, transparent);
-  outline-offset: 1px;
-}
-
-/* A plugin mark: text the plugin sends in its place, not a file. */
-.composer-chip[data-plugin-mark] {
-  background: color-mix(in oklab, var(--ds-accent) 14%, var(--ds-tile-deep));
-  color: var(--ds-text-primary);
-}
-
 .composer-chip-icon {
   display: inline-flex;
   flex: 0 0 auto;
@@ -330,26 +338,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.composer-chip-remove {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-full);
-  color: var(--ds-text-muted);
-  transition:
-    background var(--motion-duration-fast) var(--motion-ease-out),
-    color var(--motion-duration-fast) var(--motion-ease-out);
-}
-
-.composer-chip-remove:hover,
-.composer-chip-remove:focus-visible {
-  background: var(--ds-bg-hover);
-  color: var(--ds-text-primary);
 }
 
 .composer-input::placeholder {
