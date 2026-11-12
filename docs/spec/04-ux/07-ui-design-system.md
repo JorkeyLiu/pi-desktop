@@ -925,33 +925,74 @@ model):
 
 ## 8.1 Composer transient file references
 
-The passive project / Local / branch rail remains removed under D095. When the
-draft references files, a transient wrapping row appears inside the composer
-above the textarea. Each quiet text chip uses the inset surface, a subtle
-border, a file glyph, an ellipsized leaf name, and a focus-visible remove
-action. No references means no reserved row or extra composer height. The
-canonical path is tooltip/accessibility metadata and never textarea body copy,
-including after unanswered smart-stop restoration. Dispatch and persisted user
-messages still carry the canonical path required by D124. After send, the
-transcript paints those same references as composer-matching leaf-name chips
-rather than full-path text (D320).
+The passive project / Local / branch rail remains removed under D095. A draft
+reference paints inline, in the draft text itself. Every attachment and file
+reference the composer carries — an `@` picker selection, a pasted or dropped
+image or file, a bounded pasted-text file, a conversation reference, or a
+plugin mark — is one `@<filename>` text token at its insertion point, on the
+text baseline. There is no file glyph, no capsule or pill surface, no remove
+button, and no reserved row or extra composer height above the textarea. The
+visible label is ordinary selectable text inside the editing host, so a leaf
+name longer than the draft width wraps like prose and is never truncated with
+an ellipsis, and the full path never appears in the draft body. The token's
+hover title and accessible name carry the canonical path — the name is the
+file name followed by that path — including after unanswered smart-stop
+restoration. Dispatch and persisted user messages still carry the canonical
+path required by D124. After send, the transcript paints those same references
+as leaf-name text rather than full-path prose (D320).
 
-Large text pastes use a second presentation: text-only input at or below the
-configured `largePasteThreshold` remains native editor content, while input
-above it is written as UTF-8 under the active session's scratch `pasted/`
-directory and rendered as one sentinel-backed `pasted-text-*.txt` chip at the
-paste caret. The chip remains atomic until the user clicks it or presses
-Enter/Space; the composer then reads the bounded text file, replaces the
-sentinel at its current position with editable text, removes the reference, and
-places the caret after the inserted content. A failed or unsupported read keeps
-the chip in place. The renderer resolves any remaining sentinel references
-exactly once immediately before dispatch. The threshold is an AI → Defaults
-setting, defaults to 600 characters, and applies only to text-only pastes;
-clipboard files and images retain their chip presentation. Word's mixed
-`text/plain` plus generated `image/*` copies selects the text representation
-when the text is not whitespace-only and no file has a native path. That text
-uses the same threshold. Native files, non-image files, and image-only or
-whitespace-plus-image pastes retain their chips.
+A token is one atomic character to editing even though its label is several
+characters long. The caret sits only before or after it: a click or a selection
+endpoint that lands inside the label snaps to the nearer token boundary, and a
+selection that touches any part of the label covers the whole token, which the
+browser highlights as one native text selection. Backspace, Delete, or a cut
+with the caret on either boundary removes the token as one unit; undo and redo
+restore the token together with its reference and the order it occupied. A
+selection that covers tokens copies their complete references internally and
+their full paths externally, and never degrades to the visible `@name`.
+
+An action-bearing reference is also a keyboard reachable link. It is one tab
+stop inside the draft, carries `role="link"`, and its accessible name holds the
+file name and its canonical path. Enter or Space on the focused token runs the
+same reference-specific action a pointer click runs — image preview, text
+expansion, or opening the referenced conversation — and returns focus to the
+editing host at the draft caret, so the next keystroke still edits the draft.
+A focus ring is the only extra surface the token gains: no capsule, icon,
+button, or remove control appears while it is focused. A pointer drag that
+selects text never activates the token, a click on a drag never opens a
+preview, and hover reveals the image preview card. Typed text stays ordinary
+editable text, including an unfinished `@` mention and text typed through the
+`@` menu; only a committed attachment reference becomes a token.
+
+A token label is ordinary text, so Chromium canonicalizes a collapsed DOM
+caret on the element boundary next to a label into the label's own text. Typed,
+pasted, composed, or emoji text inserted at that boundary would then land
+inside the atomic token and never reach the draft. The composer therefore keeps
+a real, non-empty text node on each side of every reference — a caret host —
+whose first character is an invisible zero-width mark; the caret sits after
+that mark, one text position inside the host. Native input at either boundary
+stays ordinary draft text on the browser's own undo stack, so the most recent
+boundary edit is what undo removes, and paste, IME composition, and emoji
+insertion behave the same way. The mark is scaffolding: it is not a draft
+character and never reaches the draft value, a submitted payload, clipboard
+text, or a persisted message.
+
+Large text pastes keep their bounded content store in that inline form:
+text-only input at or below the configured `largePasteThreshold` remains native
+editor content, while input above it is written as UTF-8 under the active
+session's scratch `pasted/` directory and appears as one
+`@pasted-text-*.txt` reference token at the paste caret. The token stays
+atomic until the user activates it; the composer then reads the bounded text
+file, replaces the token at its current position with editable text, removes
+the reference, and places the caret after the inserted content. A failed or
+unsupported read keeps the token in place. The renderer resolves any remaining
+sentinel references exactly once immediately before dispatch. The threshold is
+an AI → Defaults setting, defaults to 600 characters, and applies only to
+text-only pastes; clipboard files and images keep the same reference-token
+presentation. Word's mixed `text/plain` plus generated `image/*` copies selects
+the text representation when the text is not whitespace-only and no file has a
+native path. That text uses the same threshold. Native files, non-image files,
+and image-only or whitespace-plus-image pastes keep their reference tokens.
 
 ## 8.2 Composer runtime controls
 

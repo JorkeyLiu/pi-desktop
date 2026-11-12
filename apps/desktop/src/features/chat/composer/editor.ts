@@ -4,25 +4,47 @@ import {
 } from "@pi-desktop/shared";
 import type { ComposerPluginPart } from "../../../lib/composer-smart-stop";
 import type { ComposerFileReference } from "./model";
+import {
+  CHIP_TOKEN_COUNT,
+  isChipTokenChar,
+  isImageFilePath,
+  isPluginMark,
+  nextChipToken,
+} from "./reference-model";
+import {
+  CARET_MARK,
+  caretHostConsumed,
+  caretHostDraftLength,
+  caretHostDraftText,
+  caretHostTextOffset,
+  caretIndexForPoint,
+  isCaretHostLead,
+  selectionEndForPoint,
+  selectionRangeFromPoints,
+  selectionStartForPoint,
+} from "./reference-selection";
+import {
+  buildCaretHost,
+  buildReferenceElement,
+  isCaretHost,
+  isReferenceElement,
+} from "./reference-tokens";
 
-export { type ComposerFileReference } from "./model";
+export type { ComposerFileReference } from "./model";
+export {
+  CHIP_TOKEN_COUNT,
+  isChipTokenChar,
+  isEditableTextReference,
+  isImageFilePath,
+  isPluginMark,
+  nextChipToken,
+} from "./reference-model";
 
 let composerFileReferenceSequence = 0;
-
-const CODE_FILE_PATTERN =
-  /\.(cjs|css|go|java|js|json|jsx|kt|mjs|php|py|rb|rs|sh|sql|svelte|swift|toml|ts|tsx|vue|ya?ml)$/i;
-const ARCHIVE_FILE_PATTERN = /\.(7z|bz2|gz|jar|rar|tar|zip)$/i;
-const SHEET_FILE_PATTERN = /\.(csv|ods|xls|xlsx)$/i;
-const AUDIO_FILE_PATTERN = /\.(flac|m4a|mp3|ogg|wav|webm)$/i;
-const VIDEO_FILE_PATTERN = /\.(avi|mkv|m4v|mov|mp4|webm)$/i;
 
 /** Paste/scratch files keep absolute paths; `@` entries are workspace-relative. */
 export function isPersistedScratchReference(path: string): boolean {
   return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
-}
-
-export function isImageFilePath(path: string): boolean {
-  return /\.(avif|bmp|gif|heic|jpe?g|png|tiff?|webp)$/i.test(path);
 }
 
 export function formatDroppedDirectoryPath(path: string): string {
@@ -30,7 +52,7 @@ export function formatDroppedDirectoryPath(path: string): string {
   const formatted = formatFileInsert(normalized, "dir");
   // `formatFileInsert` leaves a spaced directory quote open for interactive
   // @ completion. A completed native drop needs a closed token so mixed drops
-  // can separate the directory from the following file chip.
+  // can separate the directory from the following file token.
   return /\s/.test(normalized) ? `${formatted}"` : formatted;
 }
 
@@ -50,7 +72,6 @@ export function createFileReference(
     id: `composer-file-${composerFileReferenceSequence}`,
     sessionId,
     path,
-    // A plugin mark's label is shown as given; it is no path.
     // A plugin mark's label is shown as given, and a session reference is
     // named by its conversation; neither is a path.
     name:
@@ -64,39 +85,17 @@ export function createFileReference(
   };
 }
 
-/** A chip a plugin put in the draft that is text, not a file: a mark or the fold. */
-export function isPluginMark(reference: { plugin?: ComposerPluginPart } | undefined): boolean {
-  const kind = reference?.plugin?.kind;
-  return kind === "mark" || kind === "fold";
+/** Rendered length of a node in draft-string characters (a reference = 1 char). */
+/** The draft characters one text node contributes (a caret host hides its mark). */
+function editorTextValue(node: Node): string {
+  const text = node.nodeValue ?? "";
+  return isCaretHost(node) ? caretHostDraftText(text) : text;
 }
 
-const CHIP_TOKEN_BASE = 0xe000;
-const CHIP_TOKEN_END = 0xf8ff;
-let chipTokenSequence = 0;
-
-export function nextChipToken(): string {
-  const range = CHIP_TOKEN_END - CHIP_TOKEN_BASE + 1;
-  chipTokenSequence = (chipTokenSequence + 1) % range;
-  return String.fromCodePoint(CHIP_TOKEN_BASE + chipTokenSequence);
-}
-
-export function isChipTokenChar(char: string): boolean {
-  if (char.length !== 1) return false;
-  const code = char.codePointAt(0) ?? 0;
-  return code >= CHIP_TOKEN_BASE && code <= CHIP_TOKEN_END;
-}
-
-function isChipElement(node: Node): boolean {
-  return (
-    node.nodeType === Node.ELEMENT_NODE &&
-    (node as HTMLElement).classList.contains("composer-chip")
-  );
-}
-
-/** Rendered length of a node in draft-string characters (chip = 1 char). */
+/** Rendered length of a node in draft-string characters (a reference = 1 char). */
 function editorNodeLength(node: Node): number {
-  if (node.nodeType === Node.TEXT_NODE) return (node.nodeValue ?? "").length;
-  if (isChipElement(node)) return 1;
+  if (node.nodeType === Node.TEXT_NODE) return editorTextValue(node).length;
+  if (isReferenceElement(node)) return 1;
   if (node.nodeType === Node.ELEMENT_NODE) {
     const element = node as HTMLElement;
     if (element.tagName === "BR") return 1;
@@ -120,6 +119,24 @@ function isTrailingPlaceholderBreak(editor: HTMLElement, node: Node): boolean {
 }
 
 type EditorPoint = { node: Node; offset: number };
+
+/** A DOM point inside one reference: the token it belongs to and how far in. */
+export type ReferenceInside = {
+  /** Draft index of the token this label belongs to. */
+  readonly start: number;
+  /** Draft index just after the token. */
+  readonly end: number;
+  /** How far the DOM point sits into the visible label. */
+  readonly offset: number;
+  /** Visible label length in DOM characters. */
+  readonly length: number;
+};
+
+/** A DOM point mapped into the draft, plus the label it sits inside if any. */
+export type EditorPointInfo = {
+  readonly index: number;
+  readonly inside: ReferenceInside | null;
+};
 
 /**
  * Give the editable exactly the caret slot an empty last line needs, measured
@@ -156,35 +173,37 @@ function completeTrailingBreaks(editor: HTMLElement, expected: string): void {
   for (; run < desired; run += 1) editor.appendChild(document.createElement("br"));
 }
 
+function referenceLabelLength(element: HTMLElement): number {
+  return (element.textContent ?? "").length;
+}
+
 /**
- * A selection endpoint inside a chip's markup is not a draft position, and an
- * insertion there would split an atom chip. Collapse such a selection to the
- * chip's boundary before an edit touches the DOM.
+ * How far a DOM point inside one reference sits into its visible label. Paint
+ * gives every reference one text node, so a point in the element is a label
+ * offset; the element's own child boundary is its start or end.
  */
-function collapseChipSelection(editor: HTMLElement): void {
-  const selection = window.getSelection();
-  if (!selection || selection.rangeCount === 0) return;
-  const range = selection.getRangeAt(0);
-  const chipOf = (node: Node): Element | null => {
-    const element = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
-    return element?.closest(".composer-chip") ?? null;
-  };
-  if (!chipOf(range.startContainer) && !chipOf(range.endContainer)) return;
-  setEditorCaret(editor, editorIndexAt(editor, range.endContainer, range.endOffset));
+function referenceOffsetAt(element: HTMLElement, node: Node, offset: number): number {
+  const length = referenceLabelLength(element);
+  if (node === element) return offset === 0 ? 0 : length;
+  return Math.max(0, Math.min(offset, length));
 }
 
 /**
  * Walk the editable's DOM into the plain draft string, optionally stopping at a
  * DOM point. `editorIndexAt` is the length of that prefix, so one algorithm
- * owns both directions instead of two walks that can disagree about chips,
- * breaks, or block wrappers reintroduced by native undo.
+ * owns both directions instead of two walks that can disagree about
+ * references, breaks, or block wrappers reintroduced by native undo. A point
+ * inside a reference's label reports the token it belongs to: the label is
+ * variable-length DOM text for one draft character, so the walk — not a
+ * character count — owns that translation.
  */
 function walkEditorValue(
   el: HTMLElement,
   stop?: EditorPoint,
-): { value: string; reached: boolean } {
+): { value: string; reached: boolean; inside: ReferenceInside | null } {
   let out = "";
   let reached = stop === undefined;
+  let inside: ReferenceInside | null = null;
   const visitChildren = (parent: Node, blockStart: boolean): boolean => {
     const children = Array.from(parent.childNodes);
     for (let index = 0; index < children.length; index += 1) {
@@ -196,9 +215,14 @@ function walkEditorValue(
       const element = child.nodeType === Node.ELEMENT_NODE ? (child as HTMLElement) : null;
       if (isTrailingPlaceholderBreak(el, child)) continue;
       if (child.nodeType === Node.TEXT_NODE) {
-        const text = child.nodeValue ?? "";
+        const text = editorTextValue(child);
         if (stop && stop.node === child) {
-          out += text.slice(0, stop.offset);
+          // A caret host's mark is not a draft character, so a DOM offset inside
+          // it counts only the characters after the mark.
+          const consumed = isCaretHost(child)
+            ? caretHostConsumed(child.nodeValue ?? "", stop.offset)
+            : stop.offset;
+          out += text.slice(0, consumed);
           reached = true;
           return false;
         }
@@ -206,18 +230,24 @@ function walkEditorValue(
         continue;
       }
       if (!element) continue;
-      if (isChipElement(element)) {
-        const token = element.dataset.token ?? "";
-        out += isChipTokenChar(token) ? token : "";
-        // A chip is one draft character, so a point inside its own markup (a
-        // click on its label, an assistive caret, a drag endpoint on its
-        // remove button) is that character's end — the same span the browser's
-        // own clone of the chip covers. Points before and after the chip keep
-        // their sibling boundary.
+      if (isReferenceElement(element)) {
+        // A point inside the rendered label is not a draft position of its
+        // own: report the token's span and how far into the label it sits, so
+        // the caller can snap a caret or expand a selection to the whole token.
         if (stop && element.contains(stop.node)) {
+          inside = {
+            start: out.length,
+            end: out.length + 1,
+            offset: referenceOffsetAt(element, stop.node, stop.offset),
+            length: referenceLabelLength(element),
+          };
           reached = true;
           return false;
         }
+        const token = element.dataset.token ?? "";
+        // A reference without a draft sentinel is corrupt DOM: read its label
+        // as the text it visibly is instead of dropping it.
+        out += isChipTokenChar(token) ? token : (element.textContent ?? "");
         continue;
       }
       if (element.tagName === "BR") {
@@ -240,7 +270,7 @@ function walkEditorValue(
     return true;
   };
   visitChildren(el, true);
-  return { value: out, reached };
+  return { value: out, reached, inside };
 }
 
 /** Read the editable's DOM back into the plain draft string. */
@@ -248,23 +278,29 @@ export function readEditorValue(el: HTMLElement): string {
   return walkEditorValue(el).value;
 }
 
-/** Map a DOM point inside the editable to a draft-string index. */
-export function editorIndexAt(
-  el: HTMLElement,
-  node: Node,
-  offset: number,
-): number {
+/** Map a DOM point inside the editable to a draft position and its label. */
+export function editorPointAt(el: HTMLElement, node: Node, offset: number): EditorPointInfo {
   try {
-    const { value, reached } = walkEditorValue(el, { node, offset });
-    // A point the draft model cannot address (inside a chip's own markup)
-    // counts as the end of the value, never as a partial chip.
-    return reached ? value.length : readEditorValue(el).length;
+    const { value, reached, inside } = walkEditorValue(el, { node, offset });
+    // A point the draft model cannot address counts as the end of the value,
+    // never as a partial reference.
+    const index = reached ? value.length : readEditorValue(el).length;
+    return { index, inside };
   } catch {
-    return 0;
+    return { index: 0, inside: null };
   }
 }
 
-/** Ordered [start, end] draft-string indices covered by the selection. */
+/** Map a DOM point to the draft caret it stands for: never inside a label. */
+export function editorIndexAt(el: HTMLElement, node: Node, offset: number): number {
+  return caretIndexForPoint(editorPointAt(el, node, offset));
+}
+
+/**
+ * Ordered [start, end] draft indices covered by the selection. A selection that
+ * touches part of a reference covers that whole token, so a cut or a paste over
+ * it can never split an atomic reference.
+ */
 export function editorSelectionRange(el: HTMLElement): { start: number; end: number } {
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0) {
@@ -276,15 +312,41 @@ export function editorSelectionRange(el: HTMLElement): { start: number; end: num
     const end = readEditorValue(el).length;
     return { start: end, end };
   }
-  const a = editorIndexAt(el, range.startContainer, range.startOffset);
-  const b = editorIndexAt(el, range.endContainer, range.endOffset);
-  return { start: Math.min(a, b), end: Math.max(a, b) };
+  return selectionRangeFromPoints(
+    editorPointAt(el, range.startContainer, range.startOffset),
+    editorPointAt(el, range.endContainer, range.endOffset),
+  );
 }
 
+
+/** A caret point inside a caret host, after `consumed` of its draft characters. */
+function caretHostPoint(host: Node, consumed: number): EditorPoint {
+  return { node: host, offset: caretHostTextOffset(host.nodeValue ?? "", consumed) };
+}
+
+/**
+ * The DOM point of a draft position after one reference. The browser would
+ * canonicalize the element boundary itself into the label, so the point moves
+ * into the host text node that follows the token.
+ */
+function afterReferencePoint(parent: Node, index: number): EditorPoint {
+  const next = parent.childNodes[index + 1];
+  if (isCaretHost(next)) return caretHostPoint(next, 0);
+  return { node: parent, offset: index + 1 };
+}
+
+/** The DOM point of a draft position before one reference, after its host. */
+function beforeReferencePoint(parent: Node, index: number): EditorPoint {
+  const previous = parent.childNodes[index - 1];
+  if (isCaretHost(previous)) {
+    return caretHostPoint(previous, caretHostDraftLength(previous.nodeValue ?? ""));
+  }
+  return { node: parent, offset: index };
+}
 /** Draft-string index → DOM caret point. */
-function editorCaretPoint(el: HTMLElement, target: number): { node: Node; offset: number } {
+function editorCaretPoint(el: HTMLElement, target: number): EditorPoint {
   let remaining = target;
-  let point: { node: Node; offset: number } | null = null;
+  let point: EditorPoint | null = null;
   const descend = (parent: Node): boolean => {
     const children = Array.from(parent.childNodes);
     for (let index = 0; index < children.length; index += 1) {
@@ -300,11 +362,28 @@ function editorCaretPoint(el: HTMLElement, target: number): { node: Node; offset
       const length = editorNodeLength(child);
       if (child.nodeType === Node.TEXT_NODE) {
         if (point === null && remaining <= length) {
-          point = { node: child, offset: remaining };
+          // Inside a caret host the point must stay after the host's invisible
+          // mark: a caret on the mark's leading edge is the boundary the
+          // browser would canonicalize into the neighbouring label.
+          point = {
+            node: child,
+            offset: isCaretHost(child)
+              ? caretHostTextOffset(child.nodeValue ?? "", remaining)
+              : remaining,
+          };
           return true;
         }
         remaining -= length;
-      } else if (isChipElement(child) || (child as HTMLElement).tagName === "BR") {
+      } else if (isReferenceElement(child)) {
+        if (point === null && remaining <= 1) {
+          point =
+            remaining === 0
+              ? beforeReferencePoint(parent, index)
+              : afterReferencePoint(parent, index);
+          return true;
+        }
+        remaining -= 1;
+      } else if ((child as HTMLElement).tagName === "BR") {
         if (point === null && remaining <= 1) {
           point = { node: parent, offset: remaining === 0 ? index : index + 1 };
           return true;
@@ -320,148 +399,95 @@ function editorCaretPoint(el: HTMLElement, target: number): { node: Node; offset
   return point ?? { node: el, offset: el.childNodes.length };
 }
 
-export function setEditorCaret(el: HTMLElement, index: number): void {
-  const point = editorCaretPoint(el, Math.max(0, index));
-  const selection = window.getSelection();
-  if (!selection) return;
+function clampPoint(point: EditorPoint): EditorPoint {
   const maxOffset =
     point.node.nodeType === Node.TEXT_NODE
       ? (point.node.nodeValue ?? "").length
       : point.node.childNodes.length;
+  return { node: point.node, offset: Math.max(0, Math.min(point.offset, maxOffset)) };
+}
+
+export function setEditorCaret(el: HTMLElement, index: number): void {
+  const point = clampPoint(editorCaretPoint(el, Math.max(0, index)));
+  const selection = window.getSelection();
+  if (!selection) return;
   const range = document.createRange();
-  range.setStart(point.node, Math.min(point.offset, maxOffset));
+  range.setStart(point.node, point.offset);
   range.collapse(true);
   selection.removeAllRanges();
   selection.addRange(range);
 }
 
-/** One glyph per file family on attachment chips, as inline SVG strings. */
-const CHIP_ICON_SVG: Record<string, string> = {
-  image:
-    '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
-  code: '<path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="M14.5 4 9.5 20"/>',
-  archive:
-    '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
-  sheet:
-    '<path d="M12 3v18"/><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/>',
-  audio:
-    '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
-  video:
-    '<path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/>',
-  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
-  session: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
-  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
-  plugin:
-    '<path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/>',
-  fold: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
-};
+/**
+ * Select a draft range by its own offsets, keeping the anchor where the caller
+ * says the user's drag started so Shift+Arrow behavior stays native.
+ */
+export function setEditorSelection(
+  el: HTMLElement,
+  anchorIndex: number,
+  focusIndex: number,
+): void {
+  const anchor = clampPoint(editorCaretPoint(el, Math.max(0, anchorIndex)));
+  const focus = clampPoint(editorCaretPoint(el, Math.max(0, focusIndex)));
+  const selection = window.getSelection();
+  if (!selection) return;
+  selection.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset);
+}
 
-function chipIconKey(reference: ComposerFileReference): string {
-  if (reference.plugin?.kind === "mark") return "plugin";
-  if (reference.plugin?.kind === "fold") return "fold";
-  if (reference.kind === "session") return "session";
-  const mime = reference.mimeType ?? "";
-  if (reference.kind === "image" || mime.startsWith("image/")) return "image";
-  const name = reference.name;
-  if (CODE_FILE_PATTERN.test(name) || /javascript|typescript|json|python/i.test(mime)) {
-    return "code";
+function isRangeStartPoint(range: Range, selection: Selection): boolean {
+  return (
+    range.startContainer === selection.anchorNode && range.startOffset === selection.anchorOffset
+  );
+}
+
+/**
+ * Snap the browser's selection onto reference boundaries. A caret is never left
+ * inside a label, and a selection that reaches into one covers the whole token,
+ * both in the draft model and in the visible highlight. Returns whether the DOM
+ * selection changed, so callers can tell a repair from an untouched selection.
+ */
+export function normalizeEditorSelection(el: HTMLElement): boolean {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return false;
+  const range = selection.getRangeAt(0);
+  if (!el.contains(range.startContainer) || !el.contains(range.endContainer)) return false;
+  if (range.collapsed) {
+    const point = editorPointAt(el, range.startContainer, range.startOffset);
+    // A caret on a host's leading edge, or inside a label, is a point the
+    // browser would edit as the neighbouring token: both are repaired onto the
+    // nearest whole-token draft boundary.
+    const hostLead =
+      range.startContainer.nodeType === Node.TEXT_NODE &&
+      isCaretHostLead(range.startContainer.nodeValue ?? "", range.startOffset);
+    if (!point.inside && !hostLead) return false;
+    setEditorCaret(el, caretIndexForPoint(point));
+    return true;
   }
-  if (ARCHIVE_FILE_PATTERN.test(name) || /zip|compressed|tar$/i.test(mime)) return "archive";
-  if (SHEET_FILE_PATTERN.test(name) || /csv|spreadsheet/i.test(mime)) return "sheet";
-  if (AUDIO_FILE_PATTERN.test(name) || mime.startsWith("audio/")) return "audio";
-  if (VIDEO_FILE_PATTERN.test(name) || mime.startsWith("video/")) return "video";
-  return "file";
-}
-
-function chipSvg(key: string, size = 13): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${CHIP_ICON_SVG[key] ?? CHIP_ICON_SVG.file}</svg>`;
-}
-
-export function isEditableTextReference(reference: ComposerFileReference): boolean {
-  if (isPluginMark(reference)) return false;
-  return reference.mimeType?.toLowerCase() === "text/plain" || /\.txt$/i.test(reference.name);
-}
-
-/** Build the atomic inline chip element for one attachment reference. */
-function buildChipElement(
-  reference: ComposerFileReference,
-  token: string,
-  removeLabel: string,
-  onRemove: (token: string) => void,
-  onExpandText: (token: string) => void,
-  onOpenImage: (token: string) => void,
-  onOpenSession: (token: string) => void,
-): HTMLElement {
-  const chip = document.createElement("span");
-  chip.className = "composer-chip";
-  chip.contentEditable = "false";
-  chip.dataset.token = token;
-  // A mark names the plugin that put it there where a file names its path.
-  const origin = isPluginMark(reference) ? (reference.plugin?.pluginId ?? "") : reference.path;
-  if (isPluginMark(reference)) chip.dataset.pluginMark = reference.plugin?.kind;
-  chip.title = origin;
-  // An image keeps the compact chip and opens its preview, a session chip opens
-  // that conversation, and only plain text expands into editable draft text.
-  const image = chipIconKey(reference) === "image";
-  if (image) chip.dataset.image = "";
-  const session = reference.kind === "session";
-  if (session) chip.dataset.sessionId = reference.path;
-  const editableText = !image && !session && isEditableTextReference(reference);
-  const activate = editableText
-    ? () => onExpandText(token)
-    : image
-      ? () => onOpenImage(token)
-      : session
-        ? () => onOpenSession(token)
-        : undefined;
-  chip.setAttribute("role", activate ? "button" : "listitem");
-  chip.setAttribute("aria-label", `${reference.name} — ${origin}`);
-  if (activate) {
-    chip.tabIndex = 0;
-    // Only a text reference expands into editable text; an image chip opens
-    // its preview and a session chip opens that conversation instead.
-    chip.dataset.action = editableText
-      ? "expand-text-reference"
-      : image
-        ? "open-image-preview"
-        : "open-session-reference";
-    chip.addEventListener("click", activate);
-    chip.addEventListener("keydown", (event) => {
-      if (event.target !== chip) return;
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      event.stopPropagation();
-      activate();
-    });
-  }
-
-  const icon = document.createElement("span");
-  icon.className = "composer-chip-icon";
-  icon.innerHTML = chipSvg(chipIconKey(reference));
-
-  const nameSpan = document.createElement("span");
-  nameSpan.className = "composer-chip-name";
-  nameSpan.textContent = reference.name;
-
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "composer-chip-remove";
-  remove.title = removeLabel;
-  remove.setAttribute("aria-label", removeLabel);
-  remove.innerHTML = chipSvg("x", 11);
-  // Swallow the mousedown so removing a chip never moves the editable caret.
-  remove.addEventListener("mousedown", (event) => event.preventDefault());
-  remove.addEventListener("keydown", (event) => {
-    // Keep native button activation, without bubbling Enter into send.
-    if (event.key === "Enter" || event.key === " ") event.stopPropagation();
-  });
-  remove.addEventListener("click", (event) => {
-    event.stopPropagation();
-    onRemove(token);
-  });
-
-  chip.append(icon, nameSpan, remove);
-  return chip;
+  const anchorNode = selection.anchorNode;
+  const focusNode = selection.focusNode;
+  if (!anchorNode || !focusNode) return false;
+  const anchorIsStart = isRangeStartPoint(range, selection);
+  const anchorPoint = editorPointAt(el, anchorNode, selection.anchorOffset);
+  const focusPoint = editorPointAt(el, focusNode, selection.focusOffset);
+  const anchorIndex = anchorIsStart
+    ? selectionStartForPoint(anchorPoint)
+    : selectionEndForPoint(anchorPoint);
+  const focusIndex = anchorIsStart
+    ? selectionEndForPoint(focusPoint)
+    : selectionStartForPoint(focusPoint);
+  const anchorNeedsRepair = anchorPoint.inside
+    ? anchorIsStart
+      ? anchorPoint.inside.offset < anchorPoint.inside.length
+      : anchorPoint.inside.offset > 0
+    : false;
+  const focusNeedsRepair = focusPoint.inside
+    ? anchorIsStart
+      ? focusPoint.inside.offset > 0
+      : focusPoint.inside.offset < focusPoint.inside.length
+    : false;
+  if (!anchorNeedsRepair && !focusNeedsRepair) return false;
+  setEditorSelection(el, anchorIndex, focusIndex);
+  return true;
 }
 
 /** Paint the contenteditable from the draft string. */
@@ -469,44 +495,50 @@ export function paintEditorValue(
   el: HTMLElement,
   value: string,
   referenceByToken: Map<string, ComposerFileReference>,
-  removeLabelFor: (reference: ComposerFileReference) => string,
-  onRemove: (token: string) => void,
-  onExpandText: (token: string) => void,
-  onOpenImage: (token: string) => void,
-  onOpenSession: (token: string) => void,
 ): void {
   el.replaceChildren();
   let textBuffer = "";
+  let lastKind: "text" | "reference" | "break" | "host" | null = null;
   const flush = () => {
     if (textBuffer) {
       el.appendChild(document.createTextNode(textBuffer));
       textBuffer = "";
+      lastKind = "text";
     }
+  };
+  const appendHost = () => {
+    el.appendChild(buildCaretHost());
+    lastKind = "host";
+  };
+  const hostBeforeReference = () => {
+    // A text node already holds a caret before the token, and a host placed
+    // ahead of it already ends the same way; anything else leaves the boundary
+    // to the browser, which would edit it as the label.
+    return lastKind !== "text" && lastKind !== "host";
   };
   for (const char of Array.from(value)) {
     if (isChipTokenChar(char)) {
       const reference = referenceByToken.get(char);
       if (reference) {
         flush();
-        el.appendChild(
-          buildChipElement(
-            reference,
-            char,
-            removeLabelFor(reference),
-            onRemove,
-            onExpandText,
-            onOpenImage,
-            onOpenSession,
-          ),
-        );
+        // A caret of its own needs a real text position whenever the node
+        // before the token cannot hold one: the start of the draft, another
+        // token, or a line break.
+        if (hostBeforeReference()) appendHost();
+        el.appendChild(buildReferenceElement(reference, char));
+        lastKind = "reference";
+        // The caret after a token always needs one: the browser's nearest text
+        // node is the token's label, and it would swallow the next insertion.
+        appendHost();
         continue;
       }
-      // A private-use code point with no chip behind it is user text (for
+      // A private-use code point with no reference behind it is user text (for
       // example a Nerd Font glyph pasted from a terminal); keep it verbatim.
     }
     if (char === "\n") {
       flush();
       el.appendChild(document.createElement("br"));
+      lastKind = "break";
       continue;
     }
     textBuffer += char;
@@ -555,7 +587,9 @@ export function normalizeClipboardLineEndings(text: string): string {
 /** Keep native undo while inserting multiline text into the editor's Text/BR
  * model. insertText creates block wrappers whose offsets differ from the draft. */
 export function insertClipboardText(editor: HTMLElement, text: string): boolean {
-  collapseChipSelection(editor);
+  // A caret beside a reference is repaired onto its caret host first, so the
+  // native command below inserts outside the label and keeps the undo stack.
+  normalizeEditorSelection(editor);
   if (!/[\r\n]/.test(text)) return document.execCommand("insertText", false, text);
   const before = readEditorValue(editor);
   const { start, end } = editorSelectionRange(editor);
@@ -572,7 +606,7 @@ export function insertClipboardText(editor: HTMLElement, text: string): boolean 
   // A pasted trailing break is a draft newline and needs the caret slot after
   // it; completing against the value this paste means to produce leaves a
   // mid-draft paste's existing break run — and every trailing newline it
-  // already had — untouched. Use the draft offsets for the caret, as chip
+  // already had — untouched. Use the draft offsets for the caret, as reference
   // insertion does, without changing undo.
   if (inserted) {
     completeTrailingBreaks(editor, before.slice(0, start) + normalized + before.slice(end));
@@ -589,7 +623,7 @@ export function insertClipboardText(editor: HTMLElement, text: string): boolean 
  * valid. Returns false when the caret is outside `editor`.
  */
 export function insertNewlineAtCaret(editor: HTMLElement): boolean {
-  collapseChipSelection(editor);
+  normalizeEditorSelection(editor);
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0) return false;
   const range = selection.getRangeAt(0);
@@ -617,9 +651,7 @@ export function insertNewlineAtCaret(editor: HTMLElement): boolean {
   return true;
 }
 
-/** Paint a chip-less editor from plain draft text (no attachment references). */
+/** Paint a reference-less editor from plain draft text. */
 export function paintEditorText(editor: HTMLElement, value: string): void {
-  const noReferences = new Map<string, ComposerFileReference>();
-  const noop = () => undefined;
-  paintEditorValue(editor, value, noReferences, () => "", noop, noop, noop, noop);
+  paintEditorValue(editor, value, new Map<string, ComposerFileReference>());
 }

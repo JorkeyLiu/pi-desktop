@@ -221,8 +221,13 @@ attachment metadata/ref, never base64. An image the draft named inline also
 carries that `@path` text as `inlinePath` on the durable message and on the
 sidecar attachment: the runtime keeps the prompt content blocks in the user's
 order instead of appending every image after the text, and the transcript
-renders the image at that position. An attachment without it keeps the trailing
-position.
+renders the image at that position. A message resent from its durable row —
+Edit, a regenerated variant, or an assistant retry — sends that recorded
+`inlinePath` next to the stored `attachments/<sha256>` ref, so the position
+survives the resend while the ref keeps identifying the bytes; re-deriving the
+position from the ref would leave the image with no place in the prompt. An
+attachment without it keeps the trailing position, and an edited prompt that
+no longer names the text loses its placement rather than gaining a second one.
 Invalid attachment paths fail with `PATH_OUTSIDE_WORKSPACE`.
 
 Regenerate history (D109) also uses session channels:

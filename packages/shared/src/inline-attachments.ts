@@ -55,6 +55,49 @@ export function locateInlinePromptPaths(
   );
 }
 
+/**
+ * The text a recorded placement occupies, when it is one `@path` chip.
+ *
+ * `inlinePath` comes back from a message row on the next send, so Electron main
+ * receives it from the renderer. It only ever decides where an already-verified
+ * attachment is drawn and where its block sits in the prompt; anything that is
+ * not a single chip token is not a placement and would otherwise be able to
+ * claim arbitrary prompt text.
+ */
+export function inlinePlacementMarker(inlinePath: string | undefined): string | undefined {
+  const text = typeof inlinePath === "string" ? inlinePath.trim() : "";
+  if (!text.startsWith("@") || text.length < 2) return undefined;
+  if (!/\s/.test(text)) return text;
+  return text.startsWith('@"') && text.endsWith('"') && text.length > 3 ? text : undefined;
+}
+
+/** One attachment's placement inside the prompt, and the text that placed it. */
+export type InlineAttachmentPlacement = InlinePathSpan & { marker: string };
+
+/**
+ * Locate one placement per entry, in order: the `@path` text the entry recorded
+ * when the prompt still names it, otherwise the text the entry's own path
+ * serializes to.
+ *
+ * A resent message names the path the user originally wrote in its text while
+ * its attachment carries the content-addressed blob the host stored, so the
+ * recorded placement — not the storage ref — is what the prompt can locate.
+ */
+export function locateInlineAttachmentPlacements(
+  content: string,
+  entries: ReadonlyArray<{ path: string; inlinePath?: string }>,
+): Array<InlineAttachmentPlacement | null> {
+  let cursor = 0;
+  return entries.map((entry) => {
+    const marker =
+      inlinePlacementMarker(entry.inlinePath) ?? formatPromptPathText(entry.path);
+    const start = marker ? content.indexOf(marker, cursor) : -1;
+    if (!marker || start === -1) return null;
+    cursor = start + marker.length;
+    return { start, end: cursor, marker };
+  });
+}
+
 /** One ordered piece of a prompt: a run of text, or an attachment inside it. */
 export type InlineContentPart<A> =
   | { kind: "text"; text: string; start: number; end: number }

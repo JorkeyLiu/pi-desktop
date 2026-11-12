@@ -155,14 +155,16 @@ app.whenReady().then(async () => {
       } });
       window.webContents.on("console-message", (event) => {
         if (!event.message.startsWith("PI_PREVIEW_KEY:")) return;
-        const key = event.message.slice("PI_PREVIEW_KEY:".length);
-        assert(["Escape", "Tab", "ArrowUp", "ArrowDown", "Enter"].includes(key));
-        const keyCode = key === "ArrowUp" ? "Up" : key === "ArrowDown" ? "Down" : key;
-        window.webContents.sendInputEvent({ type: "keyDown", keyCode });
-        window.webContents.sendInputEvent({ type: "keyUp", keyCode });
+        const input = JSON.parse(event.message.slice("PI_PREVIEW_KEY:".length));
+        const keyMap = { Escape: "Escape", Tab: "Tab", Enter: "Enter", Backspace: "Backspace", Delete: "Delete", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right", " ": "Space" };
+        const keyCode = keyMap[input.key] || (input.key.length === 1 ? input.key.toUpperCase() : input.key);
+        const modifiers = Array.isArray(input.modifiers) ? input.modifiers : [];
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode, modifiers });
+        if (input.text) window.webContents.sendInputEvent({ type: "char", keyCode: input.text, modifiers });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode, modifiers });
       });
       await window.loadFile(path.join(__dirname, "index.html"));
-      await window.webContents.executeJavaScript('globalThis.composerPreviewPressKey = key => new Promise(resolve => { document.addEventListener("keyup", () => requestAnimationFrame(resolve), { once: true }); console.log("PI_PREVIEW_KEY:" + key); }); void 0');
+      await window.webContents.executeJavaScript('globalThis.composerPreviewPressKey = input => new Promise(resolve => { document.addEventListener("keyup", () => requestAnimationFrame(resolve), { once: true }); console.log("PI_PREVIEW_KEY:" + JSON.stringify(typeof input === "string" ? { key: input } : input)); }); void 0');
       const result = await window.webContents.executeJavaScript('globalThis.composerHistoryProbe("verify")');
       assert.equal(result.ok, true, JSON.stringify(result));
       console.log("COMPOSER_HISTORY_RESTART " + JSON.stringify(result));
@@ -183,19 +185,23 @@ app.whenReady().then(async () => {
   window.webContents.on("console-message", (event) => console.error(event.message));
   try {
     await window.loadFile(path.join(__dirname, "index.html"));
+    window.showInactive();
+    window.webContents.focus();
     window.webContents.debugger.attach("1.3");
     const { root } = await window.webContents.debugger.sendCommand("DOM.getDocument");
     const { nodeId } = await window.webContents.debugger.sendCommand("DOM.querySelector", { nodeId: root.nodeId, selector: "#native-files" });
     await window.webContents.debugger.sendCommand("DOM.setFileInputFiles", { nodeId, files: [path.join(__dirname, "native-image.png"), path.join(__dirname, "native notes.txt")] });
     window.webContents.on("console-message", async (event) => {
       if (!event.message.startsWith("PI_PREVIEW_KEY:")) return;
-      const key = event.message.slice("PI_PREVIEW_KEY:".length);
-      assert(["Escape", "Tab", "ArrowUp", "ArrowDown", "Enter"].includes(key));
-      const keyCode = key === "ArrowUp" ? "Up" : key === "ArrowDown" ? "Down" : key;
-      window.webContents.sendInputEvent({ type: "keyDown", keyCode });
-      window.webContents.sendInputEvent({ type: "keyUp", keyCode });
+      const input = JSON.parse(event.message.slice("PI_PREVIEW_KEY:".length));
+      const keyMap = { Escape: "Escape", Tab: "Tab", Enter: "Enter", Backspace: "Backspace", Delete: "Delete", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right", " ": "Space" };
+      const keyCode = keyMap[input.key] || (input.key.length === 1 ? input.key.toUpperCase() : input.key);
+      const modifiers = Array.isArray(input.modifiers) ? input.modifiers : [];
+      window.webContents.sendInputEvent({ type: "keyDown", keyCode, modifiers });
+      if (input.text) window.webContents.sendInputEvent({ type: "char", keyCode: input.text, modifiers });
+      window.webContents.sendInputEvent({ type: "keyUp", keyCode, modifiers });
     });
-    await window.webContents.executeJavaScript('globalThis.composerPreviewPressKey = key => new Promise(resolve => { document.addEventListener("keyup", () => requestAnimationFrame(resolve), { once: true }); console.log("PI_PREVIEW_KEY:" + key); }); void 0');
+    await window.webContents.executeJavaScript('globalThis.composerPreviewPressKey = input => new Promise(resolve => { document.addEventListener("keyup", () => requestAnimationFrame(resolve), { once: true }); console.log("PI_PREVIEW_KEY:" + JSON.stringify(typeof input === "string" ? { key: input } : input)); }); void 0');
     if (process.env.PI_COMPOSER_PREVIEW_SCREENSHOT) {
       window.webContents.on("console-message", async (event) => {
         if (event.message !== "PI_PREVIEW_CAPTURE") return;
@@ -209,11 +215,31 @@ app.whenReady().then(async () => {
       const input = JSON.parse(event.message.slice("PI_PREVIEW_POINTER:".length));
       assert(["mousePressed", "mouseMoved", "mouseReleased"].includes(input.type));
       await window.webContents.debugger.sendCommand("Input.dispatchMouseEvent", {
-        ...input, button: "left", buttons: input.type === "mouseReleased" ? 0 : 1, clickCount: 1,
+        ...input,
+        button: input.type === "mouseMoved" ? "none" : "left",
+        buttons: input.type === "mouseReleased" ? 0 : 1,
+        clickCount: 1,
       });
       await window.webContents.executeJavaScript("globalThis.composerPreviewPointerDone()");
     });
     await window.webContents.executeJavaScript('globalThis.composerPreviewPointer = input => new Promise(resolve => { globalThis.composerPreviewPointerDone = resolve; console.log("PI_PREVIEW_POINTER:" + JSON.stringify(input)); }); void 0');
+    await window.webContents.executeJavaScript('globalThis.composerPreviewDrag = input => new Promise(resolve => { globalThis.composerPreviewDragDone = resolve; console.log("PI_PREVIEW_DRAG:" + JSON.stringify(input)); }); void 0');
+    window.webContents.on("console-message", async (event) => {
+      if (!event.message.startsWith("PI_PREVIEW_DRAG:")) return;
+      const input = JSON.parse(event.message.slice("PI_PREVIEW_DRAG:".length));
+      const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const send = (type, x, y, buttons) => window.webContents.sendInputEvent({
+        type, x: Math.round(x), y: Math.round(y), button: "left", clickCount: 1, buttons,
+      });
+      send("mouseDown", input.from.x, input.from.y, 1);
+      await pause(30);
+      send("mouseMove", (input.from.x + input.to.x) / 2, (input.from.y + input.to.y) / 2, 1);
+      await pause(30);
+      send("mouseMove", input.to.x, input.to.y, 1);
+      await pause(30);
+      send("mouseUp", input.to.x, input.to.y, 0);
+      await window.webContents.executeJavaScript("globalThis.composerPreviewDragDone()");
+    });
     const result = await window.webContents.executeJavaScript("globalThis.composerPasteProbe()");
     await opensDone;
     assert.deepEqual(opened.map(path.extname), [".mp4", ".mp4", ".mp4"]);
@@ -239,6 +265,9 @@ app.whenReady().then(async () => {
     assert.equal(mimeSets.filter((mimes) => mimes === "video/mp4").length, 1);
     assert(history.some(text => text.includes("Word paragraph")), "short text missing from clipboard history");
     console.log("COMPOSER_PASTE_PROBE " + JSON.stringify({ ...result, scratchBytesVerified: true }));
+    const tokenResult = await window.webContents.executeJavaScript("globalThis.composerReferenceTokenProbe()");
+    console.log("COMPOSER_REFERENCE_TOKENS " + JSON.stringify(tokenResult));
+    assert.equal(tokenResult.ok, true, JSON.stringify(tokenResult));
     const historyResult = await window.webContents.executeJavaScript('globalThis.composerHistoryProbe("prepare")');
     assert.equal(historyResult.ok, true, JSON.stringify(historyResult));
     console.log("COMPOSER_HISTORY_PREPARE " + JSON.stringify(historyResult));
@@ -262,7 +291,7 @@ app.whenReady().then(async () => {
       stream.on("data", (data) => {
         output += data;
       });
-    const timeout = setTimeout(() => child.kill("SIGKILL"), 45_000);
+    const timeout = setTimeout(() => child.kill("SIGKILL"), 90_000);
     let code;
     try {
       code = await new Promise((resolve, reject) => {
@@ -286,6 +315,16 @@ app.whenReady().then(async () => {
   console.log("COMPOSER_PASTE_PROBE " + JSON.stringify(pasteResult));
   assert.equal(firstRun.code, 0, firstRun.output.slice(-4000));
   assert.equal(pasteResult.ok, true);
+  const tokenLine = firstRun.output
+    .split(/\r?\n/)
+    .find((line) => line.startsWith("COMPOSER_REFERENCE_TOKENS "));
+  assert(
+    tokenLine,
+    `renderer returned no reference-token result (exit=${firstRun.code}): ${firstRun.output.slice(-3000)}`,
+  );
+  const tokenResult = JSON.parse(tokenLine.slice("COMPOSER_REFERENCE_TOKENS ".length));
+  console.log("COMPOSER_REFERENCE_TOKENS " + JSON.stringify(tokenResult));
+  assert.equal(tokenResult.ok, true, JSON.stringify(tokenResult));
 
   const restartRun = await runElectron(["--history-check"]);
   const restartLine = restartRun.output

@@ -177,6 +177,9 @@ export function createTranscriptSlice({
             name: attachment.name,
             kind: attachment.kind,
             mimeType: attachment.mimeType,
+            // The durable row's own placement, so the resent row shows one
+            // image at the user's position while the echo is in flight.
+            inlinePath: attachment.inlinePath,
           })),
       );
 

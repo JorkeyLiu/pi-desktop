@@ -66,17 +66,31 @@ test("accepted files become compact references while directories keep completion
   );
 });
 
-test("composer renders atomic inline chips and serializes paths on send", () => {
-  // Chips are atomic non-editable elements inside the contenteditable draft,
-  // one per sentinel token, with an ellipsized leaf name.
-  assert.match(composer, /className = "composer-chip"/);
-  assert.match(composer, /chip\.contentEditable = "false"/);
-  assert.match(composer, /chip\.dataset\.token = token/);
-  assert.match(composer, /composer-chip-name/);
-  assert.match(composer, /nameSpan\.textContent = reference\.name/);
-  // A file chip's title is its path; a plugin mark's is its plugin.
+test("composer renders atomic inline references and serializes paths on send", () => {
+  // A committed reference paints as real text — one `@name` token carrying the
+  // full path in its title — with no chip surface, icon or remove control, and
+  // no widget chrome around the selectable label.
+  assert.match(composer, /export const REFERENCE_CLASS = "composer-reference"/);
+  assert.match(composer, /element\.dataset\.token = token/);
+  assert.match(composer, /element\.textContent = referenceLabel\(reference\)/);
+  assert.match(composer, /return isPluginMark\(reference\) \? reference\.name : `@\$\{reference\.name\}`/);
+  assert.doesNotMatch(composer, /contentEditable = "false"/);
+  assert.doesNotMatch(composer, /composer-chip-name/);
+  assert.doesNotMatch(composer, /composer-chip-remove/);
+  // A file reference's title and accessible name carry its path; a plugin
+  // mark's carry its plugin.
   assert.match(composer, /isPluginMark\(reference\) \? \(reference\.plugin\?\.pluginId \?\? ""\) : reference\.path/);
-  assert.match(composer, /chip\.title = origin/);
+  assert.match(composer, /const origin = referenceOrigin\(reference\)/);
+  assert.match(composer, /element\.title = origin/);
+  assert.match(
+    composer,
+    /element\.setAttribute\("aria-label", `\$\{reference\.name\} — \$\{origin\}`\)/,
+  );
+  // The action a pointer click runs is reachable without a pointer: one tab
+  // stop, the link role, and Enter/Space on the focused token.
+  assert.match(composer, /element\.setAttribute\("role", "link"\)/);
+  assert.match(composer, /element\.tabIndex = 0/);
+  assert.match(composer, /if \(activateFocusedReference\(event\)\) return/);
   assert.match(
     composer,
     /serializeComposerFileReferences\(rawText, activeFileReferences\)/,
@@ -87,19 +101,20 @@ test("composer renders atomic inline chips and serializes paths on send", () => 
   );
   assert.match(composer, /serializeInlineComposerFileReferences\(/);
   assert.match(composer, /current\.filter\(/);
-  assert.match(
-    composerStyles,
-    /\.composer-chip-name[\s\S]*?text-overflow: ellipsis/,
-  );
+  // A label wraps instead of ellipsizing, so a long name never truncates.
+  assert.doesNotMatch(composerStyles, /\.composer-reference[^}]*text-overflow/);
+  assert.match(composerStyles, /\.composer-reference\s*\{[\s\S]*?text-decoration: underline/);
 });
 
-test("text file chips expand into editable draft text", () => {
+test("text file references expand into editable draft text", () => {
   assert.match(
     composer,
-    /function isEditableTextReference\(reference: ComposerFileReference\)/,
+    /export function isEditableTextReference\(reference: ComposerFileReference\): boolean/,
   );
-  assert.match(composer, /\? \(\) => onExpandText\(token\)/);
-  assert.match(composer, /event\.key !== "Enter" && event\.key !== " "/);
+  // The action is reachable by pointer and by keyboard: a focused token runs
+  // it on Enter or Space through the same activation path.
+  assert.match(composer, /if \(isEditableTextReference\(reference\)\) void expandTextReference\(token\)/);
+  assert.match(composer, /onActivate\(token, action\)/);
   assert.match(composer, /const result = await api\.fsRead\(reference\.path, reference\.mimeType, sourceSessionId\)/);
   assert.match(composer, /result\.kind !== "text" \|\| result\.content === undefined/);
   assert.match(
@@ -111,10 +126,10 @@ test("text file chips expand into editable draft text", () => {
     /fileReferencesRef\.current\.filter\([\s\S]*?fileReference\.token !== token/,
   );
   assert.match(composer, /applyEditorDraft\(nextText, nextReferences, index \+ result\.content\.length\)/);
-  assert.match(
-    composerStyles,
-    /composer-chip\[data-action="expand-text-reference"\]:focus-visible/,
-  );
+  // The activated reference points at its action and reads as a link.
+  assert.match(composer, /if \(action\) \{[\s\S]*?element\.dataset\.action = action/);
+  assert.match(composer, /event\.key !== "Enter" && event\.key !== " "/);
+  assert.match(composerStyles, /\.composer-reference\[data-action\]\s*\{[\s\S]*?cursor: pointer/);
 });
 
 test("unanswered stop restores compact references instead of serialized paths", () => {

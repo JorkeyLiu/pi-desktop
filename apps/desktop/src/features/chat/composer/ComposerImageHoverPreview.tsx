@@ -4,8 +4,8 @@ import type { ComposerImagePreviewController } from "./hooks/useComposerImagePre
 import { useComposerImageHover } from "./hooks/useComposerImageHover";
 
 /**
- * Hover preview for inline image chips. It stays a read-only card: clicking the
- * chip is what opens the modal preview.
+ * Hover preview for inline image references. It stays a read-only card: a click
+ * on the reference is what opens the modal preview.
  */
 export function ComposerImageHover({ controller, editorRef }: {
   controller: ComposerImagePreviewController;
@@ -14,7 +14,7 @@ export function ComposerImageHover({ controller, editorRef }: {
   const images = controller.images;
   // The controller hands back a fresh `images` array on every render, so keep
   // the lookup stable: the hover listeners must not detach while the pointer
-  // still rests on a chip.
+  // still rests on a reference.
   const imagesRef = useRef(images);
   imagesRef.current = images;
   const idForToken = useCallback(

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   formatPromptPathText,
+  inlinePlacementMarker,
+  locateInlineAttachmentPlacements,
   locateInlinePromptPaths,
   splitInlineContent,
 } from "./inline-attachments.js";
@@ -84,5 +86,58 @@ describe("inline prompt attachment placement", () => {
       { kind: "text", text: "plain prompt", start: 0, end: 12 },
     ]);
     expect(splitInlineContent("", []).parts).toEqual([]);
+  });
+});
+
+/**
+ * A message resent from its durable row names the original path in text while
+ * its attachment carries the content-addressed blob, so placement comes from
+ * the recorded `inlinePath` rather than from the attachment's own path.
+ */
+describe("placement recorded on a resent attachment", () => {
+  it("locates the recorded marker instead of the attachment's own path", () => {
+    const marker = "@/scratch/pasted/a.png";
+    const content = `compare ${marker} with the rest`;
+    const start = content.indexOf(marker);
+    expect(
+      locateInlineAttachmentPlacements(content, [
+        { path: `attachments/${"a".repeat(64)}`, inlinePath: marker },
+      ]),
+    ).toEqual([{ start, end: start + marker.length, marker }]);
+  });
+
+  it("falls back to the entry's own path when nothing was recorded", () => {
+    expect(
+      locateInlineAttachmentPlacements("see @/a.png then @/b.png", [
+        { path: "/a.png" },
+        { path: "/b.png" },
+      ]),
+    ).toEqual([
+      { start: 4, end: 11, marker: "@/a.png" },
+      { start: 17, end: 24, marker: "@/b.png" },
+    ]);
+  });
+
+  it("ignores a placement that is not one @path chip", () => {
+    expect(inlinePlacementMarker("the rest")).toBeUndefined();
+    expect(inlinePlacementMarker("@/a b.png")).toBeUndefined();
+    expect(inlinePlacementMarker('@"/a b.png"')).toBe('@"/a b.png"');
+    const content = "the rest";
+    expect(
+      locateInlineAttachmentPlacements(content, [
+        { path: `attachments/${"b".repeat(64)}`, inlinePath: "the rest" },
+      ]),
+    ).toEqual([null]);
+  });
+
+  it("keeps entries in order and leaves an untraceable one trailing", () => {
+    const content = "first @/scratch/a.png then @/scratch/b.png";
+    expect(
+      locateInlineAttachmentPlacements(content, [
+        { path: "attachments/x", inlinePath: "@/scratch/a.png" },
+        { path: "attachments/y", inlinePath: "@/scratch/gone.png" },
+        { path: "attachments/z", inlinePath: "@/scratch/b.png" },
+      ]).map((placement) => placement?.marker ?? null),
+    ).toEqual(["@/scratch/a.png", null, "@/scratch/b.png"]);
   });
 });

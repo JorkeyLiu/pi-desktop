@@ -849,9 +849,12 @@ The minimum selection is:
   `pnpm test:e2e:boot`, including the synthetic large-list responsiveness check.
 - Settings/composer/plugin search theme surfaces: `pnpm build:js` followed by
   `pnpm test:e2e:theme-surfaces`.
-- Composer clipboard representation and text insertion: `pnpm test:e2e:composer-paste`.
-- Composer newlines, empty last line, caret placement, and the draft/DOM
-  serialization agreement: `pnpm test:e2e:composer-caret`.
+- Composer clipboard representation, attachment-selection copy/cut/paste, and
+  text insertion: `pnpm test:e2e:composer-paste`.
+- Composer newlines, empty last line, caret placement, the draft/DOM
+  serialization agreement, real CDP text insertion and emulated IME composition
+  at a reference token boundary, boundary undo, and keyboard token activation:
+  `pnpm test:e2e:composer-caret`.
 - Composer slash-menu name/description layout: `pnpm build:js` followed by
   `pnpm test:e2e:composer-autocomplete`.
 - Transcript render boundaries and cross-part delegation display: `pnpm test:e2e:transcript`.
@@ -1754,8 +1757,14 @@ validation still needed.
   in the middle of a newline-terminated draft, twice in a row; paste text ending
   with a newline after one and after two existing trailing newlines, and at the
   draft end, including into an empty draft. 8) Put the caret inside a chip's
-  label by a real click, and by a drag from the label to the chip's remove
-  button.
+  label by a real click, and by a drag that starts in the label. 9) Attach one
+  reference token as the whole draft and drive real CDP input at its trailing
+  boundary: `Input.insertText` for plain text and an emoji, then
+  `Input.imeSetComposition` plus a commit for a composed character; reattach
+  the token and repeat before its leading boundary. 10) With a token mid-text,
+  type before it, click the text after it, type again, and undo. 11) Tab to the
+  token and press Enter; on an image token press Tab and Enter; Tab again and
+  press Space.
 - **Expected**: The caret stays on the now-empty second line, the typed
   character lands there (`暂不配置。` newline `a`), and no phantom character or
   extra newline appears. Every step keeps the draft and the editor's DOM
@@ -1769,13 +1778,25 @@ validation still needed.
   chip's markup is stored and used at that chip's boundary, not at the end of
   the draft, so the text after the chip keeps its place. Chips, native undo,
   pasted text, selection deletion, and IME composition keep their behavior.
+- **Expected (token boundary)**: Text inserted by the browser at either token
+  boundary — typed, pasted, emoji, or an emulated IME commit — becomes ordinary
+  draft characters outside the token, the label stays exactly `@name`, the
+  accessible name stays intact, and the inserted text reaches the submitted
+  text. Undo after typing on both sides of a token removes only the most recent
+  boundary edit and leaves the earlier one. Tab reaches each action-bearing
+  token as one focus stop, the focused element carries `role="link"` and an
+  accessible name holding the file name and its path, Enter and Space run the
+  same action a click runs without editing the draft or the label, and the
+  keystroke after the activation still edits the draft.
 - **Specs linked**: `04-ux/08-component-spec.md` §11.3 (composer draft model),
   `04-ux/09-interaction-patterns.md` §1
 - **Acceptance**: C (composer send)
 - **Milestone**: M2
 - **Status**: Automated by `pnpm test:e2e:composer-caret` (real Chromium key
-  events against the real `ComposerInput` + `useComposerDraft`, with rendered
-  line geometry of the typed text). A real OS IME remains manual.
+  events, plus CDP `Input.insertText` and `Input.imeSetComposition` against the
+  real `ComposerInput` + `useComposerDraft`, with rendered line geometry of the
+  typed text, boundary undo, and keyboard token activation). A real OS IME
+  remains manual.
 
 #### E2E-008e: Host speech transcribe and speak
 
@@ -2225,6 +2246,39 @@ validation still needed.
   `pnpm test:e2e:composer-paste`; real desktop recording uses isolated data and
   a local model with a controlled response delay.
 
+#### E2E-011c-2: Composer attachment clipboard
+
+- **Preconditions**: Sessions A and B exist. A's draft holds text with an inline
+  image reference token and a workspace-relative file reference token; the same
+  draft text is also reachable through the editor selection. No OS clipboard
+  content is used.
+- **Steps**: 1) Select the whole draft and dispatch `copy`; read `text/plain`
+  and the application-internal clipboard format. 2) Paste the copied data twice
+  at the draft end. 3) Select one token only and copy/paste it. 4) Select all and
+  dispatch `cut`; undo, redo, and undo again. 5) Paste the cut data into session
+  B's empty draft. 6) Paste a payload with an unknown field and one past the
+  part bound.
+- **Expected**: `text/plain` contains the readable `@path` text and no renderer
+  sentinel; the internal format is versioned and carries the ordered
+  text/reference parts. Each paste restores the text, attachment identity, and
+  order with fresh non-colliding reference tokens, including repeated, subset,
+  and select-all pastes. Cut removes only the selection, publishes the readable
+  content first, and native undo/redo restores and removes the text, reference
+  tokens, and metadata in order. Session B keeps workspace-relative chips but receives A's
+  scratch-absolute path as readable text, because its host session cannot
+  resolve that scratch file. The malformed and oversized payloads fall back to
+  their plain text and add no attachment. Plain-text, native file, and external
+  clipboard pastes keep their existing behavior.
+- **Specs linked**: `04-ux/08-component-spec.md` (composer draft model and
+  §11.8 clipboard/reference rules)
+- **Acceptance**: C (composer input and attachment identity)
+- **Milestone**: M2
+- **Status**: Automated inside `scripts/e2e/composer-paste.tsx` by
+  `pnpm test:e2e:composer-paste`, against the real `ComposerInput`,
+  `useComposerDraft`, and `useComposerAttachments` with rendered
+  `ClipboardEvent`/`DataTransfer` probes. The OS clipboard is the only mocked
+  boundary.
+
 #### E2E-SESSION-reference-conversation-link: A pasted conversation link carries that conversation into the turn
 
 - **Preconditions**: Isolated desktop profile; one project with conversations A
@@ -2526,12 +2580,12 @@ validation still needed.
 
 #### Composer file-reference undo regression
 
-- Add a file reference to an unsent draft, select the chip, delete it, then
-  undo and redo with the native editor shortcuts. Undo must restore both the
-  chip and the file path used by submission; redo must remove both.
+- Add a file reference to an unsent draft, select the reference token, delete
+  it, then undo and redo with the native editor shortcuts. Undo must restore
+  both the token and the file path used by submission; redo must remove both.
 - Switch to another chat and back after undo: the other draft stays empty and
-  the source retains the restored reference. Typing a removed chip's private-use
-  token as plain text must not restore the attachment.
+  the source retains the restored reference. Typing a removed reference's
+  private-use sentinel as plain text must not restore the attachment.
 - Automated by `pnpm test:e2e:composer-paste` (`fileReferenceUndoRedo`).
 
 ### Conversation Top Bar
@@ -6249,7 +6303,9 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   `08-meta/decisions-log.md` (D137, D274)
 - **Acceptance**: C (chat stream), F (persistence), Quality
 - **Milestone**: M5
-- **Status**: Unit-covered (`transcript-style.test.mjs`); full UI scenario Draft
+- **Status**: Unit-covered (`transcript-style.test.mjs`); full UI scenario Draft,
+  with the Edit → resend rendering regression (long text, attachments, inline
+  image placement, switch/round-trip) automated in `pnpm test:e2e:transcript`
 
 - **Long-message regression**: Send a log longer than 65,536 characters as
   message text, reopen the saved chat, then Edit and resend with a short
@@ -6260,6 +6316,17 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   not open a stale editor or publish stale history. A fresh Edit after returning
   must still load the complete text and resend successfully. Automated coverage also
   preserves attachments and the typed slash-command seed.
+
+- **Inline-image resend regression**: Send a prompt with an image chip placed
+  inline between words, then Edit and resend it, retry the answer, and edit the
+  text so the `@path` marker is removed. The resent turn must keep exactly one
+  image representation: at the marker's position while the text still names it,
+  and in the trailing attachment position once it does not — never the path text
+  plus a trailing chip. The request keeps the stored `attachments/<sha256>` ref
+  and sends the recorded `inlinePath`, so the position survives without
+  re-deriving it from the ref. Automated via the rendered Edit → resend probe in
+  `scripts/e2e/transcript-edit.tsx` (`pnpm test:e2e:transcript`) with the
+  preparation boundary covered by `apps/desktop/test/prompt-inline-attachments.test.mjs`.
 
 #### E2E-069: Platform-specific sidebar header behavior
 
@@ -9094,27 +9161,31 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
      it remains an image attachment.
   2. Paste one local file, then paste multiple files including a spaced name.
   3. Paste an image from the OS screenshot/clipboard provider.
-  4. Inspect the draft before sending: confirm each materialized item is a
-     removable leaf-name chip and no scratch absolute path occupies the
-     textarea. Hover/focus chips to inspect their full paths, remove one, then
-     send the prompt and inspect the session message's attachment metadata.
-    Before sending, verify each image is a compact inline chip in the draft and
-    that hovering it reveals its preview card. Replacing all text removes the
-    inline image chips while undo restores them; image-only drafts must survive
-    session switching and retain submission metadata.
+  4. Inspect the draft before sending: confirm each materialized item is an
+     inline `@<leaf name>` reference token with no icon, capsule background, or
+     remove button, and no scratch absolute path occupies the textarea. Hover
+     each token to inspect its full path, remove one with the caret on a token
+     boundary and one Backspace, then send the prompt and inspect the session
+     message's attachment metadata.
+    Before sending, verify each image is a compact inline reference token in the
+    draft and that hovering it reveals its preview card. Replacing all text
+    removes the inline image reference tokens while undo restores them;
+    image-only drafts must survive session switching and retain submission
+    metadata.
     Mount the complete Composer: click Send for image-only input, verify
     attachment delivery and successful clearing, and immediately reject a
     text-plus-image send to verify full draft restoration. In a narrow pane,
-    prefill 20 images, confirm 20 inline chips inside the composer, and remove
-    one without losing the others.
+    prefill 20 images, confirm 20 inline reference tokens inside the composer,
+    and remove one without losing the others.
     Send a prompt that puts text, an image, then more text in that order:
     confirm the sent message renders the image chip at that position instead of
     after the body, and that an image the draft did not name inline still
     follows the text. The provider-facing prompt keeps the same order; the
     runtime placement tests assert those content blocks.
-    Inspect the chip and open it with click, Enter, and
-     Space. Confirm a centered modal preview opens, the work panel stays
-     unchanged, and the draft is neither edited nor sent. Check small images
+    Inspect the token and open it with a pointer click; a pointer drag
+     that selects the token's label must never open it. Confirm a centered modal
+     preview opens, the work panel stays unchanged, and the draft is neither
+     edited nor sent. Check small images
      stay at natural size, wide images fit without distortion, zoom/reset and
      download target the selected original, and multiple images support button
      and arrow-key navigation with zoom reset. Drag at fit size and after zoom,
@@ -9127,7 +9198,7 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
      nor send. Switch session/project or remove the selected attachment during
      a delayed read; the old preview must close and late results must not
      overwrite a newer image. Missing/undecodable images show retry and keep
-     the draft. Text chips must still expand as editable text.
+     the draft. Text reference tokens must still expand as editable text.
   5. Inspect `<data_dir>/scratch/<sessionId>/pasted/` and compare the saved
      bytes with the source files/image. Check the project `git status`.
   6. Delete the session, then confirm its scratch directory and pasted files
@@ -9137,8 +9208,8 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
     routed through the file bridge. Oversized text behavior is covered by
     E2E-102g.
   - Each file/image is saved with a sanitized, UUID-backed unique name under
-    the session scratch root, while its chip shows only the sanitized original
-    leaf name. Duplicate leaf names remain separate references.
+    the session scratch root, while its token shows only `@<sanitized original
+    leaf name>`. Duplicate leaf names remain separate references.
   - The dispatched prompt carries ordinary files through the existing path
     reference flow and carries pasted files/images as structured attachments;
     the persisted user message contains refs and metadata, never binary bytes.
@@ -9151,8 +9222,8 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
     attachment format and leaves work-panel tabs unchanged. Closing/unmounting
     releases modal/native-view blocking.
   - Deleting the session removes the pasted files with the rest of scratch.
-  - Deleting text immediately before an inline file chip must not insert a
-    blank line or move the chip to the next line; native undo/redo stay intact.
+  - Deleting text immediately before an inline reference token must not insert a
+    blank line or move the token to the next line; native undo/redo stay intact.
 - **Specs linked**: `04-ux/08-component-spec.md` §11.7–11.8,
   `03-runtime/01-ipc-protocol.md` §13c,
   `03-runtime/03-tools-and-permissions.md` §4b,
@@ -10731,7 +10802,7 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 | A / C / F / Quality — Tray session navigation | E2E-TRAY-bounded-session-navigation |
 | B — Model config | E2E-005, E2E-PROVIDER-custom-endpoint-no-api-key, E2E-006, E2E-007, E2E-038, E2E-050, E2E-052, E2E-055, E2E-066, E2E-080, E2E-082, E2E-102c, E2E-102d, E2E-102e, E2E-151, E2E-154, E2E-163, E2E-166, E2E-172, E2E-174, E2E-197, E2E-005G, E2E-005J, E2E-199, E2E-201, E2E-202, E2E-203, E2E-205, E2E-206, E2E-209, E2E-PLUGIN-provider-catalog-add-service |
 | C — Conversation & stream | E2E-CHAT-long-history-stream-keeps-responsive, E2E-CHAT-running-status-survives-output-pauses, E2E-008, E2E-008d, E2E-008e, E2E-008a, E2E-009, E2E-010, E2E-011, E2E-011a, E2E-011b, E2E-011d, E2E-011e, E2E-011g, E2E-031, E2E-040, E2E-047, E2E-048, E2E-048A, E2E-049, E2E-052, E2E-053, E2E-054, E2E-055, E2E-059, E2E-059a, E2E-060c, E2E-060d, E2E-061, E2E-061a, E2E-062, E2E-064, E2E-065, E2E-068, E2E-071, E2E-073, E2E-074, E2E-075, E2E-081, E2E-083, E2E-084, E2E-086, E2E-087, E2E-088, E2E-088b, E2E-089, E2E-090, E2E-COMPOSER-narrow-controls, E2E-094, E2E-095, E2E-096, E2E-097, E2E-098, E2E-099, E2E-102, E2E-102a, E2E-102b, E2E-102c, E2E-102d, E2E-102g, E2E-106, E2E-109, E2E-111, E2E-114, E2E-116, E2E-117, E2E-118, E2E-119, E2E-120, E2E-121, E2E-218, E2E-259, E2E-219, E2E-AGENTS-001, E2E-142, E2E-144, E2E-145, E2E-146, E2E-146a, E2E-147, E2E-151, E2E-154, E2E-155, E2E-158, E2E-159, E2E-161, E2E-162, E2E-166, E2E-172, E2E-173, E2E-174, E2E-177, E2E-178, E2E-179, E2E-180, E2E-182, E2E-183, E2E-187, E2E-198, E2E-199, E2E-202, E2E-203, E2E-207, E2E-208, E2E-CHAT-content-width-handles, E2E-250, E2E-102i, E2E-PLUGIN-session-orchestrator-real-workers, E2E-SUBAGENT-settlement-updates-before-parent-poll, E2E-SUBAGENT-resume-a-settled-delegation |
-| C — Conversation & stream (composer drafts) | E2E-011c, E2E-011c-1 |
+| C — Conversation & stream (composer drafts) | E2E-011c, E2E-011c-1, E2E-011c-2 |
 | D — Workspace | E2E-012, E2E-013, E2E-022B, E2E-024I, E2E-047, E2E-049, E2E-057, E2E-058, E2E-060, E2E-068, E2E-075, E2E-078, E2E-153, E2E-158, E2E-182, E2E-187, E2E-252 |
 | C / D / Quality — Project session history resets after collapse | E2E-263 |
 | D — Workspace (project ordering) | E2E-253 |

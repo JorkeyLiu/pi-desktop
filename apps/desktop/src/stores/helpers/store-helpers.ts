@@ -61,6 +61,10 @@ export function promptAttachmentsFromMessage(
       kind: attachment.kind,
       ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
       ...(attachment.size !== undefined ? { size: attachment.size } : {}),
+      // The stored row keeps the `@path` text of the user's own position; a
+      // resend names the same text while `ref` stays the stored blob, so main
+      // can only place the image when that placement travels with it.
+      ...(attachment.inlinePath ? { inlinePath: attachment.inlinePath } : {}),
     }));
 }
 

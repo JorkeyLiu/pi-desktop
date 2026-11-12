@@ -7,7 +7,10 @@ import { useAppStore } from "../../apps/desktop/src/stores/app-store";
 import { api } from "../../apps/desktop/src/lib/api";
 import { writeComposerDraft, deleteComposerDraft } from "../../apps/desktop/src/lib/composer-draft-cache";
 import type { ComposerDraftSnapshot } from "../../apps/desktop/src/lib/composer-smart-stop";
-import { readEditorValue } from "../../apps/desktop/src/features/chat/composer/editor";
+import {
+  readEditorValue,
+  setEditorCaret,
+} from "../../apps/desktop/src/features/chat/composer/editor";
 import { formatPromptPathText } from "@pi-desktop/shared";
 
 const assert = (value: unknown, message: string) => { if (!value) throw new Error(message); };
@@ -30,8 +33,8 @@ export async function verifyComposerSubmission(imagePath: string, i18n: i18n) {
   };
   const sendButton = () => host.querySelector<HTMLButtonElement>(".send-btn")!;
   const editor = () => host.querySelector<HTMLElement>(".composer-input")!;
-  const imageChips = () => host.querySelectorAll<HTMLElement>(".composer-chip[data-image]");
-  /** Draft text without the inline attachment chips it carries. */
+  const imageChips = () => host.querySelectorAll<HTMLElement>(".composer-reference[data-image]");
+  /** Draft text without the inline attachment tokens it carries. */
   const draftText = () => {
     let text = readEditorValue(editor());
     for (const chip of imageChips()) {
@@ -40,7 +43,7 @@ export async function verifyComposerSubmission(imagePath: string, i18n: i18n) {
     }
     return text;
   };
-  /** Wait until exactly `count` inline image chips are rendered. */
+  /** Wait until exactly `count` inline image reference tokens are rendered. */
   const untilImageChips = async (count: number) => {
     const deadline = performance.now() + 2000;
     while (imageChips().length !== count && performance.now() < deadline) await painted();
@@ -136,12 +139,23 @@ export async function verifyComposerSubmission(imagePath: string, i18n: i18n) {
 
     prefill("", Array.from({ length: 20 }, (_, index) => ({ ...attachment, name: `image-${index}.png` })));
     await untilImageChips(20);
-    assert(imageChips().length === 20, "every prefilled image must render an inline chip");
+    assert(imageChips().length === 20, "every prefilled image must render an inline reference token");
+    assert(imageChips()[19].textContent === "@image-19.png",
+      `the reference label must read as its filename: ${imageChips()[19].textContent}`);
     assert(editor().getBoundingClientRect().bottom <= host.getBoundingClientRect().bottom + 1,
-      "inline image chips must stay inside the composer pane");
-    flushSync(() => imageChips()[19].querySelector<HTMLButtonElement>(".composer-chip-remove")!.click());
+      "inline image reference tokens must stay inside the composer pane");
+    // A reference is removed by one Backspace beside its token: the token is
+    // atomic, so there is no per-reference remove control to press.
+    const removedToken = imageChips()[19].dataset.token ?? "";
+    const removedIndex = readEditorValue(editor()).indexOf(removedToken);
+    assert(removedToken && removedIndex >= 0, "the last prefilled reference lost its token");
+    setEditorCaret(editor(), removedIndex + 1);
+    const backspace = new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true });
+    flushSync(() => editor().dispatchEvent(backspace));
+    assert(backspace.defaultPrevented, "Backspace beside a reference must delete the whole token");
+    await painted();
     assert(imageChips().length === 19 && !sendButton().disabled,
-      "removing one chip must preserve the other images");
+      "removing one reference must preserve the other images");
 
     // A restarted renderer has only the Host queue entry, not the cached draft.
     const originalRemoveQueuedPrompt = api.removeQueuedPrompt;

@@ -16,14 +16,16 @@ const [composer, editor, hoverCard, hoverHook, card, cardStyles, styles, submitH
   readComposerModule("hooks/useComposerSubmit.ts"),
 ]);
 
-test("pasted images stay inline chips like every other attachment", () => {
-  assert.match(editor, /const image = chipIconKey\(reference\) === "image";/);
-  assert.match(editor, /if \(image\) chip\.dataset\.image = "";/);
-  assert.match(editor, /const editableText = !image && !session && isEditableTextReference\(reference\);/);
-  // Activating an image chip opens the preview; it never expands draft text.
-  assert.match(editor, /image\s*\?\s*\(\) => onOpenImage\(token\)/);
-  assert.match(editor, /chip\.dataset\.action = editableText/);
-  assert.match(composer, /openImageReferenceRef\.current = \(token\) => \{[\s\S]*?imagePreview\.open\(reference\)/);
+test("pasted images become inline reference tokens like every other attachment", () => {
+  assert.match(composer, /export function isImageReferenceLabel\(reference: ComposerFileReference\): boolean/);
+  assert.match(composer, /if \(isImageReferenceLabel\(reference\)\) element\.dataset\.image = ""/);
+  // Activating an image reference opens the preview; it never expands draft text.
+  assert.match(composer, /if \(isImageReferenceLabel\(reference\)\) return "open-image-preview"/);
+  assert.match(editor, /el\.appendChild\(buildReferenceElement\(reference, char\)\)/);
+  assert.match(
+    composer,
+    /if \(isImageReference\(reference\)\) \{\n      imagePreview\.open\(reference\);\n      return;/,
+  );
   // The detached attachment row above the input shell is gone.
   assert.doesNotMatch(composer, /ComposerImageAttachments/);
   assert.doesNotMatch(styles, /\.composer-image-attachments/);
@@ -32,7 +34,11 @@ test("pasted images stay inline chips like every other attachment", () => {
 
 test("hovering an image chip reveals a read-only preview card", () => {
   assert.match(composer, /<ComposerImageHover controller=\{imagePreview\} editorRef=\{inputRef\} \/>/);
-  assert.match(hoverHook, /const IMAGE_CHIP_SELECTOR = "\.composer-chip\[data-image\]";/);
+  assert.match(
+    hoverHook,
+    /closest<HTMLElement>\(IMAGE_REFERENCE_SELECTOR\)/,
+  );
+  assert.match(composer, /const IMAGE_REFERENCE_SELECTOR = `\$\{REFERENCE_SELECTOR\}\[data-image\]`/);
   assert.match(hoverHook, /getBoundingClientRect\(\)/);
   // A chip that moves under the pointer must not leave a stale card behind.
   assert.match(hoverHook, /editor\.addEventListener\("input", hide\)/);

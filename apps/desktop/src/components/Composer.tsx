@@ -40,6 +40,7 @@ import {
 } from "../features/chat/composer/model";
 import { editorSelectionRange } from "../features/chat/composer/editor";
 import { useComposerAttachments } from "../features/chat/composer/hooks/useComposerAttachments";
+import { useComposerClipboard } from "../features/chat/composer/hooks/useComposerClipboard";
 import { useComposerCompletions } from "../features/chat/composer/hooks/useComposerCompletions";
 import { useComposerDraft } from "../features/chat/composer/hooks/useComposerDraft";
 import { useComposerInputHistory } from "../features/chat/composer/hooks/useComposerInputHistory";
@@ -237,6 +238,10 @@ export function Composer({
     insertDroppedDirectoryPaths,
     dismissDroppedDirectories,
   } = attachments;
+  const composerClipboard = useComposerClipboard({
+    draft: { ref, fileReferencesRef: draft.fileReferencesRef },
+    activeSessionId,
+  });
   const executionActive = isActivePlanExecution(planCheckpoint);
   const runActive = isRunning || executionActive;
   const inputBlocked = approvalPending || pasting || nativeInputBlocked;
@@ -522,6 +527,8 @@ export function Composer({
             enterToSend={enterToSend}
             runActive={runActive}
             composerAc={completions.ac}
+            onCopy={composerClipboard.onCopy}
+            onCut={composerClipboard.onCut}
             onPaste={pasteClipboardFiles}
             onAcceptCompletion={completions.acceptCompletion}
             onSubmit={(steering) => void submitFromComposer(steering)}
@@ -530,6 +537,7 @@ export function Composer({
               inputHistory.exitBrowsing();
               completions.handleInput(source, caret);
             }}
+            onActivateReference={draft.activateReference}
             onHistoryNavigate={inputHistory.navigate}
             onCompositionStart={() => setComposing(true)}
             onCompositionEnd={(event) => {

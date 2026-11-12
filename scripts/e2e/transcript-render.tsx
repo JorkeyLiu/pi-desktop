@@ -1,5 +1,5 @@
 import { transcriptLongHistoryProbe as runLongHistoryProbe } from "./transcript-long-history";
-import { transcriptEditProbe } from "./transcript-edit";
+import { inlineAttachmentResendProbe, transcriptEditProbe } from "./transcript-edit";
 import { turnProcessProbe } from "./turn-process";
 import { transcriptStatusProbe } from "./transcript-status";
 import { createRoot } from "react-dom/client";
@@ -470,6 +470,7 @@ globalThis.transcriptRenderProbe = async () => {
 
     const statusLifecycle = await transcriptStatusProbe();
     const markdownLinks = await markdownLinkInteractionProbe(i18n);
+    const inlineResend = await inlineAttachmentResendProbe();
     return {
       ok: statusLifecycle.ok && markdownLinks.ok,
       statusLifecycle,
@@ -482,6 +483,7 @@ globalThis.transcriptRenderProbe = async () => {
       taskTimingUpdated: true,
       turnProcess: await turnProcessProbe(),
       messageEditing: await transcriptEditProbe(),
+      inlineResend,
       textUpdateDurationMs,
     };
   } finally {

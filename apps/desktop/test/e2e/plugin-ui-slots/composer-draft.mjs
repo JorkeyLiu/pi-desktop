@@ -7,15 +7,17 @@
 
 const button = (lab, name) => `[data-lab="${lab}"] [data-lab-button="${name}"]`;
 
-/** What the composer shows: its text, chips by kind, and the image tray. */
+/** What the composer shows: its text, inline reference tokens, and their labels. */
 function composerView() {
   const input = document.querySelector(".composer-input");
-  const chips = [...(input?.querySelectorAll(".composer-chip") ?? [])].map((chip) => ({
-    mark: chip.dataset.pluginMark ?? null,
-    name: chip.querySelector(".composer-chip-name")?.textContent ?? "",
-  }));
-  const images = [...(input?.querySelectorAll(".composer-chip[data-image]") ?? [])].map(
-    (chip) => chip.getAttribute("aria-label")?.split(" — ")[0] ?? "",
+  const chips = [...(input?.querySelectorAll(".composer-reference") ?? [])].map(
+    (reference) => ({
+      mark: reference.dataset.pluginMark ?? null,
+      name: reference.textContent ?? "",
+    }),
+  );
+  const images = [...(input?.querySelectorAll(".composer-reference[data-image]") ?? [])].map(
+    (reference) => reference.textContent ?? "",
   );
   return {
     text: input ? (input.value ?? input.textContent) : null,
@@ -183,16 +185,16 @@ export async function driveComposerDraft({ renderer, check }) {
   const note = await step("attach-note", "the note", (out) => out.text === "note attached" || out.status === "error");
   const withNote = await view();
   check(
-    "a text attachment lands as a chip in the draft",
-    note.status === "ok" && withNote.chips.some((chip) => chip.mark === null && chip.name === "lab-note.md") && !withNote.focused,
+    "a text attachment lands as an inline reference token in the draft",
+    note.status === "ok" && withNote.chips.some((chip) => chip.mark === null && chip.name === "@lab-note.md") && !withNote.focused,
     JSON.stringify({ note, chips: withNote.chips }),
   );
   const image = await step("attach-image", "the image", (out) => out.text === "image attached" || out.status === "error");
   const withImage = await view();
   check(
-    "an image attachment joins the draft as its own inline image chip",
-    image.status === "ok" && withImage.images.includes("lab-dot.png") &&
-      withImage.chips.some((chip) => chip.name === "lab-dot.png"),
+    "an image attachment joins the draft as its own inline reference token",
+    image.status === "ok" && withImage.images.includes("@lab-dot.png") &&
+      withImage.chips.some((chip) => chip.name === "@lab-dot.png"),
     JSON.stringify({ image, images: withImage.images, chips: withImage.chips }),
   );
   const beforeTransform = await view();
@@ -217,7 +219,7 @@ export async function driveComposerDraft({ renderer, check }) {
     () => document.querySelectorAll('.message-row[data-row-role="user"]').length,
   );
   check(
-    "a user-invoked plugin transform updates only the draft and preserves attachment chips",
+    "a user-invoked plugin transform updates only the draft and preserves attachment references",
     typeof transformed === "string" &&
       afterTransform.text.startsWith("Lab transformed: ") &&
       JSON.stringify(afterTransform.chips) === JSON.stringify(beforeTransform.chips) &&
@@ -239,7 +241,7 @@ export async function driveComposerDraft({ renderer, check }) {
     )
     .catch((error) => ({ error: error.message }));
   check(
-    "undo restores the source draft without moving its image chip",
+    "undo restores the source draft without moving its image reference",
     undone === beforeTransform.text &&
       JSON.stringify((await view()).chips) === JSON.stringify(beforeTransform.chips),
     JSON.stringify({ undone, beforeTransform }),
@@ -250,18 +252,18 @@ export async function driveComposerDraft({ renderer, check }) {
   check("attachments.list names the plugin's attachments", listed.text === "2: lab-note.md, lab-dot.png", JSON.stringify(listed));
   const removed = await step("attach-remove", "the image removed", (out) => out.status === "ok");
   const withoutImage = await view();
-  check("attachments.remove takes the image out of the draft", removed.text === "removed" && !withoutImage.images.includes("lab-dot.png"), JSON.stringify(withoutImage.images));
+  check("attachments.remove takes the image out of the draft", removed.text === "removed" && !withoutImage.images.includes("@lab-dot.png"), JSON.stringify(withoutImage.images));
   const one = await step("attach-list", "the list of one", (out) => out.status === "ok" && out.text !== "removed");
   await step("attach-remove", "the note removed", (out) => out.status === "ok" && out.text !== one.text);
   const empty = await renderer
     .until(
-      `() => { const v = (${composerView})(); return v.chips.some((chip) => chip.name === "lab-note.md") ? null : v; }`,
+      `() => { const v = (${composerView})(); return v.chips.some((chip) => chip.name === "@lab-note.md") ? null : v; }`,
       null,
-      "the note chip gone",
+      "the note reference gone",
       5_000,
     )
     .catch((error) => ({ error: error.message }));
-  check("removing the note takes its chip with it", one.text === "1: lab-note.md" && Array.isArray(empty.chips), JSON.stringify({ one, chips: empty.chips }));
+  check("removing the note takes its reference with it", one.text === "1: lab-note.md" && Array.isArray(empty.chips), JSON.stringify({ one, chips: empty.chips }));
   const none = await step("attach-remove", "nothing to remove", (out) => out.status === "error");
   check("an unknown attachment id is refused", none.text === "PLUGIN_ATTACHMENT_NOT_FOUND", JSON.stringify(none));
 

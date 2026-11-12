@@ -38,7 +38,6 @@ import {
   insertNewlineAtCaret,
   isEditableTextReference,
   isPersistedScratchReference,
-  isPluginMark,
   nextChipToken,
   paintEditorValue,
   readEditorValue,
@@ -48,13 +47,15 @@ import {
 import type { ComposerPrefill } from "../model";
 import { useComposerImagePreview, type ComposerImagePreviewController } from "./useComposerImagePreview";
 
-import { attachImageTokens } from "../image-attachments";
+import { attachImageTokens, isImageReference } from "../image-attachments";
+import { REFERENCE_SELECTOR } from "../reference-tokens";
 
 type ComposerSession = { id: string };
 
 export type ComposerDraftController = {
   imagePreview: ComposerImagePreviewController;
-  removeImage: (id: string) => void;
+  /** Run the one action a draft reference kind owns (preview, expand, open). */
+  activateReference: (token: string) => void;
   ref: RefObject<HTMLDivElement | null>;
   draftKey: string;
   referenceSessionId: string;
@@ -74,7 +75,6 @@ export type ComposerDraftController = {
   referenceByToken: Map<string, ComposerFileReference>;
   fileReferencesRef: { current: ComposerFileReference[] };
   referenceByTokenRef: { current: Map<string, ComposerFileReference> };
-  removeChipByTokenRef: { current: (token: string) => void };
   updateCursor: (next: number) => void;
   handleInput: (source: string, caret: number) => string;
   readLiveDraft: () => string;
@@ -228,8 +228,8 @@ export function useComposerDraft({
       return false;
     });
     // Only recover an actual restored chip, never a pasted private-use character.
-    for (const chip of ref.current?.querySelectorAll<HTMLElement>(".composer-chip") ?? []) {
-      const token = chip.dataset.token ?? "";
+    for (const element of ref.current?.querySelectorAll<HTMLElement>(REFERENCE_SELECTOR) ?? []) {
+      const token = element.dataset.token ?? "";
       const reference = deletedReferencesRef.current.get(token);
       if (!reference || !text.includes(token)) continue;
       if (!next.some((item) => item.token === token)) next.push(reference);
@@ -243,19 +243,6 @@ export function useComposerDraft({
   const referenceByTokenRef = useRef(referenceByToken);
   referenceByTokenRef.current = referenceByToken;
   const imagePreview = useComposerImagePreview({ references: fileReferences, value, sessionId: referenceSessionId, editorRef: ref });
-  const removeChipByTokenRef = useRef<(token: string) => void>(() => {});
-  const expandTextReferenceRef = useRef<(token: string) => void>(() => {});
-  const openImageReferenceRef = useRef<(token: string) => void>(() => {});
-  openImageReferenceRef.current = (token) => {
-    const reference = referenceByTokenRef.current.get(token);
-    if (reference) imagePreview.open(reference);
-  };
-  const openSessionReferenceRef = useRef<(token: string) => void>(() => {});
-  openSessionReferenceRef.current = (token) => {
-    const reference = referenceByTokenRef.current.get(token);
-    if (!reference || reference.kind !== "session") return;
-    void useAppStore.getState().selectSession(reference.path).catch(() => undefined);
-  };
   const pendingEditorCaretRef = useRef<number | null>(
     initialDraft?.text ? initialDraft.text.length : null,
   );
@@ -275,19 +262,7 @@ export function useComposerDraft({
     );
 
   const paintCurrentDraft = (element: HTMLElement, nextValue: string) => {
-    paintEditorValue(
-      element,
-      nextValue,
-      referenceByTokenRef.current,
-      (reference) =>
-        t(isPluginMark(reference) ? "chat.removePluginMark" : "chat.removeFileReference", {
-          name: reference.name,
-        }),
-      (token) => removeChipByTokenRef.current(token),
-      (token) => expandTextReferenceRef.current(token),
-      (token) => openImageReferenceRef.current(token),
-      (token) => openSessionReferenceRef.current(token),
-    );
+    paintEditorValue(element, nextValue, referenceByTokenRef.current);
     editorValueRef.current = nextValue;
   };
 
@@ -319,25 +294,6 @@ export function useComposerDraft({
     return () => document.removeEventListener("selectionchange", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- updateCursor is stable
   }, []);
-
-  const removeChipByToken = (token: string) => {
-    const element = ref.current;
-    if (!element) return;
-    const source = readEditorValue(element);
-    const index = source.indexOf(token);
-    if (index === -1) return;
-    const next = source.slice(0, index) + source.slice(index + 1);
-    markComposerDraftEdited(draftKeyRef.current);
-    invalidateComposerTransforms();
-    // Leave the DOM value stale so the layout effect removes the chip.
-    pendingEditorCaretRef.current = index;
-    setValue(next);
-    setCursor(index);
-    setFileReferences((current) =>
-      current.filter((fileReference) => fileReference.token !== token),
-    );
-  };
-  removeChipByTokenRef.current = removeChipByToken;
 
   /** Commit a native contenteditable input while preserving IME correction. */
   const handleInput = (source: string, caret: number): string => {
@@ -616,7 +572,21 @@ export function useComposerDraft({
       );
     }
   };
-  expandTextReferenceRef.current = expandTextReference;
+  /** The one action a reference owns; a drag never reaches it. */
+  const activateReference = (token: string) => {
+    if (inputBlocked) return;
+    const reference = referenceByTokenRef.current.get(token);
+    if (!reference) return;
+    if (reference.kind === "session") {
+      void useAppStore.getState().selectSession(reference.path).catch(() => undefined);
+      return;
+    }
+    if (isImageReference(reference)) {
+      imagePreview.open(reference);
+      return;
+    }
+    if (isEditableTextReference(reference)) void expandTextReference(token);
+  };
 
   const snapshotReferences = (sourceSessionId: string) =>
     fileReferencesRef.current
@@ -695,12 +665,7 @@ export function useComposerDraft({
 
   return {
     imagePreview,
-    removeImage: (id) => {
-      if (inputBlocked) return;
-      invalidateComposerTransforms();
-      setDraftFileReferences((current) => current.filter((reference) => reference.id !== id));
-      ref.current?.focus();
-    },
+    activateReference,
     ref,
     draftKey,
     referenceSessionId,
@@ -720,7 +685,6 @@ export function useComposerDraft({
     referenceByToken,
     fileReferencesRef,
     referenceByTokenRef,
-    removeChipByTokenRef,
     updateCursor,
     handleInput,
     readLiveDraft,

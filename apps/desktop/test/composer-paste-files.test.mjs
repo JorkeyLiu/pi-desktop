@@ -71,10 +71,14 @@ test("expanding a pasted text chip preserves it when the bounded read fails", ()
 test("chip sentinels stay unique inside the private-use range", () => {
   const baseLiteral = composer.match(/const CHIP_TOKEN_BASE = (0x[0-9a-f]+);/)?.[1];
   const endLiteral = composer.match(/const CHIP_TOKEN_END = (0x[0-9a-f]+);/)?.[1];
+  // The count is an exported single source of truth for the same range.
+  const countExpression = composer.match(
+    /export const CHIP_TOKEN_COUNT = ([^;]+);/,
+  )?.[1];
   const body = composer.match(
     /function nextChipToken\(\): string \{[\s\S]*?\n\}/,
   )?.[0];
-  assert.ok(baseLiteral && endLiteral && body, "sentinel helpers missing");
+  assert.ok(baseLiteral && endLiteral && countExpression && body, "sentinel helpers missing");
 
   // Execute the real arithmetic (not a re-implementation): a past regression
   // computed `(seq - BASE + 1) % range`, which produced Hangul code points
@@ -82,6 +86,7 @@ test("chip sentinels stay unique inside the private-use range", () => {
   const snippet = [
     `const CHIP_TOKEN_BASE = ${baseLiteral};`,
     `const CHIP_TOKEN_END = ${endLiteral};`,
+    `const CHIP_TOKEN_COUNT = ${countExpression};`,
     "let chipTokenSequence = 0;",
     body.replace(/: string/g, ""),
     "return nextChipToken;",
