@@ -160,7 +160,7 @@ test("a bulk session refresh reuses catalog matches while preserving each sessio
   assert.ok(modelReads <= 4, "bulk session reads reuse the one effective projection");
 });
 
-test("full wire IDs isolate configured bindings while catalog aliases remain metadata-only", async () => {
+test("full wire IDs isolate configured bindings while catalog metadata stays endpoint-scoped", async () => {
   const { runtime } = await fixtureRuntime();
   const modelId = "proxy/catalog-model";
   const binding = (id, contextWindow, thinkingLevels) => ({
@@ -176,9 +176,10 @@ test("full wire IDs isolate configured bindings while catalog aliases remain met
   };
   const catalogConfig = genericModelConfig(modelId, provider.baseUrl);
   assert.equal(runtime.bindingForModel(provider, ` ${modelId} `), provider.models[1]);
-  assert.equal(runtime.modelsDevModelFor(provider, modelId)?.modelId, "catalog-model");
+  assert.equal(runtime.modelsDevModelFor(provider, modelId), undefined,
+    "an unpublished wire ID never resolves through a stripped prefix or suffix");
   const selected = runtime.effectiveSubagentModelConfig(provider, modelId, catalogConfig);
-  assert.equal(selected.modelConfig.name, "catalog-model", "the display name follows the published record");
+  assert.equal(selected.modelConfig.name, modelId, "the requested wire ID is not rewritten");
   assert.equal(selected.modelConfig.contextWindow, 32_000);
   assert.deepEqual(selected.capabilities.supportedThinkingLevels, ["high"]);
   const session = { providerId: provider.id, modelId };
@@ -188,28 +189,37 @@ test("full wire IDs isolate configured bindings while catalog aliases remain met
   assert.equal(session.modelId, modelId);
 
   provider.models = [provider.models[0]];
+
   assert.equal(runtime.bindingForModel(provider, modelId), undefined);
   assert.equal(runtime.effectiveSubagentModelConfig(provider, modelId, catalogConfig).modelConfig.contextWindow, 128_000);
-  assert.deepEqual(runtime.enrichSession(session, [provider]).supportedThinkingLevels, ["low", "high"]);
+  assert.equal(runtime.effectiveSubagentModelConfig(provider, modelId, catalogConfig).modelConfig.name, modelId);
+  assert.deepEqual(runtime.enrichSession(session, [provider]).supportedThinkingLevels, ["off"]);
   assert.equal(runtime.effectiveSubagentModelConfig(provider, modelId).modelConfig.contextWindow, 128_000);
-  const otherProvider = { ...provider, id: "other-provider", models: [binding(modelId, 48_000, ["off"])] };
+  const otherProvider = { ...provider, id: "other-provider", models: [binding(modelId, 48_000, ["high"])] };
   // A different account's exact wire binding must not leak into this row.
-  assert.deepEqual(runtime.enrichSession(session, [otherProvider, provider]).supportedThinkingLevels, ["low", "high"]);
+  assert.deepEqual(runtime.enrichSession(session, [otherProvider, provider]).supportedThinkingLevels, ["off"]);
+  assert.deepEqual(
+    runtime.enrichSession({ providerId: otherProvider.id, modelId }, [otherProvider, provider]).supportedThinkingLevels,
+    ["high"],
+    "the owning account keeps its own exact wire binding",
+  );
 });
 
-test("unmatched models expose selectable thinking in providers, sessions and subagents", async () => {
+test("unmatched models expose only a conservative off capability, never an invented ladder", async () => {
   const { runtime } = await fixtureRuntime();
   const modelId = "ag/gemini-pro-agent";
-  const full = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
   const binding = { id: modelId, contextWindow: 128_000, maxTokens: 8_192, thinkingLevels: [] };
   for (const models of [[], [binding], [{ ...binding, thinkingLevels: ["off"] }]]) {
     const provider = { id: "custom", name: "Custom", models, defaultModelId: modelId };
-    const expected = models[0]?.thinkingLevels.length ? ["off"] : full;
     const session = { providerId: provider.id, modelId, thinkingLevel: "off" };
-    assert.deepEqual(runtime.enrichProvider(provider).supportedThinkingLevels, expected);
-    assert.deepEqual(runtime.enrichSession(session, [provider]).supportedThinkingLevels, expected);
+    // The endpoint publishes nothing for this id, so the runtime claims no
+    // reasoning capability instead of widening to an unrestricted ladder.
+    assert.deepEqual(runtime.enrichProvider(provider).supportedThinkingLevels, ["off"]);
+    assert.equal(runtime.enrichProvider(provider).supportsReasoning, false);
+    assert.deepEqual(runtime.enrichSession(session, [provider]).supportedThinkingLevels, ["off"]);
     assert.equal(runtime.enrichSession(session, [provider]).thinkingLevel, "off");
-    assert.deepEqual(runtime.effectiveSubagentModelConfig(provider, modelId, genericModelConfig(modelId)).capabilities.supportedThinkingLevels, expected);
+    assert.deepEqual(runtime.effectiveSubagentModelConfig(provider, modelId, genericModelConfig(modelId)).capabilities.supportedThinkingLevels, ["off"]);
+    assert.deepEqual(provider.models[0]?.thinkingLevels ?? [], models[0]?.thinkingLevels ?? [], "stored bindings are not mutated");
   }
 });
 

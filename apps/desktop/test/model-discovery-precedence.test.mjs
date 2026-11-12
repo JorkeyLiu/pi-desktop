@@ -1,88 +1,219 @@
-import { readMainSource } from "./helpers/source-contracts.mjs";
 /**
  * The AI service is the authority on which models it serves.
  *
- * `providersListModels` used to answer from the bundled models.dev snapshot
- * before it ever contacted the endpoint, which offered every model a vendor
- * publishes — including ones a given deployment does not host and ones the key
- * is not entitled to. These tests pin the corrected order: resolve the endpoint,
- * probe the service through that resolution, enrich what it returned with
- * models.dev, and only fall back to the catalog when the endpoint publishes
- * nothing usable.
+ * `providersListModels` must probe the configured endpoint through its static
+ * resolution before anything else, enrich only what the service returned, and
+ * report a failed discovery as `source: "fallback"` with every configured
+ * binding, the default id and the endpoint error. Canonical models.dev data is
+ * never an availability list and never fills a failed probe.
+ *
+ * These tests register the real IPC handler and drive it through the service
+ * path with fake host, endpoint sweep and catalog. No source text is asserted.
  */
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
 import test from "node:test";
+import ts from "typescript";
+import { ErrorCodes } from "../../../packages/shared/src/errors.ts";
+import { IPC } from "../../../packages/shared/src/protocol.ts";
+import * as modelsDev from "../electron/main/models-dev-catalog.ts";
 
-const mainSource = await readMainSource();
-
-/** Body of the providersListModels handler, so offsets are local to it. */
-const handler = (() => {
-  const start = mainSource.indexOf("IPC.invoke.providersListModels");
-  assert.notEqual(start, -1, "providersListModels handler not found");
-  // The handler ends at its own fallback return; the next `handle(` registration
-  // is not guaranteed to be the create one.
-  const end = mainSource.indexOf('source: "fallback", ...resolution, error: discoveryError', start);
-  assert.notEqual(end, -1, "could not bound the handler body");
-  return mainSource.slice(start, end);
-})();
-
-test("the live endpoint is probed before the bundled catalog is consulted", () => {
-  const discovery = handler.indexOf("await probeDiscoveryCandidates(");
-  const catalog = handler.indexOf("modelsDevCatalog.modelsForProvider(");
-  assert.notEqual(discovery, -1, "live discovery call missing");
-  assert.notEqual(catalog, -1, "catalog fallback missing");
-  assert.ok(
-    discovery < catalog,
-    "models.dev must not short-circuit ahead of the service's own /models",
+/** Minimal CJS loader for the main-process module under test. */
+function load(relative, imports) {
+  const file = new URL(relative, import.meta.url);
+  const { outputText } = ts.transpileModule(fs.readFileSync(file, "utf8"), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+    fileName: file.pathname,
+  });
+  const module = { exports: {} };
+  new Function("require", "exports", "module", outputText)(
+    (id) => {
+      assert.ok(Object.hasOwn(imports, id), `unexpected IPC dependency: ${id}`);
+      return imports[id];
+    },
+    module.exports,
+    module,
   );
+  return module.exports;
+}
+
+const profile = {
+  origin: "https://relay.example",
+  candidates: ["https://relay.example/v1/models"],
+  effectiveBaseUrl: "https://relay.example/v1",
+};
+
+function harness({ providers, outcome, attempts = [], cachedModels = [] }) {
+  const handlers = new Map();
+  const sweepCalls = [];
+  const catalogCalls = [];
+  const hostCalls = [];
+  const cacheWrites = [];
+  const modelsDevCatalog = {
+    ensureLoaded: async () => true,
+    loadLocal: async () => true,
+    refresh: async () => true,
+    getStatus: () => ({ loaded: true }),
+    deleteAccount: () => {},
+    configureAccount: (row) => catalogCalls.push(["configureAccount", row.id]),
+    findModel: (input) => {
+      catalogCalls.push(["findModel", input.modelId]);
+      return undefined;
+    },
+    publishedModelFor: (input) => {
+      catalogCalls.push(["publishedModelFor", input.modelId]);
+      return undefined;
+    },
+    modelsForProvider: (input) => {
+      catalogCalls.push(["modelsForProvider", input]);
+      return [];
+    },
+    modelConfigFor: () => ({ modalities: { input: ["text"], output: ["text"] } }),
+    settingsMetadataFor: () => undefined,
+  };
+  const host = {
+    call: async (method, input) => {
+      hostCalls.push(method);
+      if (method === "providers.list") return { providers };
+      if (method === "providers.getSecret") return { value: "stored-key" };
+      if (method === "providers.listModels") return { models: cachedModels };
+      if (method === "providers.cacheModels") {
+        cacheWrites.push(input?.models ?? []);
+        return {};
+      }
+      return {};
+    },
+  };
+  const { registerProviderIpc } = load("../electron/main/ipc/provider-ipc.ts", {
+    "@pi-desktop/shared": {
+      IPC,
+      ErrorCodes,
+      inferEndpointProfile: () => profile,
+      normalizeApiStyle: (value) => value ?? "chat_completions",
+      resolveBindingLimits: () => ({}),
+    },
+    "../oauth": { OAUTH_AUTH_KIND: "oauth", VendorOAuth: {} },
+    "../model-discovery": { probeProviderEndpoint: async () => undefined },
+    "../provider-endpoint-probe": {
+      probeDiscoveryCandidates: async (input) => {
+        sweepCalls.push(input);
+        return { attempts, outcome };
+      },
+    },
+    "../models-dev-catalog": modelsDev,
+    "../host-process": {},
+    "../logger": { app: () => {} },
+    "./types": {},
+  });
+  registerProviderIpc({
+    registrar: { handle: (channel, handler) => handlers.set(channel, handler) },
+    getHost: () => host,
+    modelsDevCatalog,
+    vendorOAuth: {},
+    logger: { app: () => {} },
+    enrichProvider: (provider) => provider,
+    listRuntimeProviders: async () => providers,
+    enrichProviderList: async (result) => result,
+    bindingForModel: () => undefined,
+  });
+  const handler = handlers.get(IPC.invoke.providersListModels);
+  assert.equal(typeof handler, "function", "providersListModels is not registered");
+  return {
+    call: (input) => handler(input),
+    sweepCalls,
+    catalogCalls,
+    hostCalls,
+    cacheWrites,
+  };
+}
+
+const configuredRow = {
+  id: "relay",
+  name: "Relay",
+  vendorKey: "custom",
+  baseUrl: "https://relay.example/v1",
+  apiStyle: "chat_completions",
+  authKind: "none",
+  models: [{ id: "configured-a" }, { id: "configured-b" }],
+  defaultModelId: "configured-default",
+};
+
+test("a failed discovery reports the endpoint error and keeps every configured id", async (t) => {
+  const h = harness({
+    providers: [configuredRow],
+    attempts: [
+      { baseUrl: "https://relay.example/v1/models", error: "401 unauthorized" },
+      { baseUrl: "https://relay.example/v1/models?format=openai", error: "404 not found" },
+    ],
+  });
+  const result = await h.call({ providerId: "relay", source: "refresh" });
+  assert.equal(result.source, "fallback");
+  assert.match(result.error, /401 unauthorized/);
+  assert.match(result.error, /404 not found/);
+  // The default id and both configured bindings stay visible for offline edits.
+  assert.deepEqual(
+    result.models.map((model) => model.modelId).sort(),
+    ["configured-a", "configured-b", "configured-default"].sort(),
+  );
+  for (const id of ["configured-a", "configured-b"]) {
+    assert.equal(result.models.find((model) => model.modelId === id)?.source, "user");
+  }
+  // Availability is never invented from the canonical catalog.
+  assert.equal(h.catalogCalls.some(([method]) => method === "modelsForProvider"), false);
+  assert.deepEqual(h.cacheWrites, [], "a failed discovery writes no model cache");
 });
 
-test("the probe asks the resolved candidates, not the typed URL alone", () => {
-  // The typed Base URL is a starting point: a bare host must be able to resolve
-  // to the path that answers, and every candidate stays on the typed origin.
-  assert.match(handler, /inferEndpointProfile\(\{/);
-  assert.match(handler, /candidates: profile\.candidates/);
-  assert.match(handler, /origin: profile\.origin/);
-  // The renderer reads the answer from the IPC result instead of re-deriving it.
-  assert.match(handler, /effectiveBaseUrl: outcome\.effectiveBaseUrl/);
-  assert.match(handler, /discoveryStyle: outcome\.discoveryStyle/);
+test("discovery probes the resolved candidates after the stored secret", async (t) => {
+  const h = harness({ providers: [configuredRow], attempts: [] });
+  await h.call({ providerId: "relay", source: "refresh" });
+  assert.equal(h.sweepCalls.length, 1);
+  assert.deepEqual(h.sweepCalls[0], {
+    origin: profile.origin,
+    candidates: profile.candidates,
+    apiKey: "stored-key",
+    headers: undefined,
+  });
+  assert.equal(h.hostCalls.filter((method) => method === "providers.getSecret").length, 1);
+  assert.equal(h.sweepCalls[0].apiKey, "stored-key", "the stored secret resolves before the probe");
+  assert.equal(h.catalogCalls.some(([method]) => method === "modelsForProvider"), false);
 });
 
-test("a catalog-derived list is reported as such, not as the service's answer", () => {
-  // The renderer has to be able to tell the user the service published no list.
-  assert.match(handler, /source: "catalog" as const/);
-  const catalogReturn = handler.slice(handler.indexOf('source: "catalog" as const'));
-  assert.match(catalogReturn.slice(0, 200), /discoveryError \? \{ error: discoveryError \}/);
-  // The live branch keeps its own distinct source value. What it returns may be
-  // widened with the user's configured bindings, but only the rows the endpoint
-  // actually served are cached, which the next test pins.
-  const liveReturn = handler.slice(handler.indexOf("await cacheForCurrentProvider(models);"));
-  assert.match(liveReturn.slice(0, 240), /source: "remote" as const/);
+test("a live answer is reported as remote, keeps configured extras and caches only served ids", async (t) => {
+  const h = harness({
+    providers: [configuredRow],
+    outcome: {
+      effectiveBaseUrl: "https://relay.example/v1",
+      discoveryStyle: "chat_completions",
+      evidence: { type: "models" },
+      models: [{ modelId: "served-a", displayName: "Served A" }],
+    },
+  });
+  const result = await h.call({ providerId: "relay", source: "refresh" });
+  assert.equal(result.source, "remote");
+  assert.equal(result.effectiveBaseUrl, "https://relay.example/v1");
+  assert.deepEqual(
+    result.models.map((model) => model.modelId).sort(),
+    ["configured-a", "configured-b", "served-a"].sort(),
+  );
+  assert.equal(result.models.find((model) => model.modelId === "served-a").source, "discovered");
+  assert.equal(result.models.find((model) => model.modelId === "configured-a").source, "user");
+  // Only the endpoint's own answer is cached; configured ids never become
+  // evidence that the service serves them.
+  assert.equal(h.cacheWrites.length, 1);
+  assert.deepEqual(h.cacheWrites[0].map((model) => model.modelId), ["served-a"]);
 });
 
-test("only a live answer is written back to the model cache", () => {
-  // Caching a catalog guess would make it indistinguishable from a real probe
-  // on the next cold start.
-  const cacheCall = handler.indexOf("await cacheForCurrentProvider(");
-  const catalog = handler.indexOf("modelsDevCatalog.modelsForProvider(");
-  assert.ok(cacheCall < catalog, "the cache write must belong to the live branch");
-  assert.match(handler, /if \(!provider \|\| req\.source === "cache"\) return;/);
-  // The cache key stays the saved endpoint, so a resolved candidate never
-  // rewrites the cache of a row that has not been saved with it yet.
-  assert.match(handler, /const requestBaseUrl = baseUrl\.replace/);
-});
-
-test("every returned model is enriched through the published models.dev catalog regardless of origin", () => {
-  // `decorate` is what attaches published limits, modalities and thinking
-  // levels, so all three branches must route through it.
-  assert.match(handler, /const modelsDevModel = .*modelsDevCatalog\.publishedModelFor/);
-  assert.match(handler, /outcome\.models\.map\(\(model\) => decorate\(model\)\)/);
-  assert.match(handler, /catalogModels\.map\(\(model\) => decorate\(model\)\)/);
-});
-
-test("the stored secret is resolved before probing, so edits need no retyped key", () => {
-  const secret = handler.indexOf('"providers.getSecret"');
-  const discovery = handler.indexOf("await probeDiscoveryCandidates(");
-  assert.notEqual(secret, -1, "stored secret lookup missing");
-  assert.ok(secret < discovery, "the key must be resolved before the probe");
+test("a cached read preserves configured ids without probing the network", async (t) => {
+  const h = harness({
+    providers: [configuredRow],
+    cachedModels: [{ modelId: "cached-a", displayName: "Cached A", source: "discovered" }],
+  });
+  const result = await h.call({ providerId: "relay", source: "cache" });
+  assert.equal(result.source, "cache");
+  assert.deepEqual(
+    result.models.map((model) => model.modelId).sort(),
+    ["cached-a", "configured-a", "configured-b"].sort(),
+  );
+  assert.deepEqual(h.sweepCalls, [], "a cache read never contacts the service");
+  assert.deepEqual(h.hostCalls, ["providers.list", "providers.listModels"]);
 });

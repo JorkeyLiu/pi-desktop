@@ -1,8 +1,11 @@
 # Model management de-specialization: design and bounded plan
 
-- Status: Phase 0 done. Phase 1 (source service/cache) implemented in the
-  desktop main process; phases 2-4 (source-aware resolver, consumer migration,
-  heuristic removal) not implemented. See section 11 for per-phase status.
+- Status: Phase 0 done. Phase 1 (source service/cache) implemented and preserved.
+  Phase 2 (deterministic resolver, consumer migration, heuristic removal) is
+  implemented in `apps/desktop/electron/main/model-metadata/` with the catalog
+  and provider-IPC consumers switched over; phase 3 residual runtime/UI
+  consumer work and phase 4 cleanup of the remaining narrow protocol adapters
+  stay open. See section 11 for per-phase status and exclusions.
 - Date: 2026-11-12
 - Baseline: `03d41de43`
 - Scope: model-management metadata acquisition, provider/model association,
@@ -111,6 +114,13 @@ borrow another publisher's record; prefer an "official" vendor (`:1015-1035`);
 use majority/intersection/median, relay canonical translation, or reseller
 capability averaging; infer a provider from a model id.
 
+Implemented in `apps/desktop/electron/main/model-metadata/model-resolver.ts`.
+Results report `state`, `method`, `domain` (`endpoint`/`canonical`), the
+publisher resolution (`state`/`method`/`candidates`), `source`, `fetchedAt`
+and, on ambiguity, `candidates`. `ModelsDevCatalog.findModel` keeps the
+endpoint-only compatibility answer; `resolveModelReference` exposes the full
+structured result.
+
 Each field reports canonical vs endpoint-serving vs explicit-override
 provenance. Unmatched/ambiguous fields stay absent; no default value is
 fabricated into informational metadata.
@@ -208,6 +218,28 @@ Not removed: provider presets, auth adapters, per-model API pins, OAuth
 entitlement discovery, proxy policy, transcript compatibility, plugin provider
 handling. Those are explicit protocol/auth/transport facts.
 
+State after phase 2: `KNOWN_PROVIDER_BASE_URLS`, `PROVIDER_ALIASES`/
+`providerKeyCandidates`, relay-owner/relay-family tables, official-vendor
+preference, borrowing/candidate-key pools, deployment/version/date suffix
+stripping, reseller canonical translation and median/intersection capability
+claims are removed, together with `relayFamily`/`relayChat`/deployment helpers
+in `pi-model-metadata.ts`.
+
+Deliberately retained narrow adapters — protocol facts, not management
+identity:
+
+- `PI_VENDOR_ALIASES` and `settingsOperationMetadata` still map an explicit
+  provider key to a pi-ai protocol operation for typed non-chat operations.
+- `anthropicThinkingFor` still reads Anthropic's own record for exactly the
+  requested id so an Anthropic Messages row keeps the `adaptive`/budget
+  thinking shape the model states; it grants no capacity or publisher identity.
+- `RESPONSES_ONLY_MODEL_IDS` stays scoped to the `opencode-go` provider key and
+  `muse-spark-1.2-contributor` / `muse-spark-1.3-contributor` because the
+  bundled `api.json` states no explicit `api` for them; removing it would
+  silently change existing wire mode.
+
+These are documented exclusions, not a claim that every special case is gone.
+
 ## 11. Phases and dependencies
 
 Each phase is buildable and testable; no phase ships a permanent second resolver.
@@ -227,18 +259,44 @@ Each phase is buildable and testable; no phase ships a permanent second resolver
   the service and `ModelsDevCatalog.getProvenance()` for phase 2. Covered by
   `apps/desktop/test/models-dev-cache.test.mjs`; the E2E restart journey is
   manual (see `06-delivery/04-e2e-test-plan.md`, `E2E-CATALOG-acquisition`).
-- **Phase 2 — source-aware resolver, side-by-side.** Read-only differential
-  harness against the current lookup over fixtures and captured endpoint samples;
-  no user-visible switch. Removal criteria: every difference is a documented
-  heuristic false positive or reported ambiguity; no fixture loses a valid exact
-  match; no invented availability. Then switch consumers and remove the old path
-  in phase 4 — not keep both.
-- **Phase 3 — runtime/UI consumers.** Map unknown at the adapter boundary;
-  preserve precedence, usage, cancellation, overrides. Update Settings hints
-  unobtrusively; public required fields stay. Depends on phase 2.
-- **Phase 4 — remove heuristics.** Delete section 10 tables after no consumer
-  imports them. Depends on phases 2/3. Acceptance: no management path reaches an
-  alias table; a targeted guard prevents reintroduction.
+- **Phase 2 — deterministic resolver + consumer switch.** **Status:**
+  implemented. `apps/desktop/electron/main/model-metadata/model-resolver.ts`
+  (461 LOC) builds one immutable index per catalog generation: normalized
+  endpoint buckets, exact and casefold id buckets per publisher, global ids,
+  and canonical id/basename buckets. `ModelsDevCatalog.resolveModelReference`
+  reports structured state/method/domain/publisher/source/fetchedAt/candidates;
+  `findModel` keeps the endpoint-only compatibility answer;
+  `modelsForProvider` reports only the endpoint owner's publisher and preserves
+  account and pi operations; `getProvenance` reads phase-1 acquisition
+  provenance. `provider-ipc.ts` failed discovery now returns every configured
+  binding plus the configured default with `source: "fallback"` and the
+  classified error — no catalog availability fallback, no cache write. The old
+  alias/host/family/official/borrow/median/intersection/deployment-stripping
+  paths in `models-dev-catalog.ts` and `pi-model-metadata.ts` are gone. Covered
+  by `apps/desktop/test/model-resolver.test.mjs`,
+  `models-dev-catalog.test.mjs`, `models-dev-cache.test.mjs`,
+  `provider-model-list-refresh.test.mjs`, `provider-model-list-scope.test.mjs`,
+  `model-discovery-precedence.test.mjs`, `model-discovery.test.mjs`,
+  `provider-lookup-model-handler.test.mjs`, `provider-catalog-runtime.test.mjs`,
+  `model-binding-catalog-source.test.mjs`, `composer-models.test.mjs` and
+  `recommended-models.test.mjs`. Phase-1 acquisition/load/status/cache wrappers
+  are preserved, and the §10 narrow protocol adapters remain by design. The
+  side-by-side criterion is met by the fixture matrix instead of a runtime
+  toggle: a removed heuristic now surfaces as `unmatched` or `ambiguous` with
+  candidates, and consumers were switched without keeping a second resolver.
+- **Phase 3 — residual runtime/UI consumers.** Unknown capability projection is
+  implemented (`capabilitiesFromModelConfig` reports `off` only for an
+  unclassified model; explicit thinking intent is honored separately). Settings
+  hints, remaining UI copy, and any consumer still assuming borrowed metadata
+  stay open. Baseline `33278fd30` already stopped inventing reasoning and price
+  for unknown models; whether an explicit non-`off` selection is honored or
+  narrowed by the capability list is still being finalized by the
+  reasoning-selection work, so this plan does not call it clamped by design.
+  Depends on phase 2.
+- **Phase 4 — remove heuristics.** The main removals landed with the phase-2
+  consumer switch because no consumer retained the old path. The remaining §10
+  narrow adapters need an explicit protocol migration first, and the
+  anti-regression guard is not added yet. Depends on phases 2/3.
 
 ## 12. Mechanical anti-regression
 
@@ -277,7 +335,7 @@ manually, but this plan does not invent that setting.
 - Image-transport worktree changes are independent; this plan neither duplicates
   nor edits them.
 
-## 15. Chosen design recommendations (implementation unperformed)
+## 15. Chosen design recommendations (status recorded in section 11)
 
 These are the recommended defaults for implementation, not open product
 questions. Re-open a decision only if implementing it proves a public contract,

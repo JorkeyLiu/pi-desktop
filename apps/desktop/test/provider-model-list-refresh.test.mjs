@@ -98,15 +98,18 @@ test("refresh removes revoked service rows and preserves configured chat binding
   };
   const initialHtml = await refresh();
   assert.deepEqual(ids(initialHtml, "provider-models-row-id").sort(), [...served].sort());
-  assert.ok(initialHtml.includes(`${formatTokenCount(1_050_000)} · ${formatTokenCount(128_000)}`),
-    "the discovery pane presents the models.dev baseline");
-  assert.ok(initialHtml.includes(`${formatTokenCount(1_000_000)} · ${formatTokenCount(row.models[2].maxTokens)}`),
-    "the chosen-model pane presents the pinned user value");
+  assert.ok(!initialHtml.includes(formatTokenCount(1_050_000)),
+    "an unowned relay endpoint never borrows a publisher's baseline");
+  assert.equal(discovery.models.find((model) => model.modelId === "gpt-6-sol").contextWindow, 128_000,
+    "the endpoint's own list decides; models.dev stays a canonical reference");
+  assert.ok(initialHtml.includes(`${formatTokenCount(1_000_000)} · —`),
+    "the pinned user window stays; an unpublished max is not presented as published");
   const catalogAstra = discovery.models.find((model) => model.modelId === "gpt-6-astra");
-  assert.equal(catalogAstra.contextWindow, 1_050_000, "discovery exposes the models.dev value");
+  assert.equal(catalogAstra.contextWindow, 1_000_000, "the user binding applies; no publisher owns the relay");
+  assert.equal(catalogAstra.catalogSource, undefined, "canonical references do not become endpoint metadata");
   const cachedAstra = cachedModels.find((model) => model.modelId === "gpt-6-astra");
   assert.ok(cachedAstra, "the endpoint metadata cache includes the served model");
-  assert.equal(cachedAstra.contextWindow, 1_050_000, "the endpoint metadata cache stores the raw catalog value");
+  assert.equal(cachedAstra.contextWindow, 1_000_000, "the cache stores the decorated row, never a borrowed value");
   const enrichedAstra = runtime.enrichProvider(row).models.find((model) => model.id === "gpt-6-astra");
   assert.equal(enrichedAstra.contextWindow, 1_000_000, "runtime keeps the explicit user binding");
   assert.equal(enrichedAstra.contextWindowSource, "user");

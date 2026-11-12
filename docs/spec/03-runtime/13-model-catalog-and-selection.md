@@ -129,12 +129,14 @@ generation must not silently fall back to the active conversation model.
    equivalent). A non-empty answer wins, is enriched per model through
    `modelsDevCatalog.findModel`, replaces what the model cache held for that
    provider, and is reported as `source: "remote"`.
-3. Only if the endpoint published nothing usable —no route, an auth error, or an
-   empty list— does `modelsForProvider` supply the vendor's published models,
-   reported as `source: "catalog"` together with any discovery error so the UI
-   can say the service did not answer. This result is **not** cached, so a
-   catalog guess never becomes indistinguishable from a real probe.
-4. Last resort: the provider's configured model, `source: "fallback"`.
+3. Only if the endpoint published nothing usable — no route, an auth error, or
+   an empty list — the response keeps every configured model binding plus the
+   configured default, reported as `source: "fallback"` together with the
+   classified discovery error so the UI can say the service did not answer.
+   Availability is an endpoint fact, so it is never borrowed from models.dev:
+   no `source: "catalog"` list is manufactured, and this result is **not**
+   cached, so a failure never becomes indistinguishable from a real probe.
+4. A row with no configured binding either reports no model rows.
 
 An OAuth vendor account skips step 2 — it has no key to probe with, and pi-ai
 already knows which models the subscription allows.
@@ -328,23 +330,19 @@ Successful account lists are authoritative; a failed list preserves the last
 usable IDs. A live-only ID with no service or catalog capacity stays generic;
 pi-ai sibling metadata never supplies its chat limits, reasoning or price.
 
-For an unanchored OpenAI-compatible relay, a known model family may use the
-weight owner's published record when that owner names the model. This record
-outranks shared reseller matches without changing the configured wire ID.
-Lookup accepts dotted/dashed version notation, one whitelisted deployment
-label, and the owner's published canonical generation ID; semantic variants
-and unpublished generations remain distinct. The owner's own sibling keys
-(regional, token-plan and coding-plan) are consulted as added evidence when the
-public key states nothing, so a generation the vendor ships only on one of its
-keys still resolves; a sibling key never vetoes an answer the public key
-already gave. When the relay names a generation the owner publishes under
-another ID, models.dev's own canonical declaration translates the name, but
-only when at least two distinct publishers corroborate the same owner-prefixed
-target and the ordinary lookup resolved nothing — the capacity still comes from
-the owner's record for the translated ID, never from the declarers. If owner
-aliases disagree on capabilities or limits, no owner record is borrowed. When
-the owner publishes no matching record, the existing shared catalog matching
-rules still apply.
+For a configured row, endpoint-serving facts are answered only inside the
+publisher that explicitly owns the endpoint. The configured provider key
+identifies that publisher only when it is an exact catalog key and the
+normalized endpoint either matches that publisher's published `api` or is
+absent; a shared endpoint needs the exact key, and an unnamed or conflicting
+endpoint stays unknown, with the competing publisher keys reported as the
+ambiguity. Within the owning publisher the wire id is matched case-sensitively
+first, then by casefold. There is no deployment/version/date/release suffix
+stripping, no last-path-segment or unique-basename borrowing from another
+publisher, no official-vendor preference, no relay-owner translation, no
+median/intersection/majority claim, and no family/brand inference from the
+model id. Unmatched ids keep conservative generic metadata plus explicit
+binding overrides.
 
 `source: "cache"` reads Host caches and configured bindings without network.
 `source: "refresh"` probes the selected endpoint/account and decorates returned
@@ -400,7 +398,9 @@ When UI/search requests models for picker:
 
 1. recent models for enabled providers
 2. user-defined models
-3. models.dev records for the matching provider/API URL
+3. models.dev records for the exact normalized endpoint that one publisher
+   explicitly owns, or a canonical reference when no publisher owns the row
+   (§ 11.3.1); an ambiguous match contributes nothing
 4. provider discovery/cache for custom or account-specific models
 5. always include "custom model id" entry action
 
@@ -531,9 +531,13 @@ Composer context-window labels resolve the exact binding with `effectiveContextW
 2. Project explicit binding levels at the account boundary. Known unsupported
    levels and native null mappings remain unavailable; saved settings are not
    rewritten. Clamp the dispatched request using Pi's public helper.
-3. Unknown free-form IDs retain the generic Desktop ladder for manual opt-in,
-   with `off` as the unset default. Explicit binding defaults remain scoped to
-   new drafts/sessions rather than overwriting existing session preferences.
+3. Unknown free-form IDs carry no invented capability claim: the runtime
+   projection is `off` only unless the user explicitly enables a level, while
+   the Settings editor still offers all seven levels for manual opt-in.
+   An explicit non-`off` selection is user intent and must reach the adapter
+   instead of being replaced by the absent claim. Explicit binding defaults
+   remain scoped to new drafts/sessions rather than overwriting existing
+   session preferences.
 4. `omit` remains a distinct request choice: no thinking field is sent. Agent
    bookkeeping may store `off` while the request omits reasoning.
 5. The Composer renders effective enabled levels in canonical order. Dispatch
@@ -581,21 +585,28 @@ wire model ID or infer reasoning from a suffix. An unmatched free-form ID keeps
 the host's generic capability snapshot, while Composer exposes the canonical
 thinking ladder for explicit manual opt-in.
 
-#### 11.3.1 Relay metadata matching
+#### 11.3.1 Reference matching
 
-The Pi adapter preserves the configured wire ID. Unknown endpoints may attach
-metadata from an exact, case-insensitive final `/` segment. A unique official
-publisher compatible with the ID family wins; conflicting capability/thinking
-candidates remain unknown. Exact served IDs are checked first. Only a narrow
-whitelist of deployment-added environment/context labels (for example `-test`
-and `-1m`) may be removed as a fallback to a published base ID. Thinking,
-preview, and dated-release suffixes are not stripped, and spelling is never
-fuzzy-corrected.
+Metadata matching is exact and reports structured state, method, domain, source
+and `fetchedAt`. A wire id is never rewritten; the transmitted id stays raw.
 
-Known provider lookup and aliases stay authoritative. An ambiguous known
-same-endpoint miss does not borrow from arbitrary publishers. There is no
-majority-vote capability or median-limit algorithm. Unmatched IDs use conservative
-generic metadata and explicit binding overrides.
+- When a publisher explicitly owns the endpoint, matching is scoped to that
+  publisher: exact raw id, then its unambiguous casefold, then a canonical id
+  the endpoint source explicitly declared. A miss in the owning publisher stays
+  a miss; another publisher's record is never borrowed.
+- When no publisher owns the row, the catalog may answer a canonical
+  reference: global exact id, then global exact-id casefold, then canonical
+  exact id, then a unique canonical `/` basename. A case-colliding or
+  otherwise non-unique id stays ambiguous and reports its candidate records
+  instead of choosing one.
+- A canonical reference says which published entity an id describes. It is
+  never endpoint capacity and never fabricates endpoint availability.
+
+No official-vendor preference, relay-owner translation, alias table,
+version/date/deployment suffix stripping, last-path-segment borrowing,
+median/intersection/majority capability claim, or family/brand inference from
+the id exists. Unmatched ids use conservative generic metadata and explicit
+binding overrides.
 
 ## 12. Refresh strategy
 

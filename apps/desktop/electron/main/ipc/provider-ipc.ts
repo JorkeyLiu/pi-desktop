@@ -669,35 +669,23 @@ export function registerProviderIpc({
         }
       }
 
-      // The endpoint published nothing usable (no /models route, an auth error,
-      // or an empty list). The catalog is the fallback, not the primary source.
-      // The list is the service's own published set, so a key that can call an
-      // embedding or image endpoint sees it here too; nothing is preselected
-      // from those, and `recommendModels` still picks chat models only.
-      const catalogModels = modelsDevCatalog.modelsForProvider({
-        vendorKey: catalogVendorKey,
-        baseUrl: endpointBaseUrl,
-        providerId: provider?.id ?? "",
-        includeNonChat: true,
-      });
-      if (catalogModels.length > 0) {
-        return {
-          models: withConfiguredBindings(
-            catalogModels.map((model) => decorate(model)),
-          ),
-          source: "catalog" as const,
-          ...resolution,
-          ...(discoveryError ? { error: discoveryError } : {}),
-        };
-      }
-
-      // Last resort: the provider's configured model, so pickers stay usable
-      // for gateways without a /models endpoint.
-      const fallbackModelId = provider?.models?.[0]?.id ?? provider?.defaultModelId;
-      const fallback = fallbackModelId
-        ? [decorate({ modelId: fallbackModelId, displayName: fallbackModelId })]
-        : [];
-      return { models: fallback, source: "fallback", ...resolution, error: discoveryError };
+      /*
+        The endpoint published nothing usable (no /models route, an auth error,
+        or an empty list). Availability is an endpoint fact, so it is never
+        invented from the canonical catalog: the response keeps the provider's
+        configured bindings and default, and reports the discovery failure.
+      */
+      const fallbackModelId = provider?.defaultModelId ?? provider?.models?.[0]?.id;
+      return {
+        models: withConfiguredBindings(
+          fallbackModelId
+            ? [decorate({ modelId: fallbackModelId, displayName: fallbackModelId })]
+            : [],
+        ),
+        source: "fallback" as const,
+        ...resolution,
+        ...(discoveryError ? { error: discoveryError } : {}),
+      };
     },
   );
 

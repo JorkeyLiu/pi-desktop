@@ -788,31 +788,27 @@ model request, while model IDs remain manual.
 ### Which publisher a row is read against
 
 A row that names no publisher of its own is read against the publisher its
-endpoint identifies, in this order: the catalog entry whose published base URL
-matches, the endpoint registry for a known host, then the catalog's own host
-when exactly one provider publishes from it. That is what keeps a custom row on
-a vendor's alternative API path — `https://open.bigmodel.cn/api/v1` for Zhipu's
-OpenAI Responses endpoint — from showing generic 128k / 8k / text-only defaults
-for models the catalog describes in full.
+endpoint identifies, only when the evidence is unambiguous: an exact normalized
+published `api` URL, and an explicit provider key that is an exact catalog key.
+A single endpoint match identifies that publisher; a shared endpoint needs the
+exact key to disambiguate; a key that names a different publisher than an
+otherwise-unique endpoint is a conflict, not an override; and with no published
+endpoint answering, only an exact configured key identifies a publisher. An
+unnamed or conflicting row leaves the publisher unknown and reports the
+competing keys instead of guessing a host, a registry entry, or the first
+catalog match.
 
-When nothing identifies a publisher at all — a relay, or a host the catalog does
-not know — the publishers this app ships a provider for answer first: they are
-the vendors and gateways behind the first-class presets, so their records
-describe the model, while a reseller's own flags describe its own deployment of
-it. Only when none of them states the ID does the pool widen to every publisher
-that does, because an ID a relay alone carries would otherwise be shown as a
-generic 128k text-only row. Within that pool the publishers' agreement is
-claimed: the lower median of their limits and, for every capability but tool
-support, only what all of them state, so the answer can only under-claim. Tool
-support follows the majority of the publishers that state it: an ID a relay lists
-can be stated by a hundred publishers, and one dissenting reseller must not decide
-— or void — the claim for a deployment it does not describe. An even split states
-no majority and claims nothing. Two routes that merely share a name leaf
-(`provider-a/foo` vs `gateway/foo`) are not one model, so an ID whose identity is
-genuinely unknown still resolves to nothing. A record borrowed this way states no
-reasoning wire shape — that is a property of the deployment — and an Anthropic
-Messages row keeps Anthropic's own shape. A model ID never decides which
-publisher is read.
+When a publisher owns the row, its own records are the only endpoint-serving
+source: the exact raw wire id first, then its unambiguous casefold, then a
+canonical id the endpoint source explicitly declared. A miss stays a miss —
+another publisher's record is never borrowed, and deployment/version/date
+suffixes are never stripped, so a relay serving `mify/mimo-v2.5-pro-0731` keeps
+that wire id and resolves only if that exact id is published. When no publisher
+owns the row, the catalog may report a canonical reference separately (global
+exact id, global casefold, canonical exact id, unique canonical basename). It
+describes the published entity, never this deployment's capacity: it cannot
+manufacture endpoint availability, and a non-unique id stays ambiguous with its
+candidate records. A model ID never decides which publisher is read.
 
 The lookup answers for the IDs a row already lists, so a served ID whose published
 record is an audio model — a TTS or ASR sibling — resolves to that record too.
