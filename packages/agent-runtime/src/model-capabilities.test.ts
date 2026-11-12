@@ -8,7 +8,7 @@ import {
   type ModelCapabilities,
 } from "./model-capabilities.js";
 import { describe, expect, it } from "vitest";
-import type { ModelInfo, ThinkingLevel } from "@pi-desktop/shared";
+import { THINKING_LEVELS, type ModelInfo, type ThinkingLevel } from "@pi-desktop/shared";
 import type { ModelConfig } from "./thinking-level.js";
 
 function knownModel(): ModelConfig {
@@ -255,22 +255,69 @@ describe("binding attachment capability overrides", () => {
 });
 
 describe("unmatched model effective thinking policy", () => {
-  it("keeps every manually selected level without inventing published metadata", () => {
-    const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-    const published = genericModelConfig("route/unknown");
+  const generic = genericModelConfig("route/unknown");
+
+  it("claims no reasoning without an explicit thinking configuration", () => {
     for (const binding of [undefined, { contextWindow: 128_000, maxTokens: 8_192, thinkingLevels: [] }]) {
-      const effective = modelConfigWithBinding(published, binding);
-      const capabilities = capabilitiesFromModelConfig(effective);
-      expect(capabilities.supportedThinkingLevels).toEqual(levels);
-      for (const level of levels) expect(clampThinkingLevel(capabilities, level)).toBe(level);
-      expect(effective.thinkingLevelMap).toMatchObject({ xhigh: "xhigh", max: "max" });
+      const effective = modelConfigWithBinding(generic, binding);
+      expect(effective.reasoning).toBe(false);
+      expect(effective.supportedThinkingLevels).toEqual([]);
+      expect(effective.thinkingLevelMap).toBeUndefined();
+      expect(effective.thinkingProtocol).toBeUndefined();
+      expect(capabilitiesFromModelConfig(effective)).toEqual({
+        supportsReasoning: false,
+        supportedThinkingLevels: ["off"],
+      });
+      for (const level of THINKING_LEVELS) {
+        expect(clampThinkingLevel(capabilitiesFromModelConfig(effective), level)).toBe("off");
+      }
     }
-    expect(published.reasoning).toBe(false);
-    expect(published.supportedThinkingLevels).toEqual([]);
+    // The operational fallback row itself is never mutated into a claim.
+    expect(generic.reasoning).toBe(false);
+    expect(generic.supportedThinkingLevels).toEqual([]);
+  });
+
+  it("honors only explicitly selected levels and their adapter mappings", () => {
+    const levels: ThinkingLevel[] = ["minimal", "high", "xhigh"];
+    const effective = modelConfigWithBinding(generic, {
+      contextWindow: 128_000,
+      maxTokens: 8_192,
+      thinkingLevels: levels,
+    });
+    expect(effective.reasoning).toBe(true);
+    expect(effective.supportedThinkingLevels).toEqual(levels);
+    // xhigh is explicitly selected but has no published mapping; it stays
+    // adapter-valid. No unselected level gains a mapping.
+    expect(effective.thinkingLevelMap).toEqual({ xhigh: "xhigh" });
+    const capabilities = capabilitiesFromModelConfig(effective);
+    expect(capabilities).toEqual({ supportsReasoning: true, supportedThinkingLevels: levels });
+    for (const level of levels) expect(clampThinkingLevel(capabilities, level)).toBe(level);
+  });
+
+  it("preserves an explicit thinking protocol with the selected levels", () => {
+    const effective = modelConfigWithBinding(generic, {
+      contextWindow: 128_000,
+      maxTokens: 8_192,
+      thinkingLevels: ["medium"],
+      thinkingProtocol: "adaptive",
+    });
+    expect(effective.thinkingProtocol).toBe("adaptive");
+    expect(effective.compat?.forceAdaptiveThinking).toBe(true);
+    expect(capabilitiesFromModelConfig(effective)).toEqual({
+      supportsReasoning: true,
+      supportedThinkingLevels: ["medium"],
+    });
+  });
+
+  it("keeps published catalog reasoning levels unchanged", () => {
+    const published = { ...knownModel(), supportedThinkingLevels: ["low", "high"] as ThinkingLevel[] };
+    expect(capabilitiesFromModelConfig(modelConfigWithBinding(published))).toEqual({
+      supportsReasoning: true,
+      supportedThinkingLevels: ["low", "high"],
+    });
   });
 
   it("preserves explicit restrictions and trusted non-reasoning records", () => {
-    const generic = genericModelConfig("route/unknown");
     const binding = { contextWindow: 128_000, maxTokens: 8_192, thinkingLevels: ["off"] as ThinkingLevel[] };
     expect(capabilitiesFromModelConfig(modelConfigWithBinding(generic, binding)).supportsReasoning).toBe(false);
     const trusted = { ...generic, source: "models.dev" as const };

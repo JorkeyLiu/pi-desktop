@@ -77,8 +77,19 @@ function isUnstable(model: ModelInfo): boolean {
   return model.experimental === true || model.status === "beta" || model.status === "alpha";
 }
 
+/**
+ * Published output price per million tokens, or `null` when the catalog states
+ * none. A missing, non-finite or negative value says nothing about how much the
+ * model costs, so it is neither free nor premium; `0` is a real free price.
+ */
+function knownOutputPrice(model: ModelInfo): number | null {
+  const output = model.cost?.output;
+  return typeof output === "number" && Number.isFinite(output) && output >= 0 ? output : null;
+}
+
 function isPremium(model: ModelInfo): boolean {
-  return (model.cost?.output ?? 0) > PREMIUM_OUTPUT_COST_PER_MILLION;
+  const output = knownOutputPrice(model);
+  return output !== null && output > PREMIUM_OUTPUT_COST_PER_MILLION;
 }
 
 function publishedDate(model: ModelInfo): string {
@@ -87,13 +98,16 @@ function publishedDate(model: ModelInfo): string {
 
 /**
  * Keys compared in order; lower sorts first. A premium tier ranks below a
- * pre-release model: an unexpected bill is worse than an unexpected beta.
+ * pre-release model: an unexpected bill is worse than an unexpected beta. An
+ * unknown price ranks below every known one, free included, because it cannot
+ * be shown to be the cheaper choice.
  */
 function demotions(model: ModelInfo): number[] {
   return [
     routedThroughUnknownVendor(model.modelId) ? 1 : 0,
     model.toolCall === true ? 0 : 1,
     isPremium(model) ? 1 : 0,
+    knownOutputPrice(model) === null ? 1 : 0,
     isUnstable(model) ? 1 : 0,
   ];
 }
@@ -111,10 +125,14 @@ function compareCandidates(
   const leftDate = publishedDate(left.model);
   const rightDate = publishedDate(right.model);
   if (leftDate !== rightDate) return leftDate < rightDate ? 1 : -1;
-  // A vendor releases a line together; the pricier sibling is its flagship.
-  const leftCost = left.model.cost?.output ?? -1;
-  const rightCost = right.model.cost?.output ?? -1;
-  if (leftCost !== rightCost) return rightCost - leftCost;
+  // A vendor releases a line together; the pricier known sibling is its
+  // flagship. Unknown prices tie here and fall through to input order.
+  const leftCost = knownOutputPrice(left.model);
+  const rightCost = knownOutputPrice(right.model);
+  if (leftCost !== null && rightCost !== null && leftCost !== rightCost) {
+    return rightCost - leftCost;
+  }
+  if (leftCost !== rightCost) return leftCost === null ? 1 : -1;
   return left.index - right.index;
 }
 

@@ -106,6 +106,40 @@ test("premium tiers and pre-release models only fill leftover slots", () => {
   );
 });
 
+test("an unknown price never outranks a known free model", () => {
+  assert.deepEqual(
+    ids([
+      model("gpt-mystery", { family: "mystery", releaseDate: "2026-09-22" }),
+      model("gpt-free", { family: "free", releaseDate: "2026-01-01", cost: { output: 0 } }),
+    ]),
+    ["gpt-free", "gpt-mystery"],
+  );
+});
+
+test("known free and known non-free prices both outrank an unknown price", () => {
+  assert.deepEqual(
+    ids([
+      model("gpt-mystery", { family: "mystery", releaseDate: "2026-09-22" }),
+      model("gpt-known", { family: "known", releaseDate: "2026-01-01", cost: { output: 10 } }),
+      model("gpt-free", { family: "free", releaseDate: "2026-01-01", cost: { output: 0 } }),
+    ]),
+    ["gpt-known", "gpt-free", "gpt-mystery"],
+  );
+});
+
+test("non-finite and negative prices count as unknown", () => {
+  for (const output of [-5, Number.NaN, Infinity, -Infinity]) {
+    assert.deepEqual(
+      ids([
+        model("gpt-questionable", { family: "questionable", releaseDate: "2026-09-22", cost: { output } }),
+        model("gpt-free", { family: "free", releaseDate: "2026-01-01", cost: { output: 0 } }),
+      ]),
+      ["gpt-free", "gpt-questionable"],
+      String(output),
+    );
+  }
+});
+
 test("an aggregator prefers known vendors over community routes", () => {
   assert.deepEqual(
     ids([

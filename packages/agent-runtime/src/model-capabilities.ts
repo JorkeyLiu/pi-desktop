@@ -105,30 +105,16 @@ export function modelConfigWithBinding(
     | null,
 ): ModelConfig {
   // A live-only account model may already carry explicit sibling capabilities.
-  // Preserve those until a stored user binding overrides them; only a truly
-  // unclassified generic row needs the unrestricted defaults below.
+  // Preserve those; an unclassified row carries no capability claim of its own.
   if (!binding && (model.supportedThinkingLevels?.length || model.thinkingLevelMap)) {
     return model;
   }
-  // A generic discovery row carries no trusted capability restriction. Keep
-  // all levels selectable unless the user stored a non-empty override.
-  // This is an effective runtime policy, not published catalog metadata.
-  if (model.source === "generic" && !binding?.thinkingLevels.length) {
-    model = {
-      ...model,
-      reasoning: true,
-      supportedThinkingLevels: [...THINKING_LEVELS],
-      thinkingLevelMap: {
-        ...model.thinkingLevelMap,
-        xhigh: model.thinkingLevelMap?.xhigh ?? "xhigh",
-        max: model.thinkingLevelMap?.max ?? "max",
-      },
-    };
-  }
   if (!binding) return model;
-  const requestedLevels = model.source === "generic" && binding.thinkingLevels.length === 0
-    ? [...THINKING_LEVELS]
-    : THINKING_LEVELS.filter((level) => binding.thinkingLevels.includes(level));
+  // Only levels the user stored stay selectable. An unknown model's empty list
+  // is an explicit no-reasoning answer, not a prompt to enable a default ladder.
+  const requestedLevels = THINKING_LEVELS.filter((level) =>
+    binding.thinkingLevels.includes(level),
+  );
   // Known native models cannot gain unsupported effort mappings from saved settings.
   const enabledThinkingLevels = model.source === "pi"
     ? requestedLevels.filter(level => model.supportedThinkingLevels?.includes(level))
