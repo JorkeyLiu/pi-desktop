@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { normalizeContext, type AgentMessage, type Message, type Model } from "@earendil-works/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { normalizeContext, type Message, type Model } from "@earendil-works/pi-ai";
 import { stream } from "@earendil-works/pi-ai/api/openai-completions";
 import { genericModelConfig, modelConfigWithBinding } from "./model-capabilities.js";
 import { buildProviderModel, type RuntimeProviderConfig } from "./provider-binding.js";
@@ -24,10 +25,11 @@ function textOnlyProvider(): RuntimeProviderConfig {
     supportsReasoning: false,
     supportedThinkingLevels: ["off"],
     modelConfig: modelConfigWithBinding(published, {
+      contextWindow: published.contextWindow,
+      maxTokens: published.maxTokens,
+      thinkingLevels: ["off"],
       supportsImages: false,
       supportsDocuments: null,
-      thinkingLevels: ["off"],
-      defaultThinkingLevel: "off",
     }),
   };
 }
