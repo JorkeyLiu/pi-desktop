@@ -471,8 +471,8 @@ a usage tab.
     expands in place for edits. The expanded body is a compact sheet, not a stacked
     form dump: 2xs labels, dense numeric fields without native spinners, the
     alias hint as a title tooltip rather than a paragraph, the default
-    thinking selector on the thinking label row, and attachments plus
-    subagent delegation on one wrapping row. The first row starts expanded so the form remains
+    thinking selector on the thinking label row, and the functional switches
+    grouped as Model usage and Request options. The first row starts expanded so the form remains
     discoverable; additional rows stay collapsed to keep large model sets
     scannable. The bundled models.dev release snapshot pre-fills known rows; custom IDs
     absent from it use the runtime generic values. The portaled
@@ -486,16 +486,20 @@ a usage tab.
     ladder or the numeric input — pins the value to the user, which removes the
     hint. A value the user pinned is never replaced by a catalog refresh; an
     unpublished model shows no hint because there is nothing to follow.
-  - each model option and configuration row keeps a compact published
-    capability state as information only. The image-input sending control is
-    gone: an attached image always travels, so there is no switch that could
-    imply it is blocked (D664 / ADR 0334). The `supportsImages` value stored on
-    an existing binding stays accepted for backward compatibility and is not
-    offered for editing. Document input keeps its explicit
-    `supportsDocuments` checkbox as declared metadata: a PDF attachment is a
-    file reference either way, so the control records the model's stated
-    capability without gating a request, and catalog/discovery capability
-    collection is unchanged.
+  - attachment capability metadata is no longer editable in model management.
+    An attached image always travels, so no switch may imply it is blocked
+    (D664 / ADR 0334); a PDF attachment is a file reference either way, so there
+    is no sending gate for it either. The stored `supportsImages` /
+    `supportsDocuments` values on existing bindings stay accepted, exported and
+    imported for backward compatibility, but the model sheet neither shows nor
+    writes them, and catalog/discovery capability collection is unchanged.
+  - the switches that do configure behavior are grouped by what they change:
+    **Model usage** holds the image-generation role (set / selected as image
+    model) and **Available for AI delegation** (`availableForSubagents`);
+    **Request options** holds **Native web search**, still offered only on a
+    wire that can carry the provider-hosted tool, and still explained by its
+    disabled reason on a wire that cannot. Thinking protocol, levels, and the
+    default selector keep their existing block above those groups.
   - model discovery is debounced after a valid endpoint, key, or API style
     change, including no-auth/local endpoints; named add-path discovery waits
     for an API key (editing reuses the stored secret) and does not mark

@@ -74,27 +74,55 @@ test("advanced settings expose the model thinking protocol", () => {
   assert.match(pickerSource, /thinkingProtocol: id as ThinkingProtocol/);
 });
 
-test("document input keeps its published-value checkbox while image input has no sending control", () => {
-  // Image input is always sent, so a checkbox that implied it could be blocked
-  // was removed (D664 / ADR 0334). The document checkbox is metadata too: a
-  // PDF attachment is a file reference either way, so it gates no transport.
+test("attachment capability metadata has no editor; functional settings keep their callbacks", () => {
+  // Image input is always sent (D664 / ADR 0334) and document input is
+  // metadata too: a PDF travels as a file reference either way. Neither
+  // capability is editable in model management any more; the binding fields
+  // survive only for stored and imported configuration.
   assert.doesNotMatch(pickerSource, /settings\.imageInput/);
+  assert.doesNotMatch(pickerSource, /settings\.documentInput/);
+  assert.doesNotMatch(pickerSource, /settings\.modelCapabilities/);
   assert.doesNotMatch(pickerSource, /supportsImages: next/);
-  assert.doesNotMatch(pickerSource, /modelMatchesFilter\(info, "vision"\)/);
-  assert.match(pickerSource, /settings\.documentInput/);
-  assert.match(pickerSource, /supportsDocuments: next/);
-  // A deliberate checkbox change pins the selected value even when it equals
-  // today's catalog value; later catalog corrections must not undo that choice.
-  assert.match(pickerSource, /onChange\(event\.target\.checked\)/);
+  assert.doesNotMatch(pickerSource, /supportsDocuments: next/);
+  // The published capability baseline went with the controls that read it.
+  assert.doesNotMatch(pickerSource, /modelMatchesFilter/);
+  assert.doesNotMatch(pickerSource, /CapabilityToggle/);
+  // What remains is grouped by what it actually configures.
+  assert.match(pickerSource, /settings\.modelUsage/);
+  assert.match(pickerSource, /settings\.requestOptions/);
   assert.match(
     pickerSource,
-    /const effective = typeof value === "boolean" \? value : published/,
+    /settings\.modelUsage[\s\S]*?availableForSubagents[\s\S]*?settings\.requestOptions[\s\S]*?nativeWebSearch/,
   );
-  // The published baseline is models.dev, never the stored override.
-  assert.match(pickerSource, /modelMatchesFilter\(info, "pdf"\) : false/);
+  // Image generation is a role, not a capability claim: the switch keeps its
+  // callback into the image-generation defaults.
+  assert.match(pickerSource, /onImageModelChange\(binding\.id, event\.target\.checked\)/);
+  // Native search keeps its wire gate, independent of the new grouping.
+  assert.match(pickerSource, /nativeWebSearchSupportedOn\(apiStyle, lookupContext\?\.baseUrl\)/);
+  assert.match(pickerSource, /disabled=\{!nativeWebSearchWireCapable\}/);
+  assert.match(pickerSource, /nativeWebSearchUnsupported/);
 });
 
-test("the capability row carries no explanatory copy or extra controls", () => {
+test("the group labels exist in every shipped catalog and the capability labels are gone", async () => {
+  for (const locale of ["de", "en", "es", "fr", "ko", "pt-BR", "tr", "zh-CN", "zh-TW"]) {
+    const catalog = await readFile(
+      new URL(`../../../packages/i18n/src/locales/${locale}/index.ts`, import.meta.url),
+      "utf8",
+    );
+    // Catalogs quote their keys in some locales, so match the key name only.
+    assert.match(catalog, /modelUsage/, locale);
+    assert.match(catalog, /requestOptions/, locale);
+    assert.doesNotMatch(catalog, /modelCapabilities/, locale);
+    assert.doesNotMatch(catalog, /documentInput/, locale);
+    // The functional labels the regrouped rows still use stay translated.
+    assert.match(catalog, /setImageModel/, locale);
+    assert.match(catalog, /availableForSubagents/, locale);
+    assert.match(catalog, /nativeWebSearch/, locale);
+    assert.match(catalog, /nativeWebSearchUnsupported/, locale);
+  }
+});
+
+test("the functional rows carry no explanatory copy or extra controls", () => {
   // The panel is a dense list of per-model rows; a hint paragraph and a reset
   // link per capability crowded it without telling the user anything the
   // checkbox state does not already say.

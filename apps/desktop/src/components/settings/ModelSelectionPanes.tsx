@@ -17,7 +17,6 @@ import {
   bindingForCustomModelInfo,
   bindingFromModelInfo,
   formatTokenCount,
-  modelMatchesFilter,
   nativeWebSearchSupportedOn,
   publishedThinkingLevels,
   resolveBindingDefaultThinkingLevel,
@@ -626,7 +625,6 @@ export function ModelSelectionPanes({
                 publishedMaxTokens === undefined
                   ? undefined
                   : binding.maxTokens;
-              const publishedDocuments = info ? modelMatchesFilter(info, "pdf") : false;
               const expanded = expandedModelId === binding.id;
               const imageModelSelected = imageModelIds?.some((modelId) =>
                 modelId.toLowerCase() === binding.id.toLowerCase(),
@@ -936,21 +934,12 @@ export function ModelSelectionPanes({
                     </div>
                     <div className="provider-chosen-capabilities">
                       <span className="provider-chosen-thinking-label">
-                        {t("settings.modelCapabilities")}
+                        {t("settings.modelUsage")}
                       </span>
                       <div className="provider-chosen-capability-rows">
-                        {/* Image input is no longer a sending switch: an
-                            attached picture always reaches the endpoint, and
-                            a text-only catalog row is metadata, not a gate.
-                            Document input keeps its explicit override. */}
-                        <CapabilityToggle
-                          label={t("settings.documentInput")}
-                          published={publishedDocuments}
-                          value={binding.supportsDocuments}
-                          onChange={(next) =>
-                            updateBinding(binding.id, { supportsDocuments: next })
-                          }
-                        />
+                        {/* Image generation is a role this model can take, not a
+                            capability claim: the switch feeds the same callback
+                            the image-generation settings read. */}
                         {onImageModelChange ? (
                           <label className="provider-chosen-capability">
                             <input
@@ -997,12 +986,24 @@ export function ModelSelectionPanes({
                             <IconHelp size={13} />
                           </Tooltip>
                         </span>
+                      </div>
+                    </div>
+                    <div className="provider-chosen-capabilities">
+                      <span className="provider-chosen-thinking-label">
+                        {t("settings.requestOptions")}
+                      </span>
+                      <div className="provider-chosen-capability-rows">
                         <span className="provider-chosen-delegation">
                           <label className="provider-chosen-capability">
                             <input
                               type="checkbox"
                               checked={binding.nativeWebSearch === true}
                               disabled={!nativeWebSearchWireCapable}
+                              title={
+                                nativeWebSearchWireCapable
+                                  ? undefined
+                                  : t("settings.nativeWebSearchUnsupported")
+                              }
                               onChange={(event) =>
                                 updateBinding(binding.id, {
                                   nativeWebSearch: event.target.checked || undefined,
@@ -1066,35 +1067,5 @@ export function ModelSelectionPanes({
         </div>
       </div>
     </div>
-  );
-}
-
-type CapabilityToggleProps = {
-  label: string;
-  /** What models.dev publishes for this model. */
-  published: boolean;
-  /** Stored override: `true`/`false` explicit, `null`/undefined follows. */
-  value: boolean | null | undefined;
-  onChange: (next: boolean) => void;
-};
-
-/**
- * One attachment capability as a plain checkbox showing the effective answer.
- *
- * An untouched checkbox follows the catalog. Once the user changes it, the
- * selected boolean is explicit and stays pinned even if it currently agrees
- * with models.dev; catalog refreshes must not undo a deliberate choice.
- */
-function CapabilityToggle({ label, published, value, onChange }: CapabilityToggleProps) {
-  const effective = typeof value === "boolean" ? value : published;
-  return (
-    <label className="provider-chosen-capability">
-      <input
-        type="checkbox"
-        checked={effective}
-        onChange={(event) => onChange(event.target.checked)}
-      />
-      <span>{label}</span>
-    </label>
   );
 }

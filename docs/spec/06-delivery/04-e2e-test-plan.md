@@ -397,8 +397,8 @@
   file and then a file above the 10 MB per-image bound; confirm each send fails
   visibly (`UNSUPPORTED` / `PAYLOAD_TOO_LARGE`) with the draft restored and no
   request body containing only a `@path`. 6) Open Settings → model Advanced and
-  confirm there is no image-input sending toggle while document input keeps its
-  control.
+  confirm neither image input nor document (PDF) input has an editing control in
+  the chosen-model sheet.
 - **Expected:** No request body built from catalog/binding image metadata
   contains pi-ai's `(image omitted: model does not support images)` or
   `(tool image omitted: model does not support images)` placeholder for an
@@ -580,8 +580,8 @@
   local chat and OpenAI Images HTTP fixtures; no live provider credentials.
 - **Steps:** Open Models settings with no image model configured; verify the image
   summary row is absent. Open a provider's Advanced model settings and verify
-  **Set as image model** is grouped with the image/document attachment
-  capabilities and can be checked for multiple models. Save, use the image
+  **Set as image model** sits under **Model usage** next to the AI-delegation
+  switch and can be checked for multiple models.
   summary menu to choose one marked model as the default, then submit a
   two-image request through the composer and edit the first output through a
   follow-up message. Collapse tool details.
@@ -13654,59 +13654,61 @@ This test plan spec is accepted when:
   §10, `08-meta/decisions-log.md` (D270 refines D237/D240)
 - **Acceptance**: B (model config), Quality
 
-#### E2E-163: Advanced model settings own the default thinking level and attachment capabilities
+#### E2E-163: Advanced model settings own thinking, model usage, and request options
 
 - **Preconditions**: One AI service with discoverable models, including a
   reasoning-capable model that publishes at least three thinking levels, a
-  vision-capable model, and a model models.dev describes as text-only. The
-  service must persist model-local `supportsImages` overrides.
+  Responses-capable endpoint, and a chat-completions endpoint. No live or paid
+  provider.
 - **Steps**: 1) Open Settings → Model configuration, edit the service and expand
   a reasoning-capable model's Advanced disclosure. 2) Enable at least three
   thinking levels and pick a default that is not the lowest enabled level, then
   save. 3) Reopen the editor and read the default selector. 4) Disable the level
   currently chosen as default and read the selector again. 5) Start a new session
-  on that model and open the composer reasoning menu. 6) Back in Advanced, on
-  the text-only model, turn Image input on, save, reopen and confirm the switch
-  reports itself as overridden. 7) Open the Composer model menu and confirm
-  that this model shows the vision badge. 8) On the published vision model,
-  turn Image input off and confirm its Composer row no longer shows the vision
-  badge. 9) Attach an image in a session on the text-only model. 10) Tick the
-  same box back to the value models.dev publishes, save, and reopen.
-  11) Turn PDF input on for a model whose catalog entry omits it, save, and
-  attach a PDF. 12) Configure a model, then point the service at an endpoint that
-  no longer lists it, reopen the editor and read that model's capability boxes.
+  on that model and open the composer reasoning menu. 6) In the same Advanced
+  body, mark the model as the image-generation model, enable **Available for AI
+  delegation** and tick **Native web search**, then save and reopen. 7) Read the
+  attachment rows and the group headings. 8) Point the service at the
+  chat-completions endpoint, reopen Advanced, and read the native search row.
+  9) Scroll the whole Advanced body at a typical dialog width and at a narrow
+  dialog width. 10) Configure a model, point the service at an endpoint that no
+  longer lists it, reopen the editor and read that model's stored state.
 - **Expected**: The default thinking level is selectable among the levels the
   binding enables and nothing else; it persists across reopen and is the level
   the home draft chip and a newly persisted session start at, not the strongest
   enabled level. Disabling the chosen default moves it to a still-enabled
   level rather than leaving a level the runtime would clamp away, and the
-  selector is absent when a binding enables one level or none. An answered
-  Image input switch overrides the published capability in both directions and
-  survives reopen. The Composer model menu shows the vision badge for the
-  effective `true` override on the published text-only model, hides it for an
-  explicit `false` override on the published vision model, and follows the
-  published value when the override is reset to `null`. The text-only model
-  transports the attached image as an image content block. Ticking a box back
-  to the published value
-  stores "follow the catalog" rather than an equal-valued override, so a later
-  catalog correction still reaches the binding without any separate reset
-  control. All seven canonical thinking chips remain available even when the
-  catalog publishes no reasoning support, so an endpoint can be opted in
-  explicitly. PDF input records the capability without changing transport: the PDF
-  stays a bounded file reference the model reads with its file tools. Each
-  capability is one checkbox with a short label and no per-row explanatory copy.
-  The Advanced body is a compact sheet: the alias hint is a title tooltip, limit
-  fields hide native spinners, thinking chips span the pane with the default
-  selector on the label row, and attachment plus delegation checkboxes share one
-  wrapping row. The first chosen row starts expanded. A configured model absent
-  from live discovery still shows its published capabilities rather than reading
-  as undescribed.
+  selector is absent when a binding enables one level or none. Advanced settings
+  are grouped as **Model usage** (the image-generation role and
+  `availableForSubagents`) and **Request options** (native web search), with the
+  thinking protocol, levels and default selector in their own block above them;
+  no group is titled after capabilities. No attachment capability has an editing
+  control: stored `supportsImages` / `supportsDocuments` values keep
+  round-tripping through storage, backup and import, but the sheet neither shows
+  nor writes them, and an attachment still travels as an image part or a `@path`
+  file reference regardless. Native web search keeps its wire gate: on a wire
+  that cannot carry the hosted tool the checkbox is disabled, its hint states
+  that this connection has no integrated search, and the stored opt-in is
+  unchanged. Both groups and every label stay fully readable at the typical and
+  the narrow width, the groups stack vertically instead of colliding, each
+  checkbox keeps a usable hit target, and the chosen row's token limits, thinking
+  chips and stored delegation/search values survive the reload. The Advanced
+  body remains a compact sheet: the alias hint is a title tooltip, limit fields
+  hide native spinners, thinking chips span the pane with the default selector on
+  the label row, and the chosen rows stay folded until Advanced is opened. A
+  configured model absent from live discovery still keeps its stored
+  configuration and its thinking selections.
 - **Specs linked**: `03-runtime/11-provider-model-system.md` §6.2,
   `03-runtime/12-provider-config-schema.md`,
   `03-runtime/13-model-catalog-and-selection.md` §11.2,
   `04-ux/08-component-spec.md` §11.7–11.8,
   `04-ux/06-settings-ia.md`, ADR 0218
 - **Acceptance**: B (model config), Quality
+- **Automation**: the Electron fixture
+  `apps/desktop/test/model-settings-functional-rows-user-path.test.mjs` renders
+  the real chosen-model sheet and drives the controls; the source contract
+  `apps/desktop/test/model-advanced-capabilities.test.mjs` pins the groups, the
+  removed capability editors, and every catalog's labels.
 
 #### E2E-164: Context compaction preserves the active task boundary
 
