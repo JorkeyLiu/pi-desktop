@@ -280,7 +280,8 @@ type ModelCatalogItem = {
 | mode/feature | 所需能力 |
 |---|---|
 | Agent 模式工具 | `tools`（如果丢失则发出警告；仅当运行时无法运行时才硬块） |
-| 图像输入 | `vision` |
+| 图像输入 | 无（始终传输；`vision` 仅作信息性元数据） |
+| 文档/PDF 输入 | 无（始终作为文件引用；`pdf` / `supportsDocuments` 仅作信息性元数据） |
 | 推理 UI 可供性 | `reasoning` |
 | 结构化修复助手 | `json` 可选 |
 
@@ -302,20 +303,20 @@ Composer 模型列表中的上下文窗口标签通过 `effectiveContextWindow` 
 5. The Composer renders effective enabled levels in canonical order. Dispatch
    normalization cannot silently enable a native unsupported level.
 
-### 11.2 Vision capability resolution
+### 11.2 图像能力仅作元数据
 
-1. Resolve the published image-input baseline from the matching model record.
-2. Apply the exact configured binding's `supportsImages` value to that
-   baseline. An absent or `null` value follows the published capability;
-   `true` enables image input for a configured endpoint even when its published
-   record is text-only, and `false` disables a published image capability.
-3. The main attachment transport gate uses this same effective result. An
-   unknown or custom model without an explicit binding override remains on the
-   conservative path-fallback route; discovery or cache metadata alone cannot
-   promote it to image transport.
-4. The main process prepares pasted images as content-addressed refs. A
-   vision-capable model receives images within the 10 MB app-side inline
-   bound as transient image blocks; other cases receive a safe `@path`.
+1. 按精确模型记录解析已发布图像输入基线，并应用绑定的 `supportsImages` 值
+   （缺省/`null` 跟随发布记录）。该结果仅作信息性元数据：可标注模型行或会话摘要，
+   但绝不门控请求。
+2. 运行时构建的聊天模型始终声明 `image` 输入，因此 pi-ai 最终消息转换不会把显式
+   图片替换为省略占位符。纯文本发布记录、未知/自定义 id 与已保存的 `false` 均不能
+   阻止用户附加的图片。
+3. Main 在 10 MB 单图上限内把显式图片准备为内容寻址引用加瞬时图像字节。超限或不可
+   读的显式图片以 `PAYLOAD_TOO_LARGE` / `UNSUPPORTED` 可见失败，而不是变成 `@path`；
+   恢复历史保留单图与 30 MB 汇总预算，超出部分沿用既有路径回退。
+4. 设置中的图像输入发送开关已移除。文档输入保留的 `supportsDocuments` 复选框仅记录
+   已声明元数据：PDF 附件无论该值如何都准备为文件引用，没有任何发送路径读取它；
+   自动目录/发现能力收集不变（D664 / ADR 0334）。
 
 ## 12. 刷新策略
 

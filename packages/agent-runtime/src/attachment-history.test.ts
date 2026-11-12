@@ -28,7 +28,7 @@ function userMessage(
 }
 
 describe("hydrateAttachmentHistory", () => {
-  it("inlines image attachments when supportsVision is true and within per-image byte limits", async () => {
+  it("inlines image attachments within per-image byte limits without consulting capability metadata", async () => {
     await withTempDir(async (tmp) => {
       const imgPath = resolve(tmp, "sample.png");
       await writeFile(imgPath, "fake-png-bytes");
@@ -46,7 +46,6 @@ describe("hydrateAttachmentHistory", () => {
 
       const hydrated = await hydrateAttachmentHistory(history, {
         projectPath: tmp,
-        supportsVision: true,
       });
 
       expect(hydrated[0]?.attachments?.[0]?.data).toBe(
@@ -79,7 +78,6 @@ describe("hydrateAttachmentHistory", () => {
 
       const hydrated = await hydrateAttachmentHistory(history, {
         projectPath: tmp,
-        supportsVision: true,
       });
 
       for (let i = 0; i < payloads.length; i++) {
@@ -110,7 +108,6 @@ describe("hydrateAttachmentHistory", () => {
 
       const hydrated = await hydrateAttachmentHistory(history, {
         projectPath: tmp,
-        supportsVision: true,
         maxInlinedImageBytes: 250,
       });
       const result = hydrated[0];
@@ -146,7 +143,6 @@ describe("hydrateAttachmentHistory", () => {
 
       const hydrated = await hydrateAttachmentHistory(history, {
         projectPath: tmp,
-        supportsVision: true,
         maxInlinedImageBytes: 0,
       });
 
@@ -179,7 +175,6 @@ describe("hydrateAttachmentHistory", () => {
 
       const hydrated = await hydrateAttachmentHistory(history, {
         scratchDir,
-        supportsVision: false,
       });
 
       expect(hydrated[0]?.content).toBe(`summarize ${pastedText} please`);
@@ -206,7 +201,6 @@ describe("hydrateAttachmentHistory", () => {
 
       const hydrated = await hydrateAttachmentHistory(history, {
         scratchDir,
-        supportsVision: false,
       });
 
       expect(hydrated[0]?.content).toBe(`read @${manual}`);
@@ -235,7 +229,6 @@ describe("hydrateAttachmentHistory", () => {
       const hydrated = await hydrateAttachmentHistory(history, {
         scratchDir,
         projectPath,
-        supportsVision: false,
       });
 
       expect(hydrated[0]?.content).toBe(`read @${lookalike}`);
@@ -270,7 +263,6 @@ describe("hydrateAttachmentHistory", () => {
       // text so the rest of the transcript still restores.
       const hydrated = await hydrateAttachmentHistory(history, {
         scratchDir,
-        supportsVision: false,
       });
 
       expect(hydrated[0]?.content).toBe(`summarize @${deleted}`);
@@ -309,7 +301,6 @@ describe("hydrateAttachmentHistory", () => {
 
       const hydrated = await hydrateAttachmentHistory(history, {
         scratchDir,
-        supportsVision: true,
       });
 
       expect(hydrated[0]?.content).toBe(`summarize @${oversized}`);

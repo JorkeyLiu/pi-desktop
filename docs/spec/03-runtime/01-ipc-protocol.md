@@ -204,13 +204,13 @@ that shell change, while an omitted or idempotent shell field does not.
 
 `attachments` is an additive prompt field. The renderer sends metadata and a
 source path only; it never sends binary data. Electron main validates the path
-against the session scratch/project roots, persists image bytes in the
-content-addressed attachment store, and derives the effective model transport
-from the published model record plus the exact binding's `supportsImages`
-override. An absent or `null` override follows the published image capability;
-`true` enables and `false` disables image input for that configured model.
-For a vision-capable model, images within the 10 MB per-image bound become
-transient pi-ai image blocks. Restored history also has a 30 MB aggregate raw
+against the session scratch/project roots and persists image bytes in the
+content-addressed attachment store. An explicit image within the 10 MB
+per-image bound becomes a transient pi-ai image block regardless of the
+published model record or the binding's `supportsImages` value; an over-size or
+unreadable explicit image fails the send with `PAYLOAD_TOO_LARGE` /
+`UNSUPPORTED` instead of becoming a path. `supportsImages` remains accepted as
+informational metadata (D664 / ADR 0334). Restored history also has a 30 MB aggregate raw
 image-byte budget: the sidecar considers persisted attachments newest-first and
 preserves every eligible image when the total fits. If the budget is exceeded,
 older images use the existing safe `@path` fallback. Unknown/custom models

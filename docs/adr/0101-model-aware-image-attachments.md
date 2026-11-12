@@ -1,10 +1,19 @@
 # ADR 0101: Model-aware image attachment transport
 
-- Status: Accepted
+- Status: Amended (transport and capability-gating clauses superseded by
+  [ADR 0334](0334-explicit-image-transport-metadata-informational.md))
 - Date: 2026-08-18
 - Deciders: PI-Desktop runtime and desktop UI maintainers
 - Amends: D197, ADR 0059, ADR 0070
-- Amended by: D361 (inline bound is 10 MB, matching MiniMax's OpenAI-compatible cap), D392 / ADR 0218 (binding image-input overrides)
+- Amended by: D361 (inline bound is 10 MB, matching MiniMax's OpenAI-compatible cap), D392 / ADR 0218 (binding image-input overrides), ADR 0334 (explicit images always travel; metadata stays informational)
+
+> **Transport superseded by ADR 0334.** Decisions 2, 4, 5 and the transport
+> half of decision 6 below are historical: an explicit user image is inlined
+> within the per-image bound regardless of catalog or binding capability
+> metadata, over-size/unreadable bytes fail visibly instead of becoming
+> `@path`, and restored history follows the same rule inside its aggregate
+> budget. The storage boundary, validation roots, content-addressed refs, and
+> the 10 MB / 30 MB byte bounds in this ADR remain in force.
 
 ## Context
 

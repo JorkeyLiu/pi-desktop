@@ -224,10 +224,17 @@ legacy binding above is materialized with, and the same value a plugin
 manifest that declares no limits already produces. The stored array and the
 manifest therefore agree on what a model without limits means (D610).
 
-For `supportsImages` and `supportsDocuments`, absent or `null` follows the
-published capability until the user explicitly changes the checkbox. Either
-explicit boolean is then pinned, even when it equals today's published value;
-a later catalog correction cannot reverse the user's choice.
+For `supportsDocuments`, absent or `null` follows the published capability
+until the user explicitly changes the checkbox; either explicit boolean is then
+pinned, even when it equals today's published value, and a later catalog
+correction cannot reverse the user's choice. `supportsImages` is still accepted
+and stored for backward compatibility, but it is informational only: it no
+longer decides whether an explicit image is sent (D664 / ADR 0334), and new
+bindings no longer expose a Settings control for it.
+
+`supportsDocuments` is informational in the same way: a non-image attachment
+is prepared as a bound `@path` file reference whatever the value says, and no
+send path consults it.
 
 Each entry of a stored `models` array is decoded on its own. An entry that no
 longer matches the schema is skipped and reported on the host log with the

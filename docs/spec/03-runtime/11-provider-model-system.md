@@ -244,7 +244,9 @@ PI-Desktop must not permanently restrict users to a short fixed model list.
    discovery or account entitlements.
 8. PDF capability remains metadata; attachments use bounded file references
    until the runtime supports a native PDF content block. Image capability is
-   resolved against the effective selected binding before transport.
+   informational metadata: the built chat transport always advertises image
+   input, so catalog or binding values never block an attached picture
+   (D664 / ADR 0334).
 
 ### 6.3 Model families to cover
 Catalog and custom model entry must support common capability classes:

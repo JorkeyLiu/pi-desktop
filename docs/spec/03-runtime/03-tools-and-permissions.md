@@ -214,12 +214,12 @@ OS clipboard files and images pasted into the composer are materialized by
 Electron main below `<data_dir>/scratch/<sessionId>/pasted/` before their
 paths and metadata are captured as transient composer references. At dispatch,
 main validates the source against the session scratch/project roots. Images are
-also copied into the content-addressed `<data_dir>/attachments/<sha256>` store;
-the effective model capability applies the published image input plus the
-configured binding's `supportsImages` override. Eligible images receive image
-blocks when that effective capability is enabled, while unknown/custom models
-without an explicit override, disabled image input, and oversized images
-receive `@` fallback paths. They use the same session lifecycle as other
+also copied into the content-addressed `<data_dir>/attachments/<sha256>` store.
+An explicit image within the 10 MB per-image bound receives an image block
+whatever the published record or binding `supportsImages` value says
+(D664 / ADR 0334); over-size or unreadable explicit images fail the send with
+`PAYLOAD_TOO_LARGE` / `UNSUPPORTED` instead of an `@` path, while non-image
+files keep their path reference. They use the same session lifecycle as other
 scratch data and do not enter the workspace, artifacts, or the persisted prompt
 as binary content.
 

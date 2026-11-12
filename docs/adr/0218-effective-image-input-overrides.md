@@ -1,9 +1,16 @@
 # ADR 0218: Effective Image-Input Overrides Across Composer and Transport
 
-- Status: Accepted
+- Status: Superseded by
+  [ADR 0334](0334-explicit-image-transport-metadata-informational.md)
 - Date: 2026-09-11
 - Deciders: PI-Desktop runtime and desktop UI maintainers
 - Amends: ADR 0101, D243
+
+> **Superseded by ADR 0334.** The effective image-input override no longer
+> gates transport or appears as a Settings sending control. `supportsImages`
+> remains accepted as persisted metadata for backward compatibility; document
+> input keeps its explicit override. The badge/transport agreement this ADR
+> established is replaced by one unconditional transport rule.
 
 ## Context
 

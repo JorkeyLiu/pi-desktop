@@ -3742,8 +3742,9 @@ reasoning-level control.
   enabled levels as the classic radio rows. `omit` persists as the session
   thinking level and sends no provider thinking override (ADR 0295).
   Model rows carry no capability badge and no context-window count: the row
-  states one model label, and its title holds the complete value. The effective
-  image-input capability still gates image attachments in the Composer.
+  states one model label, and its title holds the complete value. Image input
+  no longer gates attachments: an explicit image always travels, and published
+  capability stays informational (D664 / ADR 0334).
   Rows use `role="menuitemradio"`, `aria-checked`, active-row styling, and a
   trailing check. Selecting a concrete model, or a level from the radio list,
   persists the complete session config, clears model filtering, and returns
@@ -3823,14 +3824,14 @@ reasoning-level control.
   the same bounded paste bridge, while folders remain visible as literal full
   paths and are never copied or traversed.
 - The compact chips retain structured kind/name/MIME metadata while keeping
-  the textarea free of binary data. The selected model's published record
-  supplies the baseline, then the exact binding's `supportsImages` override
-  controls effective dispatch. Absent or `null` follows the published value;
-  `true` or `false` explicitly enables or disables image input. Eligible images
-  become transient visual input when that effective capability is enabled;
-  unknown/custom models without an explicit override, disabled image input, and
-  oversized images use the existing canonical `@<path>` file-tool fallback.
-  There are no visual previews in MVP.
+  the textarea free of binary data. An eligible image always becomes transient
+  visual input; the published record and the binding's `supportsImages` value
+  are informational metadata and never choose the file-path route (D664 /
+  ADR 0334). An over-size or unreadable explicit image fails the send with a
+  visible coded error instead of an `@<path>` fallback. A document (PDF)
+  attachment is a file reference with the same Read workflow whatever the
+  binding's `supportsDocuments` override says; that value records declared
+  metadata only. There are no visual previews in MVP.
 - No voice-to-draft input. The opt-in Live Voice path below is separate from
   the Composer draft and does not restore the hidden Dictation entry.
 

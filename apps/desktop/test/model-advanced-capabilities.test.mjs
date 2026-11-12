@@ -30,8 +30,24 @@ const catalogSource = await readFile(
 );
 const mainSource = await readMainSource();
 const providerCatalogSource = await readMainModule("runtime/provider-catalog.ts");
+const promptAttachmentsSource = await readMainModule("prompt-attachments.ts");
+const agentIpcSource = await readMainModule("ipc/agent-ipc.ts");
 const sidecarSource = await readFile(
   new URL("../../../packages/agent-runtime/src/sidecar.ts", import.meta.url),
+  "utf8",
+);
+const providerBindingSource = await readFile(
+  new URL(
+    "../../../packages/agent-runtime/src/provider-binding.ts",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const attachmentHistorySource = await readFile(
+  new URL(
+    "../../../packages/agent-runtime/src/attachment-history.ts",
+    import.meta.url,
+  ),
   "utf8",
 );
 const styles = await loadStyles();
@@ -58,10 +74,14 @@ test("advanced settings expose the model thinking protocol", () => {
   assert.match(pickerSource, /thinkingProtocol: id as ThinkingProtocol/);
 });
 
-test("the capability checkboxes show and follow the published value", () => {
-  assert.match(pickerSource, /settings\.imageInput/);
+test("document input keeps its published-value checkbox while image input has no sending control", () => {
+  // Image input is always sent, so a checkbox that implied it could be blocked
+  // was removed (D664 / ADR 0334). The document checkbox is metadata too: a
+  // PDF attachment is a file reference either way, so it gates no transport.
+  assert.doesNotMatch(pickerSource, /settings\.imageInput/);
+  assert.doesNotMatch(pickerSource, /supportsImages: next/);
+  assert.doesNotMatch(pickerSource, /modelMatchesFilter\(info, "vision"\)/);
   assert.match(pickerSource, /settings\.documentInput/);
-  assert.match(pickerSource, /supportsImages: next/);
   assert.match(pickerSource, /supportsDocuments: next/);
   // A deliberate checkbox change pins the selected value even when it equals
   // today's catalog value; later catalog corrections must not undo that choice.
@@ -71,7 +91,6 @@ test("the capability checkboxes show and follow the published value", () => {
     /const effective = typeof value === "boolean" \? value : published/,
   );
   // The published baseline is models.dev, never the stored override.
-  assert.match(pickerSource, /modelMatchesFilter\(info, "vision"\) : false/);
   assert.match(pickerSource, /modelMatchesFilter\(info, "pdf"\) : false/);
 });
 
@@ -207,16 +226,22 @@ test("the published record is not shaped by the stored override", () => {
   );
 });
 
-test("every image gate reads the override-shaped model config", () => {
-  // Five independent reads used to answer "can this model see an image": the two
-  // enrichment helpers, the sidecar launch params, the prompt transport gate and
-  // history replay. A raw input.includes("image") on any of them would disagree
-  // with the settings switch for exactly the models the override exists for.
+test("image transport reads no capability metadata at any gate", () => {
+  // Capability metadata is informational (D664 / ADR 0334). The enrichment
+  // helpers may still resolve it for a model row, but no attachment or request
+  // path may consult it: the transport advertises image input unconditionally.
   assert.doesNotMatch(mainSource, /modelConfig\?\.input\.includes\("image"\)/);
   assert.doesNotMatch(sidecarSource, /modelConfig\?\.input\.includes\("image"\)/);
-  const gates = mainSource.match(/visionFromModelConfig\(/g) ?? [];
-  assert.ok(gates.length >= 4, `expected 4+ vision gates, saw ${gates.length}`);
-  assert.match(sidecarSource, /visionFromModelConfig\(params\.provider\.modelConfig\)/);
+  assert.doesNotMatch(promptAttachmentsSource, /supportsVision/);
+  assert.doesNotMatch(promptAttachmentsSource, /visionFromModelConfig/);
+  assert.doesNotMatch(agentIpcSource, /visionFromModelConfig/);
+  assert.doesNotMatch(sidecarSource, /visionFromModelConfig/);
+  assert.doesNotMatch(attachmentHistorySource, /supportsVision/);
+  // Informational enrichment still exists for Settings/session rows.
+  const gates = providerCatalogSource.match(/visionFromModelConfig\(/g) ?? [];
+  assert.ok(gates.length >= 2, `expected informational vision reads, saw ${gates.length}`);
+  // The single transport answer is the built model's image input.
+  assert.match(providerBindingSource, /[...]catalogModel\.input, "image"]/);
 });
 
 test("a model the catalog does not describe still reports its binding overrides", () => {

@@ -289,11 +289,18 @@ test("file picker exposes files only", () => {
   assert.match(picker, /PICKER_TOKEN_TTL_MS = 60_000/);
 });
 
-test("large image attachments avoid whole-file startup reads", () => {
-  assert.match(attachments, /async function hashFile\(path: string\)/);
-  assert.match(attachments, /createReadStream\(path\)/);
-  assert.match(attachments, /const inline = supportsVision && size <= MAX_INLINE_IMAGE_BYTES/);
-  assert.match(attachments, /await copyFile\(source, target, fsConstants\.COPYFILE_EXCL\)/);
+test("an explicit image attachment gates size before reading bytes", () => {
+  // Sending an attached image is unconditional; the per-image bound is a
+  // visible refusal, never a capability-driven path fallback. The refusal must
+  // be decided from the file's size so an oversize file is never loaded whole:
+  // `PAYLOAD_TOO_LARGE` on that path is executed end to end by
+  // `image-transport-metadata-gating.test.mjs`.
+  const sizeGateAt = attachments.indexOf("if (size > MAX_INLINE_IMAGE_BYTES)");
+  const readBytesAt = attachments.indexOf("const bytes = await readFile(source.absolute)");
+  assert.ok(sizeGateAt > 0, "the explicit-image size gate is missing");
+  assert.ok(readBytesAt > sizeGateAt, "image bytes must be read only after the size gate");
+  assert.doesNotMatch(attachments, /supportsVision/);
+  assert.match(attachments, /ensureAttachmentBlob\(dataRoot, bytes\)/);
   assert.doesNotMatch(attachments, /const bytes = readFileSync\(source\.absolute\)/);
   assert.match(history, /const size = \(await stat\(canonical\)\)\.size/);
   assert.match(history, /const canInline =[\s\S]*size <= MAX_INLINE_IMAGE_BYTES/);

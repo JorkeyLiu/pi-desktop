@@ -7,7 +7,6 @@ import { parseMcpServerIds, parseMcpToolNames } from "./mcp-tool-selection.js";
 import { randomUUID } from "node:crypto";
 import type { ModelAuth } from "@earendil-works/pi-ai";
 import { ParentHostProxy } from "./parent-host-proxy.js";
-import { visionFromModelConfig } from "./model-capabilities.js";
 import { hydrateAttachmentHistory } from "./attachment-history.js";
 import { classifyAgentError } from "./agent-errors.js";
 import { readLocalRequestErrorDetails } from "./local-request-errors.js";
@@ -299,12 +298,10 @@ async function runtimeFor(
         message.role !== "user" || message.id !== params.userMessageId,
       );
     }
-    const supportsVision = visionFromModelConfig(params.provider.modelConfig);
     history = await hydrateAttachmentHistory(restoredMessages, {
       scratchDir: params.scratchDir,
       projectPath: params.remoteWorkspace ? undefined : params.projectPath,
       attachmentsDir: params.attachmentsDir,
-      supportsVision,
     });
     compaction = detail?.session?.compaction;
   } catch {

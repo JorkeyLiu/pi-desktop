@@ -27,8 +27,9 @@ remove the original attachment. A missing or forbidden live attachment still
 fails the existing path boundary; this fix must not turn that failure into an
 unvalidated file reference.
 
-Raster classification, vision capability checks, the inline size bound, and
-non-vision file fallback retain their existing behavior.
+Raster classification, the inline size bound, and the visible refusal of
+over-size/unreadable explicit images retain their behavior under ADR 0334;
+capability metadata is informational and no longer selects a file fallback.
 
 ## E2E-ATTACHMENTS-svg-file-fallback
 

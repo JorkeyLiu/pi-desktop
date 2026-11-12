@@ -458,11 +458,11 @@ background update. A configured non-empty alias is resolved from the binding
 for every equivalent model ID and remains the sole visible model name while
 the catalog is refreshed.
 
-The Composer's image-attachment gate uses the effective image-input capability
-for the exact provider/model binding. An explicit `supportsImages: true` or
-`false` wins over the published record; an absent or `null` value follows it.
-This lets a configured custom or proxied model show the capability the endpoint
-was explicitly configured to use without shaping the published `ModelInfo`.
+The Composer does not consult the effective image-input capability before
+sending an attachment. An explicit user image is transported for the exact
+provider/model binding whatever the published record or a stored
+`supportsImages` value says (D664 / ADR 0334); those values remain informational
+metadata and never shape the published `ModelInfo`.
 An OAuth provider heading uses its non-secret account label when present, so
 duplicate accounts from one vendor remain distinguishable; a Composer model row
 shows the binding's configured alias when it has one and the model name or wire
@@ -508,7 +508,8 @@ retain the existing session configuration and permission boundaries.
 | mode/feature | required capability |
 |---|---|
 | Agent mode tools | `tools` (warn if missing; hard-block only if runtime cannot function) |
-| image input | `vision` |
+| image input | none (always transported; `vision` stays informational metadata) |
+| document/PDF input | none (always a file reference; `pdf` / `supportsDocuments` stay informational metadata) |
 | reasoning UI affordances | `reasoning` |
 | structured repair helpers | `json` optional |
 
@@ -530,20 +531,27 @@ Composer context-window labels resolve the exact binding with `effectiveContextW
 5. The Composer renders effective enabled levels in canonical order. Dispatch
    normalization cannot silently enable a native unsupported level.
 
-### 11.2 Vision capability resolution
+### 11.2 Image capability is metadata
 
-1. Resolve the published image-input baseline from the matching model record.
-2. Apply the exact configured binding's `supportsImages` value to that
-   baseline. An absent or `null` value follows the published capability;
-   `true` enables image input for a configured endpoint even when its published
-   record is text-only, and `false` disables a published image capability.
-3. The main attachment transport gate uses this same effective result. An
-   unknown or custom model without an explicit binding override remains on the
-   conservative path-fallback route; discovery or cache metadata alone cannot
-   promote it to image transport.
-4. The main process prepares pasted images as content-addressed refs. A
-   vision-capable model receives images within the 10 MB app-side inline
-   bound as transient image blocks; other cases receive a safe `@path`.
+1. Resolve the published image-input baseline from the matching model record
+   and apply the binding's `supportsImages` value (absent/`null` follows the
+   published record). This effective answer is informational metadata: it may
+   label a model row or a session summary but never gates a request.
+2. The runtime's built chat model always advertises `image` input, so pi-ai's
+   final message transformation cannot replace an explicit image with its
+   omission placeholder. Text-only published rows, unknown/custom ids, and a
+   stored `false` therefore cannot stop an image the user attached.
+3. The main process prepares an explicit image within the 10 MB app-side inline
+   bound as a content-addressed ref plus transient image bytes. An over-size or
+   unreadable explicit image fails the send visibly (`PAYLOAD_TOO_LARGE` /
+   `UNSUPPORTED`) rather than becoming a safe `@path`. Restored history keeps
+   its per-image and 30 MB aggregate bounds with the existing path fallback for
+   images beyond them.
+4. The Settings image-input sending control is removed. A non-image
+   attachment, a PDF included, is prepared as a `kind: file` `@path` reference
+   whatever the document metadata says; the binding's `supportsDocuments`
+   checkbox records a declared capability only, and automatic
+   catalog/discovery capability collection is unchanged (D664 / ADR 0334).
 
 ### 11.3 Settings model-add metadata
 

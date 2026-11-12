@@ -486,12 +486,16 @@ a usage tab.
     ladder or the numeric input — pins the value to the user, which removes the
     hint. A value the user pinned is never replaced by a catalog refresh; an
     unpublished model shows no hint because there is nothing to follow.
-  - each model option and configuration row shows a compact text/vision
-    capability state. Settings compares the checkbox with the published model
-    record, while the Composer badge and runtime use the effective binding:
-    absent or `null` `supportsImages` follows the published value, and an
-    explicit `true` or `false` overrides it. An unknown model remains
-    conservative unless its configured binding explicitly enables image input.
+  - each model option and configuration row keeps a compact published
+    capability state as information only. The image-input sending control is
+    gone: an attached image always travels, so there is no switch that could
+    imply it is blocked (D664 / ADR 0334). The `supportsImages` value stored on
+    an existing binding stays accepted for backward compatibility and is not
+    offered for editing. Document input keeps its explicit
+    `supportsDocuments` checkbox as declared metadata: a PDF attachment is a
+    file reference either way, so the control records the model's stated
+    capability without gating a request, and catalog/discovery capability
+    collection is unchanged.
   - model discovery is debounced after a valid endpoint, key, or API style
     change, including no-auth/local endpoints; named add-path discovery waits
     for an API key (editing reuses the stored secret) and does not mark

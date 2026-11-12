@@ -378,6 +378,7 @@ Each ADR includes:
 | 0330 | [Work-panel visibility is shell state](0330-work-panel-visibility-is-shell-state.md) | Accepted (D661; amends ADR 0028) |
 | 0331 | [Browser-anchored upward history](0331-browser-anchored-upward-history.md) | Accepted (one bounded visible-fragment hold; amends ADR 0130) |
 | 0332 | [Built-in First-Message Session Titles](0332-builtin-first-message-session-titles.md) | Accepted; supersedes ADR 0323 in part |
+| 0334 | [Explicit images always travel; capability metadata stays informational](0334-explicit-image-transport-metadata-informational.md) | Accepted (supersedes the transport and settings clauses of ADR 0101 / ADR 0218) |
 | plugin-fetch-redirect-policy | [Host-enforced plugin fetch redirect policy](plugin-fetch-redirect-policy.md) | Accepted (implementation candidate for #1475) |
 
 | local-agent-remote-workspace-tools | [Local Agent and model requests for remote workspaces](local-agent-remote-workspace-tools.md) | Accepted for implementation |

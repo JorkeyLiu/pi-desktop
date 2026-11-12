@@ -1451,10 +1451,10 @@ Project drag/drop follows these patterns:
   switch while their owning session remains available. Workspace `@` chips
   are relative to the project that produced them and are removed from the
   draft, sentinels included, when the workspace changes.
-- When an image reference is active, Composer shows one compact live status
-  line. It names visual transport for a model whose pi-ai `input` includes
-  `image`, and names the file-path fallback for unknown/non-vision models.
-  The status is informational, keyboard-safe, and never relies on color alone.
+- When an image reference is active, the chip alone represents it. There is
+  no separate capability-status line: an explicit image always travels, so a
+  line that implied model-dependent or path-fallback sending would misstate the
+  contract (D664 / ADR 0334).
 - A native file-system drop over the Composer prevents the browser's default
   file-open behavior and shows the same accent target outline for the whole
   shell. Regular files are read through the existing bounded paste bridge and

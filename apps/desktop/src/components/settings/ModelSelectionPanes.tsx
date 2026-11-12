@@ -609,7 +609,6 @@ export function ModelSelectionPanes({
                 publishedLevelsById.get(binding.id.toLowerCase()) ?? [];
               const enabledLevels = sortThinkingLevels(binding.thinkingLevels);
               const info = infoById.get(binding.id.toLowerCase());
-              const publishedImages = info ? modelMatchesFilter(info, "vision") : false;
               // The row's published window, so the hint below the field can say
               // the number still follows it.
               const publishedContextWindow = publishedModelLimit(info, "contextWindow");
@@ -940,14 +939,10 @@ export function ModelSelectionPanes({
                         {t("settings.modelCapabilities")}
                       </span>
                       <div className="provider-chosen-capability-rows">
-                        <CapabilityToggle
-                          label={t("settings.imageInput")}
-                          published={publishedImages}
-                          value={binding.supportsImages}
-                          onChange={(next) =>
-                            updateBinding(binding.id, { supportsImages: next })
-                          }
-                        />
+                        {/* Image input is no longer a sending switch: an
+                            attached picture always reaches the endpoint, and
+                            a text-only catalog row is metadata, not a gate.
+                            Document input keeps its explicit override. */}
                         <CapabilityToggle
                           label={t("settings.documentInput")}
                           published={publishedDocuments}

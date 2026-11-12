@@ -426,12 +426,24 @@ export function buildProviderModel(
         : thinkingProtocolCompat
           ? { ...(catalogModel.compat ?? {}), ...thinkingProtocolCompat }
           : catalogModel.compat;
+  // The adapter-facing `input` answers one question only: what may this
+  // request carry. Published modalities, the binding's `supportsImages`
+  // override, and unknown/custom ids stay informational metadata on
+  // `modelConfig`; they never decide whether an image the user actually
+  // attached is dropped. pi-ai replaces every image block with an omission
+  // placeholder when `Model.input` omits `image`, so the transport always
+  // advertises it and the endpoint answers with its own normal error if it
+  // cannot read the picture.
+  const transportInput: Array<"text" | "image"> = catalogModel.input.includes("image")
+    ? [...catalogModel.input]
+    : [...catalogModel.input, "image"];
   return {
     ...catalogModel,
     id: provider.modelId,
     api: binding.api,
     provider: provider.extensionAgentKey ? provider.id : (provider.vendorKey?.trim() || provider.id),
     baseUrl,
+    input: transportInput,
     webSearch:
       resolveNativeWebSearch({
         wireApi: binding.api,

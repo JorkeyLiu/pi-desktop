@@ -1,7 +1,7 @@
 import { expandMcpInvocation } from "../composer-mcp";
 import { IPC, ErrorCodes, compactionRecordId, findSkillMentions, isGlobalPermissionMode, isRpcTimeoutError, type AgentContinueSubagentRequest, type AgentContinueSubagentResponse, type AgentEventEnvelope, type AgentPromptRequest, type AgentSteerRequest, type AgentSteerSubagentRequest, type AgentSteerSubagentResponse, type UiMessage, type AgentQueuePushRequest, type AgentStopRequest, type AgentStopSubagentsRequest, type AskToolResolution, type GlobalPermissionMode, type MessageUsage, type PendingInteractiveRequests, type PlanExecutionFinishStatus, type PlanResolutionResult, type PlanResolveRequest, type VoiceOrigin } from "@pi-desktop/shared";
 import type { FinishTurn } from "../runtime/plans";
-import { expandSlashInvocation, visionFromModelConfig, type ComposerTemplate } from "@pi-desktop/agent-runtime";
+import { expandSlashInvocation, type ComposerTemplate } from "@pi-desktop/agent-runtime";
 import {
   assembleTurnPrompt,
   durableUserMessageId,
@@ -166,7 +166,7 @@ export function registerAgentIpc({
         errorCode: ErrorCodes.TURN_NOT_FOUND,
       });
     }
-    const context = await sidecar.call<{ projectPath?: string; remoteWorkspace?: unknown; supportsVision: boolean }>(
+    const context = await sidecar.call<{ projectPath?: string; remoteWorkspace?: unknown }>(
       "agent.steeringContext", { sessionId: req.sessionId, expectedTurnId: req.expectedTurnId },
     );
     const localProjectPath = context.remoteWorkspace ? undefined : context.projectPath;
@@ -182,7 +182,7 @@ export function registerAgentIpc({
     const steerContent = mcpExpansion?.expanded ?? req.content;
     const prepared = await preparePromptAttachments(
       dataDir, req.sessionId, localProjectPath, req.attachments ?? [],
-      context.supportsVision, steerContent,
+      steerContent,
     );
     const session = await host.call<{ session?: { messages?: UiMessage[] } }>("session.get", {
       id: req.sessionId, messageLimit: 1,
@@ -638,11 +638,6 @@ export function registerAgentIpc({
       }
     }
 
-    // The binding's image override already shaped this modelConfig, so the
-    // transport gate and the settings switch cannot disagree.
-    const supportsVision = visionFromModelConfig(
-      launch.sidecarParams.provider.modelConfig,
-    );
     let preparedAttachments: PreparedPromptAttachment[];
     let modelContent: string;
     try {
@@ -654,7 +649,6 @@ export function registerAgentIpc({
             ? session.projectPath.trim()
             : undefined,
         attachments: req.attachments ?? [],
-        supportsVision,
         // The text the durable message will hold: an image chip the Composer
         // left inline keeps its place in the prompt and in the transcript, and
         // a long paste reaches the model as its text, not as a file path.

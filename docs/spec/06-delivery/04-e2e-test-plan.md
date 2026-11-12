@@ -380,6 +380,42 @@
   session IPC contract tests, and real-model desktop acceptance. A local model
   fixture or mocked component result is not real-model acceptance evidence.
 
+### E2E-CHAT-image-transport-metadata
+
+- **Preconditions:** Isolated desktop profile and data directory; a local
+  OpenAI-compatible HTTP fixture that records each request body; a provider row
+  whose model has no published image capability (unknown/custom id or text-only
+  catalog metadata) and an optional stored `supportsImages: false`; no live or
+  paid provider.
+- **Steps:** 1) Attach a readable PNG in the Composer and send one prompt.
+  Confirm the request body holds an image content part with the fixture bytes.
+  2) While that turn runs, steer with another image and confirm the next request
+  body carries it. 3) Reopen the session after a real Electron restart and send
+  a follow-up; confirm the restored user image is still an image content part. 4)
+  Trigger a tool that returns an image block and confirm the next request carries
+  it as an image part, not an omission note. 5) Attach an unreadable image-named
+  file and then a file above the 10 MB per-image bound; confirm each send fails
+  visibly (`UNSUPPORTED` / `PAYLOAD_TOO_LARGE`) with the draft restored and no
+  request body containing only a `@path`. 6) Open Settings → model Advanced and
+  confirm there is no image-input sending toggle while document input keeps its
+  control.
+- **Expected:** No request body built from catalog/binding image metadata
+  contains pi-ai's `(image omitted: model does not support images)` or
+  `(tool image omitted: model does not support images)` placeholder for an
+  explicit image, and none substitutes an `@path` in place of the picture. The
+  provider row's published modalities and a stored `supportsImages` value remain
+  metadata on the model configuration. Failure cases keep their coded errors
+  and never silently downgrade. SVG stays a file reference, and a document
+  attachment stays the same file reference whatever `supportsDocuments` says.
+- **Specs linked**: `03-runtime/02-agent-runtime.md`, `03-runtime/13-model-catalog-and-selection.md`, `04-ux/06-settings-ia.md`, ADR 0334.
+- **Acceptance**: D (attachments), E (provider requests)
+- **Status**: Partially automated. Request-body serialization and restored-history
+  transport are covered without Electron by
+  `packages/agent-runtime/src/image-transport.test.ts` and
+  `apps/desktop/test/image-transport-metadata-gating.test.mjs`; the Composer
+  staging/paste path is covered by `pnpm test:e2e:composer-paste`. The
+  full Electron send/steer/restart driver remains documented and pending.
+
 ### E2E-WORKTREE-isolated-session-lifecycle
 
 - **Preconditions:** Isolated desktop profile and data directory, git 2.29+, a
@@ -1166,8 +1202,8 @@ validation still needed.
 #### E2E-005: Add a provider and save API key
 
 - **Preconditions**: App running; no provider configured; the models.dev snapshot ships with the build.
-- **Steps**: 1) Open Settings → Model configuration and choose Add provider. 2) Confirm the searchable service chooser opens. Filter and select a built-in API-key service or **Custom endpoint**; the selection must open its matching form, never the plugin-only “selected service unavailable” state. Confirm the form has no stepper or Next/Back buttons. For **Custom endpoint**, Name and Base URL appear on one row with no helper paragraph under the URL (placeholder only), API Key and API format appear side by side on the next row (not behind Advanced), and a focused field plus its 2px accent ring stays fully inside the dialog, including on a window narrower than 1040px. The custom form's **No API key required** switch starts off; enabling it clears and disables the key field. 3) Enter a name and a base URL for a service that publishes a `/models` route, then paste an API key. Confirm the models section fills with the models THAT SERVICE returned without requiring a key for discovery; confirm a model the deployment does not host is absent. Also exercise the no-auth path with a custom endpoint: leave the key empty, enable **No API key required**, select a discovered model, and save. 4) Type in the filter box and confirm the list narrows client-side with no network request per keystroke. 5) Confirm each row shows the models.dev-derived context/output for models the catalog knows, that its compact text tracks the published value instead of a coarser rounded one (a 1,050,000 window reads `1.05M`, never `1.1M`), and that a model with no catalog match still lists with generic defaults. 6) Select two models with the checkboxes. 7) Expand Advanced on one chosen row, override its limits and toggle thinking chips; confirm each numeric field has a five-chip preset ladder for common values, clicking a chip writes the value, hand editing remains possible, and a non-preset value leaves the ladder unselected. Set max output to 8,192 while its context window still follows the catalog. On a model whose published image input is enabled, toggle image input off and then back on before saving, so the explicit choice equals the current catalog value. Confirm the label and optional hint sit above one compact grouped control and do not force the options onto a second row at normal dialog width; confirm all seven canonical levels are available, that published levels start selected for a known reasoning model, and that a non-reasoning or unknown row shows the same chips unselected with the manual-override hint; enable one level on that row and confirm the other row is unaffected. 8) Open the form-level Advanced and confirm the API format is present but pre-derived. 9) Add a free-form model ID the service did not return; confirm it is added with 128,000 / 8,192 / no-thinking defaults, then enable a thinking level if the endpoint supports it; confirm re-adding the same ID in different letter case is rejected as already added. 10) Save.
-- **Expected**: The service is asked first and models.dev only enriches the answer and seeds known-model defaults. The no-auth custom path saves `authKind: "none"`, omits `secretValue`, and makes the configured provider available anywhere an enabled no-auth provider is selectable; named cloud preset behavior stays unchanged. Newly fetched or checked model rows stay collapsed until the user opens Advanced, so every selected model ID remains visible in the right pane after a multi-select. The settings picker always offers the seven canonical thinking levels, and the Composer later renders the explicit levels saved in the same model binding; an empty or `off`-only binding resolves to `off`. Discovery is debounced ~600 ms, does not mark loading until that window elapses, and a slow reply from an earlier keystroke never replaces a newer list; named add-path discovery waits for an API key, while an unsaved custom provider is probed with the typed base URL (and key, if any) before it exists. Preset ladders cover common context/output limits while preserving hand-edited values. The explicitly selected 8,192 output remains pinned independently of the catalog-sourced context window, and the image-input choice remains explicitly enabled after it is toggled back to the published value; neither is reinterpreted as "follow catalog" on save/reopen. Later catalog corrections change only values whose own source is `catalog`. Limit text renders through one shared compact formatter, so neighbouring published windows stay distinguishable (`1M` / `1.05M` / `1.1M`) and a compact limit never reads above its published value. Custom endpoint keeps API format beside the key and omits Base URL helper copy; named endpoints do not show format. Point the same custom form at an unreachable or unauthorized URL and confirm one classified sentence reaches the app toast while the left pane keeps its single “no list” label (not a raw JSON/HTML dump and not a second “no models” empty state); with cached rows from a later edit the same reason is toasted while the rows stay. Point a second provider at a base URL with no `/models` route and confirm the list falls back to the catalog, is labelled as coming from models.dev rather than the service, and still saves. The provider appears as a row with its host, model count and secret badge; the key is stored securely (not in plaintext config); `models` contains both bindings and `models[0]` remains the provider default.
+- **Steps**: 1) Open Settings → Model configuration and choose Add provider. 2) Confirm the searchable service chooser opens. Filter and select a built-in API-key service or **Custom endpoint**; the selection must open its matching form, never the plugin-only “selected service unavailable” state. Confirm the form has no stepper or Next/Back buttons. For **Custom endpoint**, Name and Base URL appear on one row with no helper paragraph under the URL (placeholder only), API Key and API format appear side by side on the next row (not behind Advanced), and a focused field plus its 2px accent ring stays fully inside the dialog, including on a window narrower than 1040px. The custom form's **No API key required** switch starts off; enabling it clears and disables the key field. 3) Enter a name and a base URL for a service that publishes a `/models` route, then paste an API key. Confirm the models section fills with the models THAT SERVICE returned without requiring a key for discovery; confirm a model the deployment does not host is absent. Also exercise the no-auth path with a custom endpoint: leave the key empty, enable **No API key required**, select a discovered model, and save. 4) Type in the filter box and confirm the list narrows client-side with no network request per keystroke. 5) Confirm each row shows the models.dev-derived context/output for models the catalog knows, that its compact text tracks the published value instead of a coarser rounded one (a 1,050,000 window reads `1.05M`, never `1.1M`), and that a model with no catalog match still lists with generic defaults. 6) Select two models with the checkboxes. 7) Expand Advanced on one chosen row, override its limits and toggle thinking chips; confirm each numeric field has a five-chip preset ladder for common values, clicking a chip writes the value, hand editing remains possible, and a non-preset value leaves the ladder unselected. Set max output to 8,192 while its context window still follows the catalog. Confirm the Advanced row offers document input but no image-input sending toggle, because an attached image always travels (D664 / ADR 0334). Confirm the label and optional hint sit above one compact grouped control and do not force the options onto a second row at normal dialog width; confirm all seven canonical levels are available, that published levels start selected for a known reasoning model, and that a non-reasoning or unknown row shows the same chips unselected with the manual-override hint; enable one level on that row and confirm the other row is unaffected. 8) Open the form-level Advanced and confirm the API format is present but pre-derived. 9) Add a free-form model ID the service did not return; confirm it is added with 128,000 / 8,192 / no-thinking defaults, then enable a thinking level if the endpoint supports it; confirm re-adding the same ID in different letter case is rejected as already added. 10) Save.
+- **Expected**: The service is asked first and models.dev only enriches the answer and seeds known-model defaults. The no-auth custom path saves `authKind: "none"`, omits `secretValue`, and makes the configured provider available anywhere an enabled no-auth provider is selectable; named cloud preset behavior stays unchanged. Newly fetched or checked model rows stay collapsed until the user opens Advanced, so every selected model ID remains visible in the right pane after a multi-select. The settings picker always offers the seven canonical thinking levels, and the Composer later renders the explicit levels saved in the same model binding; an empty or `off`-only binding resolves to `off`. Discovery is debounced ~600 ms, does not mark loading until that window elapses, and a slow reply from an earlier keystroke never replaces a newer list; named add-path discovery waits for an API key, while an unsaved custom provider is probed with the typed base URL (and key, if any) before it exists. Preset ladders cover common context/output limits while preserving hand-edited values. The explicitly selected 8,192 output remains pinned independently of the catalog-sourced context window, and neither is reinterpreted as "follow catalog" on save/reopen. Later catalog corrections change only values whose own source is `catalog`. Limit text renders through one shared compact formatter, so neighbouring published windows stay distinguishable (`1M` / `1.05M` / `1.1M`) and a compact limit never reads above its published value. Custom endpoint keeps API format beside the key and omits Base URL helper copy; named endpoints do not show format. Point the same custom form at an unreachable or unauthorized URL and confirm one classified sentence reaches the app toast while the left pane keeps its single “no list” label (not a raw JSON/HTML dump and not a second “no models” empty state); with cached rows from a later edit the same reason is toasted while the rows stay. Point a second provider at a base URL with no `/models` route and confirm the list falls back to the catalog, is labelled as coming from models.dev rather than the service, and still saves. The provider appears as a row with its host, model count and secret badge; the key is stored securely (not in plaintext config); `models` contains both bindings and `models[0]` remains the provider default.
 - **Specs linked**: `03-runtime/11-provider-model-system.md`, `03-runtime/12-provider-config-schema.md`, `03-runtime/13-model-catalog-and-selection.md`, `03-runtime/14-secrets-storage.md`, `04-ux/06-settings-ia.md`
 - **Acceptance**: B (multi-model provider configuration, save key)
 - **Milestone**: M2
@@ -1477,8 +1513,9 @@ validation still needed.
   model; a deterministic capture proxy records the model request headers.
 - **Steps**: 1) Start an Agent turn against the account and capture the request
   headers. 2) Send a follow-up after the assistant response and capture the
-  next request. 3) Repeat with an image attachment when the selected model
-  supports vision. 4) Set a saved custom header with the same name as one of
+  next request. 3) Repeat with an explicit image attachment and confirm the
+  request carries it (transport no longer depends on published vision
+  metadata, D664 / ADR 0334). 4) Set a saved custom header with the same name as one of
   the Copilot defaults and send another turn. 5) Select a Claude model on the
   same account (Anthropic Messages) and send a turn, capturing its auth and
   identity headers.
@@ -9144,8 +9181,9 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   classifies each selected item from its MIME/extension metadata, so the same
   picker handles both regular files and images. Chips show sanitized leaf names
   while prompt attachments reference only the copied paths; the workspace is
-  unchanged. The agent can call `Read` on the text fixture, and a
-  vision-capable model receives the image as an image block. Durable messages
+  unchanged. The agent can call `Read` on the text fixture, and the selected
+  model receives the image as an image block whatever its capability metadata
+  says (D664 / ADR 0334). Durable messages
   retain metadata and refs only, never the source absolute path or binary bytes.
   The file picker does not offer directory selection; missing files,
   expired/replayed tokens, and oversized files return a visible IPC error and
@@ -9247,11 +9285,11 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   (`composer-file-reference-display.test.mjs`, `transcript-style.test.mjs`);
   full UI journey Draft (run only in a capable environment when this surface changes)
 
-#### E2E-102c: Vision-capable models receive pasted images as image input
+#### E2E-102c: Pasted images reach the provider as image input
 
-- **Preconditions**: A deterministic vision-capable models.dev model whose
-  resolved record contains `modalities.input: ["text", "image"]`; an Agent
-  session; one pasted PNG and one text prompt. Capture the renderer request,
+- **Preconditions**: A deterministic models.dev chat model whose resolved
+  record contains `modalities.input: ["text", "image"]`; an Agent session;
+  one pasted PNG and one text prompt. Capture the renderer request,
   main-to-sidecar payload, provider request, durable transcript, and
   `<data_dir>/attachments/`.
 - **Steps**:
@@ -9262,10 +9300,10 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   4. Inspect the provider request and durable session message after completion.
   5. Reload the session and ask a follow-up about the same image.
 - **Expected**:
-  - The model picker/session capability state comes from the exact models.dev
-    record, and Composer shows the image as a removable chip without a
-    separate explanatory status row. If a remote refresh fails, the bundled
-    release snapshot remains authoritative for the process.
+  - The model picker/session capability state is informational metadata from
+    the exact models.dev record, and Composer shows the image as a removable
+    chip without a separate explanatory status row. If a remote refresh fails,
+    the bundled release snapshot remains authoritative for that display.
   - Main writes one content-addressed image blob and sends the sidecar a
     transient image attachment; the provider adapter emits an image content
     block/data URL, not only `@<scratch-path>` text.
@@ -9277,7 +9315,7 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   `03-runtime/02-agent-runtime.md` §5c,
   `03-runtime/04-data-storage.md`, `03-runtime/13-model-catalog-and-selection.md`
   §11.2, `04-ux/08-component-spec.md` §11.7–11.8,
-  `08-meta/decisions-log.md` (D243), ADR 0101
+  `08-meta/decisions-log.md` (D664), ADR 0334
 - **Acceptance**: B (model config), C (conversation & stream), F (persistence),
   Quality, Security
 - **Milestone**: M5
@@ -9286,9 +9324,10 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 
 #### E2E-102j: Historical vision replay uses a bounded aggregate byte budget
 
-- **Preconditions**: A vision-capable model, a session with no compaction boundary
-  across the fixture turns, six distinct user image turns whose combined raw
-  image size is below 30 MB, and a later text-only user turn. Capture the
+- **Preconditions**: A selected chat model (capability metadata does not
+  matter), a session with no compaction boundary across the fixture turns, six
+  distinct user image turns whose combined raw image size is below 30 MB, and a
+  later text-only user turn. Capture the
   provider request during runtime recreation and edit/resend.
 - **Steps**:
   1. Send the six image turns and then a text-only turn.
@@ -9327,94 +9366,89 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
     `@path` file reference.
   - Legacy content-addressed SVG attachments from older sessions are restored
     as files, not images; stale temporary image data is cleared.
-  - Non-SVG image attachments and vision capability detection are unaffected.
+  - Non-SVG image attachments are unaffected, and capability metadata stays
+    informational (D664 / ADR 0334).
 - **Specs linked**: `03-runtime/svg-attachment-input.md`,
   `03-runtime/01-ipc-protocol.md` §5.1, `04-ux/08-component-spec.md` §11.7
 - **Acceptance**: C (conversation & stream), F (persistence), Quality
 - **Milestone**: M5
 - **Status**: Unit-covered (`svg-attachments.test.mjs`); Desktop E2E Draft
 
-#### E2E-102d: Non-vision and oversized images use the path fallback
+#### E2E-102d: Capability metadata no longer gates a normal image; oversized images fail visibly
 
-- **Preconditions**: One known non-vision model and one known vision-capable
-  model; an Agent session; a normal PNG and a deterministic image just above
-  the 10 MB inline bound.
+- **Preconditions**: One model whose published record is text-only and one
+  vision-capable model; an Agent session; a normal PNG and a deterministic
+  image just above the 10 MB inline bound.
 - **Steps**:
-  1. Select the non-vision model, paste the normal PNG, and inspect Composer's
+  1. Select the text-only model, attach the normal PNG, and inspect Composer's
      removable image chip.
   2. Send the prompt and inspect the sidecar/provider request.
-  3. Select the vision model, paste the oversized image, and send it.
-  4. Retry each turn after disposing/recreating the runtime.
+  3. Select any model, attach the oversized image, and send it.
+  4. Inspect the renderer error row, restored draft, and durable transcript.
 - **Expected**:
-  - Composer shows the pasted image as a removable chip without a separate
-    vision-status explanation. Both cases show a safe `@path` fallback and no
-    image block/base64 payload.
-  - The non-vision request references the session scratch file; the oversized
-    vision request references a safe path while the image remains available to
-    the normal file tools.
-  - Retries and runtime recreation use the content-addressed image ref and a
-    session `replayed/` path where needed; no duplicate binary blobs are made.
-  - The transcript still stores attachment metadata/ref and the UI does not
-    claim that the image was sent visually.
+  - The text-only model receives the normal PNG as an image content block/data
+    URL, not an `@path`; the published text-only capability stays metadata and
+    does not appear as a blocking status.
+  - The oversized explicit image fails the send with `PAYLOAD_TOO_LARGE`, the
+    draft is restored, and no provider request replaces the picture with text.
+  - Durable user rows store only attachment metadata/ref; no base64 is written.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md` §5.1,
   `03-runtime/03-tools-and-permissions.md` §4b,
   `03-runtime/02-agent-runtime.md` §5c,
-  `03-runtime/04-data-storage.md`, ADR 0101
+  `03-runtime/04-data-storage.md`, ADR 0334
 - **Acceptance**: B (model config), C (conversation & stream), E (tools &
   permissions), F (persistence), Security
 - **Milestone**: M5
-- **Status**: Draft (run only in a capable environment when this surface changes)
+- **Status**: Unit-covered (`image-transport-metadata-gating.test.mjs`);
+  provider/UI journey Draft (run only in a capable environment)
 
-#### E2E-102e: Unknown model ids fail closed for vision transport
+#### E2E-102e: Unknown/custom model ids still transport an explicit image
 
-- **Preconditions**: A custom provider/model id absent from the models.dev catalog,
-  discovery data that incorrectly labels it `vision`, no explicit
-  `supportsImages` binding override, and a pasted PNG.
+- **Preconditions**: A custom provider/model id absent from the models.dev
+  catalog, discovery data that labels it any capability (including `vision`),
+  and a pasted PNG.
 - **Steps**:
   1. Refresh the provider model list and select the discovered custom id.
-  2. Paste the PNG and inspect the model picker and Composer image chip.
+  2. Paste the PNG and inspect the Composer image chip.
   3. Send the prompt and inspect the sidecar/provider payload.
 - **Expected**:
-  - The unknown model is runnable as a generic text model but is not promoted
-    to `vision` by discovery/cache metadata.
-  - Composer keeps the image chip without rendering a model-dependent status
-    message, and the provider receives no image block or base64 value; the safe
-    file path remains available.
-  - The durable attachment ref is still recorded so a later known vision model
-    can replay the image correctly.
+  - The unknown model remains runnable with generic limits, and its
+    capability metadata is informational only.
+  - The provider request carries an image content block/data URL; discovery or
+    cache metadata cannot downgrade it to a path.
+  - The durable attachment ref is recorded for restored history; no base64 is
+    persisted.
 - **Specs linked**: `03-runtime/11-provider-model-system.md` §6.2/§11,
   `03-runtime/13-model-catalog-and-selection.md` §11.2,
-  `04-ux/08-component-spec.md` §11.8, ADR 0101, ADR 0218
+  `04-ux/08-component-spec.md` §11.8, ADR 0334
 - **Acceptance**: B (model config), C (conversation & stream), E (tools &
   permissions), Security
 - **Milestone**: M5
-- **Status**: Unit-covered (`model-capabilities.test.ts`); provider/UI journey
-  Draft (run only in a capable environment when this surface changes)
+- **Status**: Unit-covered (`image-transport-metadata-gating.test.mjs`);
+  provider/UI journey Draft (run only in a capable environment)
 
-#### E2E-102f: Oversized image references do not block session startup
+#### E2E-102f: Oversized explicit images fail visibly without blocking session startup
 
 - **Preconditions**: A project contains an image larger than the 10 MB inline
-  bound; a known vision-capable model is selected; the session has a valid
-  provider and workspace.
+  bound; a selected model with a valid provider and workspace.
 - **Steps**: 1. Reference the oversized image from the Composer and send a
   prompt. 2. Observe the turn lifecycle while the attachment is prepared. 3.
-  Dispose/recreate the runtime and send a follow-up about the image. 4. Inspect
-  the session transcript, the content-addressed attachment blob, and the
-  session `replayed/` path.
-- **Expected**: The session accepts the prompt and reaches the provider without
-  hanging the Electron main process or crashing the sidecar. Main hashes and
-  copies the image without constructing a whole-file in-memory buffer. The
-  provider receives the safe `@path` fallback rather than an oversized image
-  block/base64 payload. Runtime recreation copies the stored blob into the
-  scratch fallback path without reading the whole blob into memory. The durable
-  message retains only attachment metadata and the content-addressed ref.
+  Confirm the encoded error row and the restored draft. 4. Re-enter the
+  session, replace the image with a normal PNG, and send successfully.
+- **Expected**: The send fails with `PAYLOAD_TOO_LARGE` before any provider
+  request; the Electron main process does not hang and the sidecar does not
+  crash. No whole-file in-memory buffer is built, no `@path` silently replaces
+  the picture, and the durable message is not written for the rejected turn.
+  Session startup and the next normal turn are unaffected. The durable message
+  that later succeeds retains only attachment metadata and the content-addressed
+  ref.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md` §5.1,
   `03-runtime/02-agent-runtime.md` §5, `03-runtime/04-data-storage.md`,
-  ADR 0101
-- **Acceptance**: C (conversation & stream), E (tools & permissions),
-  F (persistence), Quality
+  ADR 0334
+- **Acceptance**: C (conversation & stream), F (persistence), Security
 - **Milestone**: M5
-- **Status**: Unit-covered; full UI journey Draft (run only in a capable environment when this surface changes)
+- **Status**: Unit-covered (`image-transport-metadata-gating.test.mjs`); desktop
+  provider/UI journey Draft (run only in a capable environment)
 
 #### E2E-102g: Large text paste becomes an inline session-scratch reference
 
@@ -10659,6 +10693,7 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 | Acceptance | Scenarios |
 |---|---|
 | C / E / F / Quality / Security — Session Todo checklist | E2E-CHAT-session-todo-checklist |
+| D / E — Explicit image transport with informational capability metadata | E2E-CHAT-image-transport-metadata |
 | C / E / Security / Quality — Live Voice four-stage interaction | E2E-LIVE-VOICE-four-stage-ui |
 | C / F — Hourly task updates | E2E-SCHEDULED-manual-to-hourly |
 | C / F / Quality — Saved project isolation | E2E-SCHEDULED-manual-workspace-binding |

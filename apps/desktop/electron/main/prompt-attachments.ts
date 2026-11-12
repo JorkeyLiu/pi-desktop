@@ -2,14 +2,14 @@
  * Prompt attachment preparation for the main process.
  *
  * Resolves renderer-supplied attachment paths against the session roots
- * (project, session scratch, content-addressed attachments), stores image
- * bytes as content-addressed blobs, and decides whether an image is inlined
- * for a vision-capable model or handed to the agent as a file reference.
+ * (project, session scratch, content-addressed attachments) and stores image
+ * bytes as content-addressed blobs. An image the user attached is always
+ * handed to the runtime as image bytes; model capability metadata stays
+ * informational and never downgrades it to a text path.
  */
 import { createHash } from "node:crypto";
 import {
   constants as fsConstants,
-  createReadStream,
   existsSync,
   mkdirSync,
   realpathSync,
@@ -106,10 +106,9 @@ function promptMimeType(path: string, supplied?: string, name?: string): string 
  *
  * A subagent input is inlined on the strength of being an image, so the bytes
  * decide: the renderer's `mimeType` is a label the host never corroborates, and
- * a mislabelled or renamed file would otherwise reach the child endpoint as
- * base64 that no provider can read. The main chat prompt keeps trusting the
- * label because the runtime there only offers an image to a model it believes
- * accepts one.
+ * a mislabelled or renamed file would otherwise reach the endpoint as base64
+ * that no provider can read. Both the main prompt and a subagent input refuse
+ * unreadable bytes: an attached picture that cannot be carried fails visibly.
  */
 function sniffImageMimeType(bytes: Buffer): string | undefined {
   const ascii = (start: number, end: number) => bytes.subarray(start, end).toString("latin1");
@@ -218,31 +217,6 @@ function ensureAttachmentBlob(dataRoot: string, bytes: Buffer): string {
   return `attachments/${hash}`;
 }
 
-async function hashFile(path: string): Promise<string> {
-  const hash = createHash("sha256");
-  const stream = createReadStream(path);
-  for await (const chunk of stream) hash.update(chunk as Buffer);
-  return hash.digest("hex");
-}
-
-async function ensureAttachmentBlobFromFile(
-  dataRoot: string,
-  source: string,
-): Promise<string> {
-  const hash = await hashFile(source);
-  const root = join(dataRoot, "attachments");
-  mkdirSync(root, { recursive: true });
-  const target = join(root, hash);
-  if (!existsSync(target)) {
-    try {
-      await copyFile(source, target, fsConstants.COPYFILE_EXCL);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") throw error;
-    }
-  }
-  return `attachments/${hash}`;
-}
-
 async function fallbackPathForStoredAttachment(
   dataRoot: string,
   sessionId: string,
@@ -269,7 +243,6 @@ export async function preparePromptAttachments(
   sessionId: string,
   projectPath: string | undefined,
   attachments: readonly AgentPromptAttachment[],
-  supportsVision: boolean,
   /**
    * The prompt text this input carries, with the attachment chips the Composer
    * left inline. An image named there keeps that text on the durable message and
@@ -311,41 +284,51 @@ export async function preparePromptAttachments(
     }
 
     const size = statSync(source.absolute).size;
-    const inline = supportsVision && size <= MAX_INLINE_IMAGE_BYTES;
-    const bytes = inline ? await readFile(source.absolute) : undefined;
+    // The user attached this picture for this turn. Over the safety bound, or
+    // bytes that are not a readable image, the turn fails visibly: a silent
+    // switch to `@path` would tell the user the picture was sent when it was
+    // not. Model capability metadata is not consulted here.
+    if (size > MAX_INLINE_IMAGE_BYTES) {
+      throw Object.assign(
+        new Error(
+          `${name} is ${size} bytes; an attached image is limited to ${MAX_INLINE_IMAGE_BYTES} bytes.`,
+        ),
+        { errorCode: ErrorCodes.PAYLOAD_TOO_LARGE },
+      );
+    }
+    const bytes = await readFile(source.absolute);
+    const sniffedType = sniffImageMimeType(bytes);
+    if (!sniffedType) {
+      throw Object.assign(
+        new Error(
+          `${name} is not a readable image (declared ${mimeType}).`,
+        ),
+        { errorCode: ErrorCodes.UNSUPPORTED },
+      );
+    }
     const ref =
       source.root === "attachment" && attachment.path.trim().startsWith("attachments/")
         ? attachment.path.trim()
-        : bytes
-          ? ensureAttachmentBlob(dataRoot, bytes)
-          : await ensureAttachmentBlobFromFile(dataRoot, source.absolute);
+        : ensureAttachmentBlob(dataRoot, bytes);
     // The user's own position for this image: the draft named its path between
     // words, so the text stays in the prompt and the transcript renders the
     // image there.
     const inlinePath = inlineSpans[index]
       ? formatPromptPathText(attachment.path)
       : undefined;
-    const fallbackPath = inline
-      ? displayPromptPath(source, projectPath)
-      : await fallbackPathForStoredAttachment(
-          dataRoot,
-          sessionId,
-          source,
-          name,
-        );
     prepared.push({
       message: {
         kind: "image",
         name,
         ref,
-        mimeType,
+        // The user's declared MIME is a label; the bytes decide what the
+        // endpoint is asked to read.
+        mimeType: sniffedType,
         size,
         ...(inlinePath ? { inlinePath } : {}),
       },
-      fallbackPath,
-      ...(bytes
-        ? { inlineData: bytes.toString("base64") }
-        : {}),
+      fallbackPath: displayPromptPath(source, projectPath),
+      inlineData: bytes.toString("base64"),
     });
   }
   return prepared;
@@ -427,7 +410,6 @@ export type TurnPromptInput = {
   /** The renderer's prompt text, with attachment chips serialized in place. */
   promptContent: string;
   attachments: readonly AgentPromptAttachment[];
-  supportsVision: boolean;
 };
 
 export type TurnPrompt = {
@@ -450,7 +432,6 @@ export async function assembleTurnPrompt(
     input.sessionId,
     input.projectPath,
     input.attachments,
-    input.supportsVision,
     input.promptContent,
   );
   return {
@@ -467,9 +448,11 @@ export async function assembleTurnPrompt(
 /**
  * Largest number of images one child-input request may inline.
  *
- * The main chat composer sends unlimited path references because the runtime
- * only inlines the ones its model accepts; a child input always inlines every
- * image, so the count, the per-image bound, and the aggregate bound are all
+ * Like the main prompt, a child input is limited by transport budgets, never
+ * by model capability metadata: published modalities and a binding's
+ * `supportsImages` stay informational. The main prompt bounds an image by the
+ * per-image and history byte budgets; a child input has no capability to speak
+ * for it, so its image count, per-image bound, and aggregate bound are all
  * enforced here before any byte reaches the sidecar.
  */
 export const MAX_SUBAGENT_INLINE_ATTACHMENTS = 8;
@@ -485,8 +468,9 @@ export type PreparedSubagentAttachment = {
  * Prepare images the user attached to a subagent's own input (child steer or
  * direct continuation).
  *
- * This is deliberately not `preparePromptAttachments` with a vision flag. The
- * child endpoint's vision support is never inferred from a client capability
+ * Separate from `preparePromptAttachments` because a child input carries
+ * images only and has its own image-count and total-byte caps. Like the main
+ * prompt, it never infers the endpoint's vision support from a capability
  * label — a gateway can report anything — so every image is inlined and the
  * provider is asked to accept it. An input this host cannot deliver is
  * refused with a coded error instead of degrading to a text path: silently

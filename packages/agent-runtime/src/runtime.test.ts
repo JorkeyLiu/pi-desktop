@@ -3855,7 +3855,10 @@ describe("DesktopAgentRuntime thinking configuration", () => {
     expect(model.baseUrl).toBe(provider.baseUrl);
     expect(model.contextWindow).toBe(1_048_576);
     expect(model.maxTokens).toBe(131_072);
-    expect(model.input).toEqual(["text"]);
+    // Published metadata stays text-only; transport always advertises image
+    // input so an explicit picture is never dropped (D664 / ADR 0334).
+    expect(model.input).toEqual(["text", "image"]);
+    expect(mimo.modelConfig?.input).toEqual(["text"]);
     expect(model.cost).toEqual({
       input: 0.435,
       output: 0.87,
@@ -13857,7 +13860,7 @@ describe("toolResultFromUi image restoration (issue #1073)", () => {
     }
   });
 
-  it("keeps image bytes out of the text fallback for a non-vision model", async () => {
+  it("carries a tool image block for a text-only model while keeping bytes out of text", async () => {
     const rawContent = {
       content: [
         { type: "image", data: "cG5nLWJ5dGVz", mimeType: "image/png" },
@@ -13893,9 +13896,14 @@ describe("toolResultFromUi image restoration (issue #1073)", () => {
       for (const block of textBlocks) {
         expect(block.text).not.toContain("cG5nLWJ5dGVz");
       }
-      expect(result.content.some((block: { type: string }) => block.type === "image")).toBe(
-        false,
+      // Capability metadata is informational: the tool's well-formed image
+      // block is transported, and its bytes never enter the text fallback.
+      const imageBlocks = result.content.filter(
+        (block: { type: string }) => block.type === "image",
       );
+      expect(imageBlocks).toEqual([
+        { type: "image", data: "cG5nLWJ5dGVz", mimeType: "image/png" },
+      ]);
     } finally {
       await runtime.dispose();
     }

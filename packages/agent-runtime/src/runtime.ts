@@ -283,7 +283,7 @@ import {
   harvestRetainedReasoning,
   type ReasoningReplayIdentity,
 } from "./reasoning-replay.js";
-import { genericModelConfig, visionFromModelConfig } from "./model-capabilities.js";
+import { genericModelConfig } from "./model-capabilities.js";
 import type { ProjectInstructions } from "./project-instructions.js";
 import { projectInstructionsPrompt } from "./project-instructions-prompt.js";
 import type { CustomSystemPrompt } from "./custom-system-prompt.js";
@@ -3712,9 +3712,11 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         const imageBlocks: Array<{ type: "image"; data: string; mimeType: string }> = [];
         let text: string;
         let details: unknown = rawContent;
-        const vision = visionFromModelConfig(this.provider.modelConfig);
         // Collect image blocks from a content-block array; only well-formed
-        // image entries ({ type, data, mimeType }) are accepted.
+        // image entries ({ type, data, mimeType }) are accepted. Tool output
+        // travels the same way as the user's own attachments: the transport
+        // always advertises image input, so capability metadata must not
+        // silently discard a picture the tool actually produced.
         const collectImageBlocks = (blocks: unknown[]): void => {
           for (const block of blocks) {
             if (
@@ -3723,13 +3725,11 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
               typeof block.data === "string" &&
               typeof block.mimeType === "string"
             ) {
-              if (vision) {
-                imageBlocks.push({
-                  type: "image",
-                  data: block.data,
-                  mimeType: block.mimeType,
-                });
-              }
+              imageBlocks.push({
+                type: "image",
+                data: block.data,
+                mimeType: block.mimeType,
+              });
             }
           }
         };
@@ -3779,13 +3779,11 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             ) {
               continue;
             }
-            if (vision) {
-              imageBlocks.push({
-                type: "image",
-                data: image.data,
-                mimeType: image.mimeType,
-              });
-            }
+            imageBlocks.push({
+              type: "image",
+              data: image.data,
+              mimeType: image.mimeType,
+            });
           }
           const { images: _images, ...rest } = rawContent;
           details = {
@@ -9234,7 +9232,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
   }
 
   /** Resolve attachments against the configuration of the running turn. */
-  steeringContext(expectedTurnId: string): { projectPath?: string; remoteWorkspace?: { hostKey: string; path: string }; supportsVision: boolean } {
+  steeringContext(expectedTurnId: string): { projectPath?: string; remoteWorkspace?: { hostKey: string; path: string } } {
     if (
       this.disposed || !this.acceptingSteering || this.runCancelled ||
       this.turnHadError || !this.getStatus().isRunning ||
@@ -9245,7 +9243,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         errorCode: "TURN_NOT_FOUND",
       });
     }
-    return { projectPath: this.projectPath, ...(this.remoteWorkspace ? { remoteWorkspace: this.remoteWorkspace } : {}), supportsVision: this.model.input.includes("image") };
+    return { projectPath: this.projectPath, ...(this.remoteWorkspace ? { remoteWorkspace: this.remoteWorkspace } : {}) };
   }
 
   steer(input: RuntimePrompt, expectedTurnId: string, message: UiMessage): { accepted: boolean; turnId: string } {

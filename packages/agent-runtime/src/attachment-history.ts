@@ -29,7 +29,6 @@ export type AttachmentHistoryContext = {
   scratchDir?: string;
   projectPath?: string;
   attachmentsDir?: string;
-  supportsVision: boolean;
   /**
    * Maximum aggregate raw image bytes inlined during history restoration
    * (default: 30 MB, hard-capped by MAX_INLINED_IMAGE_HISTORY_BYTES).
@@ -152,7 +151,6 @@ export async function hydrateAttachmentHistory(
   history: UiMessage[],
   params: AttachmentHistoryContext,
 ): Promise<UiMessage[]> {
-  const supportsVision = params.supportsVision;
   const requestedBudget = params.maxInlinedImageBytes;
   const maxInlinedImageBytes =
     requestedBudget === undefined || !Number.isFinite(requestedBudget)
@@ -209,8 +207,11 @@ export async function hydrateAttachmentHistory(
         return { attachment };
       }
       const size = (await stat(canonical)).size;
+      // Image history is inlined whatever the published capability says:
+      // an attached picture the user sent stays a picture when the session
+      // is restored. The per-image and aggregate budgets below are the only
+      // bound; metadata never downgrades it to a path.
       const canInline =
-        supportsVision &&
         attachment.kind === "image" &&
         size <= MAX_INLINE_IMAGE_BYTES;
       if (canInline) return { attachment, canonicalPath: canonical, size };

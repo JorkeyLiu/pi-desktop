@@ -204,7 +204,6 @@ async function hydrateResumedRows(
     scratchDir: roots.scratchDir,
     projectPath: roots.projectPath,
     attachmentsDir: roots.attachmentsDir,
-    supportsVision: true,
   });
 }
 

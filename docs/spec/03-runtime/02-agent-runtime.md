@@ -43,8 +43,9 @@ crates/host-core (tool execution + permissions)
 
 The Node runtime normalizes text and image content from host tool results,
 including MCP `content` blocks and bare plugin content-block arrays. Well-formed
-image blocks are passed to vision-capable models and retained when tool history
-is restored; malformed image entries are ignored without failing the tool call.
+image blocks are transported as image blocks and retained when tool history is
+restored; capability metadata does not filter them (D664 / ADR 0334). Malformed
+image entries are ignored without failing the tool call.
 Embedded MCP text resources contribute their `resource.text`, and MCP resource
 links contribute a one-line `[resource link]` reference, to the model-visible
 text alongside sibling text blocks; binary resources are not inlined. When no
@@ -138,9 +139,11 @@ continues to own title source and persistence in schema v23.
    does not call this path until the current session reaches `agent_end`
 6. validate structured attachments at Electron main's session-bound path
    boundary, persist image bytes by SHA-256, and retain only attachment refs in
-   the durable user message. Only an image that is within the 10 MB inline
-   bound for a vision model is read into memory; larger images use streamed
-   hashing/copying and the existing safe path fallback
+   the durable user message. An explicit image within the 10 MB inline bound
+   is read into memory whatever the catalog or binding metadata says; an
+   over-size or unreadable explicit image fails the send visibly instead of
+   becoming a path (D664 / ADR 0334), while a non-image file keeps streamed
+   hashing/copying and its file reference
    A `pi-desktop://session/<id>` link in the draft is resolved in the same step
    into a bounded excerpt attachment: the same project only, the current
    conversation dropped before any read, and the runtime quotes it to the model
@@ -760,17 +763,21 @@ criterion-by-criterion report of what was met and the evidence observed.
   pricing, and other model metadata. pi-ai remains responsible for request
   serialization and adapter compatibility.
 - Provider configuration cannot override published reasoning, thinking,
-  limits, or other model metadata. The explicit attachment capability fields
-  are the exception: `supportsImages` and `supportsDocuments` are effective
-  binding overrides for the endpoint.
+  limits, or other model metadata. `supportsImages` remains accepted on
+  persisted bindings as backward-compatible metadata, but it no longer decides
+  image transport. `supportsDocuments` is metadata on the same terms: a
+  non-image attachment is a file reference the model reads, so no request path
+  consults it either (D664 / ADR 0334).
 - Unsupported requested levels use the selected Pi catalog model's
   nearest-supported-level rule: scan upward first, then downward. A
   non-reasoning provider always resolves to `off`.
-- Vision support starts from the same published model record. An absent or
-  `null` `supportsImages` follows its image input; `true` or `false` explicitly
-  enables or disables image transport for the configured binding. Unknown or
-  custom ids remain conservative text/path models unless their binding
-  explicitly enables image input.
+- Image transport does not start from the published record. The built chat
+  model always advertises `image` in `Model.input`, the field pi-ai reads
+  before it would replace image blocks with an omission placeholder, so an
+  explicit user image is carried for a text-only published row, an
+  unknown/custom id, and a stored `supportsImages` value alike. Published
+  modalities and the binding value remain metadata on `modelConfig`; a
+  provider that cannot read the picture returns its ordinary provider error.
 - The effective level is passed to the pi `Agent`; provider-specific request
   serialization remains pi-ai's responsibility.
 - Pi `thinking` blocks become `UiMessage.thinking` and
@@ -799,12 +806,12 @@ criterion-by-criterion report of what was met and the evidence observed.
   restores as an errored result; a tool row whose assistant row was lost
   gets a synthesized call-only assistant carrier so call/result pairs stay
   well-formed for every provider API.
-Vision runtimes hydrate persisted image refs only from the session-bound
-attachment, scratch, and project roots. Each image remains subject to the 10 MB
-safety bound, and restored history has a 30 MB aggregate raw-byte budget.
-The newest refs are considered first; all eligible images remain image blocks
-when the history fits, while over-budget or oversized images become safe
-`@path` fallbacks. An image whose message names it inline (`inlinePath`) is
+Every runtime hydrates persisted image refs only from the session-bound
+attachment, scratch, and project roots, without consulting capability metadata.
+Each image remains subject to the 10 MB safety bound, and restored history has a
+30 MB aggregate raw-byte budget. The newest refs are considered first; all
+eligible images remain image blocks when the history fits, while over-budget or
+per-image oversized history images keep the safe `@path` fallback. An image whose message names it inline (`inlinePath`) is
 spliced back into the prompt at that position, so a restored turn keeps the
 order the user wrote. Reads are bounded by the admitted file size. Base64 is
 transient and never restored into durable UI messages or transcript records.
@@ -1412,9 +1419,9 @@ The runtime hands the bytes to the child endpoint as image blocks beside the
 text (`initialImages` on the continued run's opening turn, the second
 `steer()` argument while running). The host has already validated them, so no
 capability metadata gates the request: the gateway's `input: ["text"]` catalog
-entry is not trusted, and the child transport always offers the image — a
-provider that cannot read it reports that itself instead of the host silently
-dropping the user's picture. A resumed chain replays its own image inputs:
+entry is not trusted, and every runtime chat transport offers image input
+(D664 / ADR 0334) — a provider that cannot read it reports that itself instead
+of the host silently dropping the user's picture. A resumed chain replays its own image inputs:
 the delegate's rows are hydrated from the host blob store through the same
 session roots before seeding, an image-only chain seeds from its first image
 row without a synthesized text brief, and a chain with neither text nor a

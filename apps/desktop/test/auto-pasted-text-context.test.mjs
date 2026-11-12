@@ -143,7 +143,6 @@ async function send({ dataRoot, projectPath, promptContent, attachments }) {
     projectPath,
     promptContent,
     attachments,
-    supportsVision: false,
   });
 }
 

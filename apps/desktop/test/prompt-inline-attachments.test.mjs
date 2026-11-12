@@ -31,7 +31,6 @@ test("an image the draft named inline records that text and keeps its place", as
     sessionId,
     undefined,
     [attachment],
-    true,
     content,
   );
   assert.equal(prepared.message.kind, "image");
@@ -41,7 +40,7 @@ test("an image the draft named inline records that text and keeps its place", as
   assert.equal(appendPromptFallbackPaths(content, [prepared]), content);
 });
 
-test("an image the prompt does not name inline keeps the trailing position", async (t) => {
+test("an image the prompt does not name inline is carried without a path", async (t) => {
   const { data, path } = await fixture(t);
   const attachment = { path, name: "pasted-a.png", kind: "image", mimeType: "image/png" };
   const [prepared] = await preparePromptAttachments(
@@ -49,17 +48,14 @@ test("an image the prompt does not name inline keeps the trailing position", asy
     sessionId,
     undefined,
     [attachment],
-    false,
     "look at this",
   );
   assert.equal(prepared.message.inlinePath, undefined);
-  assert.equal(prepared.inlineData, undefined);
-  const text = appendPromptFallbackPaths("look at this", [prepared]);
-  assert.ok(text.startsWith("look at this"));
-  assert.ok(text.includes(path));
+  assert.deepEqual(Buffer.from(prepared.inlineData, "base64"), png);
+  assert.equal(appendPromptFallbackPaths("look at this", [prepared]), "look at this");
 });
 
-test("a replayed copy still travels for the path the prompt names", async (t) => {
+test("a replayed copy is no longer appended for an inline image", async (t) => {
   const { data } = await fixture(t);
   const ref = `attachments/${"a".repeat(64)}`;
   await mkdir(join(data, "attachments"), { recursive: true });
@@ -71,13 +67,11 @@ test("a replayed copy still travels for the path the prompt names", async (t) =>
     sessionId,
     undefined,
     [attachment],
-    false,
     content,
   );
   assert.equal(prepared.message.inlinePath, `@${ref}`);
-  const text = appendPromptFallbackPaths(content, [prepared]);
-  assert.ok(text.startsWith(content));
-  // The stored blob is replayed into scratch, so that working path is added.
-  assert.notEqual(prepared.fallbackPath, ref);
-  assert.ok(text.includes(prepared.fallbackPath));
+  assert.deepEqual(Buffer.from(prepared.inlineData, "base64"), png);
+  // The picture is an image block now, so the prompt keeps only the user's
+  // text and never gains a second path copy.
+  assert.equal(appendPromptFallbackPaths(content, [prepared]), content);
 });

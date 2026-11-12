@@ -145,9 +145,13 @@ host-core 只保留 `catalog` / `user`，丢弃其他值。没有来源标记的
 包括通用的 128,000 / 8,192，因为旧值无法表明它是通用种子还是用户显式选择。解析规则见
 [13-model-catalog-and-selection](13-model-catalog-and-selection.md) §9.1。
 
-`supportsImages` 与 `supportsDocuments` 缺省或为 `null` 时跟随已发布能力，直到用户
-主动更改复选框。用户一旦选择，显式布尔值就会固定保存；即使当前值与目录相同，之后的
-目录修正也不会撤销用户选择。
+`supportsDocuments` 缺省或为 `null` 时跟随已发布能力，直到用户主动更改复选框。
+用户一旦选择，显式布尔值就会固定保存；即使当前值与目录相同，之后的目录修正也不会
+撤销用户选择。`supportsImages` 仍被接受并保存以保持向后兼容，但仅作信息性元数据，
+不再决定显式图片是否发送（D664 / ADR 0334）；新绑定不再提供该项设置控件。
+
+`supportsDocuments` 同样仅作信息性元数据：非图片附件一律准备为受边界约束的 `@path`
+文件引用，不因该值改变，也没有发送路径读取它。
 
 `compatibility.supportsReasoning` 和
 `compatibility.supportedThinkingLevels` 对于存储的记录保持可读状态
