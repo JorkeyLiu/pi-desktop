@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import {
   createModels,
   InMemoryModelsStore,
@@ -34,9 +33,19 @@ import type {
 } from "@pi-desktop/shared";
 import { genericModelConfig, modelConfigWithBinding, transcriptConfigFromPi, type ModelConfig } from "@pi-desktop/agent-runtime";
 import { resolveBindingLimits } from "@pi-desktop/shared";
+import {
+  ModelsDevAcquisition,
+  type ModelsDevProvenance,
+} from "./model-metadata/models-dev-acquisition.ts";
+import {
+  MODELS_DEV_SOURCE_TIMEOUT_MS,
+  MODELS_DEV_SOURCE_URL,
+} from "./model-metadata/models-dev-source.ts";
 
-export const MODELS_DEV_API_URL = "https://models.dev/api.json";
-export const MODELS_DEV_TIMEOUT_MS = 10_000;
+/** Canonical public source; the acquisition service owns the request policy. */
+export const MODELS_DEV_API_URL = MODELS_DEV_SOURCE_URL;
+/** Bound for one acquisition attempt (see models-dev-source). */
+export const MODELS_DEV_TIMEOUT_MS = MODELS_DEV_SOURCE_TIMEOUT_MS;
 const LOOKUP_MEMO_LIMIT = 1_024;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8_192;
@@ -131,6 +140,11 @@ export type ModelsDevCatalogStatus = {
 export type ModelsDevCatalogOptions = {
   /** Checked-in/release-packaged api.json; never a user-data path. */
   catalogPath: string;
+  /**
+   * Versioned disk cache file under the desktop data directory. Omitted in
+   * tests and consumers that must stay network/persistence-free.
+   */
+  cachePath?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   now?: () => number;
@@ -1412,22 +1426,30 @@ export class ModelsDevCatalog {
   private source: ModelsDevCatalogStatus["source"] = "empty";
   private fetchedAt: string | undefined;
   private lastError: string | undefined;
-  private readonly fetchImpl: typeof fetch;
-  private readonly timeoutMs: number;
+  private readonly acquisition: ModelsDevAcquisition<ModelsDevProvider>;
   private readonly now: () => number;
   private readonly catalogPath: string;
   private localLoadAttempted = false;
   private localLoadPromise: Promise<boolean> | undefined;
+  /** One automatic revalidation per process; automatic failures are not retried. */
+  private autoRefreshAttempted = false;
+  private disposed = false;
   private readonly operationModels: MutableModels;
   private readonly accountModels = new Map<string, MutableModels>();
   private readonly accountRows = new Map<string, CatalogAccount>();
   private readonly removedAccounts = new Set<string>();
 
   constructor(options: ModelsDevCatalogOptions) {
-    this.fetchImpl = options.fetchImpl ?? fetch;
-    this.timeoutMs = options.timeoutMs ?? MODELS_DEV_TIMEOUT_MS;
     this.now = options.now ?? (() => Date.now());
     this.catalogPath = options.catalogPath;
+    this.acquisition = new ModelsDevAcquisition<ModelsDevProvider>({
+      catalogPath: options.catalogPath,
+      ...(options.cachePath ? { cachePath: options.cachePath } : {}),
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
+      now: this.now,
+      parse: parseModelsDevCatalog,
+    });
     this.operationModels = createModels({
       modelsStore: new InMemoryModelsStore(),
       authContext: { env: async () => undefined, fileExists: async () => false },
@@ -1454,24 +1476,23 @@ export class ModelsDevCatalog {
     this.accountRows.set(row.id, structuredClone(row));
   }
 
-  /** Load the bundled release snapshot; this never performs network I/O. */
+  /**
+   * Load the best already-local payload: a schema-valid disk cache wins, the
+   * bundled release snapshot is the bootstrap fallback. Never network I/O.
+   */
   async loadLocal(): Promise<boolean> {
     if (this.localLoadPromise) return this.localLoadPromise;
     if (this.localLoadAttempted) return this.loaded;
     this.localLoadAttempted = true;
     this.localLoadPromise = (async () => {
       try {
-        const raw = JSON.parse(await readFile(this.catalogPath, "utf8")) as unknown;
-        const parsed = parseModelsDevCatalog(raw);
-        if (parsed.length === 0) throw new Error("models.dev snapshot contained no providers");
-        this.providers = new Map(parsed.map((provider) => [provider.providerKey, provider]));
-        // Replacing the provider map invalidates the derived lookup index.
-        this.lookupIndex = undefined;
-        this.hostIndex = undefined;
-        this.lookupMemo.clear();
-        this.loaded = true;
-        this.source = "bundled";
-        this.lastError = undefined;
+        const snapshot = await this.acquisition.loadLocal();
+        if (!snapshot) throw new Error("models.dev metadata is unavailable");
+        this.applyProviders(
+          snapshot.providers,
+          snapshot.source === "cache" ? "remote" : "bundled",
+          snapshot.fetchedAt,
+        );
       } catch (error) {
         this.loaded = false;
         this.lastError = error instanceof Error ? error.message : String(error);
@@ -1485,46 +1506,79 @@ export class ModelsDevCatalog {
     }
   }
 
-  /** Ensure the release snapshot is available without contacting the network. */
+  /**
+   * Local-first load plus, when the payload is outside its freshness window,
+   * one non-blocking background revalidation. Callers never wait on the
+   * network to get a usable catalog.
+   */
   async ensureLoaded(): Promise<boolean> {
-    return this.loadLocal();
+    const loaded = await this.loadLocal();
+    this.revalidateInBackground();
+    return loaded;
   }
 
-  /** Refresh the in-memory snapshot for the current process; never writes user data. */
+  /**
+   * Refresh canonical metadata. Conditional when cached data is usable, then
+   * persisted for the next process. A failure keeps the current payload and
+   * manual refresh always contacts the source.
+   */
   async refresh(): Promise<boolean> {
     if (this.loadPromise) return this.loadPromise;
     this.loadPromise = (async () => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       try {
-        const response = await this.fetchImpl(MODELS_DEV_API_URL, {
-          headers: { Accept: "application/json" },
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          throw new Error(`models.dev catalog request failed (${response.status})`);
+        const outcome = await this.acquisition.refresh();
+        if (outcome.status === "failed") {
+          this.lastError = outcome.error;
+          return false;
         }
-        const parsed = parseModelsDevCatalog(await response.json());
-        if (parsed.length === 0) throw new Error("models.dev catalog contained no usable providers");
-        this.providers = new Map(parsed.map((provider) => [provider.providerKey, provider]));
-        // Replacing the provider map invalidates the derived lookup index.
-        this.lookupIndex = undefined;
-        this.hostIndex = undefined;
-        this.lookupMemo.clear();
-        this.loaded = true;
-        this.source = "remote";
-        this.fetchedAt = new Date(this.now()).toISOString();
         this.lastError = undefined;
+        if (outcome.status === "updated") {
+          this.applyProviders(outcome.providers, "remote", outcome.fetchedAt);
+        }
         return true;
       } catch (error) {
         this.lastError = error instanceof Error ? error.message : String(error);
         return false;
       } finally {
-        clearTimeout(timer);
         this.loadPromise = undefined;
       }
     })();
     return this.loadPromise;
+  }
+
+  /** Internal provenance of the loaded payload for later consumer migration. */
+  getProvenance(): ModelsDevProvenance {
+    return this.acquisition.provenance();
+  }
+
+  /** Abort in-flight acquisition; later results are ignored. Terminal. */
+  dispose(): void {
+    this.disposed = true;
+    this.acquisition.dispose();
+  }
+
+  private applyProviders(
+    providers: readonly ModelsDevProvider[],
+    source: ModelsDevCatalogStatus["source"],
+    fetchedAt?: string,
+  ): void {
+    this.providers = new Map(providers.map((provider) => [provider.providerKey, provider]));
+    // Replacing the provider map invalidates the derived lookup index.
+    this.lookupIndex = undefined;
+    this.hostIndex = undefined;
+    this.lookupMemo.clear();
+    this.loaded = true;
+    this.source = source;
+    this.fetchedAt = fetchedAt;
+    this.lastError = undefined;
+  }
+
+  /** At most one automatic revalidation per process; automatic failures are not retried. */
+  private revalidateInBackground(): void {
+    if (this.autoRefreshAttempted || this.disposed) return;
+    if (!this.acquisition.shouldRevalidate()) return;
+    this.autoRefreshAttempted = true;
+    void this.refresh();
   }
 
   getStatus(): ModelsDevCatalogStatus {

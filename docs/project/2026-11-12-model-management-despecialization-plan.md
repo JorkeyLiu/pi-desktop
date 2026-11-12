@@ -1,6 +1,8 @@
 # Model management de-specialization: design and bounded plan
 
-- Status: Proposed design and implementation plan. Not implemented.
+- Status: Phase 0 done. Phase 1 (source service/cache) implemented in the
+  desktop main process; phases 2-4 (source-aware resolver, consumer migration,
+  heuristic removal) not implemented. See section 11 for per-phase status.
 - Date: 2026-11-12
 - Baseline: `03d41de43`
 - Scope: model-management metadata acquisition, provider/model association,
@@ -216,6 +218,15 @@ Each phase is buildable and testable; no phase ships a permanent second resolver
   known-good. No consumer change. Depends on confirmed payload shape; the cap
   moves only from a measured legitimate need. Acceptance: cache tests pass;
   failure keeps prior data; no credentials; no SQLite change.
+  **Status:** implemented. `electron/main/model-metadata/` holds the bounded
+  source (`models-dev-source.ts`), the versioned cache
+  (`models-dev-cache.ts`, `<dataDir>/model-metadata/models-dev-v1.json`), and
+  the acquisition service (`models-dev-acquisition.ts`); `ModelsDevCatalog`
+  keeps its public methods and delegates loading/refresh to the service.
+  Provenance (`source`/`fetchedAt`/`checkedAt`/freshness) is available through
+  the service and `ModelsDevCatalog.getProvenance()` for phase 2. Covered by
+  `apps/desktop/test/models-dev-cache.test.mjs`; the E2E restart journey is
+  manual (see `06-delivery/04-e2e-test-plan.md`, `E2E-CATALOG-acquisition`).
 - **Phase 2 — source-aware resolver, side-by-side.** Read-only differential
   harness against the current lookup over fixtures and captured endpoint samples;
   no user-visible switch. Removal criteria: every difference is a documented

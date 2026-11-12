@@ -306,9 +306,17 @@ If user selects model tagged without tools while in Agent mode:
 
 ## 6. Refresh behavior
 
-The bundled models.dev snapshot is the startup baseline. Startup reads no
-remote catalog and uses no ambient credentials. `providers.refreshModelCatalog`
-refreshes models.dev explicitly; settings metadata lookups themselves are local.
+The bundled models.dev snapshot remains the bootstrap fallback. Electron main
+owns canonical metadata acquisition: at startup it loads a schema-validated,
+versioned disk cache (`<dataDir>/model-metadata/models-dev-v1.json`) if one
+exists and otherwise paints the bundled snapshot, then revalidates in the
+background when the payload is older than 24 h (15 s per attempt, 16 MiB
+decoded body cap, conditional `If-None-Match`/`If-Modified-Since`). Revalidation
+never blocks model listing, a failure keeps the last-known-good payload, and
+only a fully validated document may be persisted. `providers.refreshModelCatalog`
+still refreshes models.dev explicitly (a `304` succeeds only with a usable
+cached payload); settings metadata lookups themselves are local. No credentials,
+cookies, or auth headers are sent to the public source.
 
 For keyed endpoints, live discovery supplies IDs and models.dev enriches their
 metadata. A positive safe integer context/input or output limit reported on a live

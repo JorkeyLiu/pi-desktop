@@ -1252,6 +1252,15 @@ validation still needed.
 - **Milestone**: M2
 - **Status**: Documented; covered by `apps/desktop/test/model-custom-lookup.test.mjs`, `apps/desktop/test/provider-lookup-model-handler.test.mjs`, and `apps/desktop/test/provider-endpoint-metadata.test.mjs`
 
+#### E2E-CATALOG-acquisition: Canonical metadata refresh survives a restart without credentials
+
+- **Preconditions**: A writable desktop data directory with no `model-metadata` cache; the models.dev snapshot ships with the build; the public source is stubbed to answer a small schema-valid document, then to answer `304` for a conditional request, then to fail.
+- **Steps**: 1) Launch the app and open Settings → Model configuration before any network answer arrives; confirm the bundled models.dev rows are listed and usable without waiting. 2) Let the background revalidation finish; confirm `models.dev/api.json` is still byte-identical and a versioned cache appeared under `<dataDir>/model-metadata/`. 3) Restart the app with the source unreachable and confirm the same refreshed rows paint from the cache while the bundled snapshot is not rewritten. 4) Seed an oversized or schema-invalid response and confirm the previous rows and previous cache stay in place. 5) Delete the cache and let a stale clock trigger revalidation; confirm the request carries no credentials and the app lists the bundled rows throughout.
+- **Expected**: Startup paints a usable catalog immediately and only revalidates in the background when the cached payload is older than 24 h; each attempt is bounded to 15 s and 16 MiB of decoded body, oversize or invalid documents are rejected before they replace anything, a corrupt or outdated cache is quarantined, no cache file is written for invalid or failed answers, and only a schema-valid refreshed document is persisted. `providers.refreshModelCatalog` still refreshes explicitly and a `304` succeeds only with a usable cached payload. No credentials, cookies, or payload content are sent to or logged from the public source.
+- **Specs linked**: `03-runtime/13-model-catalog-and-selection.md`
+- **Acceptance**: B (model configuration), Security.
+- **Milestone**: M2
+- **Status**: Documented; acquisition/cache behavior is covered by `apps/desktop/test/models-dev-cache.test.mjs` and the existing catalog suites. The full restart journey is manual because it needs a fresh Electron data directory.
 #### E2E-PROVIDER-configured-models-search: The chosen pane's search narrows the configured list
 
 - **Preconditions**: App running; one provider saved with at least three model bindings, one of them carrying an alias and another whose catalog display name differs from its id.

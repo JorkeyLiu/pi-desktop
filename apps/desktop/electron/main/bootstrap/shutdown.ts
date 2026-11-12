@@ -15,6 +15,7 @@ import type { McpControlServer } from "../mcp-control";
 import type { McpOAuthManager } from "../mcp-oauth";
 import { getActiveRemoteHostsBoot, setActiveRemoteHostsBoot } from "./remote-hosts";
 import type { LiveCallService } from "../live-voice/call-service";
+import type { ModelsDevCatalog } from "../models-dev-catalog";
 
 const QUIT_TURN_SETTLE_BUDGET_MS = 2_000;
 
@@ -52,6 +53,7 @@ export type ShutdownDependencies = {
   disposePowerSaveBlockers: () => void;
   liveCallService?: Pick<LiveCallService, "endForLifecycle">;
   disposeSystemProxyRelay?: () => Promise<void>;
+  modelMetadata: Pick<ModelsDevCatalog, "dispose">;
 };
 
 /** Register the last-window and before-quit resource lifecycle handlers. */
@@ -66,6 +68,7 @@ export function registerShutdownHandlers({
   persistenceOutbox,
   inflightCheckpointer,
   flushEventPersistence,
+  modelMetadata,
   pluginPanels,
   plugins,
   userMcp,
@@ -205,6 +208,7 @@ export function registerShutdownHandlers({
       mcpOAuth?.disposeAll();
       browserHost.dispose();
       inflightCheckpointer.dispose();
+      modelMetadata.dispose();
 
       try {
         await hostShutdown;

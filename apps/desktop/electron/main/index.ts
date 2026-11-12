@@ -39,6 +39,7 @@ import {
   ModelsDevCatalog,
   catalogModelConfigFor,
 } from "./models-dev-catalog";
+import { modelsDevCachePath } from "./model-metadata/models-dev-cache.ts";
 import { VendorOAuth } from "./oauth";
 import { AppUpdaterController } from "./updater";
 import {
@@ -274,6 +275,9 @@ const modelsDevCatalog = new ModelsDevCatalog({
   catalogPath: app.isPackaged
     ? join(process.resourcesPath, "models.dev", "api.json")
     : join(app.getAppPath(), "resources", "models.dev", "api.json"),
+  // Canonical metadata cache lives beside other desktop-data files; the
+  // bundled snapshot stays a read-only bootstrap fallback.
+  cachePath: modelsDevCachePath(dataDir),
 });
 
 const vendorOAuth = new VendorOAuth({
@@ -1066,6 +1070,7 @@ registerShutdownHandlers({
   confirmQuitDialog,
   disposePowerSaveBlockers,
   liveCallService,
+  modelMetadata: modelsDevCatalog,
   disposeSystemProxyRelay,
 });
 
