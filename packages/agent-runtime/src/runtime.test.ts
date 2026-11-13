@@ -9776,7 +9776,8 @@ describe("DesktopAgentRuntime subagents", () => {
     }
 
     const result = await wait.execute("wait-1", { delegationIds: ids });
-    expect(result.content[0].text).toContain("more result");
+    expect(result.content[0].text).toContain("deferred to keep this batch bounded");
+    expect(result.content[0].text).toContain("No report is truncated or lost");
     expect((runtime as any).delegations.get(ids[0]).reportDelivered).toBe(true);
     expect((runtime as any).delegations.get(ids[4]).reportDelivered).toBe(false);
     expect((runtime as any).keepTurnOpenForDelegates()).toBe(true);
@@ -9789,6 +9790,172 @@ describe("DesktopAgentRuntime subagents", () => {
     );
     expect(delivered).toContain("report-4-");
     expect((runtime as any).delegations.get(ids[4]).reportDelivered).toBe(true);
+    expect((runtime as any).keepTurnOpenForDelegates()).toBe(false);
+
+    subagentRuns.deferred = false;
+    await runtime.dispose();
+  });
+
+  it("returns a single report larger than the wait batch budget in full", async () => {
+    const runtime = createRuntime({ subagents: [explorer] });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    const task = taskTool(runtime);
+    const wait = (runtime as any).agent.state.tools.find(
+      (entry: any) => entry.name === "TaskWait",
+    );
+    const report = `REPORT-HEAD\n${"w".repeat(30_000)}\nREPORT-MIDDLE\n${"w".repeat(30_000)}\nREPORT-TAIL`;
+
+    const started = await task.execute("task-1", {
+      agent: "explorer",
+      task: "Find it.",
+    });
+    const delegationId = (started.details as any).delegationId as string;
+    subagentRuns.resolveRun!({
+      agentName: "explorer",
+      status: "completed",
+      report,
+      turns: 1,
+      toolCalls: 1,
+    });
+    await vi.waitFor(() => {
+      expect((runtime as any).delegations.get(delegationId).status).toBe(
+        "completed",
+      );
+    });
+
+    const result = await wait.execute("wait-1", { delegationIds: [delegationId] });
+    const text = String(result.content[0].text);
+    expect(text.length).toBeGreaterThan(50_000);
+    expect(text).toContain("REPORT-HEAD");
+    expect(text).toContain("REPORT-MIDDLE");
+    expect(text).toContain("REPORT-TAIL");
+    expect((runtime as any).delegations.get(delegationId).reportDelivered).toBe(
+      true,
+    );
+
+    subagentRuns.deferred = false;
+    await runtime.dispose();
+  });
+
+  it("auto-delivers a single report larger than the wait batch budget in full", async () => {
+    const runtime = createRuntime({ subagents: [explorer] });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    const task = taskTool(runtime);
+    const prompt = vi.fn(async () => undefined);
+    (runtime as any).agent.prompt = prompt;
+    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
+    const report = `REPORT-HEAD\n${"w".repeat(30_000)}\nREPORT-MIDDLE\n${"w".repeat(30_000)}\nREPORT-TAIL`;
+
+    const started = await task.execute("task-1", {
+      agent: "explorer",
+      task: "Find it.",
+    });
+    const delegationId = (started.details as any).delegationId as string;
+    subagentRuns.resolveRun!({
+      agentName: "explorer",
+      status: "completed",
+      report,
+      turns: 1,
+      toolCalls: 1,
+    });
+    await vi.waitFor(() => {
+      expect((runtime as any).delegations.get(delegationId).status).toBe(
+        "completed",
+      );
+    });
+
+    await (runtime as any).resumeAfterDelegations();
+    expect(prompt).toHaveBeenCalledTimes(1);
+    const delivered = String(
+      (prompt.mock.calls as unknown as unknown[][])[0]?.[0] ?? "",
+    );
+    expect(delivered).toContain("REPORT-HEAD");
+    expect(delivered).toContain("REPORT-MIDDLE");
+    expect(delivered).toContain("REPORT-TAIL");
+    expect(delivered.length).toBeGreaterThan(50_000);
+    expect((runtime as any).delegations.get(delegationId).reportDelivered).toBe(
+      true,
+    );
+
+    subagentRuns.deferred = false;
+    await runtime.dispose();
+  });
+
+  it("defers later reports to a later batch and never starves a long one", async () => {
+    const runtime = createRuntime({ subagents: [explorer] });
+    subagentRuns.calls.length = 0;
+    subagentRuns.instances.length = 0;
+    subagentRuns.deferred = true;
+    subagentRuns.resolveRun = undefined;
+    const task = taskTool(runtime);
+    const wait = (runtime as any).agent.state.tools.find(
+      (entry: any) => entry.name === "TaskWait",
+    );
+    const prompt = vi.fn(async () => undefined);
+    (runtime as any).agent.prompt = prompt;
+    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
+
+    const ids: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const started = await task.execute(`task-${index}`, {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      ids.push((started.details as any).delegationId as string);
+    }
+    const reports = [
+      `report-0-${"a".repeat(10_000)}`,
+      `REPORT-HEAD\n${"b".repeat(28_000)}\nREPORT-MIDDLE\n${"b".repeat(28_000)}\nREPORT-TAIL`,
+      `report-2-${"c".repeat(10_000)}`,
+      `report-3-${"d".repeat(10_000)}`,
+    ];
+    for (let index = 0; index < 4; index += 1) {
+      subagentRuns.resolveRun!({
+        agentName: "explorer",
+        status: "completed",
+        report: reports[index],
+        turns: 1,
+        toolCalls: 1,
+      });
+      await vi.waitFor(() => {
+        expect((runtime as any).delegations.get(ids[index]).status).toBe(
+          "completed",
+        );
+      });
+    }
+
+    const result = await wait.execute("wait-1", { delegationIds: ids });
+    const text = String(result.content[0].text);
+    expect(text).toContain("report-0-");
+    expect(text).toContain("report-2-");
+    expect(text).toContain("report-3-");
+    expect(text).not.toContain("REPORT-HEAD");
+    expect(text).toContain("deferred to keep this batch bounded");
+    expect(text).toContain("No report is truncated or lost");
+    for (const index of [0, 2, 3]) {
+      expect(
+        (runtime as any).delegations.get(ids[index]).reportDelivered,
+      ).toBe(true);
+    }
+    expect((runtime as any).delegations.get(ids[1]).reportDelivered).toBe(false);
+    expect((runtime as any).keepTurnOpenForDelegates()).toBe(true);
+
+    await (runtime as any).resumeAfterDelegations();
+    expect(prompt).toHaveBeenCalledTimes(1);
+    const delivered = String(
+      (prompt.mock.calls as unknown as unknown[][])[0]?.[0] ?? "",
+    );
+    expect(delivered).toContain("REPORT-HEAD");
+    expect(delivered).toContain("REPORT-MIDDLE");
+    expect(delivered).toContain("REPORT-TAIL");
+    expect(delivered.length).toBeGreaterThan(50_000);
+    expect((runtime as any).delegations.get(ids[1]).reportDelivered).toBe(true);
     expect((runtime as any).keepTurnOpenForDelegates()).toBe(false);
 
     subagentRuns.deferred = false;

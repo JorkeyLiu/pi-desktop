@@ -28,6 +28,7 @@ export const enEntries: ChangelogEntry[] = [
       "A subagent's transcript shows the working indicator while the child is working, instead of a list of rows that sits still between updates.",
       "A long paste you send now reaches the model as the text you pasted, at the point you pasted it, instead of a file path the model had to open. The draft and the transcript keep the compact chip, and every send path — retry, a queued message, or a reopened conversation — carries the same text.",
       "Checking on running subagents answers immediately: the task list reports the current snapshot instead of blocking until one finishes, and waiting stays an explicit step.",
+      "A subagent's report now reaches the main agent whole, however long it is: no length cap clips it, no file path stands in for it, and a wait that batches several reports still delivers the first one in full before deferring the rest.",
     ],
   },
   {

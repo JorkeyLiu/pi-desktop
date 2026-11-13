@@ -19,9 +19,7 @@
  *   already stopped calling tools. Only user Stop or `TaskStop` aborts it.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
 import { estimateVisibleResponseOutputTokens } from "./response-token-estimate.js";
-import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   Agent,
@@ -119,10 +117,6 @@ export const SUBAGENT_LIST_TOOL_NAME = "TaskList";
 /** Stop running delegations (ADR 0089). */
 export const SUBAGENT_STOP_TOOL_NAME = "TaskStop";
 
-/** The report is the only thing that enters the parent's context; keep it
- * from becoming the context problem delegation was supposed to avoid. */
-export const MAX_SUBAGENT_REPORT_CHARS = 12_000;
-
 export type SubagentRunStatus = SharedSubagentRunStatus;
 
 export type SubagentRunResult = {
@@ -156,7 +150,15 @@ export type SubagentRunResult = {
    * not what the run installed rather than claiming it was saved.
    */
   handoffCheckpointError?: SubagentHandoffPersistenceError;
-  /** File path in session scratch where the unclipped report was preserved (ADR 0062). */
+  /**
+   * Legacy optional pointer to a scratch copy of a report (ADR 0062).
+   *
+   * RETIRED with the report cap: this run never spills a report to a file, so
+   * this runtime never sets it. The field stays in the result and snapshot
+   * contracts so stored records, resumed chains, and existing consumers keep
+   * loading; a value from an older record is still read as a historical
+   * pointer, not as where the current report lives.
+   */
   scratchReportPath?: string;
   error?: {
     code: string;
@@ -181,7 +183,13 @@ export type SubagentRunOptions = {
   parentToolCallId: string;
   /** Delegation identifier issued by the runtime for this task run (ADR 0279). */
   delegationId?: string;
-  /** Session scratch workspace root for persistent spillover artifacts (ADR 0062). */
+  /**
+   * Session scratch workspace root.
+   *
+   * Accepted for call-site compatibility. Report delivery no longer depends on
+   * it: a report is never spilled here, so a remote or scratch-less session
+   * receives exactly the same text (ADR 0062 §5).
+   */
   scratchDir?: string;
   /** The delegated instruction, written by the parent model. */
   task: string;
@@ -295,33 +303,15 @@ export function composeSubagentSystemPrompt(options: {
     `You are the \"${definition.name}\" subagent inside PI-Desktop, working on one task delegated by the main agent.`,
     `You cannot see the user, ask questions, or delegate further. Finish the task with the tools you have: ${toolList}.`,
     subagentCanMutate(definition, resolved)
-      ? "You may change files, but only the ones the task is about; leave everything else untouched. If the final report would exceed ~8,000 characters, write the full report to a file yourself and make the final message a compact summary plus the file path."
+      ? "You may change files, but only the ones the task is about; leave everything else untouched. If the task asks you to write a file, write it."
       : "You have no tools that change files or run commands, so never report an edit you could not have made.",
-    "Your final message is the report the main agent receives when you finish. Make it self-contained: what you did, what you found with exact paths and line numbers, and anything you could not finish.",
-    "Keep the report tight. Report findings, not narration, and never pad it with a summary of your own process.",
+    "Your final message is the report the main agent receives when you finish. Let it directly contain the result, the relevant evidence (what you did, what you found with exact paths and line numbers), and anything you could not finish; keep it concise and proportional to the task.",
+    "Report findings, not narration, and never pad it with a summary of your own process.",
     "If you discover in the first few turns that you lack a tool essential to the task (e.g. no Bash when shell commands are needed), stop immediately with a one-sentence report naming the missing capability. Do not attempt workarounds or pad the report with unrelated reading.",
   ].join("\n");
   return [framing, definition.prompt, ...(options.guidance ?? [])]
     .filter((block) => block.trim().length > 0)
     .join("\n\n");
-}
-
-function boundedReport(value: string): string {
-  const text = value.trim();
-  if (text.length <= MAX_SUBAGENT_REPORT_CHARS) return text;
-  const marker = "\n\n[subagent report truncated]\n\n";
-  const available = MAX_SUBAGENT_REPORT_CHARS - marker.length;
-  const head = Math.ceil(available / 2);
-  const tail = Math.floor(available / 2);
-  return `${text.slice(0, head)}${marker}${text.slice(-tail)}`;
-}
-
-/** Keep opaque provider/tool-call ids inside the session scratch directory. */
-function scratchPathSegment(value: string): string {
-  if (/^[A-Za-z0-9._-]+$/.test(value) && value !== "." && value !== "..") {
-    return value;
-  }
-  return `id-${encodeURIComponent(value)}`;
 }
 
 export { addUsage };
@@ -1300,25 +1290,6 @@ export class SubagentRun {
     return error;
   }
 
-  private saveScratchReport(text: string): string | undefined {
-    if (!this.opts.scratchDir || text.length <= MAX_SUBAGENT_REPORT_CHARS) {
-      return undefined;
-    }
-    try {
-      const dir = join(
-        this.opts.scratchDir,
-        "delegations",
-        scratchPathSegment(this.opts.parentToolCallId),
-      );
-      mkdirSync(dir, { recursive: true });
-      const target = join(dir, "report.md");
-      writeFileSync(target, text, "utf8");
-      return target;
-    } catch {
-      return undefined;
-    }
-  }
-
   private result(
     status: SubagentRunStatus,
     report: string,
@@ -1352,15 +1323,11 @@ export class SubagentRun {
       ),
       ...(degradationNote ? [degradationNote] : []),
     ];
-    const scratchReportPath = this.saveScratchReport(text);
-    let finalReport: string;
-    if (scratchReportPath) {
-      const notice = `Complete subagent report (${text.length} characters) was saved to: ${scratchReportPath}`;
-      finalReport =
-        preamble.length > 0 ? `${preamble.join("\n\n")}\n\n${notice}` : notice;
-    } else {
-      finalReport = boundedReport([...preamble, text].join("\n\n"));
-    }
+    // The parent gets the report itself — whole, whatever its length. No cap
+    // clips it and no file pointer replaces it: the run's outcome, the failure
+    // preamble, and the degradation note travel with the same text in every
+    // status, on local and remote sessions alike.
+    const finalReport = [...preamble, text].join("\n\n");
     return {
       agentName: name,
       modelId: this.provider.modelId,
@@ -1382,7 +1349,6 @@ export class SubagentRun {
       ...(this.handoffCheckpointError
         ? { handoffCheckpointError: this.handoffCheckpointError }
         : {}),
-      ...(scratchReportPath ? { scratchReportPath } : {}),
       ...(error ? { error } : {}),
     };
   }

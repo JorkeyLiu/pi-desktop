@@ -119,20 +119,30 @@ retry storm.
 ### 5. The parent's context gains the report, and only the report
 
 A `SubagentRun` is a second pi `Agent` in the same sidecar process. Its final
-message, bounded to `MAX_SUBAGENT_REPORT_CHARS` (12k), becomes the `Task` tool
-result, with `agent`, `status`, `turns`, `toolCalls` and `usage` as structured
-details.
+message becomes the `Task` tool result, with `agent`, `status`, `turns`,
+`toolCalls` and `usage` as structured details.
 
-When a delegate's completed report exceeds `MAX_SUBAGENT_REPORT_CHARS`, the
-runtime preserves the full, unclipped report in the session scratch directory
-(`<data_dir>/scratch/<sessionId>/delegations/<parentToolCallId>/report.md`; an
-opaque ID containing path separators is encoded before it is used as a path
-component)
-and returns a compact pointer notice (`Complete subagent report (N characters) was saved to: <path>`)
-alongside `scratchReportPath` in the structured result. If scratch persistence fails,
-it degrades gracefully to bounded head/tail clipping with a truncation marker.
-Delegates with mutation capability are guided in their prompt to write oversized
-reports (>8,000 characters) directly to a file and return a summary with the file path.
+The report itself travels, whole. No length cap clips it and no scratch file
+replaces it: the final answer is the evidence the parent delegated for, and a
+pointer would force a second read the parent may not be able to make (a remote
+session has no local scratch path). The same rule holds for every status — a
+failed run's last output keeps its failure preamble and stays complete. A
+delegate is guided in its prompt to let the final message directly contain the
+result, the relevant evidence (exact paths and line numbers), and anything it
+could not finish, concise and proportional to the task; writing a file the
+task itself asks for remains ordinary tool work, never a substitute report.
+`scratchReportPath` stays an optional field on the result and snapshot
+contracts so older records keep loading; current runs never set it.
+
+Delivery is batched, not clipped. Explicit `TaskWait` and the idle auto-resume
+share one assembly bounded by `MAX_TASKWAIT_RESULT_CHARS` (50k) so a large
+fan-out cannot put every report into a single request. Each batch always
+carries at least one settled report in full, even when that report alone
+exceeds the bound; reports it defers stay pending delivery and arrive in a
+later batch that `TaskWait` returns by id or that the idle auto-resume prompts
+with. The omission line states how many results were deferred and that no
+report was truncated or lost, and the delivery marking covers exactly the
+reports inlined in that batch.
 When a delegate truncates due to model output token limits (`SUBAGENT_OUTPUT_TRUNCATED`),
 the failure result includes character count statistics and a resume hint for ADR 0279
 chains (`Task(resume: "<delegationId>")`).

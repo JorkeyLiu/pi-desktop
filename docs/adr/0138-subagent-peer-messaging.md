@@ -23,7 +23,8 @@
 
 Delegation as built by ADR 0062 and ADR 0089 has exactly one integration point:
 the parent. A delegate receives one `task` brief at spawn time, runs alone, and
-returns one report bounded to 12k characters. Concurrent delegates cannot see
+returns one report, delivered whole — a wait batch defers a later report to a
+follow-up delivery instead of truncating it (ADR 0062 §5). Concurrent delegates cannot see
 each other. The only thing they share is mutual exclusion — `PathMutex` in the
 sidecar and host-core's one-in-flight-mutation-per-session rule — and both are
 locks with no payload.

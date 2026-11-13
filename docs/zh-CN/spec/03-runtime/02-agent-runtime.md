@@ -693,8 +693,10 @@ Frontmatter 新增 `permission: inherit | ask | accept-edits | auto`（默认
 - `TaskWait(delegationIds?, mode?, minCompleted?, timeoutSeconds?)` — 收敛
   正在运行的委托（默认全部）并返回它们的报告；`mode: "any"` 配合
   `minCompleted` 可以在前 N 个完成时提前收敛。已结算的委托立即返回，
-  因此按 id 重读报告代价很低。合并结果上限为 `MAX_TASKWAIT_RESULT_CHARS`
-  （50k）。`timeoutSeconds` 默认 600 秒并被夹到 900 秒：等待会阻塞回合，
+  因此按 id 重读报告代价很低。合并结果按 `MAX_TASKWAIT_RESULT_CHARS`
+  （50k）分批：每批至少完整交付一份已结算报告（即使该报告本身超过上限），
+  其余留待后续批次（空闲自动续跑会送达，或按 id 再调用 `TaskWait` 取回），
+  报告不会被截断或丢弃，结果只说明本批延后了几份。`timeoutSeconds` 默认 600 秒并被夹到 900 秒：等待会阻塞回合，
   所以这个上限决定了会话最长能看起来卡住多久。到点不是失败，也不会停掉委托
   （D328）—— 等待返回心跳（谁、状态、已用时、轮数、最后工具）以及已完成的
   报告。运行时会保持父级回合打开，并在它们完成时把剩余报告交回，即使父级已经
@@ -719,8 +721,9 @@ Frontmatter 新增 `permission: inherit | ask | accept-edits | auto`（默认
 `Glob`、`Grep` 和 `Bash`，而 `code-reviewer` 保持只读；`fixer` 与 `ui-designer`
 会在工作区内写入，`ui-designer` 另外声明 `BrowserPreview`，以便在报告前检查渲染结果。
 其状态为 `completed`、`failed`、`aborted`、`timed_out` 以及仅存在于注册表的
-`stopped`；终态通过 `TaskWait` 呈现，其文本是报告（上限为
-`MAX_SUBAGENT_REPORT_CHARS`，12k），其 details 携带 `delegationId`、`agent`、
+`stopped`；终态通过 `TaskWait` 呈现，其文本就是委托自己的报告——完整、
+不截断，无论多长、无论 scratch 是否可用（ADR 0062 §5）——其 details 携带
+`delegationId`、`agent`、
 `status`、`startedAt`、结算后的 `completedAt`、`turns`、`toolCalls`，以及失败或
 超时时的 `error`。`startedAt` 与 `completedAt` 是以毫秒计的运行时时间戳，也是
 渲染器展示委托时长的事实来源；`Task` 那次立即返回的工具调用时长只覆盖启动

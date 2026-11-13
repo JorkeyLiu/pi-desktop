@@ -28,6 +28,7 @@ export const esEntries: ChangelogEntry[] = [
       "La transcripción de un subagente muestra el indicador de trabajo mientras el hijo trabaja, en vez de una lista que se queda quieta entre actualizaciones.",
       "Un texto largo pegado llega ahora al modelo como el texto que pegaste, en el punto donde lo pegaste, en lugar de una ruta de archivo que debía abrir. El borrador y el historial conservan el chip compacto, y cada vía de envío —reintentar, un mensaje en cola o una conversación reabierta— lleva el mismo texto.",
       "Consultar los subagentes en ejecución responde al instante: la lista de tareas muestra el estado actual en lugar de esperar a que uno termine, y esperar sigue siendo un paso aparte.",
+      "El informe de un subagente llega ahora completo al agente principal, por largo que sea: ningún límite de longitud lo recorta, ninguna ruta de archivo lo sustituye y, cuando una espera agrupa varios informes, el primero se entrega íntegro antes de aplazar el resto.",
     ],
   },
   {

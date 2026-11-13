@@ -12816,6 +12816,15 @@ This test plan spec is accepted when:
       parent's idle auto-resume still returns the report. Stop a parent blocked
       in auto-resume while a child ignores abort; confirm the parent ends and
       reports idle without a timeout loop.
+  13. Complete one delegate with a report far past the former 12k report
+      ceiling — and, in a second run, past the 50k wait-batch budget — then
+      read it through both delivery paths: an explicit `TaskWait` by id and
+      the idle auto-resume. Repeat with a session whose scratch directory is
+      unavailable and confirm the same complete text. Then start a fan-out of
+      five delegates whose combined reports exceed the batch budget and confirm
+      the first `TaskWait` returns at least one complete report plus a deferred
+      count, and that the idle resume delivers the deferred reports whole one
+      batch later.
 - **Expected**: `Task` returns immediately with a `delegationId` and the parent
   keeps working; `TaskWait` converges with per-delegation reports and statuses;
   every terminal child state resumes the parent even if transcript publication
@@ -12833,6 +12842,14 @@ This test plan spec is accepted when:
   a stopped/aborted delegate's chain is still continuable (a parent `Task(resume)`
   delivers its report, a direct user continue runs detached without waking the
   parent); reloaded transcripts keep their delegation cards and outcomes.
+  A delivered report is the delegate's own text: a report longer than the
+  former 12k ceiling keeps its beginning, middle, and end when it reaches the
+  parent through `TaskWait` or the idle auto-resume, with no path-only notice,
+  no truncation marker, and no dependence on scratch availability. A wait
+  batch never overflows one request and never starves a long report: the first
+  settled report in a batch is delivered whole even past the batch budget,
+  the result states how many results were deferred, deferred reports arrive
+  whole in a later batch, and the delivered ids match exactly the reports inlined.
 - **Specs linked**: `03-runtime/02-agent-runtime.md` §5f/§5f.1/§7.1,
   `03-runtime/03-tools-and-permissions.md` §10.2,
   `08-meta/decisions-log.md` (D242 amends D231), ADR 0089 and ADR 0100
@@ -12845,8 +12862,13 @@ This test plan spec is accepted when:
   stopped-child continuation (step 10a) is automated by
   `pnpm test:e2e:subagent-lifecycle` over the real host-core / sidecar / Main
   path: it stops a running child, continues it explicitly, and confirms the new
-  run's provider request and delivery ownership. The renderer journey (steps
-  2/3/7) stays pending over a capable environment.
+  run's provider request and delivery ownership. Long-report retention and the
+  batch delivery rule (step 13) are automated in
+  `packages/agent-runtime/src/subagent.test.ts` and
+  `packages/agent-runtime/src/runtime.test.ts`: `Task` -> settlement ->
+  `TaskWait` / idle auto-resume over the real runtime wiring, with only the
+  delegate loop faked. The renderer journey (steps 2/3/7) stays pending over a
+  capable environment.
 
 #### E2E-162 / E2E-173: Delegate workflow scrolling
 
