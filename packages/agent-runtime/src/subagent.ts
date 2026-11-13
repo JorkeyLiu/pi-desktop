@@ -64,8 +64,11 @@ import {
   nowIso,
   usageFromPi,
 } from "./agent-messages.js";
-import type { RuntimeProviderConfig } from "./provider-binding.js";
-import { clampThinkingLevel } from "./thinking-level.js";
+import {
+  providerForThinkingIntent,
+  type RuntimeProviderConfig,
+} from "./provider-binding.js";
+import { resolveThinkingIntent } from "./model-capabilities.js";
 import { subagentModelBinding, type SubagentProviderRetryState } from "./subagent-model-binding.js";
 import { contextBudgetFor, contextBudgetForStreaming, contextBudgetLimitsFor } from "./context-budget.js";
 import { convertToLlm } from "./pi-runtime-messages.js";
@@ -753,8 +756,14 @@ export class SubagentRun {
     provider: RuntimeProviderConfig,
     thinkingLevel: SubagentThinkingLevel,
   ) {
+    // The level was already resolved at the decision site; this projects it
+    // onto the model the adapter sends. A selected or inherited level is
+    // adapter intent even when the target model claims no reasoning support, so
+    // the projection enables exactly that level. A model that does state its
+    // capability was clamped there and stays unprojected here.
+    const intent = resolveThinkingIntent(provider, thinkingLevel);
     return subagentModelBinding({
-      provider,
+      provider: providerForThinkingIntent(provider, intent),
       thinkingLevel,
       sessionId: this.opts.sessionId,
       maxTokens: this.opts.definition.maxTokens,
@@ -1178,7 +1187,8 @@ export class SubagentRun {
       if (this.attemptedModels.has(identity)) continue;
       this.attemptedModels.add(identity);
       const requested = this.opts.definition.thinkingLevel ?? this.opts.inheritedThinkingLevel ?? this.opts.thinkingLevel;
-      const thinking = requested === "omit" ? "omit" : clampThinkingLevel(next.provider, requested);
+      const intent = resolveThinkingIntent(next.provider, requested);
+      const thinking = requested === "omit" ? "omit" : intent.level;
       const binding = this.bindingFor(next.provider, thinking);
       // An alternative whose window cannot hold the carried context would fail
       // identically to the model it replaces; skip it with the reason recorded

@@ -221,6 +221,65 @@ describe("subagent model fallback over real transport", () => {
     expect(changes).toEqual(["high"]);
     expect(f.requests[1].reasoning_effort).toBe("high");
   });
+  it("honors an inherited level for a fallback model with unknown reasoning support", async () => {
+    const f = await fixture();
+    const base = f.provider("secondary");
+    const unknown: RuntimeProviderConfig = {
+      ...base,
+      supportsReasoning: false,
+      supportedThinkingLevels: [],
+      modelConfig: genericModelConfig("secondary", base.baseUrl!),
+    };
+    const changes: string[] = [];
+    const result = await f.run({
+      inheritedThinkingLevel: "high",
+      fallbackModels: [{ key: "s/secondary", provider: unknown }],
+      onModelChange: (_, level) => changes.push(level),
+    });
+    expect(result.status).toBe("completed");
+    expect(result.thinkingLevel).toBe("high");
+    expect(changes).toEqual(["high"]);
+    // The absence of a capability claim does not erase the level that reaches
+    // the wire, so the delegate request still asks for high effort.
+    expect(f.requests[1].reasoning_effort).toBe("high");
+  });
+
+  it("sends the selected level for a primary delegate model with unknown reasoning support", async () => {
+    const f = await fixture({ fail: [] });
+    const base = f.provider("primary");
+    const unknown: RuntimeProviderConfig = {
+      ...base,
+      supportsReasoning: false,
+      supportedThinkingLevels: [],
+      modelConfig: genericModelConfig("primary", base.baseUrl!),
+    };
+    const result = await f.run({ provider: unknown, thinkingLevel: "high" });
+    expect(result.status).toBe("completed");
+    expect(result.thinkingLevel).toBe("high");
+    expect(f.requests[0].reasoning_effort).toBe("high");
+  });
+
+  it("keeps off for a fallback model that states it does not reason", async () => {
+    const f = await fixture();
+    const base = f.provider("secondary");
+    const stated: RuntimeProviderConfig = {
+      ...base,
+      supportsReasoning: false,
+      supportedThinkingLevels: ["off"],
+      modelConfig: {
+        ...genericModelConfig("secondary", base.baseUrl!),
+        source: "pi",
+        reasoning: false,
+      },
+    };
+    const result = await f.run({
+      inheritedThinkingLevel: "high",
+      fallbackModels: [{ key: "s/secondary", provider: stated }],
+    });
+    expect(result.status).toBe("completed");
+    expect(result.thinkingLevel).toBe("off");
+    expect(f.requests[1].reasoning_effort).toBeUndefined();
+  });
   it("does not retry a host tool failure through another model", async () => {
     const f = await fixture({ editFirst: true });
     await f.run({ resolveToolOutcome: () => ({ isError: true, terminate: true }) });

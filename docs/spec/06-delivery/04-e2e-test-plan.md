@@ -14934,15 +14934,18 @@ are withdrawn with ADR 0165.
 - **Expected**: The pinned and explicitly selected delegates retain the
   binding's enabled thinking levels and send the selected non-`off` level even
   when models.dev says reasoning is unavailable or publishes a sparse set. The
-  unpinned delegate inherits the parent's effective level. A binding with no
-  non-`off` level still resolves to `off`.
+  unpinned delegate inherits the parent's effective level. A target whose
+  stated metadata or enabled levels contain no non-`off` level still resolves
+  to `off`, while an unclassified target that states nothing keeps the
+  selected level instead of being forced to `off`.
 - **Specs linked**: `03-runtime/02-agent-runtime.md`,
   `03-runtime/11-provider-model-system.md`, ADR 0144 / D283
 - **Acceptance**: B (model configuration) + C (chat/stream) + Quality
 - **Milestone**: M6+
 - **Status**: Unit/wiring-covered (`model-capabilities.test.ts`,
-  `apps/desktop/test/subagent-wiring.test.mjs`); full UI journey Draft (do not
-  run E2E locally unless explicitly requested)
+  `agent-runtime` `runtime.test.ts` / `subagent-fallback.test.ts` delegate
+  level decisions, `apps/desktop/test/subagent-wiring.test.mjs`); full UI
+  journey Draft (do not run E2E locally unless explicitly requested)
 
 #### E2E-203: Omit subagent thinking override and read selected levels in dark mode
 

@@ -769,8 +769,17 @@ criterion-by-criterion report of what was met and the evidence observed.
   non-image attachment is a file reference the model reads, so no request path
   consults it either (D664 / ADR 0334).
 - Unsupported requested levels use the selected Pi catalog model's
-  nearest-supported-level rule: scan upward first, then downward. A
-  non-reasoning provider always resolves to `off`.
+  nearest-supported-level rule: scan upward first, then downward. A model
+  whose effective metadata states no reasoning support and enables no non-`off`
+  level always resolves to `off`.
+- Metadata that answers nothing about reasoning — an unclassified or custom
+  model with no catalog record, supported-level set, mapping, options, or
+  protocol — is not a claim of non-reasoning. An explicitly selected level (or
+  one a delegate inherits from its session) is kept as adapter intent: this is
+  the same resolution a session applies to its own level, and only that level
+  is enabled for the request. The runtime does not invent a capability ladder,
+  and the stored default `off` stays `off`. A configured binding ladder or a
+  catalog record that does state a supported set still clamps to it.
 - Image transport does not start from the published record. The built chat
   model always advertises `image` in `Model.input`, the field pi-ai reads
   before it would replace image blocks with an omission placeholder, so an
@@ -1434,10 +1443,18 @@ provider id, vendor key or display name, and capped at
 `MAX_SUBAGENT_PROVIDERS` (8) distinct providers. An unresolvable pin is omitted
 from the binding map on purpose; the runtime turns the missing entry into a tool
 error naming the pin, and never falls back to the session model. A definition's
-`thinkingLevel` is clamped against the resolved model with the same
-nearest-supported rule as §5c, except that the special `omit` value deliberately
+`thinkingLevel` is resolved against the resolved model with the same intent
+rule as §5c — a stated supported-level set clamps through the
+nearest-supported rule, while metadata that answers nothing about reasoning
+keeps the selected level — except that the special `omit` value deliberately
 sends no thinking override and leaves the provider adapter's own default in
 control.
+
+A delegate's own selection (the definition's `thinkingLevel` when set, else
+the session's effective level) is resolved through that same rule at spawn and
+again for each fallback target. The resolved level is what the started `Task`
+result records, so it is also what the transcript can display.
+
 `agents.create` and `agents.update` accept the pin only in that
 `<provider>/<model>` shape; a value without a provider half is rejected with
 `SUBAGENT_INVALID` rather than written, because the runtime could never resolve
@@ -1461,7 +1478,9 @@ provider-id/model-id duplicates are skipped; an unresolved alternative is
 reported and skipped. The runtime removes only the terminal failed assistant
 from model context, preserving the original user task and completed tools,
 then continues with the next provider's adapter, credentials, request headers,
-output cap, and re-clamped original thinking selection. `omit` stays omitted.
+output cap, and the original thinking selection re-resolved for that target
+(a stated supported-level set clamps, an unclassified target keeps the
+selected level). `omit` stays omitted.
 The completed tool history is never replayed by the fallback controller.
 Host/tool failures, unexpected thrown errors, no-report outcomes, and Stop do
 not trigger fallback. The run's original owner and abort signal govern every

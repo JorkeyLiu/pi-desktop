@@ -41,7 +41,11 @@ import {
   zhipuRequestCompat,
   type ThinkingLevel,
 } from "@pi-desktop/shared";
-import { genericModelConfig } from "./model-capabilities.js";
+import {
+  capabilitiesFromModelConfig,
+  genericModelConfig,
+  type ThinkingIntentResolution,
+} from "./model-capabilities.js";
 import { sessionAffinityCompat } from "./session-affinity.js";
 import type { ModelConfig } from "./thinking-level.js";
 
@@ -460,6 +464,29 @@ export function buildProviderModel(
     },
     ...(Object.keys(modelHeaders).length > 0 ? { headers: modelHeaders } : {}),
   } as Model<Api>;
+}
+
+/**
+ * Adapter-facing provider for one resolved thinking intent.
+ *
+ * A resolution carries a replacement model only when a level was selected on a
+ * model whose metadata claims nothing; that replacement enables exactly the
+ * intended level before it can reach the adapter. Every other resolution
+ * returns the same provider object, so callers that identify providers by
+ * reference (delegation chains) keep their identity.
+ */
+export function providerForThinkingIntent(
+  provider: RuntimeProviderConfig,
+  intent: ThinkingIntentResolution,
+): RuntimeProviderConfig {
+  if (intent.modelConfig === provider.modelConfig) return provider;
+  const capabilities = capabilitiesFromModelConfig(intent.modelConfig);
+  return {
+    ...provider,
+    modelConfig: intent.modelConfig,
+    supportsReasoning: capabilities.supportsReasoning,
+    supportedThinkingLevels: [...capabilities.supportedThinkingLevels],
+  };
 }
 
 /** Account-local operation registry. Vendor identity stays internal; auth stays row-scoped. */

@@ -8660,6 +8660,146 @@ describe("DesktopAgentRuntime subagents", () => {
     await runtime.dispose();
   });
 
+  it("honors an explicitly selected level for a delegate model with unknown reasoning support", async () => {
+    const unknown: RuntimeProviderConfig = {
+      ...provider,
+      id: "remote",
+      name: "Remote",
+      modelId: "remote-model",
+      supportsReasoning: false,
+      supportedThinkingLevels: [],
+      modelConfig: genericModelConfig("remote-model", provider.baseUrl),
+    };
+    const runtime = createRuntime({
+      subagents: [{ ...pinned, thinkingLevel: "high" }],
+      subagentProviders: { "remote/remote-model": unknown },
+    });
+    subagentRuns.calls.length = 0;
+    subagentRuns.deferred = false;
+    subagentRuns.result = undefined;
+
+    const result = await taskTool(runtime).execute("task-thinking", {
+      agent: "reviewer",
+      task: "Review src/app.ts.",
+    });
+
+    // The definition's own selection reaches the delegate instead of being
+    // replaced by the absence of a capability claim.
+    expect(subagentRuns.calls[0].thinkingLevel).toBe("high");
+    // Task details are the run's only carrier in the transcript; `off` would
+    // record a level the renderer deliberately hides.
+    expect((result.details as Record<string, unknown>).thinkingLevel).toBe("high");
+
+    await runtime.dispose();
+  });
+
+  it("inherits the session's selected level onto a delegate model with unknown reasoning support", async () => {
+    const unknownSession: RuntimeProviderConfig = {
+      ...provider,
+      modelId: "route/unknown",
+      supportsReasoning: false,
+      supportedThinkingLevels: [],
+      modelConfig: genericModelConfig("route/unknown", provider.baseUrl),
+    };
+    const unknownRemote: RuntimeProviderConfig = {
+      ...provider,
+      id: "remote",
+      name: "Remote",
+      modelId: "remote-model",
+      supportsReasoning: false,
+      supportedThinkingLevels: [],
+      modelConfig: genericModelConfig("remote-model", provider.baseUrl),
+    };
+    const runtime = createRuntime({
+      provider: unknownSession,
+      thinkingLevel: "high",
+      subagents: [pinned],
+      subagentProviders: { "remote/remote-model": unknownRemote },
+    });
+    subagentRuns.calls.length = 0;
+    subagentRuns.deferred = false;
+    subagentRuns.result = undefined;
+
+    expect((runtime as any).thinkingLevel).toBe("high");
+    const result = await taskTool(runtime).execute("task-inherit", {
+      agent: "reviewer",
+      task: "Review src/app.ts.",
+    });
+
+    expect(subagentRuns.calls[0].thinkingLevel).toBe("high");
+    expect((result.details as Record<string, unknown>).thinkingLevel).toBe("high");
+
+    await runtime.dispose();
+  });
+
+  it("keeps the nearest-supported clamp for a delegate model that publishes a ladder", async () => {
+    const known: RuntimeProviderConfig = {
+      ...provider,
+      id: "remote",
+      name: "Remote",
+      modelId: "remote-model",
+      supportsReasoning: true,
+      supportedThinkingLevels: ["off", "low", "medium", "high"],
+      modelConfig: {
+        ...genericModelConfig("remote-model", provider.baseUrl),
+        source: "pi",
+        reasoning: true,
+        supportedThinkingLevels: ["off", "low", "medium", "high"],
+      },
+    };
+    const runtime = createRuntime({
+      subagents: [{ ...pinned, thinkingLevel: "xhigh" }],
+      subagentProviders: { "remote/remote-model": known },
+    });
+    subagentRuns.calls.length = 0;
+    subagentRuns.deferred = false;
+    subagentRuns.result = undefined;
+
+    const result = await taskTool(runtime).execute("task-clamp", {
+      agent: "reviewer",
+      task: "Review src/app.ts.",
+    });
+
+    expect(subagentRuns.calls[0].thinkingLevel).toBe("high");
+    expect((result.details as Record<string, unknown>).thinkingLevel).toBe("high");
+
+    await runtime.dispose();
+  });
+
+  it("keeps off for a delegate model that states it does not reason", async () => {
+    const stated: RuntimeProviderConfig = {
+      ...provider,
+      id: "remote",
+      name: "Remote",
+      modelId: "remote-model",
+      supportsReasoning: false,
+      supportedThinkingLevels: ["off"],
+      modelConfig: {
+        ...genericModelConfig("remote-model", provider.baseUrl),
+        source: "pi",
+        reasoning: false,
+      },
+    };
+    const runtime = createRuntime({
+      thinkingLevel: "high",
+      subagents: [pinned],
+      subagentProviders: { "remote/remote-model": stated },
+    });
+    subagentRuns.calls.length = 0;
+    subagentRuns.deferred = false;
+    subagentRuns.result = undefined;
+
+    const result = await taskTool(runtime).execute("task-no-reasoning", {
+      agent: "reviewer",
+      task: "Review src/app.ts.",
+    });
+
+    expect(subagentRuns.calls[0].thinkingLevel).toBe("off");
+    expect((result.details as Record<string, unknown>).thinkingLevel).toBe("off");
+
+    await runtime.dispose();
+  });
+
   it.each([false, true])(
     "publishes a settled Task snapshot without polling (settles early: %s)",
     async (settlesEarly) => {

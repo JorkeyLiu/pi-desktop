@@ -4836,13 +4836,16 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           }
         }
         const controller = new AbortController();
+        // An absent capability claim is not a claim of non-reasoning: a level
+        // the user selected, or one the delegate inherits from the session,
+        // reaches this run instead of being replaced by `off`.
         const thinkingLevel: SubagentThinkingLevel =
           definition.thinkingLevel === "omit"
             ? "omit"
-            : clampThinkingLevel(
+            : resolveThinkingIntent(
                 provider,
                 definition.thinkingLevel ?? this.thinkingLevel,
-              );
+              ).level;
         // Only TaskStop, user Stop, dispose, and a parent fatal error abort a
         // delegate (D328 / D352). The Task tool call returns immediately; tying
         // the background run to that call's signal would kill it when the parent
