@@ -1104,11 +1104,19 @@ handoff is required, and `agent_end`/`turn_end` are never emitted for a rollover
 time reset only after a successful handoff (context occupancy is re-measured); a rejected,
 invalid, or unrequested submission changes nothing and is reported to the model as a tool
 error carrying the reason it can correct (an empty text, or one over the bound; the text
-is never silently truncated). Successful rollovers are unlimited; only the failure side
-is bounded, and every streak counter resets on a valid, useful handoff: at most 3
-consecutive unanswered requests, 3 consecutive invalid submissions, and 2 consecutive
-no-progress rollovers (the fixed header alone exceeds the threshold, so re-asking after
-one requires real work). A request is repeated only after the segment advanced, so a
+is never silently truncated). The bound is declared on the parameter itself (`minLength:
+1`, `maxLength: 12000`) and is enforced by the argument schema before the tool's `execute`
+runs, so a submission refused there — empty text, more than 12000 characters, a missing
+or non-text `handoff` — reaches the delegate as that schema error and is charged to the
+same streak as one the runtime's own normalizer refuses. Each submission of either kind
+costs exactly one entry, while a submission nobody asked for and one refused as a
+duplicate cost none. The request prompt, the tool description, and the acceptance result
+all state it: one submission answers one request, an accepted handoff waits for a new
+request before the tool is called again, and the text is at most 12000 characters.
+Successful rollovers are unlimited; only the failure side is bounded, and every streak
+counter resets on a valid, useful handoff: at most 3 consecutive unanswered requests, 3
+consecutive invalid submissions, and 2 consecutive no-progress rollovers (the fixed
+header alone exceeds the threshold, so re-asking after one requires real work).
 threshold below the dispatch header's own size can never spin. The token trigger is
 evaluated on the pre-compaction request, before any protection pass. ADR 0299's compaction
 and degradation remain the safety fallback and run at the same boundary after the handoff

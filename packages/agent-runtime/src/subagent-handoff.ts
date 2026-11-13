@@ -21,9 +21,11 @@
  *
  * Successful rollovers are deliberately uncapped: a delegate working a long
  * autonomous task may roll its context over as often as its threshold asks.
- * What is bounded is the failure side — consecutive invalid submissions,
- * consecutive requests the delegate ignored, and consecutive rollovers that
- * did not bring occupancy below a threshold the fixed header already exceeds.
+ * What is bounded is the failure side — consecutive invalid submissions
+ * (whichever layer refused them: the argument schema before the tool runs, or
+ * the runtime's own normalizer), consecutive requests the delegate ignored,
+ * and consecutive rollovers that did not bring occupancy below a threshold
+ * the fixed header already exceeds.
  * Each counter is reset by a valid submission or a successful rollover, so a
  * delegate that starts participating again never inherits a spent budget from
  * an earlier segment.
@@ -261,6 +263,7 @@ export function renderSubagentHandoffRequest(input: {
     `Any length up to ${MAX_SUBAGENT_HANDOFF_CHARS} characters in any structure — prose, bullets, notes, a plan — is accepted. There is no required outline. Facts that still matter, decisions and constraints that bind the remaining work, the files and state involved, what you verified and how, what is left to do, and anything still pending or running are the usual content of a handoff, but include only what this task actually needs and leave out the rest.`,
     "Before you submit, check your own handoff: could you resume this task from it alone, with none of the earlier history? The run continues with the same task, tools, and permissions. The original task and every direction the user sent to this run are kept verbatim and replayed to you after the rollover, so do not restate them; say what they now mean only where a later direction changed the earlier one. Everything else you do not write is gone. Keep it concise, but do not leave out something you would have to rediscover.",
     "Do not start new work before submitting it.",
+    `Submit it once: one \`${SUBAGENT_HANDOFF_TOOL_NAME}\` call answers this request. After it is accepted, wait for a new request before calling the tool again.`,
   ].join("\n");
 }
 
@@ -423,7 +426,8 @@ export const SUBAGENT_HANDOFF_PARAMETERS = Type.Object({
     description:
       "What your future self needs to continue this delegated task. " +
       "Free form: prose, bullets, notes, or any structure you can read back. " +
-      "You lose the earlier history, so write it for a reader who has only this text and the original task.",
+      `At most ${MAX_SUBAGENT_HANDOFF_CHARS} characters, submitted once for one request: ` +
+      "you lose the earlier history, so write it for a reader who has only this text and the original task.",
   }),
 });
 
@@ -440,7 +444,9 @@ export function createSubagentHandoffTool(options: {
     label: "Context handoff",
     description:
       "Record a handoff for this delegated task so the run can continue with a smaller context. " +
-      "Call it only when the runtime asks for one. The original task, the tools, and the permissions stay in place; " +
+      "Call it only when the runtime asks for one, and call it once: one submission answers that " +
+      `request, and after it is accepted you wait for a new request before calling it again. The text is at most ${MAX_SUBAGENT_HANDOFF_CHARS} characters. ` +
+      "The original task, the tools, and the permissions stay in place; " +
       "the handoff replaces the earlier working history, so write everything you would need to finish.",
     parameters: SUBAGENT_HANDOFF_PARAMETERS,
     execute: async (_toolCallId, args) => {
@@ -456,7 +462,7 @@ export function createSubagentHandoffTool(options: {
         content: [
           {
             type: "text" as const,
-            text: "Handoff recorded. Continue the task; your context is replaced at the next turn boundary.",
+            text: "Handoff recorded for this request. Continue the task; your context is replaced at the next turn boundary. Do not call the tool again until the runtime asks for a new handoff.",
           },
         ],
         details: { accepted: true },

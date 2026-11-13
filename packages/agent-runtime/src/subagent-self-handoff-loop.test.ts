@@ -19,7 +19,11 @@ import { Type } from "typebox";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { SubagentDefinition } from "@pi-desktop/shared";
 import { SubagentRun, type SubagentRunOptions } from "./subagent.js";
-import { SUBAGENT_HANDOFF_TOOL_NAME } from "./subagent-handoff.js";
+import {
+  MAX_SUBAGENT_HANDOFF_CHARS,
+  MAX_SUBAGENT_HANDOFF_FAILURES,
+  SUBAGENT_HANDOFF_TOOL_NAME,
+} from "./subagent-handoff.js";
 import type { RuntimeProviderConfig } from "./provider-binding.js";
 
 const provider: RuntimeProviderConfig = {
@@ -247,9 +251,25 @@ function createRun(
 
 function handoffCall(
   id: string,
-  args: { [key: string]: string } = SUBMITTABLE,
+  args: ToolCall["arguments"] = SUBMITTABLE,
 ): ToolCall {
   return { type: "toolCall", id, name: SUBAGENT_HANDOFF_TOOL_NAME, arguments: args };
+}
+
+/** Provider requests that actually delivered a handoff ask, in order. */
+function askCount(requests: readonly LlmMessage[][]): number {
+  return requests.filter(hasInstruction).length;
+}
+
+/** Rejections of one shape, as the loop would deliver them turn after turn. */
+function invalidRepetition(
+  count: number,
+  args: ToolCall["arguments"],
+): ScriptedReply[] {
+  return Array.from({ length: count }, (_, index) => ({
+    kind: "tools" as const,
+    calls: [handoffCall(`handoff-invalid-${index}`, args)],
+  }));
 }
 
 function readCall(id: string): ToolCall {
@@ -526,4 +546,181 @@ describe("SubagentRun self-handoff through the real loop", () => {
     expect(imageData(requests[2]!)).toEqual([image.data]);
     expect(result.status).toBe("completed");
   });
+
+/**
+ * The bounded failure budget has to cover the layer the model can fail at
+ * *before* `execute`: the argument schema. A submission that is empty text,
+ * too long, or the wrong shape is refused by the schema check, so the tool
+ * never runs — the runtime never sees the rejection `execute` would report, and
+ * the ask it already parked keeps riding on later requests. These tests walk
+ * the real loop with such submissions and assert what the delegate observes:
+ * how many asks it gets, which error it reads back, whether a later valid
+ * submission still rolls the context over, and what the run kept.
+ */
+describe("SubagentRun self-handoff with schema-rejected submissions", () => {
+  type HandoffStateView = {
+    failures: number;
+    unanswered: number;
+    requested: boolean;
+  };
+
+  /** The run's own bookkeeping: a secondary witness next to the requests. */
+  function stateOf(run: SubagentRun): HandoffStateView {
+    return (run as unknown as { handoffState: HandoffStateView }).handoffState;
+  }
+
+  /** Six submissions of one shape, then a plain report. */
+  async function drive(shape: ToolCall["arguments"]) {
+    const requests: LlmMessage[][] = [];
+    const script: ScriptedReply[] = [
+      { kind: "tools", calls: [readCall("read-1")] },
+      ...invalidRepetition(6, shape),
+      { kind: "text", text: "Final report: stopped asking." },
+    ];
+    const harness = createRun({ kind: "tool-calls", value: 1 }, [readTool([])]);
+    harness.agent.streamFunction = scriptedProvider(script, requests);
+    const result = await harness.run.run();
+    return { ...harness, requests, result };
+  }
+
+  it("charges a schema rejection into the same budget as an execute rejection", async () => {
+    const requests: LlmMessage[][] = [];
+    const script: ScriptedReply[] = [
+      { kind: "tools", calls: [readCall("read-1")] },
+      // Every submission is invalid, but at different layers: the first is
+      // refused by the argument schema and never reaches `execute`, the rest
+      // are refused by the runtime's own normalizer. All of them come out of
+      // one budget, so the asks stop after three in total.
+      { kind: "tools", calls: [handoffCall("handoff-empty", { handoff: "" })] },
+      ...invalidRepetition(5, { handoff: "   \n  " }),
+      { kind: "text", text: "Final report: stopped asking." },
+    ];
+    const harness = createRun({ kind: "tool-calls", value: 1 }, [readTool([])]);
+    harness.agent.streamFunction = scriptedProvider(script, requests);
+
+    const result = await harness.run.run();
+
+    expect(askCount(requests)).toBe(MAX_SUBAGENT_HANDOFF_FAILURES);
+    // Each layer's own reason reached the delegate, so it can correct in place.
+    expect(requestText(requests[2]!)).toContain(
+      'Validation failed for tool "SubagentHandoff"',
+    );
+    expect(requestText(requests[3]!)).toContain("The handoff is empty");
+    // Six submissions are six failures, not six unanswered asks: the two
+    // layers charge into one counter, and each submission charges it once.
+    expect(stateOf(harness.run).failures).toBe(6);
+    expect(stateOf(harness.run).unanswered).toBe(0);
+    expect(result.status).toBe("completed");
+    expect(result.handoffs).toBeUndefined();
+  });
+
+  it("stops asking after empty-text submissions the schema rejects", async () => {
+    const { requests, result, run, agent } = await drive({ handoff: "" });
+
+    // The ask is bounded: three asks, then no more, even though the delegate
+    // kept submitting the same empty text.
+    expect(askCount(requests)).toBe(MAX_SUBAGENT_HANDOFF_FAILURES);
+    expect(stateOf(run).failures).toBe(6);
+    // The delegate is told why, through the real tool error the loop delivers.
+    expect(requestText(requests[2]!)).toContain(
+      'Validation failed for tool "SubagentHandoff"',
+    );
+    // Nothing was installed: a rejected submission never changes the history.
+    expect(result.status).toBe("completed");
+    expect(result.handoffs).toBeUndefined();
+    expect(
+      requestText(agent.state.messages as unknown as LlmMessage[]),
+    ).toContain("contents of read-1");
+  });
+
+  it("stops asking after submissions over the character bound", async () => {
+    const { requests, result, run } = await drive({
+      handoff: "x".repeat(MAX_SUBAGENT_HANDOFF_CHARS + 1),
+    });
+
+    expect(askCount(requests)).toBe(MAX_SUBAGENT_HANDOFF_FAILURES);
+    expect(stateOf(run).failures).toBe(6);
+    expect(requestText(requests[2]!)).toContain(
+      'Validation failed for tool "SubagentHandoff"',
+    );
+    expect(result.handoffs).toBeUndefined();
+  });
+
+  it("stops asking after submissions of the wrong shape", async () => {
+    const { requests, result, run } = await drive({});
+
+    expect(askCount(requests)).toBe(MAX_SUBAGENT_HANDOFF_FAILURES);
+    expect(stateOf(run).failures).toBe(6);
+    expect(requestText(requests[2]!)).toContain(
+      'Validation failed for tool "SubagentHandoff"',
+    );
+    expect(result.handoffs).toBeUndefined();
+  });
+
+  it("charges a whitespace submission exactly once", async () => {
+    // Whitespace passes the schema and is rejected by the runtime's own
+    // normalizer; it must cost one failure, not one per layer.
+    const { requests, result, run } = await drive({ handoff: "   \n  " });
+
+    expect(askCount(requests)).toBe(MAX_SUBAGENT_HANDOFF_FAILURES);
+    // Six submissions, six charges: one per submission, not one per layer.
+    expect(stateOf(run).failures).toBe(6);
+    expect(requestText(requests[2]!)).toContain("The handoff is empty");
+    expect(result.handoffs).toBeUndefined();
+  });
+
+  it("does not charge a submission nobody asked for", async () => {
+    const requests: LlmMessage[][] = [];
+    const script: ScriptedReply[] = [
+      // Three rejected calls while no request is outstanding: the runtime
+      // refuses them for its own reason, so none may spend the budget.
+      ...invalidRepetition(3, { handoff: "" }),
+      { kind: "tools", calls: [readCall("read-1")] },
+      { kind: "tools", calls: [readCall("read-2")] },
+      { kind: "tools", calls: [handoffCall("handoff-1")] },
+      { kind: "text", text: "Final report: handed off." },
+    ];
+    const harness = createRun({ kind: "tool-calls", value: 5 }, [readTool([])]);
+    harness.agent.streamFunction = scriptedProvider(script, requests);
+
+    const result = await harness.run.run();
+
+    // The threshold was reached after the proactive calls: the ask still
+    // happened, so nothing was charged against the failure budget.
+    expect(askCount(requests)).toBe(1);
+    expect(stateOf(harness.run).failures).toBe(0);
+    expect(result.status).toBe("completed");
+    expect(result.handoffs).toBe(1);
+  });
+
+  it("resets the budget on a valid submission", async () => {
+    const requests: LlmMessage[][] = [];
+    const script: ScriptedReply[] = [
+      { kind: "tools", calls: [readCall("read-1")] },
+      { kind: "tools", calls: [handoffCall("handoff-bad-1", { handoff: "" })] },
+      { kind: "tools", calls: [handoffCall("handoff-bad-2", { handoff: "" })] },
+      { kind: "tools", calls: [handoffCall("handoff-1")] },
+      // A second call after the acceptance is a duplicate, not an invalid
+      // submission: it is refused for the runtime's own reason.
+      { kind: "tools", calls: [handoffCall("handoff-duplicate", { handoff: "" })] },
+      { kind: "tools", calls: [readCall("read-2")] },
+      { kind: "tools", calls: [handoffCall("handoff-2")] },
+      { kind: "text", text: "Final report: two handoffs." },
+    ];
+    const harness = createRun({ kind: "tool-calls", value: 1 }, [readTool([])]);
+    harness.agent.streamFunction = scriptedProvider(script, requests);
+
+    const result = await harness.run.run();
+
+    // Two rejections had been charged before the valid submission, which
+    // resets the budget: the post-rollover segment is asked again.
+    expect(hasInstruction(requests[3]!)).toBe(true);
+    expect(hasInstruction(requests[6]!)).toBe(true);
+    const afterAcceptance = requestText(requests[4]!);
+    expect(afterAcceptance).toContain("[Delegated-task handoff 1]");
+    expect(stateOf(harness.run).failures).toBe(0);
+    expect(result.status).toBe("completed");
+    expect(result.handoffs).toBe(2);
+  });
+});
 });
