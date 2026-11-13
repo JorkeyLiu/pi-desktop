@@ -26,8 +26,12 @@ import { settledDelegationMessage } from "./delegation-message.js";
 import type { SubagentHandoffPersistenceError } from "./subagent-handoff.js";
 
 /**
- * A `TaskWait` result is the parent's context; like a delegate's report, it
- * must not become the context problem delegation exists to avoid.
+ * One wait-result *batch* is sized so a large fan-out cannot dump every report
+ * into the parent's context at once. The bound is a batching rule, never a
+ * content rule: at least one settled report is always delivered whole, even
+ * when that single report alone exceeds the budget, and a report deferred here
+ * stays pending delivery — `TaskWait` returns it by id on a later batch and the
+ * idle resume prompts with it. Nothing is clipped or dropped permanently.
  */
 export const MAX_TASKWAIT_RESULT_CHARS = 50_000;
 
@@ -209,7 +213,17 @@ export function snapshotWaitRecord(record: DelegationRecord): WaitResultSnapshot
   };
 }
 
-/** Join delegation results into one bounded text block for the model. */
+/**
+ * Join delegation results into one text block for the model.
+ *
+ * Batching rule: a block is deferred only when it does not fit the batch and
+ * an settled report was already delivered in this batch. The first settled
+ * report is always delivered whole — a single long report can therefore
+ * exceed `MAX_TASKWAIT_RESULT_CHARS` on its own. A deferred report keeps its
+ * `reportDelivered` marker untouched, so `TaskWait` returns it in a later
+ * batch and the idle resume prompts with it; the marker says exactly that and
+ * never implies the text was clipped.
+ */
 export function formatDelegationResults(
   results: Array<{
     delegationId: string;
@@ -225,20 +239,24 @@ export function formatDelegationResults(
   const includedDelegationIds = new Set<string>();
   let total = 0;
   let omitted = 0;
+  let deliveredSettledReport = false;
   for (const result of results) {
     const header = `## ${result.agent} (${result.delegationId}) — ${result.status}${result.metrics ? ` · ${result.metrics}` : ""}`;
     const block = `${header}\n${result.report}`;
-    if (total + block.length > MAX_TASKWAIT_RESULT_CHARS) {
+    const settled = result.status !== "running";
+    const withinBatch = total + block.length <= MAX_TASKWAIT_RESULT_CHARS;
+    if (!withinBatch && !(settled && !deliveredSettledReport)) {
       omitted += 1;
       continue;
     }
     parts.push(block);
     includedDelegationIds.add(result.delegationId);
+    if (settled) deliveredSettledReport = true;
     total += block.length + 2;
   }
   if (omitted > 0) {
     parts.push(
-      `[${omitted} more result${omitted === 1 ? "" : "s"} omitted to protect this context; call TaskWait with their delegationIds to re-read one.]`,
+      `[${omitted} of ${results.length} result${results.length === 1 ? "" : "s"} deferred to keep this batch bounded; call TaskWait with their delegationIds to read them in a later batch. No report is truncated or lost.]`,
     );
   }
   return {

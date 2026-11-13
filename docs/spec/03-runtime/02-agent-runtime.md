@@ -969,10 +969,12 @@ core set rather than the on-demand catalog of §7.1:
 - `TaskWait(delegationIds?, mode?, minCompleted?)` — result-dependency selector only.
   Converges on running delegations (defaults to all); `mode: "any"` with `minCompleted`
   converges as soon as the first N settle. Settled re-read is cheap and immediate.
-  The joined result is bounded to `MAX_TASKWAIT_RESULT_CHARS` (50k); if the bound omits
-  finished reports, those reports remain pending undelivered and the runtime sends them on
-  the idle resume (or they can be re-read by id) — one delivery path, never dropped by
-  truncation. A program wake is not a failure and does not stop delegates (D328): the wait
+  The joined result is batched under `MAX_TASKWAIT_RESULT_CHARS` (50k) so a large
+  fan-out cannot overflow one request: each batch carries at least one settled report
+  whole, even when that report alone exceeds the bound. Reports a batch defers stay
+  pending undelivered until the runtime sends them on the idle resume or the parent
+  calls `TaskWait` with their ids — one assembly on both paths, whole reports at every
+  step, and the result states how many results were deferred rather than clipping any. A program wake is not a failure and does not stop delegates (D328): the wait
   returns a heartbeat (agent, status, elapsed, turns, last tool) plus any finished reports.
   The runtime keeps the parent turn open and delivers remaining reports when they finish,
   even if the parent already stopped calling tools. Only `TaskStop` or user Stop aborts a
@@ -1247,10 +1249,11 @@ tests or other tooling. Its statuses are `completed`, `failed`,
 `aborted` and the registry-only `stopped` (`timed_out` is a vestigial
 pre-D328 record value only, treated as `failed` for resume; no timeout is armed);
 the terminal ones surface through `TaskWait`, whose text is
-the report (bounded to `MAX_SUBAGENT_REPORT_CHARS`, 12k; when exceeded, persisted to session scratch with a pointer notice per ADR 0062) and whose details
+the delegate's report itself — whole and untruncated whatever its length or scratch
+availability, on success and failure alike (ADR 0062 §5) — and whose details
 carry `delegationId`, `agent`, `modelId`, `thinkingLevel`, `status`, `startedAt`,
-`completedAt` when settled, `turns`, `toolCalls`, and `scratchReportPath` when
-the full report was spilled to scratch; on failure they carry
+`completedAt` when settled, `turns`, `toolCalls`, and `scratchReportPath` only on
+older records written by the retired scratch-spill path; on failure they carry
 `error` (including resume ID hints on `SUBAGENT_OUTPUT_TRUNCATED`). The same effective model and thinking fields are included in the
 immediate `Task` result and in lifecycle snapshots so live and restored
 delegation views do not re-derive them from definitions or parent settings.

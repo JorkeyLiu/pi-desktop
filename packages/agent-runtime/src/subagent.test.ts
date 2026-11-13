@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
@@ -8,7 +8,6 @@ import type { Message } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   composeSubagentSystemPrompt,
-  MAX_SUBAGENT_REPORT_CHARS,
   SubagentRun,
   type SubagentRunOptions,
   type SubagentRunStatus,
@@ -96,6 +95,21 @@ function assistantMessage(overrides: {
   };
 }
 
+/**
+ * A report well past the retired 12k report cap, with unique markers at the
+ * beginning, middle and end so a delivery path cannot quietly clip it.
+ */
+function oversizedReport(): string {
+  const filler = "evidence line with path and line number. ".repeat(400);
+  return [
+    "REPORT-HEAD: first finding survives delivery.",
+    filler,
+    "REPORT-MIDDLE: middle finding survives delivery.",
+    filler,
+    "REPORT-TAIL: last finding survives delivery.",
+  ].join("\n");
+}
+
 describe("composeSubagentSystemPrompt", () => {
   it("states the read-only boundary and keeps project guidance last", () => {
     const prompt = composeSubagentSystemPrompt({
@@ -119,15 +133,30 @@ describe("composeSubagentSystemPrompt", () => {
 
     expect(prompt).toContain("You may change files");
     expect(prompt).not.toContain("no tools that change files");
-    expect(prompt).toContain("If the final report would exceed ~8,000 characters, write the full report to a file yourself");
+    // A file the task itself asks for is a deliverable; the report is not
+    // routed through a file because of its length.
+    expect(prompt).toContain("If the task asks you to write a file, write it");
+    expect(prompt).not.toMatch(/~?8,000/);
+    expect(prompt).not.toContain("write the full report to a file yourself");
   });
 
-  it("does not instruct read-only delegates to write reports to a file", () => {
+  it("asks for the result, its evidence, and the remaining gaps in the final message", () => {
+    const prompt = composeSubagentSystemPrompt({
+      definition: definition({ tools: ["Read", "Edit"] }),
+    });
+
+    expect(prompt).toContain("directly contain the result, the relevant evidence");
+    expect(prompt).toContain("anything you could not finish");
+    expect(prompt).toContain("concise and proportional to the task");
+  });
+
+  it("leaves read-only delegates without a report-file escape hatch", () => {
     const prompt = composeSubagentSystemPrompt({
       definition: definition({ tools: ["Read", "Glob"] }),
     });
 
     expect(prompt).not.toContain("write the full report to a file yourself");
+    expect(prompt).not.toMatch(/~?8,000/);
   });
 
   it("lists resolved inherit tools and treats them as mutating when they write", () => {
@@ -441,14 +470,16 @@ describe("SubagentRun reporting", () => {
     expect(run.usage.totalTokens).toBe(30);
   });
 
-  it("bounds a runaway report", () => {
+  it("keeps a runaway report whole in the result", () => {
     const { run } = createRun();
-    const report = "x".repeat(MAX_SUBAGENT_REPORT_CHARS * 2);
+    const report = oversizedReport();
 
     const result = run.result("completed", report);
 
-    expect(result.report.length).toBeLessThanOrEqual(MAX_SUBAGENT_REPORT_CHARS);
-    expect(result.report).toContain("[subagent report truncated]");
+    expect(result.report).toBe(report);
+    expect(result.report).toContain("REPORT-HEAD");
+    expect(result.report).toContain("REPORT-MIDDLE");
+    expect(result.report).toContain("REPORT-TAIL");
   });
 
   it("records the effective model and thinking selection", () => {
@@ -546,18 +577,18 @@ describe("SubagentRun reporting", () => {
     expect(result.error?.charactersProduced).toBe("Partial text here...".length);
   });
 
-  it("spills oversized reports to session scratch directory (ADR 0062)", async () => {
+  it("keeps an oversized completed report inline when scratch is available", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "pi-subagent-scratch-"));
     try {
       const { run } = createRun({
         scratchDir: tmp,
         parentToolCallId: "call-99",
       });
-      const largeReport = "A".repeat(MAX_SUBAGENT_REPORT_CHARS + 500);
+      const reportText = oversizedReport();
       run.handleEvent({
         type: "message_end",
         message: assistantMessage({
-          content: [{ type: "text", text: largeReport }],
+          content: [{ type: "text", text: reportText }],
           stopReason: "stop",
         }),
       });
@@ -570,58 +601,28 @@ describe("SubagentRun reporting", () => {
       const result = await (run as unknown as SubagentRun).run();
 
       expect(result.status).toBe("completed");
-      expect(result.scratchReportPath).toBeDefined();
-      expect(result.report).toContain("Complete subagent report");
-      expect(result.report).toContain("was saved to:");
-      expect(result.report).toContain(result.scratchReportPath!);
-      expect(existsSync(result.scratchReportPath!)).toBe(true);
-      expect(readFileSync(result.scratchReportPath!, "utf8")).toBe(largeReport);
+      expect(result.report).toBe(reportText);
+      expect(result.report).toContain("REPORT-HEAD");
+      expect(result.report).toContain("REPORT-MIDDLE");
+      expect(result.report).toContain("REPORT-TAIL");
+      expect(result.scratchReportPath).toBeUndefined();
+      // The report is not copied out and pointed at instead.
+      expect(existsSync(join(tmp, "delegations"))).toBe(false);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  it("keeps an opaque tool-call id inside the scratch directory", async () => {
-    const tmp = mkdtempSync(join(tmpdir(), "pi-subagent-scratch-"));
-    try {
-      const { run } = createRun({
-        scratchDir: tmp,
-        parentToolCallId: "../../outside",
-      });
-      run.handleEvent({
-        type: "message_end",
-        message: assistantMessage({
-          content: [{ type: "text", text: "A".repeat(MAX_SUBAGENT_REPORT_CHARS + 1) }],
-          stopReason: "stop",
-        }),
-      });
-      run.agent = {
-        prompt: vi.fn().mockResolvedValue(undefined),
-        waitForIdle: vi.fn().mockResolvedValue(undefined),
-        abort: vi.fn(),
-      };
-
-      const result = await (run as unknown as SubagentRun).run();
-
-      expect(result.scratchReportPath?.startsWith(join(tmp, "delegations"))).toBe(true);
-      expect(readFileSync(result.scratchReportPath!, "utf8")).toHaveLength(
-        MAX_SUBAGENT_REPORT_CHARS + 1,
-      );
-    } finally {
-      rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("falls back to bounded clipping when scratch write is unavailable or fails", async () => {
+  it("keeps an oversized report inline when no scratch directory exists", async () => {
     const { run } = createRun({
       scratchDir: undefined,
       parentToolCallId: "call-no-scratch",
     });
-    const largeReport = "A".repeat(MAX_SUBAGENT_REPORT_CHARS + 500);
+    const reportText = oversizedReport();
     run.handleEvent({
       type: "message_end",
       message: assistantMessage({
-        content: [{ type: "text", text: largeReport }],
+        content: [{ type: "text", text: reportText }],
         stopReason: "stop",
       }),
     });
@@ -635,8 +636,27 @@ describe("SubagentRun reporting", () => {
 
     expect(result.status).toBe("completed");
     expect(result.scratchReportPath).toBeUndefined();
-    expect(result.report.length).toBeLessThanOrEqual(MAX_SUBAGENT_REPORT_CHARS);
-    expect(result.report).toContain("[subagent report truncated]");
+    expect(result.report).toBe(reportText);
+  });
+
+  it("preserves a failed run's oversized last output after its failure preamble", () => {
+    const { run } = createRun();
+    run.turns = 2;
+    const reportText = oversizedReport();
+
+    const result = run.result("failed", reportText, {
+      code: "NETWORK_ERROR",
+      message: "no route",
+    });
+
+    expect(result.report).toContain(
+      "The explorer subagent failed after 2 turn(s): no route.",
+    );
+    expect(result.report).toContain("Its last output was:");
+    expect(result.report).toContain("REPORT-HEAD");
+    expect(result.report).toContain("REPORT-MIDDLE");
+    expect(result.report).toContain("REPORT-TAIL");
+    expect(result.report.length).toBeGreaterThan(12_000);
   });
 
   it("clears truncated output state if a subsequent turn finishes cleanly", async () => {

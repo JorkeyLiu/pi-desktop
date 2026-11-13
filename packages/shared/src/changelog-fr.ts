@@ -28,6 +28,7 @@ export const frEntries: ChangelogEntry[] = [
       "La transcription d’un sous-agent affiche l’indicateur de travail tant que l’enfant travaille, au lieu d’une liste figée entre deux mises à jour.",
       "Un long texte collé parvient désormais au modèle sous la forme du texte collé, à l'endroit où vous l'avez collé, au lieu d'un chemin de fichier qu'il devait ouvrir. Le brouillon et l'historique conservent la puce compacte, et chaque envoi — nouvelle tentative, message en file d'attente ou conversation réouverte — transporte le même texte.",
       "Consulter les sous-agents en cours répond immédiatement : la liste des tâches renvoie l’état actuel au lieu d’attendre la fin de l’un d’eux, et l’attente reste une étape distincte.",
+      "Le rapport d'un sous-agent parvient désormais entier à l'agent principal, quelle que soit sa longueur : aucune limite de longueur ne le tronque, aucun chemin de fichier ne le remplace et, lorsqu'une attente regroupe plusieurs rapports, le premier est tout de même livré en entier avant que le reste ne soit différé.",
     ],
   },
   {

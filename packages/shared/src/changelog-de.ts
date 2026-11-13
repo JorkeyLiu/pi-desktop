@@ -28,6 +28,7 @@ export const deEntries: ChangelogEntry[] = [
       "Das Transcript eines Subagents zeigt den Arbeitsindikator, solange das Kind arbeitet, statt einer Liste, die zwischen Aktualisierungen stillsteht.",
       "Ein langer eingefügter Text erreicht das Modell jetzt an der eingefügten Stelle als der eingefügte Text statt als Dateipfad, den es erst öffnen müsste. Entwurf und Verlauf behalten den kompakten Chip, und jeder Sendeweg – Wiederholen, eine eingereihte Nachricht oder eine erneut geöffnete Unterhaltung – trägt denselben Text.",
       "Der Blick auf laufende Subagenten antwortet jetzt sofort: Die Aufgabenliste zeigt den aktuellen Stand, statt auf das Ende eines Agenten zu warten; das Warten bleibt ein eigener Schritt.",
+      "Der Bericht eines Subagenten erreicht den Hauptagenten jetzt vollständig, egal wie lang er ist: keine Längenbegrenzung kürzt ihn, kein Dateipfad tritt an seine Stelle, und ein Warten, das mehrere Berichte bündelt, liefert den ersten trotzdem vollständig, bevor es den Rest zurückstellt.",
     ],
   },
   {

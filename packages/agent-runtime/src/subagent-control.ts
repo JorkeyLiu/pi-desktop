@@ -22,12 +22,8 @@ import {
   type UiMessage,
 } from "@pi-desktop/shared";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { nowIso, truncateTextWithMarker } from "./agent-messages.js";
-import {
-  MAX_SUBAGENT_REPORT_CHARS,
-  type SubagentRunResult,
-  type SubagentRunStatus,
-} from "./subagent.js";
+import { nowIso } from "./agent-messages.js";
+import type { SubagentRunResult, SubagentRunStatus } from "./subagent.js";
 import {
   assembleWaitResult,
   delegationSummary,
@@ -546,7 +542,7 @@ export function settleDelegationRecord(
     settled = {
       ...result,
       status: "failed",
-      report: truncateTextWithMarker(`${message}\n\n${result.report}`, MAX_SUBAGENT_REPORT_CHARS, "\n[report truncated]\n"),
+      report: `${message}\n\n${result.report}`,
       error: { code: "SUBAGENT_PARENT_FAILED", message, resumeId: record.delegationId },
     };
   }
