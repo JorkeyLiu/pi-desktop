@@ -1654,7 +1654,7 @@ test("an unknown payload keeps its fields and one clearly named raw entry", () =
   assert.equal(raw.label, undefined);
 });
 
-test("a failed call's own sentence is the reason, and a bare verdict adds nothing", () => {
+test("a failed handoff states only its reason, and another tool keeps its record", () => {
   const reason = "The handoff is empty: write what your future self needs to continue this task.";
   const refusal = {
     toolName: "SubagentHandoff",
@@ -1672,8 +1672,8 @@ test("a failed call's own sentence is the reason, and a bare verdict adds nothin
   // restates the failure the row already shows, so the sentence is the body.
   assert.deepEqual(roles(blocks), ["error"]);
   assert.equal(blocks[0].text, reason);
-  // Anything beyond the verdict is a diagnostic the sentence cannot replace:
-  // the record and its untouched payload stay.
+  // Anything beyond the verdict is still not a second section on a handoff row:
+  // the reader expanded it to read why the submission was refused.
   const diagnostic = buildToolPresentation(
     {
       ...refusal,
@@ -1684,10 +1684,27 @@ test("a failed call's own sentence is the reason, and a bare verdict adds nothin
     },
     { failureNote: () => "unused" },
   );
-  assert.deepEqual(roles(diagnostic), ["error", "details", "details"]);
-  assert.deepEqual(diagnostic[1].rows, [
+  assert.deepEqual(roles(diagnostic), ["error"]);
+  assert.equal(diagnostic[0].text, reason);
+  // Another failed tool with the same record keeps every diagnostic: the
+  // handoff rule is scoped to that one built-in.
+  const plugin = buildToolPresentation(
+    {
+      toolName: "plugin_deploy",
+      toolStatus: "error",
+      isError: true,
+      toolResult: {
+        content: [{ type: "text", text: "The deployment was rejected by the gate." }],
+        details: { accepted: false, reasonCode: "gate_rejected" },
+      },
+    },
+    { failureNote: () => "unused" },
+  );
+  assert.deepEqual(roles(plugin), ["error", "details", "details"]);
+  assert.equal(plugin[0].text, "The deployment was rejected by the gate.");
+  assert.deepEqual(plugin[1].rows, [
     { label: "accepted", value: "false" },
-    { label: "reasonCode", value: "handoff_empty" },
+    { label: "reasonCode", value: "gate_rejected" },
   ]);
   // The echo of a payload is not a reason: it may not be printed twice.
   const echoed = buildToolPresentation(

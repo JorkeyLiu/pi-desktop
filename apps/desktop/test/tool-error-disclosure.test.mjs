@@ -166,8 +166,9 @@ function refusedRead(id = "h-read", callId = "c-read") {
 }
 
 /**
- * A refusal that records a diagnostic beside its verdict: the runtime's own
- * reason code is not something the sentence carries, so the record stays.
+ * A refusal that records extra diagnostics beside its verdict: the reader still
+ * expands a handoff row for the refusal reason alone, so none of them becomes a
+ * field or a payload drawer.
  */
 function refusedHandoffWithDiagnostic(id = "h-diag", callId = "c-diag") {
   return childRow(id, {
@@ -179,6 +180,29 @@ function refusedHandoffWithDiagnostic(id = "h-diag", callId = "c-diag") {
     toolResult: {
       content: [{ type: "text", text: REFUSAL }],
       details: { accepted: false, reasonCode: "handoff_empty", dropped: true },
+      isError: true,
+    },
+  });
+}
+
+/**
+ * Another tool's failure with exactly the same shape of record, so the
+ * handoff-only rule is proven not to have spread to every failed row.
+ */
+function failedPluginWithDiagnostic(id = "h-plugin", callId = "c-plugin") {
+  return childRow(id, {
+    toolName: "plugin_deploy",
+    toolCallId: callId,
+    toolArgs: { target: "staging" },
+    toolStatus: "error",
+    isError: true,
+    toolResult: {
+      content: [{ type: "text", text: "The deployment was rejected by the gate." }],
+      details: {
+        accepted: false,
+        reasonCode: "gate_rejected",
+        dropped: true,
+      },
       isError: true,
     },
   });
@@ -303,19 +327,42 @@ test("a refused handoff opens to the delegate's failure reason, not its verdict 
   } finally { await vite.close(); }
 });
 
-test("a refusal that records a diagnostic keeps it beside its reason", async () => {
+test("a handoff refusal hides every diagnostic behind its reason", async () => {
   const { vite, render } = await setup();
   try {
     const html = render([taskCall(), refusedHandoffWithDiagnostic()], "h-diag");
     const body = rowBody(html, "h-diag");
     assert.ok(body, "the refused row's disclosure did not open");
-    // The record is not only a verdict, so nothing about it is dropped: the
-    // sentence leads, and the fields the sentence cannot replace follow, beside
-    // the untouched payload.
+    // A handoff row is opened for one fact — why the runtime refused it. Extra
+    // diagnostics in the record are no second section: the sentence is the
+    // whole body, with no fields and no payload drawer.
     assert.ok(body.includes(REFUSAL), "the refusal does not state its reason");
     assert.equal((body.match(/The handoff is empty/g) ?? []).length, 1);
+    assert.doesNotMatch(body, /reasonCode|handoff_empty|dropped/);
+    assert.doesNotMatch(body, /tool-field-label/);
+    assert.doesNotMatch(body, /class="tool-raw"/);
+  } finally { await vite.close(); }
+});
+
+test("another tool's failure keeps the diagnostics the handoff row hides", async () => {
+  const { vite, render } = await setup();
+  try {
+    const html = render([taskCall(), failedPluginWithDiagnostic()], "h-plugin");
+    const body = rowBody(html, "h-plugin");
+    assert.ok(body, "the failed plugin row's disclosure did not open");
+    // The handoff-only rule is exactly that: every other failed tool still
+    // states its reason first and keeps the record it came with, beside the
+    // untouched payload.
+    assert.ok(
+      body.includes("The deployment was rejected by the gate."),
+      "the plugin failure does not state its reason",
+    );
+    assert.equal(
+      (body.match(/The deployment was rejected by the gate\./g) ?? []).length,
+      1,
+    );
     assert.match(body, /reasonCode/);
-    assert.match(body, /handoff_empty/);
+    assert.match(body, /gate_rejected/);
     assert.match(body, /class="tool-raw"/);
   } finally { await vite.close(); }
 });

@@ -119,6 +119,16 @@ export function isAskToolName(toolName?: string): boolean {
   return bareToolName(toolName) === "asktool";
 }
 
+/**
+ * The self-handoff built-in, matched on the exact bare name for the same reason
+ * as the question tool: a provider namespace (`functions.SubagentHandoff`) still
+ * reaches its own row, while a plugin tool whose name merely ends in the word
+ * keeps the generic presentation.
+ */
+export function isSubagentHandoffTool(toolName?: string): boolean {
+  return bareToolName(toolName) === "subagenthandoff";
+}
+
 /** The tool that STARTS a subagent (ADR 0062). The lifecycle tools of ADR 0089
  * (TaskWait/TaskList/TaskStop) drive an existing delegation and are not
  * delegation activity items themselves. */
@@ -292,7 +302,7 @@ export function getToolIdentityKey(toolName?: string): ToolIdentityKey | null {
   // provider word in every other language. Its identity is matched exactly, like
   // the question tool's, so a plugin tool that merely sounds similar keeps its
   // own name.
-  if (bareToolName(toolName) === "subagenthandoff") {
+  if (isSubagentHandoffTool(toolName)) {
     return "chat.toolIdentitySubagentHandoff";
   }
   const action = exactBuiltinAction(toolName);

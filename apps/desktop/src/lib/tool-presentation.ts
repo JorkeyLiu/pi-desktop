@@ -4,6 +4,7 @@ import {
   getToolAction,
   getToolSummaryKey,
   isAskToolName,
+  isSubagentHandoffTool,
   type ToolAction,
 } from "./tool-display";
 import { reviewChangeFromMessage } from "./workspace-review";
@@ -284,6 +285,55 @@ function isBareFailureVerdict(details: Record<string, unknown> | null): boolean 
       ([key, value]) => value === false && FAILURE_VERDICT_KEYS.has(key),
     )
   );
+}
+
+/**
+ * A failed self-handoff row's body: exactly one failure sentence.
+ *
+ * A handoff is a protocol submission, so its record is the verdict the runtime
+ * reached, not content. Extra diagnostics it may carry (`accepted: false`, a
+ * reason code, the dropped draft) either restate or qualify the refusal the row
+ * already shows, and a reader who expands the row is asking one thing: why it
+ * was refused. The body is therefore that sentence alone — never fields, never
+ * a raw dump — while the payload itself is left untouched for persistence. The
+ * reason follows the ordinary failure precedence: the structured `error`, the
+ * envelope's own sentence, the row's error message, then the renderer's
+ * localized sentence saying none was reported.
+ */
+function handoffFailureBlock(
+  message: ToolPresentationMessage,
+  options: ToolPresentationOptions,
+): ToolBlock[] {
+  const details = asRecord(toolResultPayload(message));
+  const structured = stringAt(details, "error");
+  if (structured) {
+    const code = stringAt(details, "code");
+    return [
+      {
+        kind: "note",
+        role: "error",
+        text: structured,
+        ...(code ? { code } : {}),
+      },
+    ];
+  }
+  const sentence = envelopeFailureText(message, details);
+  if (sentence) return [{ kind: "note", role: "error", text: sentence }];
+  const recorded = asRecord(message.error);
+  const recordedText = stringAt(recorded, "message");
+  const recordedCode = stringAt(recorded, "code");
+  const text =
+    recordedText ??
+    options.failureNote?.(message.toolStatus === "denied" ? "denied" : "failed");
+  if (!text) return [];
+  return [
+    {
+      kind: "note",
+      role: "error",
+      text,
+      ...(recordedCode ? { code: recordedCode } : {}),
+    },
+  ];
 }
 
 /**
@@ -1408,6 +1458,13 @@ export function buildToolPresentation(
   if (isAskToolName(message.toolName)) {
     const askToolBlock = askToolResultBlock(message);
     if (askToolBlock) return [askToolBlock];
+  }
+  // A failed self-handoff states its reason and nothing else: its record is a
+  // submission verdict, so the payload is never rendered as fields or a raw
+  // dump. Only the exact built-in takes this path; a plugin tool that merely
+  // sounds similar keeps the ordinary failure presentation.
+  if (isSubagentHandoffTool(message.toolName) && resultFailed(message)) {
+    return handoffFailureBlock(message, options);
   }
 
   const action = getToolAction(message.toolName);

@@ -19102,19 +19102,20 @@ host-created files. The full app's file-preview viewer is covered separately.
   no snippet of the delegate's text, never a lifecycle status, never argument
   or result JSON — and that title is centred on the transcript column at both
   wide and narrow pane widths, opening or not. The running and refused calls
-  keep the tool row and its own state (spinner, `Failed`) and their disclosed
-  details. Opening a checkpoint shows the standard tool detail section head —
+  keep the tool row and its own state (spinner, `Failed`); the refused row's
+  disclosure is only its reason. Opening a checkpoint shows the standard tool
+  detail section head —
   a translated heading naming the bytes and one copy control — above the whole
   authored handoff, as plain text with its own line breaks and bullets
   preserved — no field labels, no section list, no per-field structure.
   Model-authored markup in it renders as text, not HTML, and the copy control
   hands over every character of the handoff while reporting the copy without
   collapsing the row. The refused call's own disclosure states the reason the
-  runtime refused it — the explanation the result carried as text — instead of
-  only the `accepted: false` verdict; when that verdict is the whole recorded
-  result, the sentence stands alone, with neither the verdict's fields nor its
-  payload drawer, and the reason is printed once. A record carrying any
-  diagnostic beyond the verdict keeps it beside the reason. The row is named by
+  runtime refused it — the explanation the result carried as text — and nothing
+  else: never the `accepted: false` verdict, a reason code, any other recorded
+  field, or the payload drawer, even when the record carried diagnostics beyond
+  the verdict, and the reason is printed once. Every other failed tool still
+  keeps the record it came with beside its reason. The row is named by
   its localized identity rather than its protocol identifier (`Subagent
   Handoff` in English, `子代理交接` in Chinese), and the head states that name
   once — never again as its own hint. A failed call that recorded no result
@@ -19134,8 +19135,9 @@ host-created files. The full app's file-preview viewer is covered separately.
   section head, and that pressing the head's copy control hands the renderer
   the whole authored handoff and shows the copied feedback.
   The same file also asserts the refused row's opened body carries the reason
-  once and no verdict field or payload drawer, an extra diagnostic is kept, and
-  the row is named by its English and Chinese catalog names exactly once.
+  once with no verdict, diagnostic field or payload drawer, that another failed
+  tool still keeps its diagnostics, and that the row is named by its English and
+  Chinese catalog names exactly once.
 
 ### E2E-SUBAGENT-handoff-keeps-steering
 
