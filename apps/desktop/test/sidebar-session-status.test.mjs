@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   latestSessionOutcomes,
   sidebarSessionStatus,
+  sidebarSessionStatusIsTogglable,
 } from "../src/lib/sidebar-session-status.ts";
 import { loadStylesSync } from "./helpers/styles.mjs";
 
@@ -50,20 +51,39 @@ test("read task notifications leave no sidebar indicator", () => {
   assert.deepEqual(outcomes, {});
 });
 
-test("prioritizes in-progress and selected states over terminal outcomes", () => {
+test("permission, in-progress work, and unread outcomes outrank the manual mark", () => {
   assert.equal(
-    sidebarSessionStatus({ running: true, selected: true, outcome: "failed" }),
+    sidebarSessionStatus({
+      running: true,
+      outcome: "failed",
+      pending: true,
+      hasPendingPermission: true,
+    }),
+    "permission",
+  );
+  assert.equal(
+    sidebarSessionStatus({ running: true, outcome: "failed", pending: true }),
     "running",
   );
   assert.equal(
-    sidebarSessionStatus({ running: false, selected: true, outcome: "failed" }),
-    "selected",
+    sidebarSessionStatus({ running: false, outcome: "failed", pending: true }),
+    "failed",
   );
   assert.equal(
-    sidebarSessionStatus({ running: false, selected: false, outcome: "completed" }),
+    sidebarSessionStatus({ running: false, outcome: "completed" }),
     "completed",
   );
-  assert.equal(sidebarSessionStatus({ running: false, selected: false }), null);
+  assert.equal(sidebarSessionStatus({ running: false, pending: true }), "pending");
+  // A selected idle row keeps its hollow mark: selection never blanks it.
+  assert.equal(sidebarSessionStatus({ running: false }), "idle");
+});
+
+test("only the manual idle mark toggles; every reported state stays informational", () => {
+  for (const status of ["permission", "running", "completed", "failed"]) {
+    assert.equal(sidebarSessionStatusIsTogglable(status), false, status);
+  }
+  assert.equal(sidebarSessionStatusIsTogglable("pending"), true);
+  assert.equal(sidebarSessionStatusIsTogglable("idle"), true);
 });
 
 test("opening a conversation acknowledges its outcome badge before loading details", () => {
@@ -92,6 +112,10 @@ test("opening a conversation acknowledges its outcome badge before loading detai
 });
 
 test("renders semantic, shape-distinct sidebar status indicators", () => {
+  const mark = fs.readFileSync(
+    new URL("../src/features/sessions/SessionStatusMark.tsx", import.meta.url),
+    "utf8",
+  );
   const sidebar = fs.readFileSync(
     new URL("../src/components/Sidebar.tsx", import.meta.url),
     "utf8",
@@ -105,15 +129,30 @@ test("renders semantic, shape-distinct sidebar status indicators", () => {
   );
   const main = readMainSourceSync();
 
-  assert.match(sidebar, /sessionSelected[\s\S]*sessionCompleted[\s\S]*sessionFailed/);
-  assert.match(sidebar, /IconCheck[\s\S]*IconCircleAlert/);
+  assert.match(sidebar, /<SessionStatusMark/);
+  assert.doesNotMatch(sidebar, /nav\.sessionSelected/);
+  // The idle mark is the toggle: a shared button primitive, a pressed state,
+  // and a localized name, so it is reachable by pointer and keyboard.
+  assert.match(mark, /TooltipButton/);
+  assert.match(mark, /aria-pressed={marked}/);
+  assert.match(mark, /nav\.sessionPendingMarker/);
+  assert.match(mark, /nav\.sessionMarkPending/);
+  assert.match(mark, /nav\.sessionClearPending/);
+  assert.match(mark, /IconCheck[\s\S]*IconCircleAlert/);
+  assert.match(mark, /onDragStart[\s\S]*preventDefault\(\)[\s\S]*stopPropagation\(\)/);
   assert.match(styles, /thread-item-status\.running::before[\s\S]*--ds-warning/);
-  assert.match(styles, /thread-item-status\.selected::before[\s\S]*--ds-accent/);
+  assert.match(styles, /thread-item-status\.idle::before[\s\S]*--ds-accent/);
+  assert.match(styles, /thread-item-status\.pending::before[\s\S]*--ds-warning/);
   assert.match(styles, /thread-item-status\.completed[\s\S]*--ds-success/);
   assert.match(styles, /thread-item-status\.failed[\s\S]*--ds-error/);
+  // The manual mark carries no halo and no animation.
+  const pendingBlock = styles.match(
+    /\.thread-item-status\.pending::before {[\s\S]*?\n}/,
+  )?.[0] ?? "";
+  assert.doesNotMatch(pendingBlock, /animation|box-shadow/);
   assert.match(
     styles,
-    /prefers-reduced-motion: reduce[\s\S]*thread-item-status\.running::before[\s\S]*animation: none/,
+    /prefers-reduced-motion: reduce[\s\S]*thread-item-status\.running::after[\s\S]*animation: none/,
   );
   assert.match(
     app,

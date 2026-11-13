@@ -247,44 +247,61 @@ Light-surface polish (D148):
 
 ### 4.5 Sidebar task status semantics
 
-Compact task rows reserve one `12px` leading status slot. State is never
+Compact task rows reserve one leading status slot in the row's left gutter. The
+slot is `20px` wide and spans the full row height, so the toggle is a real hit
+target centered on the same 10px the mark has always occupied. State is never
 communicated by color alone, and each status consumes an existing semantic
 token rather than introducing a decorative palette:
 
 | State | Semantic color | Shape / motion | Meaning |
 |---|---|---|---|
-| Selected | neutral accent | static outlined ring | current conversation |
-| In progress | warning orange | filled dot; two breathing cycles, then steady | agent is producing or executing |
+| Idle (manual toggle, unpressed) | neutral accent | hollow outlined ring, static | no live state; the row is not marked pending |
+| Pending (manual toggle, pressed) | warning orange | filled dot, static — no halo, no animation | the user marked the row as still needing them |
+| In progress | warning orange | filled dot plus a halo ring that animates only while the turn runs; static halo under reduced motion | agent is producing or executing |
+| Permission | purple | dot with two pulse cycles, then steady | the session waits on a tool approval |
 | Completed | success green | check mark | latest unread task turn completed |
 | Failed | error red | circled alert mark | latest unread task turn failed |
 
-Precedence is `in progress → selected → completed/failed`. Starting another
-turn clears the prior terminal outcome; abort clears the live indicator without
-creating a failure. Opening a conversation acknowledges its unread terminal
-outcome: the terminal mark clears immediately and the matching durable task
-notification is marked read so the mark cannot return after a notification
-refresh or app restart. Restoring/focusing the app with that conversation still
-visible in the chat applies the same acknowledgement without requiring a
-session switch; other sessions remain unread. Outcomes already marked read
-never produce a terminal mark. Marking the row read, marking all rows read, or
-clearing the inbox also dismisses any matching task-native banner; a late event
-for that durable id cannot restore the mark, row, or banner. Reduced-motion mode
-disables the breathing animation while retaining its orange fill and localized
-accessible name. Running dots in task rows and related-session hover cards
-animate for two 1.6-second cycles when mounted or entering the running state,
-then remain steady until the status changes. They must not continuously
-submit frames while the rest of the window is idle.
+Precedence is `permission → in progress → completed/failed → manual pending →
+idle`. An idle row shows the hollow mark whether or not it is the selected
+conversation, so selection never conceals a manual mark. Only the hollow and
+manual states toggle: clicking the mark fills it, clicking it again clears it,
+and the manual flag is device-local sidebar preference state (no host row,
+protocol field, or tray flag) that survives a turn starting or ending, opening
+or selecting the session, a renderer refresh, and a relaunch. Permission,
+in-progress, and unread-outcome marks stay informational: a click on them
+never selects the row and never replaces their glyph. The idle/manual control
+is the shared tooltip button with a localized accessible name, `aria-pressed`,
+and Enter/Space activation.
 
-The same bound covers every idle-reachable status indicator, because any
+Starting another turn clears the prior terminal outcome; abort clears the live
+indicator without creating a failure. Opening a conversation acknowledges its
+unread terminal outcome: the terminal mark clears immediately and the matching
+durable task notification is marked read so the mark cannot return after a
+notification refresh or app restart. Restoring/focusing the app with that
+conversation still visible in the chat applies the same acknowledgement without
+requiring a session switch; other sessions remain unread. Outcomes already
+marked read never produce a terminal mark. Marking the row read, marking all
+rows read, or clearing the inbox also dismisses any matching task-native banner;
+a late event for that durable id cannot restore the mark, row, or banner.
+
+The running halo in a task row is the sidebar's one continuous animation: it
+exists only while that turn is actually in flight and stops as soon as the
+turn settles, so an idle window never keeps submitting frames for it.
+Reduced-motion mode stops the halo and keeps its static ring, so running is
+still distinguishable from the plain orange manual fill by shape, not motion.
+The related-session hover card keeps its bounded two-cycle running mark.
+
+The same bound covers every other idle-reachable status indicator, because any
 one of them keeps the transparent macOS window dirty and therefore
 re-composited even when nothing is happening: the permission dot on a
 session waiting for approval, the plan-mode chip in the composer toolbar,
 and the warning dot on the backend banner each play two cycles and then
 hold a steady state that carries the meaning by itself (purple fill,
 planning-tinted icon, warning fill). Only indicators that describe work in
-flight — a streaming cursor, a running tool row, a recording microphone —
-may animate for as long as that work lasts. Reduced-motion mode disables
-all of them.
+flight — a streaming cursor, a running tool row, a recording microphone, and
+the sidebar running halo — may animate for as long as that work lasts.
+Reduced-motion mode disables all of them.
 
 ### 4.6 Tailwind CSS variable stub
 

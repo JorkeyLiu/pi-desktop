@@ -28,6 +28,7 @@ import {
   projectIsPinned,
   sessionIsArchived,
   sessionIsPinned,
+  sessionIsPending,
   sortProjects,
   sortSessions,
   normalizeProjectName,
@@ -250,6 +251,7 @@ export function createProjectSlice({
   | "deleteProject"
   | "toggleSessionPinned"
   | "toggleSessionArchived"
+  | "toggleSessionPending"
   | "archiveSession"
   | "restoreSession"
   | "renameSession"
@@ -528,6 +530,22 @@ export function createProjectSlice({
           session.id === id ? { ...session, archived } : session,
         );
         return { sessionMeta, sessions };
+      });
+      persistCurrentSidebar(get);
+    },
+
+    // The manual pending mark is sidebar preference state only: flipping it
+    // must never touch the session list, the host row, or a task outcome.
+    toggleSessionPending: (id) => {
+      if (!id) return;
+      set((state) => {
+        const pending = !sessionIsPending(id, state.sessionMeta);
+        return {
+          sessionMeta: {
+            ...state.sessionMeta,
+            [id]: { ...(state.sessionMeta[id] || {}), pending },
+          },
+        };
       });
       persistCurrentSidebar(get);
     },

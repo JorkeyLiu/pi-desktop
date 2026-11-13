@@ -10,6 +10,9 @@ import { loadStylesSync } from "./helpers/styles.mjs";
  * material, so it is re-composited every frame it stays dirty: a 7px dot is
  * enough to drive WindowServer GPU to ~70% on an otherwise idle desktop. See
  * issue #1064 and `04-ux/07-ui-design-system.md` (sidebar status marks).
+ *
+ * The one deliberate exception is the running workspace halo: it animates only
+ * while a turn really is in flight, and the reduced-motion rule keeps it static.
  */
 
 const styles = loadStylesSync();
@@ -55,7 +58,6 @@ function reducedMotionBlocks() {
 // running (a session waiting on permission, plan mode left on, a backend
 // warning banner), so they kept animating on an idle window.
 const IDLE_INDICATORS = [
-  ".thread-item-status.running::before",
   ".sidebar-session-hover-card-session-link-status::before",
   ".thread-item-status.permission::before",
   '.composer-mode-chip[data-planning="true"] svg',
@@ -76,6 +78,34 @@ test("idle status indicators stop submitting frames", () => {
       `${selector} must keep a finite cycle count`,
     );
   }
+});
+
+// The manual idle marks stay perfectly still: a hollow ring for an unmarked
+// session, a plain orange fill for a marked one. Only live work moves.
+test("manual sidebar marks never animate", () => {
+  for (const selector of [
+    ".thread-item-status.idle::before",
+    ".thread-item-status.pending::before",
+    ".thread-item-status.running::before",
+  ]) {
+    const block = declarationBlock(selector);
+    assert.doesNotMatch(block, /animation/, `${selector} must stay static`);
+    assert.doesNotMatch(block, /infinite/, `${selector} must not loop`);
+  }
+});
+
+test("the running halo is the sidebar's one continuous animation, scoped to running", () => {
+  const halo = declarationBlock(".thread-item-status.running::after");
+  assert.match(halo, /animation:[^;]*infinite/, "running halo animates while active");
+  // A static ring remains under reduced motion, so running never degrades to
+  // a plain fill that reads like the manual pending mark.
+  assert.match(halo, /box-shadow:/, "the running halo keeps a static ring");
+  const reduced = reducedMotionBlocks();
+  const rule = reduced
+    .map((block) => containedRule(block, ".thread-item-status.running::after"))
+    .find((candidate) => candidate !== null);
+  assert.ok(rule, "running halo needs a prefers-reduced-motion fallback");
+  assert.match(rule, /animation: none/);
 });
 
 test("idle status indicators honour reduced motion", () => {

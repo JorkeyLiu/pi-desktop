@@ -29,6 +29,11 @@ export type SessionMeta = {
   order?: number;
   /** Survives renderer restarts so automatic titles never replace a manual one. */
   manualTitle?: boolean;
+  /**
+   * Device-local "still needs me" mark the user toggles in the sidebar. It is
+   * renderer preference state only: no host row, protocol field, or tray flag.
+   */
+  pending?: boolean;
 };
 export const MAX_PROJECT_NAME_CHARS = 80;
 export type ProjectMeta = {
@@ -117,10 +122,12 @@ function cleanSessionMeta(value: unknown): Record<string, SessionMeta> {
     const archived = bool(raw.archived);
     const order = manualOrder(raw.order);
     const manualTitle = bool(raw.manualTitle);
+    const pending = bool(raw.pending);
     if (pinned !== undefined) item.pinned = pinned;
     if (archived !== undefined) item.archived = archived;
     if (order !== undefined) item.order = order;
     if (manualTitle !== undefined) item.manualTitle = manualTitle;
+    if (pending !== undefined) item.pending = pending;
     if (Object.keys(item).length) output[id] = item;
   }
   return output;
@@ -236,6 +243,14 @@ export function loadSidebarWidth(): number {
 
 export function saveSidebarWidth(value: number): void {
   write(SIDEBAR_WIDTH_KEY, clampSidebarWidth(value));
+}
+
+/** Absent or non-boolean means not marked, so older records stay unchanged. */
+export function sessionIsPending(
+  id: string,
+  meta: Record<string, SessionMeta>,
+): boolean {
+  return meta[id]?.pending === true;
 }
 
 export function projectIsPinned(path: string, meta: Record<string, ProjectMeta>): boolean {

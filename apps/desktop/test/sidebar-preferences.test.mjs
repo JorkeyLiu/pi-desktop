@@ -17,6 +17,7 @@ import {
   sortSessions,
   filterSwitcherProjects,
   listSwitcherProjects,
+  sessionIsPending,
 } from "../src/lib/sidebar-preferences.ts";
 import { loadRecentProjects, renameRecentProject } from "../src/lib/recent-projects.ts";
 import {
@@ -638,4 +639,74 @@ test("a session reorder keeps ranks for its own container only", () => {
   assert.equal(next.moved.manualTitle, true);
   assert.equal(next.pinned.order, 3);
   assert.equal(withoutSessionOrder(meta, "missing"), meta);
+});
+
+test("manual pending marks survive a renderer restart and stay device-local", () => {
+  const values = new Map();
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value),
+    },
+  });
+  try {
+    saveSidebarPreferences({
+      sessionMeta: {
+        marked: { pending: true, pinned: true },
+        cleared: { pending: false },
+      },
+      projectMeta: {},
+      projectSort: "recent",
+      sessionView: { sort: "created", archived: false },
+      openProjectPaths: [],
+    });
+    const loaded = loadSidebarPreferences();
+    assert.equal(loaded.sessionMeta.marked.pending, true);
+    assert.equal(loaded.sessionMeta.marked.pinned, true);
+    assert.equal(loaded.sessionMeta.cleared.pending, false);
+    assert.equal(sessionIsPending("marked", loaded.sessionMeta), true);
+    assert.equal(sessionIsPending("cleared", loaded.sessionMeta), false);
+    assert.equal(sessionIsPending("absent", loaded.sessionMeta), false);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "localStorage", previous);
+    else delete globalThis.localStorage;
+  }
+});
+
+test("an older record without the manual mark loads as unmarked", () => {
+  const values = new Map([
+    [
+      "pi.desktop.sidebarPreferences",
+      JSON.stringify({
+        sessionMeta: {
+          legacy: { pinned: true },
+          junk: { pending: "yes" },
+        },
+        projectMeta: {},
+        projectSort: "recent",
+        sessionView: { sort: "created", archived: false },
+        openProjectPaths: [],
+      }),
+    ],
+  ]);
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value),
+    },
+  });
+  try {
+    const loaded = loadSidebarPreferences();
+    assert.equal(loaded.sessionMeta.legacy.pending, undefined);
+    assert.equal(sessionIsPending("legacy", loaded.sessionMeta), false);
+    assert.equal(loaded.sessionMeta.junk, undefined);
+    assert.equal(sessionIsPending("junk", loaded.sessionMeta), false);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "localStorage", previous);
+    else delete globalThis.localStorage;
+  }
 });

@@ -50,21 +50,16 @@ import {
   projectReorderShouldArm,
   sameProjectReorderBucket,
 } from "../lib/sidebar-project-reorder";
-import {
-  sidebarSessionStatus,
-  type SidebarSessionStatus,
-} from "../lib/sidebar-session-status";
+import { sidebarSessionStatus } from "../lib/sidebar-session-status";
+import { SessionStatusMark } from "../features/sessions/SessionStatusMark";
 import { ErrorCodes, formatSessionLink } from "@pi-desktop/shared";
 import type { SessionSummary } from "@pi-desktop/shared";
 import {
   compareSessionRows,
   resolveSessionSort,
+  sessionIsPending,
 } from "../lib/sidebar-preferences";
-import type {
-  ProjectMeta,
-  ProjectSort,
-  SessionSort,
-} from "../lib/sidebar-preferences";
+import type { ProjectMeta, ProjectSort, SessionSort } from "../lib/sidebar-preferences";
 import {
   canReorderSidebarSessions,
   moveSessionWithinOrder,
@@ -105,10 +100,8 @@ import {
   IconArrowUpDown,
   IconPlug,
   IconBranch,
-  IconCheck,
   IconChevronDown,
   IconCopy,
-  IconCircleAlert,
   IconNewSession,
   IconFolder,
   IconMore,
@@ -243,6 +236,7 @@ export function Sidebar({
   const activateProject = useAppStore((s) => s.activateProject);
   const renameProject = useAppStore((s) => s.renameProject);
   const toggleSessionPinned = useAppStore((s) => s.toggleSessionPinned);
+  const toggleSessionPending = useAppStore((s) => s.toggleSessionPending);
   const archiveSessionAction = useAppStore((s) => s.archiveSession);
   const restoreSession = useAppStore((s) => s.restoreSession);
   const renameSession = useAppStore((s) => s.renameSession);
@@ -1092,36 +1086,6 @@ export function Sidebar({
     if (changed) setSelectedIds(next);
   }, [sessionIdSet]); // intentionally not including selectedIds to avoid loop
 
-  const renderSessionStatus = (status: SidebarSessionStatus) => {
-    const labelKey =
-      status === "running"
-        ? "nav.sessionRunning"
-        : status === "selected"
-          ? "nav.sessionSelected"
-          : status === "completed"
-            ? "nav.sessionCompleted"
-            : status === "failed"
-              ? "nav.sessionFailed"
-              : "nav.sessionPermission";
-    const fallback =
-      status === "running"
-        ? "In progress"
-        : status === "selected"
-          ? "Selected"
-          : status === "completed"
-            ? "Completed"
-            : status === "failed"
-              ? "Failed"
-              : "Permission required";
-    const label = t(labelKey, { defaultValue: fallback });
-    return (
-      <span className={`thread-item-status ${status}`} aria-label={label} title={label}>
-        {status === "completed" ? <IconCheck size={10} aria-hidden /> : null}
-        {status === "failed" ? <IconCircleAlert size={11} aria-hidden /> : null}
-      </span>
-    );
-  };
-
   const reportError = useCallback(
     (error: unknown) => {
       showToast(error instanceof Error ? error.message : String(error), {
@@ -1759,8 +1723,8 @@ export function Sidebar({
     const hasPendingPermission = (pendingPermissions[session.id]?.length ?? 0) > 0;
     const status = sidebarSessionStatus({
       running,
-      selected: active,
       outcome: sessionOutcomes[session.id],
+      pending: sessionIsPending(session.id, sessionMeta),
       hasPendingPermission,
     });
     return (
@@ -1805,7 +1769,11 @@ export function Sidebar({
           );
         }}
       >
-        {status ? renderSessionStatus(status) : null}
+        <SessionStatusMark
+          status={status}
+          sessionId={session.id}
+          onTogglePending={toggleSessionPending}
+        />
         <button
           type="button"
           className="thread-item-main"

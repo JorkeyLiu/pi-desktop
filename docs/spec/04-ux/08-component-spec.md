@@ -437,11 +437,15 @@ visually distinct from list content.
 | Expanded | Full session titles visible |
 | Sidebar width | 240–520px (default 275px); drag below 160px collapses |
 | Collapsed | Icon rail — hover shows tooltip with session title |
-| Active session | Accent-blue outlined status ring plus active row background |
+| Active session | Active row background; the status mark is independent of selection |
 | Selecting session | Destination row receives the active treatment immediately while transcript/workspace resolution continues |
-| Session in progress | Orange breathing dot; static under reduced motion |
-| Session completed | Green check mark from the latest unread task notification when the row is not selected |
-| Session failed | Red circled alert mark from the latest unread task notification when the row is not selected |
+| Session idle | Hollow accent outlined mark on every idle row, selected or not; it is the manual pending toggle at rest |
+| Session pending (manual) | Static orange filled mark after the user marks the row; no halo, no animation; device-local preference that survives a run, opening the session, refresh, and relaunch |
+| Session in progress | Orange filled dot with an externally visible halo that animates only while the turn runs; the static halo remains under reduced motion; running outranks the manual mark without clearing it |
+| Session completed | Green check mark from the latest unread task notification, also on the selected row |
+| Session failed | Red circled alert mark from the latest unread task notification, also on the selected row |
+| Session permission | Purple dot with two pulse cycles from a pending tool approval; it outranks every other status |
+| Session outcomes acknowledged | Opening the row clears its unread outcome mark and marks the matching task notification read |
 | Hover row | Project headers and all conversation rows share one full-row `--ds-bg-hover` surface, radius and transition; selected conversation fill takes precedence |
 | Current workspace | Project header shows the workspace dot, never a persistent selection fill; topbar follows that workspace; composer exposes no workspace identity |
 | Navigation selection | Only the selected conversation on the chat page uses `--ds-bg-active`, including pinned and standalone rows; folding its group never transfers selection to the header. No conversation or a non-chat page means no selected conversation row |
@@ -463,6 +467,11 @@ visually distinct from list content.
 - Click the project directory row (chevron, folder, label, or remaining
   disclosure hit area): activate its path when necessary, then toggle only
   that project's conversation group; retain the other project groups
+- Click the session status mark: only the hollow idle mark (and its orange
+  marked state) toggles the device-local manual pending mark, with `aria-pressed`,
+  a localized accessible name, and Enter/Space activation. It never selects the
+  row and never starts a row drag. Permission, in-progress, and unread-outcome
+  marks swallow the click instead: it selects nothing and replaces no glyph.
 - Click session: activate its bound project when necessary and switch the active
   session. A destination that still has a retained pane (warm switch) is revealed
   immediately with its own content and its own scroll position, so the first

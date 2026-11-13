@@ -11802,34 +11802,51 @@ This test plan spec is accepted when:
 - In light and dark themes, keep session B selected while session A progresses
   through in-progress, completed, a new in-progress turn, failed, and aborted
   states. Repeat with reduced motion enabled and inspect keyboard focus.
-- Expect A to show an orange dot that breathes twice over 3.2 seconds and then
-  stays steady while in progress, a green check on completion, and a red circled
-  alert on failure. Starting a new turn clears A's earlier terminal mark; abort
-  leaves no completed or failed mark.
-- Expect selected idle B to show a static accent-blue outlined ring and active
-  row background. If selected B starts work, its orange in-progress dot takes
-  precedence until the turn settles; its latest terminal result remains hidden
-  behind the selected ring while selected.
-- Every indicator exposes localized In progress / Selected / Completed / Failed
-  text through its accessible name and tooltip. Reduced motion makes the orange
-  dot static without changing its color or meaning. Row height, title truncation,
+- Expect every idle row — including the selected B — to show a static accent
+  outlined hollow mark in the leading gutter. Clicking C's hollow mark fills it
+  orange (static, no halo, no animation) without selecting C or moving the
+  active conversation; clicking it again clears it. The active row keeps its
+  background and the manual mark stays visible on it.
+- Expect A to show an orange filled dot with an externally visible halo that
+  animates for as long as the turn runs, a green check on completion, and a red
+  circled alert on failure. Starting a new turn clears A's earlier terminal
+  mark; abort leaves no completed or failed mark. A manual mark kept on another
+  row while A ran is still there when the run ends.
+- Expect precedence permission → in progress → completed/failed → manual
+  pending → idle: start work on a marked row and the running mark wins, park a
+  permission on it and the purple dot wins, settle an unread outcome and the
+  terminal mark wins — the stored manual flag returns as each clears. A click on
+  a permission, running, or outcome mark selects nothing and replaces no glyph.
+- The idle/manual toggle is a shared tooltip button with `aria-pressed`, a
+  localized accessible name, Enter/Space activation, and a usable hit target;
+  it never selects the row or starts a row drag. Row height, title truncation,
   pin icon, hover actions, and focus ring remain stable in both themes.
+- Reload and relaunch the renderer, and open the marked session. The manual
+  flag survives all three and repaints as the same static orange mark; a row
+  with no flag still reads as unmarked.
+- Every indicator exposes localized Working / Pending marker / Done / Needs
+  attention / Permission required text through its accessible name. Reduced
+  motion makes the running halo static while keeping its ring, so running stays
+  distinguishable from the plain orange manual fill.
 - Open a conversation with a completed or failed mark and expect that terminal
   mark to clear immediately while its durable task notification becomes read.
   Refresh notifications and restart the app; the acknowledged mark must not
   return. A terminal notification marked read from the inbox likewise produces
   no sidebar terminal mark.
 - Repeat for a running related-session marker in the hover card. After 3.2
-  seconds, neither running marker has an active animation; recording an otherwise
-  idle native macOS window must show no continuous frames from these markers.
-  Start a new turn and reopen the hover card: the bounded animation can play again.
-  GPU measurements must distinguish app frame submissions from whole-system load.
-- Repeat with the three idle-reachable indicators, one per idle window: leave a
-  session parked on a tool approval request, turn plan mode on, and raise a
-  backend warning banner. After 3.2 seconds none of the permission dot, the
-  plan-mode chip, or the warning dot has an active animation, and recording an
-  otherwise idle native macOS window shows no continuous frames from them.
+  seconds that bounded running mark has no active animation, and recording an
+  otherwise idle native macOS window shows no continuous frames from it. The
+  sidebar running halo is scoped to a running row: with nothing running, no
+  sidebar row submits frames. GPU measurements must distinguish app frame
+  submissions from whole-system load.
+- Repeat with the three other idle-reachable indicators, one per idle window:
+  leave a session parked on a tool approval request, turn plan mode on, and
+  raise a backend warning banner. After 3.2 seconds none of the permission dot,
+  the plan-mode chip, or the warning dot has an active animation, and recording
+  an otherwise idle native macOS window shows no continuous frames from them.
   Under reduced motion all three are static from the first painted frame.
+- **Specs linked**: `04-ux/07-ui-design-system.md` §4.5, `04-ux/08-component-spec.md` §3.4/§3.5, decisions-log D135
+- **Status**: Partially automated — `scripts/e2e-sidebar-pending-marker.mjs` renders the real Sidebar and store in Electron and checks hollow/filled/halo geometry, click-without-select, run override and survival, outcome/permission precedence, keyboard activation, relaunch persistence, and the reduced-motion static halo; `apps/desktop/test/sidebar-session-status.test.mjs`, `idle-status-animations.test.mjs`, and `sidebar-preferences.test.mjs` cover precedence, motion bounds, and preference sanitization
 
 ### US-UI-68 Session-scoped inline permissions and artifacts (D138/D142)
 - Run two sessions concurrently and keep A visible while B reaches a tool
