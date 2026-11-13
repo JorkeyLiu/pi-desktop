@@ -165,6 +165,25 @@ function refusedRead(id = "h-read", callId = "c-read") {
   });
 }
 
+/**
+ * A refusal that records a diagnostic beside its verdict: the runtime's own
+ * reason code is not something the sentence carries, so the record stays.
+ */
+function refusedHandoffWithDiagnostic(id = "h-diag", callId = "c-diag") {
+  return childRow(id, {
+    toolName: "SubagentHandoff",
+    toolCallId: callId,
+    toolArgs: { handoff: "" },
+    toolStatus: "error",
+    isError: true,
+    toolResult: {
+      content: [{ type: "text", text: REFUSAL }],
+      details: { accepted: false, reasonCode: "handoff_empty", dropped: true },
+      isError: true,
+    },
+  });
+}
+
 /** The accepted submission the checkpoint row owns, for the untouched path. */
 function acceptedHandoff(id = "h1", callId = "c1") {
   return childRow(id, {
@@ -183,7 +202,7 @@ function acceptedHandoff(id = "h1", callId = "c1") {
   });
 }
 
-async function setup() {
+async function setup(language = "en") {
   const vite = await createServer({
     root, configFile: false,
     server: { middlewareMode: true, hmr: false, ws: false },
@@ -192,8 +211,12 @@ async function setup() {
   });
   const i18n = createInstance();
   await i18n.init({
-    lng: "en",
-    resources: { en: { translation: flattenCatalog(catalogs.en) } },
+    lng: language,
+    fallbackLng: "en",
+    resources: {
+      en: { translation: flattenCatalog(catalogs.en) },
+      [language]: { translation: flattenCatalog(catalogs[language]) },
+    },
     interpolation: { escapeValue: false },
   });
   const { SubagentTranscriptTab } = await vite.ssrLoadModule(
@@ -271,11 +294,62 @@ test("a refused handoff opens to the delegate's failure reason, not its verdict 
     assert.match(body, /<span>Error<\/span>/);
     // Once: the row must not print the reason twice.
     assert.equal((body.match(/The handoff is empty/g) ?? []).length, 1);
-    // The structured half is retained rather than discarded...
-    assert.match(body, /<dt class="tool-field-label">accepted<\/dt>/);
-    // ...and the untouched payload stays one disclosure away.
+    // The verdict is not a second answer: `{accepted: false}` restates the
+    // failure the row already shows, so it brings neither its fields nor its
+    // untouched JSON to a disclosure the sentence already fills.
+    assert.doesNotMatch(body, /<dt class="tool-field-label">accepted<\/dt>/);
+    assert.doesNotMatch(body, /class="tool-raw"/);
+    assert.doesNotMatch(body, /accepted/i);
+  } finally { await vite.close(); }
+});
+
+test("a refusal that records a diagnostic keeps it beside its reason", async () => {
+  const { vite, render } = await setup();
+  try {
+    const html = render([taskCall(), refusedHandoffWithDiagnostic()], "h-diag");
+    const body = rowBody(html, "h-diag");
+    assert.ok(body, "the refused row's disclosure did not open");
+    // The record is not only a verdict, so nothing about it is dropped: the
+    // sentence leads, and the fields the sentence cannot replace follow, beside
+    // the untouched payload.
+    assert.ok(body.includes(REFUSAL), "the refusal does not state its reason");
+    assert.equal((body.match(/The handoff is empty/g) ?? []).length, 1);
+    assert.match(body, /reasonCode/);
+    assert.match(body, /handoff_empty/);
     assert.match(body, /class="tool-raw"/);
   } finally { await vite.close(); }
+});
+
+test("the self-handoff row is named in the session language, once", async () => {
+  const english = await setup("en");
+  try {
+    const html = english.render([taskCall(), refusedHandoff()]);
+    const markup = rowMarkup(html, "h-error");
+    // The protocol identifier stays what it is; only what the reader is shown
+    // is localized.
+    assert.match(markup, /data-tool-name="SubagentHandoff"/);
+    // The name is stated by the head's name span alone: a tool with nothing to
+    // summarize must not print its own name a second time as the summary. (The
+    // row's `title` and accessible label legitimately repeat it.)
+    assert.equal(
+      (markup.match(/class="tool-row-name"[^>]*>Subagent Handoff</g) ?? []).length,
+      1,
+    );
+    assert.doesNotMatch(markup, /class="tool-row-summary"/);
+  } finally { await english.vite.close(); }
+
+  const chinese = await setup("zh-CN");
+  try {
+    const html = chinese.render([taskCall(), refusedHandoff()]);
+    const markup = rowMarkup(html, "h-error");
+    assert.match(markup, /data-tool-name="SubagentHandoff"/);
+    assert.equal(
+      (markup.match(/class="tool-row-name"[^>]*>子代理交接</g) ?? []).length,
+      1,
+    );
+    assert.doesNotMatch(markup, /Subagent Handoff/);
+    assert.doesNotMatch(markup, /class="tool-row-summary"/);
+  } finally { await chinese.vite.close(); }
 });
 
 test("a failed call that recorded no result opens on an honest reason, never an empty body", async () => {
@@ -574,6 +648,10 @@ app.whenReady().then(async () => {
     assert.equal(refused.errorNote, true);
     assert.ok(refused.bodyText.includes(REFUSAL), "the opened body drops the refusal reason");
     assert.equal((refused.bodyText.match(/The handoff is empty/g) ?? []).length, 1);
+    // The verdict is not restated beside its own reason: the sentence is the
+    // whole disclosure, so no `accepted` field and no payload drawer remain.
+    assert.doesNotMatch(refused.bodyText, /accepted/i);
+    assert.doesNotMatch(refused.bodyText, /Details|Raw/);
     // The other failed row was not opened along with it.
     assert.equal(rowFor(result.steps.afterRefused, "h-lost").expanded, "false");
     const lost = rowFor(result.steps.afterLost, "h-lost");

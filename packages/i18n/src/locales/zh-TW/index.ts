@@ -574,6 +574,7 @@ export const zhTW = {
     toolIdentityImage: "產生圖片",
     toolIdentitySchedule: "排程任務",
     toolIdentityAskTool: "提問",
+    toolIdentitySubagentHandoff: "子代理交接",
     toolLoadedSkill: "已載入技能",
     toolLoadingSkill: "正在載入技能",
     toolSearchedTools: "已檢索工具",

@@ -572,6 +572,7 @@ export const de = {
     "toolIdentityImage": "Bilder generieren",
     "toolIdentitySchedule": "Geplante Aufgabe",
     "toolIdentityAskTool": "Fragen",
+    "toolIdentitySubagentHandoff": "Subagent-Übergabe",
     "toolLoadedSkill": "Skill geladen",
     "toolLoadingSkill": "Skill wird geladen",
     "toolSearchedTools": "Werkzeuge durchsucht",

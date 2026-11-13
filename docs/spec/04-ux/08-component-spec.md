@@ -2277,8 +2277,10 @@ replaced.
 - The ordinary tool row above and below it is unaffected, including its
   running spinner, failure state, and disclosed details. A refused submission
   is an error tool row like any other: opening it states the reason the runtime
-  refused it (beside the `accepted` verdict it recorded), because that reason
-  is the whole point of the row.
+  refused it, and the ordinary failure rule below decides what its record adds —
+  a refusal whose whole record is the verdict (`accepted: false`) shows that
+  sentence alone, while a record carrying any further diagnostic is preserved
+  beside it.
 
 ### 8.5 Accessibility
 
@@ -2669,6 +2671,12 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
   tables (`TOOL_ACTION_KEYS`, `TOOL_RUNNING_KEYS`, `LIFECYCLE_*_KEYS`) may still
   name progress in aggregate surfaces such as the activity group, but they never
   select a row's identity.
+  A built-in with no action of its own still has a localized identity
+  (`SubagentHandoff` reads as its catalog name, not its protocol identifier);
+  the protocol name stays the tool's name on the wire and in the row's
+  `data-tool-name`. An unknown tool with no summarizable argument falls back to
+  its display name as its hint, so the head would print that name twice: the row
+  drops that repeat rather than broadening the hint rules.
 - The primary argument is a clamped single-line hint. Natural-language
   descriptions use the UI sans face at the header size; structured commands and
   paths remain monospace.
@@ -2731,6 +2739,9 @@ as text for the model; only the structured half is rendered, so no byte appears
 twice — with one exception: on a failure the text blocks state the reason, and
 `details` records only the verdict (a refusal's explanation beside
 `accepted: false`), so that sentence is the reason a reader expands the row for.
+When the record is nothing but that verdict, the sentence is the whole body: the
+verdict fields and their untouched payload would restate the failure the row
+already shows, so neither is printed.
 
 | Tool | Blocks |
 |---|---|
@@ -2746,7 +2757,7 @@ twice — with one exception: on a failure the text blocks state the reason, and
 | ScheduledTaskList/Create/Update/Delete | one row per automation under the `Scheduled task` heading: title, cadence, its clock, the weekly days **named in the session language** (the schema numbers them from Monday = 0, so a bare index is never printed), and enabled/paused |
 | ToolSearch, EnterPlanMode/SubmitPlan, NewContext, BrowserPreview, GenerateImages | the names they activated or matched, each name set listed once and read in the session language (the legacy `addedToolNames` carrier is used only when the row reports no `activated` list), the mode the tool's own name states (`Plan`, `Goal`), or the prompts and written images the call carried |
 | any host `notice` | `Note` — an error, warning or truncation notice stays visible after the blocks it qualifies; a routine informational notice is not printed in a successful row's body |
-| any failure | `Error` — message plus code, listed first. A failure explains itself with the envelope's own sentence when `details` does not restate it; the structured payload it came with is still listed beside its `Raw` disclosure, and a text block that merely re-serializes `details` is never printed as a reason. A failure that recorded no result states the `code` and `message` the row carries, or — recording neither — one localized sentence saying no reason was reported: it never opens on an empty body |
+| any failure | `Error` — message plus code, listed first. A failure explains itself with the envelope's own sentence when `details` does not restate it; a text block that merely re-serializes `details` is never printed as a reason. The record it came with is listed beside its `Raw` disclosure — except when that record is only the refusal verdict the sentence already states (an all-false `accepted`/`success`/`ok`, nothing else): then the sentence is the whole body, and no verdict field or payload is drawn. A failure that recorded no result states the `code` and `message` the row carries, or — recording neither — one localized sentence saying no reason was reported: it never opens on an empty body |
 | TaskWait/List/Stop roster | one table per roster group the runtime returned: `Subagents` for `delegations`, then `Stopped`, `Stop requested — still running` and `Already finished` as the runtime's own `stopped` / `stopPending` / `settled` groups. Each group keeps its heading so a worker whose cancellation was only requested never reads as stopped |
 | Task counters | `Stats` — the delegate's turns, tool calls and usage, after its brief and report |
 | unmapped payload | scalar entries as label/value fields; long or multi-line strings as their own labeled block; nested objects as JSON, all of it beside one explicit `Raw` disclosure of the untouched payload. The disclosure names itself in its own summary, so no second `Details` heading is drawn above it |

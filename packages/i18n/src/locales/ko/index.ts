@@ -581,6 +581,7 @@ export const ko = {
     toolIdentityImage: "이미지 생성",
     toolIdentitySchedule: "예약 작업",
     toolIdentityAskTool: "질문",
+    toolIdentitySubagentHandoff: "서브에이전트 인계",
     toolLoadedSkill: "스킬 로드됨",
     toolLoadingSkill: "스킬 로드 중",
     toolSearchedTools: "도구 검색됨",

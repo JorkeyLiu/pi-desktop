@@ -581,6 +581,7 @@ export const tr = {
     toolIdentityImage: "Görsel oluştur",
     toolIdentitySchedule: "Zamanlanmış görev",
     toolIdentityAskTool: "Sorular",
+    toolIdentitySubagentHandoff: "Alt ajan devri",
     toolLoadedSkill: "Beceri yüklendi",
     toolLoadingSkill: "Beceri yükleniyor",
     toolSearchedTools: "Araçlar arandı",

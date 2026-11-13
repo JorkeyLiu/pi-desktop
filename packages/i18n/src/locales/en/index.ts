@@ -584,6 +584,7 @@ export const en = {
     toolIdentityImage: "Generate images",
     toolIdentitySchedule: "Scheduled task",
     toolIdentityAskTool: "Questions",
+    toolIdentitySubagentHandoff: "Subagent Handoff",
     toolLoadedSkill: "Loaded skill",
     toolLoadingSkill: "Loading skill",
     toolSearchedTools: "Searched tools",

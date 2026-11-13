@@ -253,7 +253,8 @@ export type ToolIdentityKey =
   | "chat.toolIdentityBrowser"
   | "chat.toolIdentityImage"
   | "chat.toolIdentitySchedule"
-  | "chat.toolIdentityAskTool";
+  | "chat.toolIdentityAskTool"
+  | "chat.toolIdentitySubagentHandoff";
 
 const TOOL_IDENTITY_KEYS: Record<ToolAction, ToolIdentityKey | null> = {
   read: "chat.toolIdentityRead",
@@ -286,6 +287,14 @@ export function getToolIdentityKey(toolName?: string): ToolIdentityKey | null {
   // exact name reaches its own card and its history row must not print the
   // raw provider word.
   if (isAskToolName(toolName)) return "chat.toolIdentityAskTool";
+  // The self-handoff built-in has no action of its own, so `use` would name it
+  // from its protocol identifier, which reads as English words or the raw
+  // provider word in every other language. Its identity is matched exactly, like
+  // the question tool's, so a plugin tool that merely sounds similar keeps its
+  // own name.
+  if (bareToolName(toolName) === "subagenthandoff") {
+    return "chat.toolIdentitySubagentHandoff";
+  }
   const action = exactBuiltinAction(toolName);
   return action ? TOOL_IDENTITY_KEYS[action] : null;
 }

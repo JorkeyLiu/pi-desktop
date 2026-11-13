@@ -260,6 +260,33 @@ function envelopeFailureText(
 }
 
 /**
+ * The keys tools answer a refusal with: a false value is a verdict, not a
+ * result, so it names no fact the failure sentence does not already state.
+ */
+const FAILURE_VERDICT_KEYS = new Set(["accepted", "success", "ok"]);
+
+/**
+ * Whether a failed call's whole structured half is the verdict it refused with.
+ *
+ * A refusal answers `{ accepted: false }` and explains itself in the text, so
+ * the record is a restatement of "no" — the row's failure state and the sentence
+ * beside it already say that, and printing the verdict as fields beside the
+ * untouched JSON would only say it twice more. Only that exact shape qualifies:
+ * a record carrying any other field holds a diagnostic the sentence cannot
+ * replace, so it is preserved and rendered.
+ */
+function isBareFailureVerdict(details: Record<string, unknown> | null): boolean {
+  if (!details) return false;
+  const entries = Object.entries(details);
+  return (
+    entries.length > 0 &&
+    entries.every(
+      ([key, value]) => value === false && FAILURE_VERDICT_KEYS.has(key),
+    )
+  );
+}
+
+/**
  * Unwrap `{ content, details }` down to the single payload worth showing.
  * `details` holds the structured host result; the content blocks repeat it as
  * text for the model, so showing both would duplicate every byte.
@@ -1337,6 +1364,10 @@ function resultBlocks(
     return withFailureNote([codeBlock("output", payload)]);
   }
   if (details) {
+    // A refusal whose record is only its verdict has nothing to add: the
+    // sentence above is the explanation, and "accepted false" beside its own
+    // JSON would make a reader expand a row to read "no" three times.
+    if (failureNote && isBareFailureVerdict(details)) return [failureNote];
     return withFailureNote(withRawBlock(recordBlocks(details, "details"), details));
   }
   if (payload !== undefined && payload !== null) {

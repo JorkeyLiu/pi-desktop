@@ -282,9 +282,8 @@ function HostToolRow({
         : bareName === "taskstop"
           ? "chat.toolIdentityTaskStop"
           : getToolIdentityKey(message.toolName);
-  const rawName = identityKey
-    ? t(identityKey)
-    : getToolDisplayName(message.toolName) || t("chat.tool");
+  const formattedName = getToolDisplayName(message.toolName);
+  const rawName = identityKey ? t(identityKey) : formattedName || t("chat.tool");
   const roster = lifecycle ? delegationRoster(message) : [];
   const rosterSummary = lifecycle ? delegationRosterSummary(roster) : "";
   const rosterOutcome = lifecycle ? delegationRosterOutcome(roster) : null;
@@ -372,8 +371,15 @@ function HostToolRow({
             : "";
   // A lifecycle row never falls back to its arguments: while it is still
   // running it has no roster yet, and `delegationIds` would otherwise reach the
-  // head as a JSON blob of UUIDs (D268).
-  const summary = lifecycle ? rosterSummary : argSummary;
+  // head as a JSON blob of UUIDs (D268). An unrecognized tool with nothing to
+  // summarize falls back to its own display name, which the head has just
+  // printed — a row must not read "Subagent Handoff Subagent Handoff". Only that
+  // self-repeat is dropped; every argument-derived summary stays as it was.
+  const summary = lifecycle
+    ? rosterSummary
+    : argSummary === formattedName
+      ? ""
+      : argSummary;
   // A delegate control row states its own wait state on the right: which kind
   // of check it is making while it runs, the backend-owned outcome once it
   // settles. Its name stays the fixed tool identity.

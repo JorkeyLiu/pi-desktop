@@ -1654,7 +1654,7 @@ test("an unknown payload keeps its fields and one clearly named raw entry", () =
   assert.equal(raw.label, undefined);
 });
 
-test("a failed call's own sentence is the reason, beside the details it explains", () => {
+test("a failed call's own sentence is the reason, and a bare verdict adds nothing", () => {
   const reason = "The handoff is empty: write what your future self needs to continue this task.";
   const refusal = {
     toolName: "SubagentHandoff",
@@ -1668,12 +1668,27 @@ test("a failed call's own sentence is the reason, beside the details it explains
     },
   };
   const blocks = buildToolPresentation(refusal, { failureNote: () => "unused" });
-  // The text is the explanation; `details` only records the verdict, so the
-  // body leads with the reason and keeps the payload it came with.
-  assert.deepEqual(roles(blocks), ["error", "details", "details"]);
+  // The text is the explanation; `details` only records the verdict, which
+  // restates the failure the row already shows, so the sentence is the body.
+  assert.deepEqual(roles(blocks), ["error"]);
   assert.equal(blocks[0].text, reason);
-  assert.deepEqual(blocks[1].rows, [{ label: "accepted", value: "false" }]);
-  assert.equal(blocks[2].kind, "raw");
+  // Anything beyond the verdict is a diagnostic the sentence cannot replace:
+  // the record and its untouched payload stay.
+  const diagnostic = buildToolPresentation(
+    {
+      ...refusal,
+      toolResult: {
+        content: [{ type: "text", text: reason }],
+        details: { accepted: false, reasonCode: "handoff_empty" },
+      },
+    },
+    { failureNote: () => "unused" },
+  );
+  assert.deepEqual(roles(diagnostic), ["error", "details", "details"]);
+  assert.deepEqual(diagnostic[1].rows, [
+    { label: "accepted", value: "false" },
+    { label: "reasonCode", value: "handoff_empty" },
+  ]);
   // The echo of a payload is not a reason: it may not be printed twice.
   const echoed = buildToolPresentation(
     {

@@ -572,6 +572,7 @@ export const fr = {
     "toolIdentityImage": "Générer des images",
     "toolIdentitySchedule": "Tâche planifiée",
     "toolIdentityAskTool": "Questions",
+    "toolIdentitySubagentHandoff": "Passation du sous-agent",
     "toolLoadedSkill": "Compétence chargée",
     "toolLoadingSkill": "Chargement de la compétence",
     "toolSearchedTools": "Outils recherchés",

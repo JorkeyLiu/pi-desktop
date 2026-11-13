@@ -574,6 +574,7 @@ export const zhCN = {
     toolIdentityImage: "生成图片",
     toolIdentitySchedule: "定时任务",
     toolIdentityAskTool: "提问",
+    toolIdentitySubagentHandoff: "子代理交接",
     toolLoadedSkill: "已加载技能",
     toolLoadingSkill: "正在加载技能",
     toolSearchedTools: "已检索工具",

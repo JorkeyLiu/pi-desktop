@@ -572,6 +572,7 @@ export const es = {
     "toolIdentityImage": "Generar imágenes",
     "toolIdentitySchedule": "Tarea programada",
     "toolIdentityAskTool": "Preguntas",
+    "toolIdentitySubagentHandoff": "Traspaso del subagente",
     "toolLoadedSkill": "Habilidad cargada",
     "toolLoadingSkill": "Cargando habilidad",
     "toolSearchedTools": "Herramientas buscadas",

@@ -59,6 +59,7 @@ test("tool row identity labels are present and localized in every shipped catalo
     "chat.toolIdentityTodo", "chat.toolIdentitySkill", "chat.toolIdentityToolSearch",
     "chat.toolIdentityMode", "chat.toolIdentityContext", "chat.toolIdentityBrowser",
     "chat.toolIdentityImage", "chat.toolIdentitySchedule",
+    "chat.toolIdentitySubagentHandoff",
   ];
   for (const [id, catalog] of Object.entries(catalogs)) {
     const flat = flattenCatalog(catalog);

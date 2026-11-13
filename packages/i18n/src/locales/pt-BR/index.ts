@@ -571,6 +571,7 @@ export const ptBR = {
     toolIdentityImage: "Gerar imagens",
     toolIdentitySchedule: "Tarefa agendada",
     toolIdentityAskTool: "Perguntas",
+    toolIdentitySubagentHandoff: "Transferência do subagente",
     toolLoadedSkill: "Habilidade carregada",
     toolLoadingSkill: "Carregando habilidade",
     toolSearchedTools: "Ferramentas pesquisadas",

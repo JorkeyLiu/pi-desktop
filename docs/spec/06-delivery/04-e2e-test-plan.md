@@ -19111,11 +19111,16 @@ host-created files. The full app's file-preview viewer is covered separately.
   hands over every character of the handoff while reporting the copy without
   collapsing the row. The refused call's own disclosure states the reason the
   runtime refused it — the explanation the result carried as text — instead of
-  only the `accepted: false` verdict, and it still lists the structured detail
-  it came with; the reason is printed once. A failed call that recorded no
-  result opens on the error `code`/`message` the row carries, or, recording
-  neither, on one localized sentence saying no reason was reported: an error
-  row's disclosure never opens on an empty body.
+  only the `accepted: false` verdict; when that verdict is the whole recorded
+  result, the sentence stands alone, with neither the verdict's fields nor its
+  payload drawer, and the reason is printed once. A record carrying any
+  diagnostic beyond the verdict keeps it beside the reason. The row is named by
+  its localized identity rather than its protocol identifier (`Subagent
+  Handoff` in English, `子代理交接` in Chinese), and the head states that name
+  once — never again as its own hint. A failed call that recorded no result
+  opens on the error `code`/`message` the row carries, or, recording neither,
+  on one localized sentence saying no reason was reported: an error row's
+  disclosure never opens on an empty body.
 - **Specs linked**: `04-ux/08-component-spec.md` (8.4a, 8.4b),
   `04-ux/02-i18n-english-first.md`.
 - **Status**: Automated render coverage plus a hidden-Electron click/Space probe
@@ -19128,6 +19133,9 @@ host-created files. The full app's file-preview viewer is covered separately.
   equals the authored handoff character for character under the standard
   section head, and that pressing the head's copy control hands the renderer
   the whole authored handoff and shows the copied feedback.
+  The same file also asserts the refused row's opened body carries the reason
+  once and no verdict field or payload drawer, an extra diagnostic is kept, and
+  the row is named by its English and Chinese catalog names exactly once.
 
 ### E2E-SUBAGENT-handoff-keeps-steering
 
