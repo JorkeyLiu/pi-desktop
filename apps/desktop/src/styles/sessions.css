@@ -380,8 +380,9 @@
   animation: sidebar-status-pulse-purple 1.2s ease-in-out 2;
 }
 
-/* Hollow mark: every idle row carries it, selected or not, and it is the
-   manual pending toggle's unpressed face. */
+/* Hollow mark: the selected idle conversation carries it as the manual
+   pending toggle's unpressed face. An unselected unmarked row renders no mark
+   element at all, so the gutter stays empty and spans nothing clickable. */
 .thread-item-status.idle::before {
   position: absolute;
   inset: 0;
@@ -393,9 +394,9 @@
   content: "";
 }
 
-/* Manual pending: a filled orange dot, deliberately still — no halo, no
-   animation. Work in flight outranks it visually without clearing the stored
-   mark. */
+/* Manual pending: a filled orange dot on the selected or an unselected row,
+   deliberately still — no halo, no animation. Work in flight outranks it
+   visually without clearing the stored mark. */
 .thread-item-status.pending::before {
   position: absolute;
   inset: 0;

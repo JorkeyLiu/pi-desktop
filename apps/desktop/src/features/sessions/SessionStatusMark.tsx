@@ -7,12 +7,14 @@ import {
 } from "../../lib/sidebar-session-status";
 
 /**
- * The one leading status mark a sidebar session row reserves. Only the idle
- * and manual states are controls: they toggle the device-local pending mark
- * and stop the click from selecting or dragging the row. Work in flight, a
- * pending permission, and an unread task outcome are informational, so they
- * leave the row's own pointer behavior untouched: a click selects the row
- * exactly as a click on the title does, and never toggles the manual mark.
+ * The one leading status mark a sidebar session row renders. Only the hollow
+ * mark on the selected idle conversation and the manual mark on any row are
+ * controls: they toggle the device-local pending mark and stop the click from
+ * selecting or dragging the row. Work in flight, a pending permission, and an
+ * unread task outcome are informational, so they leave the row's own pointer
+ * behavior untouched: a click selects the row exactly as a click on the title
+ * does, and never toggles the manual mark. An unselected unmarked idle row
+ * renders no mark at all.
  */
 export function SessionStatusMark({
   status,

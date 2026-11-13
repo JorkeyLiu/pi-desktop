@@ -11802,11 +11802,14 @@ This test plan spec is accepted when:
 - In light and dark themes, keep session B selected while session A progresses
   through in-progress, completed, a new in-progress turn, failed, and aborted
   states. Repeat with reduced motion enabled and inspect keyboard focus.
-- Expect every idle row — including the selected B — to show a static accent
-  outlined hollow mark in the leading gutter. Clicking C's hollow mark fills it
-  orange (static, no halo, no animation) without selecting C or moving the
-  active conversation; clicking it again clears it. The active row keeps its
-  background and the manual mark stays visible on it.
+- Expect only the selected idle row B to show a static accent outlined hollow
+  mark in the leading gutter; every other idle row shows no mark and no hidden
+  hit target in that gutter. Select C: its hollow mark appears and B's disappears.
+  Clicking C's hollow mark fills it orange (static, no halo, no animation)
+  without moving the active conversation; clicking it again clears it while C
+  stays selected, so the hollow mark returns. Mark D, then select another row:
+  D's orange mark stays visible while unselected, and clicking it clears it
+  with no dot left behind.
 - Expect A to show an orange filled dot with an externally visible halo that
   animates for as long as the turn runs, a green check on completion, and a red
   circled alert on failure. Starting a new turn clears A's earlier terminal
@@ -11825,9 +11828,10 @@ This test plan spec is accepted when:
   preceding row paints its focus-visible outline. Row height, title truncation,
   pin icon, hover actions, and focus ring remain stable in both themes.
 - Select one marked conversation, run it, then reload and relaunch the renderer,
-  and open it again. The manual flag survives all of it and repaints as the same
-  static orange mark on the selected row; a row with no flag still reads as
-  unmarked.
+  and open it again. The manual flag survives all of it and repaints as the
+  same static orange mark whether or not the row is selected; a selected row
+  with no flag shows the hollow mark, and an unselected row with no flag shows
+  nothing.
 - Every indicator exposes localized Working / Pending marker / Done / Needs
   attention / Permission required text through its accessible name. Reduced
   motion makes the running halo static while keeping its ring, so running stays
@@ -11850,7 +11854,7 @@ This test plan spec is accepted when:
   an otherwise idle native macOS window shows no continuous frames from them.
   Under reduced motion all three are static from the first painted frame.
 - **Specs linked**: `04-ux/07-ui-design-system.md` §4.5, `04-ux/08-component-spec.md` §3.4/§3.5, decisions-log D135
-- **Status**: Partially automated — `scripts/e2e-sidebar-pending-marker.mjs` renders the real Sidebar and store in Electron and checks hollow/filled/halo geometry, the 24 px hit target, click-without-select for the toggle, row selection through running/permission/outcome marks without flipping the stored flag, run override and survival, selecting a marked row, outcome/permission precedence, real Tab focus with a painted focus outline plus Enter and Space activation, relaunch persistence, and the reduced-motion static halo; `apps/desktop/test/sidebar-session-status.test.mjs`, `app-store-sidebar.test.mjs`, `idle-status-animations.test.mjs`, and `sidebar-preferences.test.mjs` cover precedence, the action-boundary guard, motion bounds, and preference sanitization
+- **Status**: Partially automated — `scripts/e2e-sidebar-pending-marker.mjs` renders the real Sidebar and store in Electron and checks the selected-only hollow mark and the empty gutter on unselected idle rows, filled/halo geometry, the 24 px hit target, click-without-select for the toggle, row selection through running/permission/outcome marks without flipping the stored flag, run override and survival, a mark that stays visible on an unselected row and clears with no dot left behind, outcome/permission precedence, real Tab focus with a painted focus outline plus Enter and Space activation, relaunch persistence, and the reduced-motion static halo; `apps/desktop/test/sidebar-session-status.test.mjs`, `app-store-sidebar.test.mjs`, `idle-status-animations.test.mjs`, and `sidebar-preferences.test.mjs` cover precedence, the action-boundary guard, motion bounds, and preference sanitization
 
 ### US-UI-68 Session-scoped inline permissions and artifacts (D138/D142)
 - Run two sessions concurrently and keep A visible while B reaches a tool

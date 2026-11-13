@@ -14,25 +14,30 @@ export { latestSessionOutcomes } from "@pi-desktop/shared";
 
 /**
  * One leading status slot per session row. The unread task outcome outranks the
- * device-local manual pending marker, and an idle row is never blank: it shows
- * the hollow mark that carries the manual toggle.
+ * device-local manual pending marker. An unmarked row resolves to a status only
+ * while it is the selected conversation: the selected idle row carries the
+ * hollow mark that opens the manual toggle, and an unselected unmarked row
+ * renders no mark at all, so no idle row is decorated and the gutter never
+ * holds an invisible control.
  */
 export function sidebarSessionStatus({
   running,
   outcome,
   pending,
   hasPendingPermission,
+  selected,
 }: {
   running: boolean;
   outcome?: SidebarSessionOutcome;
   pending?: boolean;
   hasPendingPermission?: boolean;
-}): SidebarSessionStatus {
+  selected: boolean;
+}): SidebarSessionStatus | null {
   if (hasPendingPermission) return "permission";
   if (running) return "running";
   if (outcome) return outcome;
   if (pending) return "pending";
-  return "idle";
+  return selected ? "idle" : null;
 }
 
 /**
@@ -48,7 +53,9 @@ export function sidebarSessionStatusIsTogglable(
 /**
  * The status rule a flip of the manual mark must pass at the action boundary
  * too, not only in the row control: the session has to exist in the sidebar and
- * its visible state has to be the idle or manual mark. Live work, a pending
+ * its visible state has to be the selected idle hollow or the manual mark on
+ * any row. That keeps a hidden idle row from toggling through a direct caller
+ * while an unselected manual mark stays clearable, and live work, a pending
  * permission, and an unread outcome keep the mark informational, so no caller
  * can flip the stored flag under a glyph that reports something the user has
  * not acted on yet.
@@ -59,15 +66,22 @@ export function sessionPendingToggleAllowed({
   outcome,
   pending,
   hasPendingPermission,
+  selected,
 }: {
   known: boolean;
   running: boolean;
   outcome?: SidebarSessionOutcome;
   pending?: boolean;
   hasPendingPermission?: boolean;
+  selected: boolean;
 }): boolean {
   if (!known) return false;
-  return sidebarSessionStatusIsTogglable(
-    sidebarSessionStatus({ running, outcome, pending, hasPendingPermission }),
-  );
+  const status = sidebarSessionStatus({
+    running,
+    outcome,
+    pending,
+    hasPendingPermission,
+    selected,
+  });
+  return status !== null && sidebarSessionStatusIsTogglable(status);
 }

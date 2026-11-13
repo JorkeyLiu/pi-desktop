@@ -188,6 +188,24 @@ function status(id: string) {
   return mark(id).getAttribute("data-session-status");
 }
 
+/** An unselected unmarked idle row renders no mark element at all. */
+function hasMark(id: string): boolean {
+  return Boolean(row(id).querySelector(".thread-item-status"));
+}
+
+function rowMain(id: string): HTMLButtonElement {
+  const element = row(id).querySelector<HTMLButtonElement>(".thread-item-main");
+  if (!element) throw new Error(`missing row button ${id}`);
+  return element;
+}
+
+/** Select a row the way a user does, then let the committed state paint. */
+async function selectViaRow(id: string) {
+  rowMain(id).click();
+  await until(() => useAppStore.getState().activeSessionId === id, `${id} row selects`);
+  await frame();
+}
+
 function pseudo(id: string, part: "::before" | "::after") {
   const element = mark(id);
   const style = getComputedStyle(element, part);
@@ -216,10 +234,49 @@ async function idleProbe() {
   await until(() => document.querySelectorAll("[data-sidebar-session-row]").length === 4, "rows render");
   await frame();
 
-  // 1. Every idle row carries the hollow mark, including the selected one.
-  const idleMarks = ["open", "alpha", "beta", "gamma"].map((id) => status(id));
-  check("every idle row shows a mark, selected row included", idleMarks.every((value) => value === "idle"), idleMarks);
-  check("the open row stays visually selected", row("open").classList.contains("active"));
+  // 1. Only the selected idle conversation carries the hollow mark. The other
+  // idle rows render nothing, so their gutter is not a hidden hit target.
+  check(
+    "only the selected idle row shows the hollow mark",
+    status("open") === "idle" &&
+      row("open").classList.contains("active") &&
+      !hasMark("alpha") &&
+      !hasMark("beta") &&
+      !hasMark("gamma"),
+    {
+      open: status("open"),
+      alpha: hasMark("alpha"),
+      beta: hasMark("beta"),
+      gamma: hasMark("gamma"),
+    },
+  );
+  const alphaRow = row("alpha").getBoundingClientRect();
+  const alphaGutter = document.elementFromPoint(
+    alphaRow.left + 4,
+    alphaRow.top + alphaRow.height / 2,
+  );
+  check(
+    "an unselected idle row keeps no invisible status hit target",
+    alphaGutter !== null &&
+      !(alphaGutter as HTMLElement).closest(".thread-item-status"),
+    {
+      tag: alphaGutter?.tagName ?? null,
+      className: (alphaGutter as HTMLElement | null)?.className ?? null,
+    },
+  );
+
+  // 2. Selecting an unmarked row reveals its hollow mark and drops the hollow
+  // mark the previously selected row showed.
+  await selectViaRow("alpha");
+  check(
+    "selecting an idle row shows its hollow mark and hides the previous one",
+    status("alpha") === "idle" &&
+      row("alpha").classList.contains("active") &&
+      !hasMark("open") &&
+      !hasMark("beta") &&
+      !hasMark("gamma"),
+    { active: useAppStore.getState().activeSessionId, open: hasMark("open") },
+  );
 
   const alphaMark = mark("alpha");
   const rect = alphaMark.getBoundingClientRect();
@@ -250,14 +307,15 @@ async function idleProbe() {
     idlePseudo,
   );
 
-  // 2. Clicking the idle mark marks the row without selecting it.
+  // 3. Clicking the hollow mark fills it without selecting the session, and a
+  // second click clears it back to the hollow face.
   (mark("alpha") as HTMLElement).click();
   await frame();
-  const selectionAfterClick = useAppStore.getState().activeSessionId;
   check(
-    "clicking a plain idle mark never selects the session",
-    selectionAfterClick === "open" && !row("alpha").classList.contains("active"),
-    selectionAfterClick,
+    "clicking the selected idle mark never moves the active conversation",
+    useAppStore.getState().activeSessionId === "alpha" &&
+      row("alpha").classList.contains("active"),
+    useAppStore.getState().activeSessionId,
   );
   check(
     "the first click fills the manual mark",
@@ -275,33 +333,29 @@ async function idleProbe() {
       pendingPseudo.boxShadow === "none",
     pendingPseudo,
   );
-
-  // 3. A second click clears it.
   (mark("alpha") as HTMLElement).click();
   await frame();
   check(
-    "a second click clears the manual mark",
+    "a second click clears the manual mark back to the hollow face",
     status("alpha") === "idle" && storedMark("alpha") === false,
     { status: status("alpha"), stored: storedMark("alpha") },
   );
 
-  // 4. Mark beta for the remaining phases.
+  // 4. Mark beta for the remaining phases, then select another row: the filled
+  // mark stays visible while the row is unselected.
+  await selectViaRow("beta");
   (mark("beta") as HTMLElement).click();
   await frame();
   check("beta is marked before the running phase", status("beta") === "pending" && storedMark("beta") === true);
-  // Selecting the marked conversation must keep the mark on its own row; the
-  // row background is the only thing selection paints.
-  const betaMain = row("beta").querySelector<HTMLButtonElement>(".thread-item-main");
-  if (!betaMain) throw new Error("missing beta row button");
-  betaMain.click();
-  await until(() => useAppStore.getState().activeSessionId === "beta", "beta row selects");
-  await frame();
+  await selectViaRow("open");
   check(
-    "selecting a marked conversation keeps the manual mark visible",
+    "selecting another row keeps the manual mark visible on the unselected row",
     status("beta") === "pending" &&
       mark("beta").getAttribute("aria-pressed") === "true" &&
       storedMark("beta") === true &&
-      row("beta").classList.contains("active"),
+      !row("beta").classList.contains("active") &&
+      status("open") === "idle" &&
+      !hasMark("gamma"),
     { status: status("beta"), activeSessionId: useAppStore.getState().activeSessionId },
   );
 
@@ -327,9 +381,10 @@ async function idleProbe() {
     { runningDot, runningHalo },
   );
   (mark("beta") as HTMLElement).click();
+  await until(() => useAppStore.getState().activeSessionId === "beta", "a running mark selects its row");
   await frame();
   check(
-    "a running mark never toggles the stored manual flag",
+    "a running mark selects the row and never toggles the stored manual flag",
     status("beta") === "running" &&
       storedMark("beta") === true &&
       useAppStore.getState().activeSessionId === "beta",
@@ -356,7 +411,42 @@ async function idleProbe() {
     { status: status("beta"), stored: storedMark("beta") },
   );
 
-  // 7. An unread outcome outranks the manual mark and refuses the toggle.
+  // 7. Clearing a marked row while it is unselected leaves no dot behind.
+  await selectViaRow("alpha");
+  (mark("alpha") as HTMLElement).click();
+  await frame();
+  await selectViaRow("open");
+  check(
+    "a marked unselected row shows its filled mark",
+    status("alpha") === "pending" && !row("alpha").classList.contains("active"),
+    { status: status("alpha") },
+  );
+  (mark("alpha") as HTMLElement).click();
+  await frame();
+  check(
+    "clearing an unselected marked row returns no dot",
+    !hasMark("alpha") && storedMark("alpha") === false,
+    { mark: hasMark("alpha"), stored: storedMark("alpha") },
+  );
+  const clearedRow = row("alpha").getBoundingClientRect();
+  const clearedGutter = document.elementFromPoint(
+    clearedRow.left + 4,
+    clearedRow.top + clearedRow.height / 2,
+  );
+  check(
+    "the cleared row leaves no latent hit target in its gutter",
+    clearedGutter !== null &&
+      !(clearedGutter as HTMLElement).closest(".thread-item-status"),
+    {
+      tag: clearedGutter?.tagName ?? null,
+      className: (clearedGutter as HTMLElement | null)?.className ?? null,
+    },
+  );
+
+  // 8. An unread outcome outranks the manual mark and refuses the toggle.
+  // Gamma is unmarked and unselected, so it shows nothing until selected.
+  check("an unselected unmarked row shows no dot before the outcome", !hasMark("gamma"));
+  await selectViaRow("gamma");
   (mark("gamma") as HTMLElement).click();
   await frame();
   useAppStore.setState({ sessionOutcomes: { gamma: "completed" } });
@@ -380,7 +470,7 @@ async function idleProbe() {
     { status: status("gamma"), stored: storedMark("gamma") },
   );
 
-  // 8. A pending permission outranks both.
+  // 9. A pending permission outranks both.
   useAppStore.setState({
     pendingPermissions: {
       gamma: [
@@ -403,18 +493,20 @@ async function idleProbe() {
   );
   useAppStore.setState({ pendingPermissions: {} });
 
-  // 9. A drag cannot start from the toggle.
+  // 10. A drag cannot start from the toggle. Beta is marked and unselected, so
+  // its filled mark is the control that is on screen here.
+  const dragFrom = mark("beta");
   const dragStart = new DragEvent("dragstart", {
     bubbles: true,
     cancelable: true,
     dataTransfer: new DataTransfer(),
   });
-  const dragAccepted = mark("alpha").dispatchEvent(dragStart);
+  const dragAccepted = dragFrom.dispatchEvent(dragStart);
   await frame();
   check(
     "dragging from the toggle never starts a row drag",
-    dragAccepted === false && row("alpha").getAttribute("draggable") === "true",
-    { dragAccepted, draggable: row("alpha").getAttribute("draggable") },
+    dragAccepted === false && row("beta").getAttribute("draggable") === "true",
+    { dragAccepted, draggable: row("beta").getAttribute("draggable") },
   );
 
   const stored = loadSidebarPreferences();
@@ -456,7 +548,11 @@ async function informationalProbe() {
   useAppStore.setState({ runningSessions: {} });
   seed(loadSidebarPreferences());
   await frame();
-  check("clearing the run returns the row to idle", status("alpha") === "idle");
+  check(
+    "clearing the run leaves the now unselected row with no mark",
+    !hasMark("alpha") && useAppStore.getState().activeSessionId === "open",
+    { mark: hasMark("alpha"), active: useAppStore.getState().activeSessionId },
+  );
 
   useAppStore.setState({
     pendingPermissions: {
@@ -537,11 +633,20 @@ async function persistenceProbe(markedId: string) {
       persisted.getAttribute("aria-pressed") === "true",
     { status: status(markedId), pressed: persisted.getAttribute("aria-pressed") },
   );
-  // Only what the user marked comes back; an unmarked row stays hollow.
+  // Only what the user marked comes back. An unselected row with no mark
+  // renders nothing at all, so the restored sidebar shows no idle dots.
   check(
-    "an unmarked row comes back hollow",
-    status("alpha") === "idle" && storedMark("alpha") === false,
-    { status: status("alpha"), stored: storedMark("alpha") },
+    "an unselected unmarked row comes back with no mark",
+    !hasMark("alpha") && storedMark("alpha") === false,
+    { mark: hasMark("alpha"), stored: storedMark("alpha") },
+  );
+  // The keyboard phase needs the filled mark on a control that stays on
+  // screen after Enter clears it, so select the row the way a user does.
+  await selectViaRow(markedId);
+  check(
+    "the pending row is selected before the keyboard checks",
+    row(markedId).classList.contains("active") && status(markedId) === "pending",
+    { active: useAppStore.getState().activeSessionId, status: status(markedId) },
   );
   return { checks };
 }
@@ -612,8 +717,9 @@ async function activationProbe(expected: "pending" | "idle", key: string) {
     { status: status("beta"), stored: storedMark("beta"), expected },
   );
   check(
-    "keyboard activation never selects the session",
-    useAppStore.getState().activeSessionId === "open" && !row("beta").classList.contains("active"),
+    "keyboard activation never changes the active conversation",
+    useAppStore.getState().activeSessionId === "beta" &&
+      row("beta").classList.contains("active"),
     useAppStore.getState().activeSessionId,
   );
   const evidence = focusEvidence("beta");

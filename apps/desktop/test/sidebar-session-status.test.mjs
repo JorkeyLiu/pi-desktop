@@ -59,24 +59,54 @@ test("permission, in-progress work, and unread outcomes outrank the manual mark"
       outcome: "failed",
       pending: true,
       hasPendingPermission: true,
+      selected: false,
     }),
     "permission",
   );
   assert.equal(
-    sidebarSessionStatus({ running: true, outcome: "failed", pending: true }),
+    sidebarSessionStatus({
+      running: true,
+      outcome: "failed",
+      pending: true,
+      selected: false,
+    }),
     "running",
   );
   assert.equal(
-    sidebarSessionStatus({ running: false, outcome: "failed", pending: true }),
+    sidebarSessionStatus({
+      running: false,
+      outcome: "failed",
+      pending: true,
+      selected: false,
+    }),
     "failed",
   );
   assert.equal(
-    sidebarSessionStatus({ running: false, outcome: "completed" }),
+    sidebarSessionStatus({ running: false, outcome: "completed", selected: false }),
     "completed",
   );
-  assert.equal(sidebarSessionStatus({ running: false, pending: true }), "pending");
-  // A selected idle row keeps its hollow mark: selection never blanks it.
-  assert.equal(sidebarSessionStatus({ running: false }), "idle");
+  assert.equal(
+    sidebarSessionStatus({ running: false, pending: true, selected: false }),
+    "pending",
+  );
+});
+
+test("only the selected unmarked row shows the hollow idle mark", () => {
+  // An unselected row with nothing to report renders no mark, so idle rows are
+  // never decorated and the gutter holds no invisible control. Selecting it
+  // reveals the hollow toggle at rest.
+  assert.equal(sidebarSessionStatus({ running: false, selected: false }), null);
+  assert.equal(sidebarSessionStatus({ running: false, selected: true }), "idle");
+  // A manual mark stays visible on unselected rows, and an unread outcome does
+  // not wait for selection either.
+  assert.equal(
+    sidebarSessionStatus({ running: false, pending: true, selected: false }),
+    "pending",
+  );
+  assert.equal(
+    sidebarSessionStatus({ running: false, outcome: "completed", selected: true }),
+    "completed",
+  );
 });
 
 test("only the manual idle mark toggles; every reported state stays informational", () => {
@@ -87,17 +117,30 @@ test("only the manual idle mark toggles; every reported state stays informationa
   assert.equal(sidebarSessionStatusIsTogglable("idle"), true);
 });
 
-test("a manual mark flips only for a known idle or marked session", () => {
+test("a manual mark flips only for a selected idle row or a marked row", () => {
   const base = {
     known: true,
     running: false,
     pending: false,
     hasPendingPermission: false,
+    selected: true,
   };
   // The action boundary repeats this rule for direct callers, not just the row
   // control, so no path can flip the flag under a glyph the user has not acted
-  // on yet, and an unknown id cannot create sidebar metadata.
-  assert.equal(sessionPendingToggleAllowed(base), true, "idle");
+  // on yet, and an unknown id cannot create sidebar metadata. A hidden idle row
+  // is refused because its mark is not rendered; an unselected manual mark is
+  // still allowed so its filled dot can be cleared.
+  assert.equal(sessionPendingToggleAllowed(base), true, "selected idle");
+  assert.equal(
+    sessionPendingToggleAllowed({ ...base, selected: false }),
+    false,
+    "unselected idle",
+  );
+  assert.equal(
+    sessionPendingToggleAllowed({ ...base, pending: true, selected: false }),
+    true,
+    "unselected marked",
+  );
   assert.equal(sessionPendingToggleAllowed({ ...base, pending: true }), true, "marked");
   assert.equal(sessionPendingToggleAllowed({ ...base, known: false }), false, "unknown session");
   assert.equal(sessionPendingToggleAllowed({ ...base, running: true }), false, "running");
@@ -162,10 +205,11 @@ test("renders semantic, shape-distinct sidebar status indicators", () => {
   const main = readMainSourceSync();
 
   assert.match(sidebar, /<SessionStatusMark/);
+  assert.match(sidebar, /selected: active/);
+  assert.match(sidebar, /\{status \? \(/);
   assert.doesNotMatch(sidebar, /nav\.sessionSelected/);
   // The idle mark is the toggle: a shared button primitive, a pressed state,
   // and a localized name, so it is reachable by pointer and keyboard.
-  assert.match(mark, /TooltipButton/);
   assert.match(mark, /aria-pressed={marked}/);
   assert.match(mark, /nav\.sessionPendingMarker/);
   assert.match(mark, /nav\.sessionMarkPending/);

@@ -541,7 +541,9 @@ export function createProjectSlice({
     // must never touch the session list, the host row, or a task outcome. The
     // action boundary repeats the rule the row control applies, so no caller
     // can flip the flag under live work, a permission, or an unread outcome,
-    // and an id the sidebar does not hold cannot create metadata.
+    // can toggle an unselected row whose mark is not rendered, or invent
+    // metadata for an id the sidebar does not hold. The selected check matches
+    // the row's own selected state (only the chat page paints one).
     toggleSessionPending: (id) => {
       if (!id) return;
       const current = get();
@@ -551,6 +553,7 @@ export function createProjectSlice({
         outcome: current.sessionOutcomes[id],
         pending: sessionIsPending(id, current.sessionMeta),
         hasPendingPermission: (current.pendingPermissions[id]?.length ?? 0) > 0,
+        selected: current.page === "chat" && current.activeSessionId === id,
       });
       if (!allowed) return;
       set((state) => {

@@ -1726,6 +1726,7 @@ export function Sidebar({
       outcome: sessionOutcomes[session.id],
       pending: sessionIsPending(session.id, sessionMeta),
       hasPendingPermission,
+      selected: active,
     });
     return (
       <div
@@ -1769,11 +1770,13 @@ export function Sidebar({
           );
         }}
       >
-        <SessionStatusMark
-          status={status}
-          sessionId={session.id}
-          onTogglePending={toggleSessionPending}
-        />
+        {status ? (
+          <SessionStatusMark
+            status={status}
+            sessionId={session.id}
+            onTogglePending={toggleSessionPending}
+          />
+        ) : null}
         <button
           type="button"
           className="thread-item-main"

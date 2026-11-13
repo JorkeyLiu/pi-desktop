@@ -256,7 +256,7 @@ token rather than introducing a decorative palette:
 
 | State | Semantic color | Shape / motion | Meaning |
 |---|---|---|---|
-| Idle (manual toggle, unpressed) | neutral accent | hollow outlined ring, static | no live state; the row is not marked pending |
+| Idle (manual toggle, unpressed) | neutral accent | hollow outlined ring, static, on the selected idle conversation only | no live state; the row is not marked pending. Unselected unmarked rows show no mark and leave the gutter empty |
 | Pending (manual toggle, pressed) | warning orange | filled dot, static — no halo, no animation | the user marked the row as still needing them |
 | In progress | warning orange | filled dot plus a halo ring that animates only while the turn runs; static halo under reduced motion | agent is producing or executing |
 | Permission | purple | dot with two pulse cycles, then steady | the session waits on a tool approval |
@@ -264,18 +264,20 @@ token rather than introducing a decorative palette:
 | Failed | error red | circled alert mark | latest unread task turn failed |
 
 Precedence is `permission → in progress → completed/failed → manual pending →
-idle`. An idle row shows the hollow mark whether or not it is the selected
-conversation, so selection never conceals a manual mark. Only the hollow and
-manual states toggle: clicking the mark fills it, clicking it again clears it,
-and the manual flag is device-local sidebar preference state (no host row,
-protocol field, or tray flag) that survives a turn starting or ending, opening
-or selecting the session, a renderer refresh, and a relaunch. Permission,
-in-progress, and unread-outcome marks stay informational: they are not
-controls, so a click reaches the row exactly as a click on the title does — it
-selects that conversation, acknowledges only its own unread outcome, and never
-toggles the stored manual flag. The idle/manual control is the shared tooltip
-button with a localized accessible name, `aria-pressed`, and Enter/Space
-activation.
+idle`. Only the selected unmarked conversation shows the hollow idle mark, so
+the mark that opens the manual toggle exists exactly where the row is already
+active; every other unmarked row shows nothing and the gutter holds no hidden
+control. A manual mark stays visible on an unselected row and remains the
+control that clears it. Only the hollow and manual states toggle: clicking the
+mark fills it, clicking it again clears it, and the manual flag is device-local
+sidebar preference state (no host row, protocol field, or tray flag) that
+survives a turn starting or ending, opening or selecting the session, a
+renderer refresh, and a relaunch. Permission, in-progress, and unread-outcome
+marks stay informational: they are not controls, so a click reaches the row
+exactly as a click on the title does — it selects that conversation,
+acknowledges only its own unread outcome, and never toggles the stored manual
+flag. The idle/manual control is the shared tooltip button with a localized
+accessible name, `aria-pressed`, and Enter/Space activation.
 
 Starting another turn clears the prior terminal outcome; abort clears the live
 indicator without creating a failure. Opening a conversation acknowledges its
