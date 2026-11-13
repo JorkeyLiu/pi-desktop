@@ -279,7 +279,57 @@ window.todoChecklistProbe = async () => {
     normalizedCard.textContent!.includes("truncated to 500 characters"),
     "the truncation warning stays visible",
   );
+  // The host's warnings qualify the list it committed, so they read as lines of
+  // that card: they get no `Note` section heading of their own, and the list
+  // with its progress line stays the body.
+  const warningNotes = [
+    ...normalizedCard.querySelectorAll<HTMLElement>(".tool-note"),
+  ];
+  assert(
+    warningNotes.length === 2,
+    `both host warnings render in the card (${warningNotes.length})`,
+  );
+  assert(
+    warningNotes.every((note) => note.closest(".tool-block.is-todos")),
+    "every warning belongs to the checklist block it qualifies",
+  );
+  assert(
+    warningNotes.every(
+      (note) =>
+        note.querySelector(".tool-note-text")?.getAttribute("role") === "note",
+    ),
+    "every warning keeps its accessible note role",
+  );
+  assert(
+    warningNotes.some((note) =>
+      note.textContent!.includes("1 item(s) were truncated to 500 characters"),
+    ),
+    "the truncation warning is named in the card",
+  );
+  assert(
+    warningNotes.some((note) =>
+      note.textContent!.includes(
+        "only the first in_progress item is kept; later ones became pending",
+      ),
+    ),
+    "the demotion warning is named in the card",
+  );
+  assert(
+    !normalizedCard.querySelector(".tool-row-section-head"),
+    "warnings add no standalone Note heading to the checklist",
+  );
+  assert(
+    progress(normalizedCard) === "0/2 completed",
+    `warnings leave the progress line intact (${progress(normalizedCard)})`,
+  );
+  assert(
+    normalizedCard
+      .querySelector('[role="progressbar"]')
+      ?.getAttribute("aria-valuemax") === "2",
+    "warnings leave the progress range intact",
+  );
   checks.push("host-normalization-is-what-the-card-shows");
+  checks.push("normalization-warnings-stay-inside-the-checklist-card");
 
   // ── A refused write is an error, never a list ──
   const refused = (await action("refuse", {
@@ -379,6 +429,10 @@ window.todoChecklistProbe = async () => {
       unicodeScalars: [...stored[0].content].length,
       activeItems: stored.filter((todo) => todo.status === "in_progress").length,
       truncationWarning: normalizedCard.textContent!.includes("truncated to 500 characters"),
+      warningLines: warningNotes.length,
+      standaloneNoteHeading: Boolean(
+        normalizedCard.querySelector(".tool-row-section-head"),
+      ),
     },
     host: "real-stdio-sqlite",
     agent: "production-runtime-tool-search-todo-write",

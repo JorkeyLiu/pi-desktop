@@ -26,7 +26,9 @@ try {
     outfile: join(temp, "renderer.js"),
     bundle: true,
     platform: "browser",
-    format: "iife",
+    // The renderer modules read `import.meta.env`, which only survives an ES
+    // module bundle; the page loads it as one below.
+    format: "esm",
     jsx: "automatic",
     define: {
       "process.env.NODE_ENV": '"production"',
@@ -74,7 +76,7 @@ try {
     join(temp, "index.html"),
     `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:"><title>AskTool card regression</title>${css
       .map((path) => `<link rel="stylesheet" href="${path}">`)
-      .join("")}<script src="renderer.js"></script>`,
+      .join("")}<script type="module" src="renderer.js"></script>`,
   );
   await writeFile(
     join(temp, "main.cjs"),

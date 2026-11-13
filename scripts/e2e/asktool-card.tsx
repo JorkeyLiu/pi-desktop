@@ -11,14 +11,24 @@
  * Scenario: E2E-ASKTOOL-compact-card-interaction. It also pins the compact
  * question block: a multi-paragraph question body stays one stacked text
  * column rather than lining its blocks up in a row.
+ *
+ * The second half covers the transcript history row of a completed ask: the
+ * collapsed row must name the tool in the session language, state the short
+ * description the model wrote for the call, and state how many questions were
+ * answered; one row without a description must state no hint at all. Clicking a
+ * row must reveal every question, answer and skip. It runs in English and in
+ * zh-CN, including a namespaced `functions.asktool` call, and measures the
+ * rendered type of the answered and skipped entries.
  */
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import i18n from "i18next";
 import { I18nextProvider } from "react-i18next";
-import { en } from "@pi-desktop/i18n";
+import { en, zhCN } from "@pi-desktop/i18n";
 import { MAX_ASK_TOOL_QUESTION_CHARS } from "../../packages/shared/src/types/agent";
 import { AskToolCard } from "../../apps/desktop/src/components/AskToolCard";
+import { ToolRow } from "../../apps/desktop/src/features/chat/transcript/ToolRow";
+import { TranscriptDisclosureProvider } from "../../apps/desktop/src/features/chat/transcript/disclosure";
 import { api } from "../../apps/desktop/src/lib/api";
 import { useAppStore } from "../../apps/desktop/src/stores/app-store";
 
@@ -101,6 +111,65 @@ const MAX_LENGTH_QUESTION: FixtureQuestion = {
   options: [{ label: "continue", description: "Proceed with the selected choice." }],
 };
 
+// A completed ask as the transcript persists it: the questions the model
+// asked, their options, and one answer per question (`null` for a skip). The
+// first question carries Markdown so the expanded card's rendering can be
+// checked independently of the call's plain-text display summary.
+const HISTORY_QUESTIONS = [
+  { question: "Which **deployment** target?", options: ["Web", "Desktop"] },
+  {
+    question: "Which platforms should be supported?",
+    options: ["macOS", "Windows", "Linux"],
+    multiSelect: true,
+  },
+  { question: "Should beta updates be enabled?", options: ["Yes", "No"] },
+];
+// One answer per question, in the order they were asked: the second question
+// was multi-select, and the third was skipped.
+const HISTORY_ANSWERS: Array<string[] | null> = [
+  ["Desktop"],
+  ["macOS", "Linux"],
+  null,
+];
+// The display-only summary the model wrote for the call. It is the collapsed
+// row's hint in every locale, because it is the model's text, not a string the
+// row derives from the first question.
+const HISTORY_DESCRIPTION = "Choose the deployment target";
+
+function askHistoryMessage(
+  id: string,
+  toolName: string,
+  description: string | null = HISTORY_DESCRIPTION,
+) {
+  return {
+    id,
+    role: "tool" as const,
+    content: "",
+    createdAt: "2026-10-09T00:00:00.000Z",
+    status: "complete" as const,
+    toolName,
+    toolCallId: `tool-${id}`,
+    toolStatus: "success" as const,
+    // The call's own display metadata: present in the ordinary row, absent in
+    // the legacy row below that proves a missing summary states no hint.
+    toolArgs: description
+      ? { description, questions: HISTORY_QUESTIONS }
+      : { questions: HISTORY_QUESTIONS },
+    toolResult: {
+      content: [
+        {
+          type: "text",
+          text: HISTORY_QUESTIONS.map(
+            (entry, index) =>
+              `${entry.question}：${(HISTORY_ANSWERS[index] ?? []).join("、")}`,
+          ).join("\n---\n"),
+        },
+      ],
+      details: { questions: HISTORY_QUESTIONS, answers: HISTORY_ANSWERS },
+    },
+  };
+}
+
 export async function asktoolCardProbe() {
   await i18n.init({ lng: "en", resources: { en: { translation: en } } });
   const initial = useAppStore.getState();
@@ -120,6 +189,10 @@ export async function asktoolCardProbe() {
   const root = createRoot(host, {
     onUncaughtError: (error) => errors.push(error),
   });
+  // The history row is a second root so the card under test above it stays
+  // mounted while the transcript row renders the same persisted result.
+  let historyHost: HTMLElement | null = null;
+  let historyRoot: ReturnType<typeof createRoot> | null = null;
   const element = <T extends HTMLElement = HTMLElement>(
     selector: string,
   ): T => {
@@ -391,14 +464,355 @@ export async function asktoolCardProbe() {
       "the maximum-length question remains answerable",
     );
 
+    // The pending card above stays mounted while the history row is added, so
+    // its own typography is recorded here: the history stylesheet must not reach
+    // it.
+    const liveType = {
+      label: getComputedStyle(element(".asktool-question-number")).fontSize,
+      option: getComputedStyle(element(".asktool-option-description")).fontSize,
+    };
+
+    // ── Flow H: the completed ask as the transcript history renders it ──
+    // The row names the tool in the session language, states the display-only
+    // description the call carried, and states the answered count against every
+    // question asked; the questions and answers belong to the expanded body. The
+    // persisted result is the only other input here.
+    const zh = i18n.createInstance();
+    await zh.init({
+      lng: "zh-CN",
+      resources: { "zh-CN": { translation: zhCN } },
+      interpolation: { escapeValue: false },
+    });
+    historyHost = document.createElement("div");
+    historyHost.id = "asktool-history";
+    historyHost.style.cssText =
+      "position:fixed;inset:0;overflow:auto;background:#141414";
+    document.body.append(historyHost);
+    historyRoot = createRoot(historyHost, {
+      onUncaughtError: (error) => errors.push(error),
+    });
+    const historyElement = <T extends HTMLElement = HTMLElement>(
+      selector: string,
+    ): T => {
+      const found = historyHost!.querySelector<T>(selector);
+      assert(found, `history row: missing ${selector}`);
+      return found as T;
+    };
+    const mountHistory = async (
+      instance: typeof i18n,
+      message: ReturnType<typeof askHistoryMessage>,
+    ) => {
+      flushSync(() =>
+        historyRoot!.render(
+          <I18nextProvider i18n={instance}>
+            <TranscriptDisclosureProvider>
+              <ToolRow message={message} />
+            </TranscriptDisclosureProvider>
+          </I18nextProvider>,
+        ),
+      );
+      await until(
+        () =>
+          Boolean(
+            historyHost!.querySelector(`[data-message-id="${message.id}"]`),
+          ),
+        "the ask history row mounts",
+      );
+    };
+    const historyName = () => historyElement(".tool-row-name").textContent ?? "";
+    const historySummary = () =>
+      historyElement(".tool-row-summary").textContent ?? "";
+    const historyChips = () =>
+      historyElement(".tool-row-chips").textContent ?? "";
+    const historyHeader = () =>
+      historyElement<HTMLButtonElement>(".tool-row-header");
+
+    await mountHistory(i18n, askHistoryMessage("asktool-history-en", "asktool"));
+    // Identity is the session language, never the wire name.
+    assert(
+      historyName() === "Questions",
+      `the row is named in the session language (${historyName()})`,
+    );
+    assert(
+      !historyElement(".tool-row")
+        .getAttribute("aria-label")!
+        .toLowerCase()
+        .includes("asktool"),
+      "the wire tool name never reaches the row's accessible label",
+    );
+    // The hint is the call's own display metadata: it is not the first question,
+    // it is never counted, and it is the model's text rather than something the
+    // row derived from the questions.
+    assert(
+      historySummary() === HISTORY_DESCRIPTION,
+      `the summary states the call's task (${historySummary()})`,
+    );
+    assert(
+      !/(\+\d+)/.test(historySummary()),
+      `the summary never counts the questions it did not show (${historySummary()})`,
+    );
+    assert(
+      historyChips().includes("2/3 answered"),
+      `the row states the answered count (${historyChips()})`,
+    );
+    assert(
+      historyHeader().getAttribute("aria-expanded") === "false",
+      "a completed ask starts collapsed",
+    );
+    assert(
+      !historyHost!.querySelector(".tool-row-body") &&
+        !historyHost!.querySelector(".tool-asktool-results"),
+      "the collapsed row renders no answers",
+    );
+
+    // The user path: one click on the row opens its answers.
+    flushSync(() => historyHeader().click());
+    await until(
+      () => historyHeader().getAttribute("aria-expanded") === "true",
+      "the ask row expands",
+    );
+    const historyControls = historyHeader().getAttribute("aria-controls");
+    assert(historyControls, "the expanded row names the body it controls");
+    const historyBody = document.getElementById(historyControls!);
+    assert(
+      historyBody?.classList.contains("tool-row-body"),
+      "aria-controls names the rendered body",
+    );
+    const results = historyElement(".tool-asktool-results");
+    assert(
+      results.getAttribute("aria-label") === "Questions and answers",
+      `the answers keep their accessible heading (${results.getAttribute("aria-label")})`,
+    );
+    const questionCopies = [
+      ...historyHost!.querySelectorAll<HTMLElement>(
+        ".tool-asktool-question-copy",
+      ),
+    ];
+    assert(
+      questionCopies.length === 3,
+      `every question renders (${questionCopies.length})`,
+    );
+    assert(
+      questionCopies.map((node) => node.textContent).join("|") ===
+        "Which deployment target?|Which platforms should be supported?|Should beta updates be enabled?",
+      "the card lists the questions in the order they were asked",
+    );
+    assert(
+      Boolean(questionCopies[0]!.querySelector("strong")),
+      "the expanded question renders the Markdown in full",
+    );
+    const answerValues = [
+      ...historyHost!.querySelectorAll<HTMLElement>(
+        ".tool-asktool-answer-value",
+      ),
+    ];
+    assert(
+      answerValues.length === 3,
+      `both answered questions list their answers (${answerValues.length})`,
+    );
+    assert(
+      answerValues.map((node) => node.textContent).join("|") ===
+        "Desktop|macOS|Linux",
+      "the card shows the answers the request resolved with",
+    );
+    const historyEntries = [
+      ...historyHost!.querySelectorAll<HTMLElement>(".tool-asktool-entry"),
+    ];
+    assert(
+      historyEntries.length === 3,
+      `the card keeps one entry per question (${historyEntries.length})`,
+    );
+    assert(
+      Boolean(historyEntries[2]!.querySelector(".tool-asktool-skipped")),
+      "the unanswered third question is shown as skipped",
+    );
+    assert(
+      historyEntries[2]!.textContent!.includes("Skipped"),
+      "the skipped entry says so",
+    );
+    assert(
+      !historyBody!.textContent!.includes('"answers"') &&
+        !historyBody!.textContent!.includes('"questions"'),
+      "the expanded body is never the serialized result",
+    );
+    assert(
+      !historyBody!.textContent!.includes(HISTORY_DESCRIPTION),
+      "the expanded body does not repeat the head's summary",
+    );
+    // Runtime typography evidence: the whole question-and-answer history —
+    // question, label, answers and the skipped state — reads at the tool detail
+    // size from the one rule on its container.
+    const historyResults = historyElement<HTMLElement>(".tool-asktool-results");
+    const answersSize = getComputedStyle(historyResults).fontSize;
+    assert(
+      answersSize === "12px",
+      `the Q&A history reads at the tool detail size (${answersSize})`,
+    );
+    for (const selector of [
+      ".tool-asktool-question-number",
+      ".tool-asktool-question-copy",
+      ".tool-asktool-answer-label",
+      ".tool-asktool-answer-value",
+      ".tool-asktool-skipped",
+    ]) {
+      const size = getComputedStyle(historyElement(selector)).fontSize;
+      assert(
+        size === answersSize,
+        `${selector} inherits the history size (${size} vs ${answersSize})`,
+      );
+    }
+    // The pending card above keeps its own tokens: the history rule reaches only
+    // `.tool-asktool-*`, and adding the second root changed nothing in the card.
+    assert(
+      getComputedStyle(element(".asktool-question-number")).fontSize ===
+        liveType.label &&
+        getComputedStyle(element(".asktool-option-description")).fontSize ===
+          liveType.option &&
+        liveType.label !== answersSize,
+      `the pending card keeps its own typography (label ${liveType.label}, option ${liveType.option})`,
+    );
+
+    // The toggle is two-way: collapsing hides the answers, and expanding again
+    // shows the same persisted ones.
+    flushSync(() => historyHeader().click());
+    await until(
+      () => historyHeader().getAttribute("aria-expanded") === "false",
+      "the ask row collapses",
+    );
+    assert(
+      !historyHost!.querySelector(".tool-row-body"),
+      "a collapsed ask hides its answers again",
+    );
+    flushSync(() => historyHeader().click());
+    await until(
+      () => historyHeader().getAttribute("aria-expanded") === "true",
+      "the ask row re-expands",
+    );
+    assert(
+      historyHost!.querySelectorAll(".tool-asktool-answer-value").length === 3,
+      "re-expanding shows the same persisted answers",
+    );
+
+    // The same persisted result in a zh-CN session under a namespaced tool
+    // name: identity and labels follow the session language, nothing else.
+    const zhIdentity = zh.t("chat.toolIdentityAskTool");
+    const zhChip = zh.t("chat.toolChipAnswered", { answered: 2, total: 3 });
+    const zhTitle = zh.t("askTool.historyTitle");
+    const zhSkipped = zh.t("askTool.skipped");
+    assert(
+      zhIdentity !== "chat.toolIdentityAskTool",
+      `the zh-CN catalog defines the ask identity (${zhIdentity})`,
+    );
+    assert(
+      zhTitle !== "askTool.historyTitle",
+      `the zh-CN catalog defines the answer heading (${zhTitle})`,
+    );
+    await mountHistory(
+      zh,
+      askHistoryMessage("asktool-history-zh", "functions.asktool"),
+    );
+    // `useTranslation` hands a component's first render the translator it was
+    // created with and swaps it in an effect once the new instance's language
+    // event lands, so wait for the row to speak the session language before
+    // reading the rest of its strings.
+    await until(
+      () => historyName() === zhIdentity,
+      "the history row speaks the session language",
+    );
+    assert(
+      historyName() === zhIdentity,
+      `the namespaced ask is named in the session language (${historyName()})`,
+    );
+    // The hint is the model's own text, so the session language leaves it
+    // alone: only the tool identity, the chip and the body are localized.
+    assert(
+      historySummary() === HISTORY_DESCRIPTION,
+      `the namespaced ask keeps the model's summary (${historySummary()})`,
+    );
+    assert(
+      historyChips().includes(zhChip),
+      `the namespaced ask states the answered count (${historyChips()})`,
+    );
+    flushSync(() => historyHeader().click());
+    await until(
+      () => historyHeader().getAttribute("aria-expanded") === "true",
+      "the zh-CN ask row expands",
+    );
+    assert(
+      historyElement(".tool-asktool-results").getAttribute("aria-label") ===
+        zhTitle,
+      "the zh-CN answers keep their localized heading",
+    );
+    assert(
+      historyHost!.querySelectorAll(".tool-asktool-question-copy").length === 3,
+      "the zh-CN card lists every question",
+    );
+    assert(
+      historyElement(".tool-asktool-skipped").textContent === zhSkipped,
+      `the zh-CN skip is named (${historyElement(".tool-asktool-skipped").textContent})`,
+    );
+    // A row recorded without the optional summary states no hint at all: it
+    // never quotes the first question and never counts the rest, while the
+    // answered chip and the whole Q&A body stay reachable.
+    await mountHistory(
+      i18n,
+      askHistoryMessage("asktool-history-no-summary", "asktool", null),
+    );
+    assert(
+      !historyHost!.querySelector(".tool-row-summary"),
+      "a row without a description states no hint",
+    );
+    assert(
+      !/(\+\d+)/.test(historyElement(".tool-row").textContent ?? ""),
+      "a row without a description never counts its questions",
+    );
+    // The previous mount spoke zh-CN; the translator swaps in an effect, so wait
+    // for the row to speak this session's language before reading the chip.
+    await until(
+      () => historyName() === "Questions",
+      "the row without a description speaks the session language",
+    );
+    assert(
+      historyChips().includes("2/3 answered"),
+      `the chip stays without a hint (${historyChips()})`,
+    );
+    flushSync(() => historyHeader().click());
+    await until(
+      () => historyHeader().getAttribute("aria-expanded") === "true",
+      "the row without a description expands",
+    );
+    assert(
+      historyHost!.querySelectorAll(".tool-asktool-question-copy").length === 3,
+      "every question stays reachable without a hint",
+    );
+    assert(
+      (historyHost!.querySelectorAll(".tool-asktool-answer-value").length) === 3 &&
+        Boolean(historyHost!.querySelector(".tool-asktool-skipped")),
+      "the answers and the skip stay reachable without a hint",
+    );
     assert(errors.length === 0, `render errors: ${errors.map(String)}`);
-    return { ok: true, resolutions: resolutions.length };
+    return {
+      ok: true,
+      resolutions: resolutions.length,
+      history: {
+        collapsedAndExpandedRows: 3,
+        locales: ["en", "zh-CN"],
+        questions: 3,
+        answers: 2,
+        skipped: 1,
+      },
+    };
   } catch (error) {
     return {
       ok: false,
       error: error instanceof Error ? (error.stack ?? error.message) : String(error),
     };
   } finally {
+    if (historyRoot !== null) {
+      const mounted = historyRoot;
+      flushSync(() => mounted.unmount());
+    }
+    historyHost?.remove();
     flushSync(() => root.unmount());
     host.remove();
     api.resolveAskTool = originalResolve;

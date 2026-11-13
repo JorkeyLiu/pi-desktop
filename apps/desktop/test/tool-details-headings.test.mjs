@@ -6,10 +6,11 @@ import { slotSsr } from "./helpers/slot-ssr.mjs";
 /*
  * An expanded tool body has exactly one heading per section (D192). The
  * section frame already prints the translated label and its copy control, so a
- * card that repeats the same label as its own head renders it twice — the
- * duplicate "activated / activated" a ToolSearch row used to show. A routine
+ * card that repeats the same label as its own head renders it twice. A routine
  * successful result also used to end with a generic "Note" section restating
- * what the row above already said; only a real warning belongs there.
+ * what the row above already said. An Edit's warnings are still their own note
+ * (they qualify a change the card cannot show); a TodoWrite warning belongs to
+ * the checklist card it came with, never to a separate section.
  */
 
 const toolSearchMessage = {
@@ -113,20 +114,27 @@ test("a routine write adds no generic note section", async (t) => {
   assert.doesNotMatch(html, /Checklist updated/);
 });
 
-test("a real warning still opens its own note section", async (t) => {
+test("a TodoWrite warning rides inside the checklist card, without a note section", async (t) => {
   const ssr = await slotSsr(t);
   const { buildToolPresentation } = await ssr.load("/src/lib/tool-presentation.ts");
   const { ToolDetailBlocks } = await ssr.load("/src/components/ToolDetails.tsx");
   const warning = "Only one item is in progress at a time";
   const blocks = buildToolPresentation(todoMessage([warning]));
 
+  // The warning qualifies the checklist it came with, so it is a line of that
+  // card: no second `Note` section is framed, and the rows, progress line and
+  // copy-free checklist body are untouched.
+  assert.deepEqual(blocks.map((block) => block.kind), ["todos"]);
+  assert.deepEqual(blocks[0].warnings, [warning]);
   const html = ssr.render(createElement(ToolDetailBlocks, { blocks }));
-  // Trimming routine notes must not silence the ones that carry information,
-  // and the checklist beside it still carries no frame of its own.
-  assert.match(html, />Note</);
+  assert.doesNotMatch(html, />Note</);
+  assert.doesNotMatch(html, /tool-row-section-head/);
+  assert.match(html, /class="tool-block is-todos"/);
+  assert.match(html, /tool-todo/);
+  assert.match(html, /1\/2 completed/);
+  assert.equal(html.match(/class="tool-todo-row/g)?.length, 2);
   assert.match(html, new RegExp(warning));
-  assert.match(html, /tool-row-section-head/);
-  assert.doesNotMatch(html, />Checklist</);
+  assert.match(html, /tool-note/);
 });
 
 /*

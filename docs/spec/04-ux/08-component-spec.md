@@ -2667,6 +2667,18 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
   The `truncated` chip follows `details.truncated` and appears only when this
   result was cut short, not when a Read window of a longer file was filled
   (D306).
+- An `asktool` row is named by its localized identity, never the raw provider
+  word. Its hint is the optional `description` the model wrote for the call —
+  the same display-only argument a Bash row shows — read as one plain, bounded
+  line; a question's Markdown belongs to the card and is never quoted in the
+  head. A call whose `description` is missing, blank, or not a string states no
+  hint at all: the row keeps its identity and never invents a summary from the
+  questions or counts the ones it did not show (`(+N)`). Once the result carries
+  matching `questions` and `answers`, an answered/total chip (`2/3 answered`)
+  states the progress: the denominator is every question asked, while the
+  numerator counts only the questions that carry an answer, so a skipped
+  question stays in the total and is not counted as answered. The expanded body
+  never repeats the hint.
 - A path hint names the file: the row prints the last segment of the path and
   nothing else, because the hint is scanned rather than read and the name is
   what a reader matches on. A name too long for the row ellipsizes at the row's
@@ -2711,7 +2723,8 @@ twice.
 | Bash | `Command` (shell, highlighted) beside `Output` and `Errors` (error hue) as terminal panes (D226 follow-up, §9.10); each pane is labelled and copies its own bytes, and an empty channel is omitted rather than shown as an empty pane |
 | Glob | `Files` — clickable workspace paths; a pattern that matched nothing states `No files matched` instead of a heading over an empty list |
 | Grep | `Matches` — grouped by file with a `line` gutter and clickable path headings for `outputMode: content`; a clickable path list for `filesWithMatches`; `path` → hit count fields for `count`. An empty array in any of the three modes states `No matches` (or `No files matched`) as the answer: the payload's `count` and `truncated` are never printed in place of a body, and an empty-only list carries no heading above that sentence |
-| TodoWrite | the checklist the call committed — a progress line from the host's own counts plus one row per item with its state and priority; never the serialized `todos` argument. Rows and counts come from the committed list in the result rather than the call's argument, so truncation and single-active-item demotion are what the reader sees. A cancelled item is neither completed nor outstanding: it leaves the ratio and is reported as its own count beside it. A list with no outstanding item names its state instead of printing `0/0` — `All N items cancelled` when every item was dropped, and a cleared note when the write emptied the checklist — and neither renders a progress bar. A cleared row still has a body, because a row's `aria-controls` must name the element it renders. The checklist is the whole block: nothing heads it but its own progress line, so no section heading and no copy control are drawn above it. A refused write keeps its `Error` note and no rows: an uncommitted list is never shown as the session's checklist |
+| TodoWrite | the checklist the call committed — a progress line from the host's own counts plus one row per item with its state and priority; never the serialized `todos` argument. Rows and counts come from the committed list in the result rather than the call's argument, so truncation and single-active-item demotion are what the reader sees. A cancelled item is neither completed nor outstanding: it leaves the ratio and is reported as its own count beside it. A list with no outstanding item names its state instead of printing `0/0` — `All N items cancelled` when every item was dropped, and a cleared note when the write emptied the checklist — and neither renders a progress bar. A cleared row still has a body, because a row's `aria-controls` must name the element it renders. The checklist is the whole block: nothing heads it but its own progress line, so no section heading and no copy control are drawn above it. Host `warnings` about the write (a truncated item, a demoted `in_progress`) print inside that card below its rows with no heading of their own — they qualify the checklist rather than opening a second section — while the model still receives them in the result text. A refused write keeps its `Error` note and no rows: an uncommitted list is never shown as the session's checklist |
+| AskTool | the questions the call asked and the answers it recorded, under the session-language history title: one numbered question per entry with its selected answers or `Skipped`. A question's own Markdown is rendered as the content it is, and the payload's `questions`/`answers` arrays are never printed as JSON |
 | Skill | the loaded document as a card: the skill's name, the `location`/`references` it reported, and its body as Markdown. A failed call is an `Error` note instead |
 | ScheduledTaskList/Create/Update/Delete | one row per automation under the `Scheduled task` heading: title, cadence, its clock, the weekly days **named in the session language** (the schema numbers them from Monday = 0, so a bare index is never printed), and enabled/paused |
 | ToolSearch, EnterPlanMode/SubmitPlan, NewContext, BrowserPreview, GenerateImages | the names they activated or matched, each name set listed once and read in the session language (the legacy `addedToolNames` carrier is used only when the row reports no `activated` list), the mode the tool's own name states (`Plan`, `Goal`), or the prompts and written images the call carried |

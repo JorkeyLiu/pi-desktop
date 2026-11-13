@@ -669,3 +669,30 @@ test("regenerate history pager and stable revision family are wired", async () =
   assert.match(sharedSource, /revisionRootId\?: string/);
   assert.match(sharedSource, /MessageRevisionSummary/);
 });
+
+test("an asktool history answer reads at the tool-detail size", () => {
+  const results = stylesSource.match(/\n\.tool-asktool-results \{([^}]*)\}/)?.[1];
+  assert.ok(results);
+  // The history block states its size once, on its own container, so the
+  // question, its label, the answers and the skip read at the same `--text-sm`
+  // size as the tool-detail blocks beside them.
+  assert.match(results, /font-size:\s*var\(--text-sm\);/);
+  for (const rule of [
+    stylesSource.match(/\n\.tool-asktool-question-copy \{([^}]*)\}/)?.[1],
+    stylesSource.match(
+      /\n\.tool-asktool-question-number,\s*\.tool-asktool-answer-label \{([^}]*)\}/,
+    )?.[1],
+    stylesSource.match(/\n\.tool-asktool-answer-value \{([^}]*)\}/)?.[1],
+    stylesSource.match(/\n\.tool-asktool-skipped \{([^}]*)\}/)?.[1],
+  ]) {
+    assert.ok(rule);
+    // No child states a size of its own, so the container's inheritance is the
+    // only rule that decides it.
+    assert.doesNotMatch(rule, /font-size\s*:/);
+  }
+  // The pending card keeps its own typography: its rules are named
+  // `.asktool-*`, so the history container can never reach them.
+  const liveNumber = stylesSource.match(/\n\.asktool-question-number \{([^}]*)\}/)?.[1];
+  assert.ok(liveNumber);
+  assert.match(liveNumber, /font-size:\s*var\(--text-xs\);/);
+});

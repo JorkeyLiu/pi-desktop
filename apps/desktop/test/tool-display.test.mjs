@@ -9,6 +9,7 @@ import {
   getToolSummary,
   getToolSummaryKey,
   getToolSummaryValue,
+  isAskToolName,
   isDelegationStartTool,
   isToolPathSummary,
   toolSummarySpec,
@@ -222,5 +223,98 @@ test("summaries that name no argument fall back to the action label", () => {
       items: [{ prompt: "a cat" }, { prompt: "a dog" }],
     }),
     "a cat (+1)",
+  );
+});
+
+test("asktool is named as itself, namespace or not, and never as a plugin name", () => {
+  // A provider namespace does not change which tool ran, so the history row
+  // still names it in the session language instead of printing "Asktool".
+  for (const name of ["asktool", "AskTool", "functions.asktool", "functions.AskTool"]) {
+    assert.equal(isAskToolName(name), true, name);
+    assert.equal(getToolIdentityKey(name), "chat.toolIdentityAskTool", name);
+  }
+  // A plugin tool that only contains the word is not the question tool.
+  for (const name of ["plugin_asktool", "asktool_history", "mcp__asktool__ask"]) {
+    assert.equal(isAskToolName(name), false, name);
+    assert.equal(getToolIdentityKey(name), null, name);
+  }
+});
+
+test("an asktool summary is the model's own description, not the first question", () => {
+  const questions = [
+    { question: "Which **deployment** target?", options: ["Web", "Desktop"] },
+    { question: "Pick the `runtime` to ship in", options: ["Node", "Bun"] },
+    { question: "Should beta updates be enabled?", options: ["Yes", "No"] },
+  ];
+  // A question is Markdown and its wording belongs to the card, so the collapsed
+  // row shows the short, user-facing summary the model wrote for the call — the
+  // same display-only `description` a Bash row shows.
+  assert.equal(
+    getToolSummary("asktool", { description: "Choose the deployment target", questions }),
+    "Choose the deployment target",
+  );
+  assert.equal(
+    getToolSummaryKey("asktool", { description: "Choose the deployment target", questions }),
+    "description",
+  );
+  // A provider namespace reaches the same rule, and the summary is the model's
+  // own text: it is never counted, appended to, or derived from the questions.
+  assert.equal(
+    getToolSummary("functions.asktool", { description: "确认部署范围", questions }),
+    "确认部署范围",
+  );
+  assert.doesNotMatch(
+    getToolSummary("asktool", { description: "Choose the deployment target", questions }),
+    /\(\+\d+\)/,
+  );
+  // The row's single-line and bound rules apply like any display metadata: the
+  // source stays as written, only its line breaks and length are handled.
+  assert.equal(
+    getToolSummary("asktool", {
+      description: "Choose the\n**deployment** target",
+      questions,
+    }),
+    "Choose the **deployment** target",
+  );
+  assert.equal(
+    getToolSummary("asktool", { description: "x".repeat(400), questions }).length,
+    220,
+  );
+  // The whole argument the row summarized is still available unwrapped.
+  assert.equal(
+    getToolSummaryValue("asktool", {
+      description: "Choose the\ndeployment target",
+      questions,
+    }),
+    "Choose the\ndeployment target",
+  );
+});
+
+test("an asktool row without a usable description states no summary", () => {
+  const questions = [
+    { question: "Which deployment target?", options: ["Web", "Desktop"] },
+    { question: "Should beta updates be enabled?", options: ["Yes", "No"] },
+  ];
+  const none = { key: null, text: "", path: false };
+  // Nothing is invented from the questions: no first-question summary and no
+  // `(+N)` remainder. The row keeps its identity and its answered chip.
+  for (const args of [
+    { questions },
+    { description: "", questions },
+    { description: "   \n ", questions },
+    { description: 42, questions },
+    { description: null, questions },
+    { description: { text: "nope" }, questions },
+  ]) {
+    const label = JSON.stringify(args);
+    assert.deepEqual(toolSummarySpec("asktool", args), none, label);
+    assert.equal(getToolSummary("asktool", args), "", label);
+    assert.equal(getToolSummaryKey("asktool", args), null, label);
+  }
+  // A plugin tool that merely contains the word keeps the generic presentation
+  // of any other unknown tool instead of the asktool rule.
+  assert.equal(
+    getToolSummary("plugin_asktool", { description: "Choose the deployment target" }),
+    "Choose the deployment target",
   );
 });

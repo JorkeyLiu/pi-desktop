@@ -1013,7 +1013,7 @@ test("a ToolSearch lists each group once and drops the wrapper sentence", () => 
   assert.equal(byRole(failed, "error").text, "ToolSearch is unavailable in Goal mode");
 });
 
-test("a TodoWrite warning reaches the reader without a second checklist", () => {
+test("a TodoWrite warning rides in the checklist card instead of a note section", () => {
   const blocks = buildToolPresentation({
     toolName: "TodoWrite",
     toolArgs: { todos: [{ content: "Inspect", status: "pending" }] },
@@ -1022,13 +1022,17 @@ test("a TodoWrite warning reaches the reader without a second checklist", () => 
       warnings: ["Only one item is in progress at a time"],
     }),
   });
-  assert.deepEqual(roles(blocks), ["details", "notice"]);
+  // The checklist is the whole body (spec §9.3): a warning about that write
+  // qualifies the card it came with, so it is a field of the block, not a
+  // second "Note" section under an untranslated heading.
+  assert.deepEqual(roles(blocks), ["details"]);
   assert.equal(blocks[0].kind, "todos");
-  assert.deepEqual(blocks[1], {
-    kind: "note",
-    role: "notice",
-    text: "Only one item is in progress at a time",
-  });
+  assert.deepEqual(blocks[0].warnings, ["Only one item is in progress at a time"]);
+  assert.deepEqual(blocks[0].items, [{ content: "Inspect", status: "pending" }]);
+  assert.deepEqual(
+    [blocks[0].completed, blocks[0].total, blocks[0].cancelled],
+    [0, 1, 0],
+  );
 });
 
 test("a TodoWrite card reads the list the host committed, not the raw argument", () => {

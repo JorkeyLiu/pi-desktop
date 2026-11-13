@@ -17,6 +17,13 @@ The tool accepts a non-empty `questions` array. Each question contains:
   `description`;
 - `multiSelect`: optional; when true, more than one selectable answer is allowed.
 
+At the call level, `description` is an optional display-only summary of what the
+questions are about: one short, user-facing, task-focused line, for example
+`Choose the deployment target`. It is advertised as optional so callers that
+send only `questions` keep working, and, like the same-named Bash argument, it
+never reaches the request event, the pending card, the recorded answers, or the
+model-facing result.
+
 Each question prompt is limited to 300 Unicode characters, including Markdown
 source. Longer prompts are rejected by the runtime before a pending card is
 created, so the model can retry with a shorter question. The character count
@@ -77,6 +84,15 @@ The completed asktool row in conversation history presents persisted
 `details.questions` and `details.answers` as an ordered question-and-answer
 summary. Multi-select answers remain separate labels, and skipped questions
 have an explicit localized state. This is a read-only projection: the
-model-facing text and stored tool result are unchanged. If structured details
-are unavailable or invalid, the transcript keeps its generic result rendering
-so imported or malformed history remains inspectable.
+model-facing text and stored tool result are unchanged.
+
+The collapsed row's hint is the call-level `description`, projected as one
+bounded plain-text line, and the question-and-answer text stays in the card
+body. A call without a usable description — absent, blank, or not a string —
+states no hint: the row never falls back to the first question and never
+appends a remainder count such as `(+2)`. The answered chip reports answered
+questions over every question asked, so a skip stays in the denominator. The
+expanded body never repeats the hint.
+
+If structured details are unavailable or invalid, the transcript keeps its
+generic result rendering so imported or malformed history remains inspectable.

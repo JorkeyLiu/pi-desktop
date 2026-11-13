@@ -2442,7 +2442,15 @@ describe("DesktopAgentRuntime deferred tool catalog", () => {
         }),
       ]),
     );
+    // The optional `description` is display metadata for the collapsed
+    // transcript row: it is advertised but never required, and it never reaches
+    // the typed request or the recorded result.
+    expect((askTool.parameters as any).properties.description).toMatchObject({
+      type: "string",
+    });
+    expect((askTool.parameters as any).required).toEqual(["questions"]);
     const pending = askTool.execute("ask-call-1", {
+      description: "Choose a color and the targets",
       questions: [
         {
           question: "**Color?**",
@@ -2473,6 +2481,14 @@ describe("DesktopAgentRuntime deferred tool catalog", () => {
         { question: "Targets?", options: ["Web", "Desktop"], multiSelect: true },
       ],
     });
+    // The summary rides in the tool call only: the typed request keeps its own
+    // shape, and the answers arrive exactly as the renderer resolved them.
+    expect(Object.keys(request).sort()).toEqual([
+      "questions",
+      "requestId",
+      "sessionId",
+      "toolCallId",
+    ]);
     expect(
       runtime.resolveAskTool({
         requestId: request.requestId,

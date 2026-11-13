@@ -110,8 +110,13 @@ function bareToolName(toolName?: string): string {
     .replace(/[^a-z0-9]+/g, "");
 }
 
+/**
+ * The asktool question tool, matched on the exact bare name so a provider
+ * namespace (`functions.asktool`) still reaches its own card while a plugin
+ * tool that merely contains the word keeps the generic presentation.
+ */
 export function isAskToolName(toolName?: string): boolean {
-  return toolName?.toLowerCase() === "asktool";
+  return bareToolName(toolName) === "asktool";
 }
 
 /** The tool that STARTS a subagent (ADR 0062). The lifecycle tools of ADR 0089
@@ -247,7 +252,8 @@ export type ToolIdentityKey =
   | "chat.toolIdentityContext"
   | "chat.toolIdentityBrowser"
   | "chat.toolIdentityImage"
-  | "chat.toolIdentitySchedule";
+  | "chat.toolIdentitySchedule"
+  | "chat.toolIdentityAskTool";
 
 const TOOL_IDENTITY_KEYS: Record<ToolAction, ToolIdentityKey | null> = {
   read: "chat.toolIdentityRead",
@@ -276,6 +282,10 @@ export function getToolIdentityKey(toolName?: string): ToolIdentityKey | null {
   if (lifecycle === "wait") return "chat.toolIdentityTaskWait";
   if (lifecycle === "list") return "chat.toolIdentityTaskList";
   if (lifecycle === "stop") return "chat.toolIdentityTaskStop";
+  // A question tool is not an action, so it only has an identity name: its
+  // exact name reaches its own card and its history row must not print the
+  // raw provider word.
+  if (isAskToolName(toolName)) return "chat.toolIdentityAskTool";
   const action = exactBuiltinAction(toolName);
   return action ? TOOL_IDENTITY_KEYS[action] : null;
 }
@@ -390,11 +400,17 @@ export function toolSummarySpec(
   const record = asRecord(args);
   const none: ToolSummarySpec = { key: null, text: "", path: false };
 
-  // AskTool asks its first question; the rest is the card's own business.
-  if (isAskToolName(toolName) && Array.isArray(record?.questions)) {
-    const first = asRecord(record.questions[0]);
-    const question = typeof first?.question === "string" ? first.question : "";
-    if (question.trim()) return { key: null, text: compact(question), path: false };
+  // A question is Markdown and its wording belongs to the card, so the
+  // collapsed row shows the optional `description` the model wrote for the call
+  // — the same display-only label a Bash row shows. Without one the row keeps
+  // its identity and its answered chip: the questions are never quoted as a
+  // summary, and the ones it did not show are never counted into it.
+  if (isAskToolName(toolName)) {
+    const description = record?.description;
+    if (typeof description !== "string") return none;
+    const text = compact(description);
+    if (!text) return none;
+    return { key: "description", text, path: false };
   }
 
   if (action === "todo" || action === "context") return none;

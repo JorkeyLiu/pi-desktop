@@ -511,19 +511,37 @@
 - **Steps:** Mount the production `AskToolCard`, assert the header Tab order
   (decline, skip, next) with no legacy bottom action row, then walk select →
   next → submit, skip → submit, decline-all, and a custom answer, remounting
-  with a fresh request id between flows. Finally mount a question whose body
+  with a fresh request id between flows. Then mount a question whose body
   holds two markdown blocks and measure their boxes, then answer a question at
-  the 300-character limit.
+  the 300-character limit. Finally mount the production transcript `ToolRow`
+  over a completed ask persisted with three questions (the third skipped), once
+  in English and once in zh-CN under a namespaced `functions.asktool` call, once
+  more through a call that carried no `description`, click each header, and
+  measure the computed type size of the answered and skipped entries.
 - **Expected:** Every flow resolves through the store's `resolveAsk` with the
   exact answers (skips recorded as `null`), and no render errors are reported.
   The two question blocks stack vertically on a shared left edge that spans
   the card's text column, so a sentence never wraps inside a flex column. The
   full 300-character question remains visible and answerable; runtime validation
-  rejects a 301-character question before opening the card.
+  rejects a 301-character question before opening the card. The completed ask's
+  transcript row names the tool in the session language (`Questions` in English,
+  `提问` in zh-CN, a namespaced `functions.asktool` call included), states the
+  call's display-only `description` as one plain line (the same model text in
+  both locales and never counted), and carries `2/3 answered` — a skipped
+  question stays in the total. A row mounted for a call without a description
+  states no hint at all: no question quoted, no `(+N)` remainder. One click
+  expands each row to all three questions, both answers and the skipped third,
+  the question body keeps its Markdown, the expanded body never repeats the hint,
+  the wire tool name appears nowhere in the row, and the computed type size of
+  the questions, labels, answers and skip equals the expanded tool-detail size
+  (12px) while the pending card keeps its own tokens.
 - **Status:** Automated in `pnpm test:e2e:asktool-card`, which mounts the
-  production `AskToolCard` in a real Chromium page, clicks through the header
-  actions, and measures the multi-block question layout. Runtime boundary
-  validation is covered by `packages/agent-runtime/src/runtime.test.ts`.
+  production `AskToolCard` and the production transcript `ToolRow` in a real
+  Chromium page, clicks through the header actions, expands the ask's history
+  rows, measures the multi-block question layout, and reads the computed type
+  size of the answered and skipped entries. Runtime boundary validation and the
+  optional `description` argument are covered by
+  `packages/agent-runtime/src/runtime.test.ts`.
 
 ### E2E-POWER-keep-awake-setting
 
@@ -10711,7 +10729,9 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   committed list survives.
   Send an overlong item and a second `in_progress` item and confirm the row
   shows what the host stored — truncated content and the demoted state — not the
-  argument as written. Refuse a write (a turn that belongs to another session)
+  argument as written, and that the host's warnings read as lines of the checklist
+  card itself rather than a `Note` section of their own. Refuse a write
+  (a turn that belongs to another session)
   and confirm the row states the error, lists no rows, and never prints the raw
   `todos` argument; then write again from a turn that has already ended and
   confirm the host commits it, the row shows that list, and no turn was
@@ -10738,7 +10758,8 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   `aria-controls` always names an element it renders; a refused write
   does not mutate or emit and shows only its error. The Composer stack renders
   no checklist surface of its own, and no retired checklist component is mounted
-  anywhere. Stale events are rejected.
+  anywhere. Host warnings render inside that checklist card, adding no section
+  heading of their own. Stale events are rejected.
 - **Specs**: `03-runtime/03-tools-and-permissions.md`,
   `03-runtime/04-data-storage.md`, `03-runtime/06-host-rpc-protocol.md`,
   `04-ux/08-component-spec.md` §9.2/§9.3, ADR 0312.
@@ -10753,8 +10774,9 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   expands to — no section heading, no copy-only header row — collapse surviving
   an update, a second write leaving the first card intact, the mixed cancelled
   count, the all-cancelled label, the cleared state and its disclosure target,
-  truncation
-  and single-active-item normalization as rendered, a refused write against
+  truncation and single-active-item normalization as rendered — the warning
+  lines staying inside the checklist card, with no section heading of their
+  own — a refused write against
   another session's turn, a write from a turn that already ended, a legacy
   row without a committed list, stale-event rejection through the production
   store, and host-restart durability. Native wheel input over the cards — the

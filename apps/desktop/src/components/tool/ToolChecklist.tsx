@@ -4,6 +4,7 @@ import type { ToolBlock } from "../../lib/tool-presentation";
 import { TodoStatusGlyph } from "../TodoStatusGlyph";
 import { MoreNote } from "./BlockHead";
 import { cx } from "../ui";
+import { IconInfo } from "../icons";
 
 /*
  * The checklist a `TodoWrite` call committed, as rows (D192 follow-up).
@@ -102,6 +103,19 @@ export function ToolChecklist({ block }: { block: TodosBlock }) {
         </ul>
       ) : null}
       <MoreNote hidden={block.hidden} />
+      {/*
+        What the host reported beside this write (a truncated item, a demoted
+        `in_progress`) qualifies the checklist it committed, so it reads as a
+        line of the card rather than a `Note` section of its own.
+      */}
+      {block.warnings.map((warning, index) => (
+        <div className="tool-note" key={`${index}:${warning}`}>
+          <IconInfo size={13} />
+          <span className="tool-note-text" role="note">
+            {warning}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

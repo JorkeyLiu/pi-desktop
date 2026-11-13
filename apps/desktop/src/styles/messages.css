@@ -3212,6 +3212,10 @@
   border-radius: var(--radius-md);
   background: var(--ds-tile);
   padding: 10px 12px;
+  /* The questions, their labels, the answers and the skip read at the size of
+     the tool-detail blocks around them. The size is stated once here so every
+     child inherits it; the pending `.asktool-*` card keeps its own typography. */
+  font-size: var(--text-sm);
   gap: 10px;
   scrollbar-gutter: stable;
 }
@@ -3231,13 +3235,11 @@
 .tool-asktool-question-number,
 .tool-asktool-answer-label {
   color: var(--ds-text-muted);
-  font-size: var(--text-xs);
   font-weight: var(--font-weight-medium);
 }
 
 .tool-asktool-question-copy {
   color: var(--ds-text-primary);
-  font-size: var(--text-sm);
   font-weight: var(--font-weight-medium);
   line-height: var(--leading-normal);
   overflow-wrap: anywhere;

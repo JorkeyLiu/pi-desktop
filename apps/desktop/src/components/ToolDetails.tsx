@@ -406,6 +406,7 @@ export function ToolDetailBlocks({
 
 const CHIP_LABEL_KEYS: Record<ToolChip["role"], string> = {
   exit: "chat.toolChipExit",
+  answered: "chat.toolChipAnswered",
   matches: "chat.toolChipMatches",
   files: "chat.toolChipFiles",
   replacements: "chat.toolChipReplacements",
@@ -428,6 +429,9 @@ export function ToolChips({ chips }: { chips: ToolChip[] }) {
         >
           {t(CHIP_LABEL_KEYS[chip.role], {
             ...("count" in chip ? { count: chip.count } : {}),
+            ...("answered" in chip
+              ? { answered: chip.answered, total: chip.total }
+              : {}),
             ...("text" in chip
               ? chip.role === "lines"
                 ? { range: chip.text }

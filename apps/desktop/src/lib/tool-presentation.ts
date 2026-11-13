@@ -45,6 +45,8 @@ export type ToolPresentationMessage = {
 
 export type ToolChip =
   | { role: "exit" | "matches" | "files" | "replacements"; count: number }
+  /** AskTool progress: answered out of every question asked; a skip is not answered. */
+  | { role: "answered"; answered: number; total: number }
   | { role: "truncated" | "scratch" }
   | { role: "lines"; text: string }
   | { role: "size"; text: string };
@@ -140,6 +142,12 @@ export type ToolBlock =
       total: number;
       cancelled: number;
       hidden: number;
+      /**
+       * What the host reported beside the write (a truncated item, a demoted
+       * `in_progress`). They belong to the checklist they qualify, so the card
+       * prints them under its rows instead of as a separate `Note` section.
+       */
+      warnings: string[];
     })
   | (BlockBase & {
       kind: "document";
@@ -560,6 +568,7 @@ function todosBlock(
     total: numberAt(summary, "total") ?? items.length - cancelled,
     cancelled,
     hidden: Math.max(0, items.length - MAX_TODO_ITEMS),
+    warnings: stringArray(details?.warnings) ?? [],
   };
 }
 
@@ -770,7 +779,7 @@ function safeJson(value: unknown): string {
 
 function askToolResultBlock(
   message: ToolPresentationMessage,
-): ToolBlock | null {
+): Extract<ToolBlock, { kind: "asktool" }> | null {
   const details = asRecord(toolResultPayload(message));
   const rawQuestions = details?.questions;
   const rawAnswers = details?.answers;
@@ -853,6 +862,22 @@ export function toolResultChips(message: ToolPresentationMessage): ToolChip[] {
   if (!details) return [];
   const action = getToolAction(message.toolName);
   const chips: ToolChip[] = [];
+  // An asktool history row states how far its questions were answered without
+  // the reader expanding it. The card's own reading of the result decides the
+  // count, so the badge and the body can never disagree. The denominator is
+  // every question asked; a skipped question keeps its place in that total but
+  // is not counted as answered.
+  const history = isAskToolName(message.toolName)
+    ? askToolResultBlock(message)
+    : null;
+  if (history) {
+    chips.push({
+      role: "answered",
+      answered: history.questions.filter((entry) => entry.answers !== null)
+        .length,
+      total: history.questions.length,
+    });
+  }
   const exitCode = numberAt(details, "exitCode");
   // A successful exit is already implied by the row status; only failures earn
   // a badge.
@@ -1045,17 +1070,14 @@ function resultBlocks(
         ? null
         : todosBlock(args, details);
       if (checklist) blocks.push(checklist);
-      const warnings = stringArray(details?.warnings);
-      if (warnings) {
-        for (const warning of warnings) {
-          blocks.push({ kind: "note", role: "notice", text: warning });
-        }
-      }
       // The host's success line ("Checklist updated: 2/3 completed; current:
-      // …") restates what the checklist above already shows — the counts, the
-      // in-progress item and the warnings it embeds — so a routine write adds
-      // no second section. Warnings still reach the reader above, and a
-      // refused write reports through `error`, which renders as its own note.
+      // …") restates what the checklist above already shows — the counts and
+      // the in-progress item it names — so a routine write adds no second
+      // section. Its warnings qualify the checklist itself, so they ride
+      // inside that card (an unheaded line below the rows) rather than heading
+      // a `Note` section of their own; the model still receives them through
+      // the result text. A refused write reports through `error`, which
+      // renders as its own note.
       mapped = true;
       break;
     }

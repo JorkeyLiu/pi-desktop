@@ -1313,6 +1313,15 @@ export function commandShellGuidance(
 const BASH_DESCRIPTION_PARAM_GUIDANCE =
   'Optional short, active-voice title of the command\'s user-facing purpose, for example "Install dependencies". Display metadata only: the command still runs exactly as written and every permission and safety check applies unchanged.';
 
+/**
+ * The `description` argument of an asktool call is display metadata: the user
+ * sees it in the collapsed transcript row instead of the raw first question. It
+ * is advertised as optional so callers that send only `questions` keep working,
+ * and it never reaches the ask request, the card, or the recorded answers.
+ */
+const ASK_TOOL_DESCRIPTION_PARAM_GUIDANCE =
+  'Optional short, user-facing, task-focused summary of what the questions are about, for example "Choose the deployment target". Display metadata only: the questions, their options, the answers the user gives, and every permission and execution rule are unchanged by it.';
+
 function commandShellToolDescription(
   shell: CommandShellOption,
   scratchDir?: string,
@@ -3332,7 +3341,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         case "TodoWrite":
           return todoWriteDescription;
         case ASK_TOOL_NAME:
-          return `Ask the user one or more questions. Keep each question to ${MAX_ASK_TOOL_QUESTION_CHARS} characters or fewer. Use Markdown in question text and option labels when formatting helps (for example, emphasis, inline code, or lists); the desktop card renders it safely. Plain strings and existing { label, description? } options are accepted; descriptions remain plain text and answers return the selected source label. The card always provides a custom user-input option.`;
+          return `Ask the user one or more questions. Keep each question to ${MAX_ASK_TOOL_QUESTION_CHARS} characters or fewer. Use Markdown in question text and option labels when formatting helps (for example, emphasis, inline code, or lists); the desktop card renders it safely. Plain strings and existing { label, description? } options are accepted; descriptions remain plain text and answers return the selected source label. The card always provides a custom user-input option. Give the call an optional \`description\`: a short, user-facing, task-focused summary of what the questions are about, for example "Choose the deployment target", so the collapsed transcript row shows the ask's intent instead of one of its questions.`;
         case "PluginScaffold":
           return "Create a PI-Desktop plugin from a template and load it for development. `directory` is workspace-relative and must be empty or new; `template` is one of panel-basic, agent-tool-basic, skill-pack, full-demo. Use this instead of hand-writing plugin files.";
         case "PluginCheck":
@@ -3876,6 +3885,11 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       label: "Ask questions",
       description: describe(ASK_TOOL_NAME),
       parameters: Type.Object({
+        // Display metadata for the collapsed transcript row: optional, never
+        // part of the request, and never part of the recorded result.
+        description: Type.Optional(
+          Type.String({ description: ASK_TOOL_DESCRIPTION_PARAM_GUIDANCE }),
+        ),
         questions: Type.Array(
           Type.Object({
             question: Type.String({ maxLength: MAX_ASK_TOOL_QUESTION_CHARS }),
