@@ -66,25 +66,70 @@ app.whenReady().then(async () => {
   window.webContents.on("console-message", (event) => console.error(event.message));
   const load = () => window.loadFile(path.join(__dirname, "index.html"));
   try {
+    const settle = () => window.webContents.executeJavaScript(
+      "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+    );
     await load();
     const idle = await window.webContents.executeJavaScript("globalThis.sidebarPendingMarkerIdleProbe()");
     emit("idle", idle);
+    const informational = await window.webContents.executeJavaScript(
+      "globalThis.sidebarPendingMarkerInformationalProbe()",
+    );
+    emit("informational", informational);
     await load();
     const persistence = await window.webContents.executeJavaScript(
       "globalThis.sidebarPendingMarkerPersistenceProbe(" + JSON.stringify(idle.markedId) + ")",
     );
     emit("persistence", persistence);
-    const focused = await window.webContents.executeJavaScript(
-      "globalThis.sidebarPendingMarkerFocusMark('beta')",
+    // Real keyboard focus: the harness only focuses the row before the mark,
+    // then the runner presses genuine Tab keys until the control holds focus.
+    const anchored = await window.webContents.executeJavaScript(
+      "globalThis.sidebarPendingMarkerFocusAnchor()",
     );
-    if (!focused) throw new Error("could not focus the beta mark");
-    for (const type of ["keyDown", "keyUp"]) {
-      await window.webContents.sendInputEvent({ type: type === "keyDown" ? "rawKeyDown" : "keyUp", keyCode: "Enter" });
+    if (!anchored) throw new Error("could not focus the row before the mark");
+    window.webContents.focus();
+    // Keyboard input goes through the debugger protocol, the same channel a
+    // real browser uses for Tab traversal and native button activation.
+    await window.webContents.debugger.attach("1.3");
+    const press = async (key) => {
+      const base = {
+        key: key.key,
+        code: key.code,
+        windowsVirtualKeyCode: key.keyCode,
+        nativeVirtualKeyCode: key.keyCode,
+        modifiers: 0,
+      };
+      await window.webContents.debugger.sendCommand(
+        "Input.dispatchKeyEvent",
+        key.text ? { ...base, type: "keyDown", text: key.text } : { ...base, type: "rawKeyDown" },
+      );
+      await window.webContents.debugger.sendCommand(
+        "Input.dispatchKeyEvent",
+        { ...base, type: "keyUp" },
+      );
+    };
+    let keyboard = null;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await press({ key: "Tab", code: "Tab", keyCode: 9 });
+      await settle();
+      keyboard = await window.webContents.executeJavaScript(
+        "globalThis.sidebarPendingMarkerKeyboardFocusProbe()",
+      );
+      if (keyboard.focused) break;
     }
-    window.webContents.sendInputEvent({ type: "char", keyCode: "\\r" });
-    const activation = await window.webContents.executeJavaScript("globalThis.sidebarPendingMarkerActivationProbe()");
+    emit("keyboard", keyboard);
+    await press({ key: "Enter", code: "Enter", keyCode: 13, text: "\\r" });
+    await settle();
+    const activation = await window.webContents.executeJavaScript(
+      'globalThis.sidebarPendingMarkerActivationProbe("idle", "Enter")',
+    );
     emit("activation", activation);
-    window.webContents.debugger.attach("1.3");
+    await press({ key: " ", code: "Space", keyCode: 32, text: " " });
+    await settle();
+    const toggled = await window.webContents.executeJavaScript(
+      'globalThis.sidebarPendingMarkerActivationProbe("pending", "Space")',
+    );
+    emit("toggle", toggled);
     await window.webContents.debugger.sendCommand("Emulation.setEmulatedMedia", {
       features: [{ name: "prefers-reduced-motion", value: "reduce" }],
     });
@@ -92,7 +137,7 @@ app.whenReady().then(async () => {
     const reduced = await window.webContents.executeJavaScript("globalThis.sidebarPendingMarkerReducedMotionProbe()");
     emit("reduced", reduced);
     window.webContents.debugger.detach();
-    const phases = [idle, persistence, activation, reduced];
+    const phases = [idle, informational, persistence, keyboard, activation, toggled, reduced];
     const ok = phases.every((phase) => (phase.checks ?? []).every((check) => check.ok));
     console.log("SIDEBAR_PENDING_MARKER_RESULT " + JSON.stringify({ ok }));
     app.exit(ok ? 0 : 1);
@@ -123,7 +168,7 @@ app.whenReady().then(async () => {
     if (!line.startsWith("SIDEBAR_PENDING_MARKER_PROBE ")) continue;
     phases.push(JSON.parse(line.slice("SIDEBAR_PENDING_MARKER_PROBE ".length)));
   }
-  assert.ok(phases.length === 4, `probe phases did not run (exit ${code}):\n${stderr.slice(-2000)}`);
+  assert.ok(phases.length === 7, `probe phases did not run (exit ${code}):\n${stderr.slice(-2000)}`);
   let failed = 0;
   for (const phase of phases) {
     for (const check of phase.checks ?? []) {

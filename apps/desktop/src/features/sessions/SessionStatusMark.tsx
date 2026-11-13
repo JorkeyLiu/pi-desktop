@@ -7,10 +7,12 @@ import {
 } from "../../lib/sidebar-session-status";
 
 /**
- * The one leading status mark a sidebar session row reserves. Work in flight, a
- * pending permission, and an unread task outcome are informational; only the
- * manual idle mark toggles, so a click can never replace a glyph that reports
- * something the user has not read yet.
+ * The one leading status mark a sidebar session row reserves. Only the idle
+ * and manual states are controls: they toggle the device-local pending mark
+ * and stop the click from selecting or dragging the row. Work in flight, a
+ * pending permission, and an unread task outcome are informational, so they
+ * leave the row's own pointer behavior untouched: a click selects the row
+ * exactly as a click on the title does, and never toggles the manual mark.
  */
 export function SessionStatusMark({
   status,
@@ -69,12 +71,6 @@ export function SessionStatusMark({
       data-session-id={sessionId}
       aria-label={label}
       title={label}
-      // Informational marks are not controls, but they swallow the click so a
-      // pointer can never select the row or acknowledge an unread outcome.
-      onClick={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      }}
     >
       {status === "completed" ? <IconCheck size={10} aria-hidden /> : null}
       {status === "failed" ? <IconCircleAlert size={11} aria-hidden /> : null}

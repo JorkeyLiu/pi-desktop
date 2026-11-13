@@ -471,7 +471,9 @@ visually distinct from list content.
   marked state) toggles the device-local manual pending mark, with `aria-pressed`,
   a localized accessible name, and Enter/Space activation. It never selects the
   row and never starts a row drag. Permission, in-progress, and unread-outcome
-  marks swallow the click instead: it selects nothing and replaces no glyph.
+  marks are not controls: the click belongs to the row exactly as it does on the
+  title, so it selects that conversation and acknowledges only its own unread
+  outcome, and it never toggles the manual flag.
 - Click session: activate its bound project when necessary and switch the active
   session. A destination that still has a retained pane (warm switch) is revealed
   immediately with its own content and its own scroll position, so the first

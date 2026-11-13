@@ -329,3 +329,24 @@ test("activation and resume register a project without moving an existing one", 
     "resuming a workspace keeps its retained-tab position",
   );
 });
+
+test("the manual pending action repeats the row rule at the action boundary", () => {
+  // The rendered control guards the pointer path; this guard covers every other
+  // caller, so a direct toggle cannot flip the stored flag under live work, a
+  // pending permission, or an unread outcome, or invent metadata for an id the
+  // sidebar does not hold.
+  const block =
+    projectSliceSource.match(/toggleSessionPending: \(id\) => \{[\s\S]*?\n    \},/)?.[0] ?? "";
+  assert.match(block, /sessionPendingToggleAllowed\(\{/);
+  assert.match(block, /known: current\.sessions\.some\(/);
+  assert.match(block, /running: Boolean\(current\.runningSessions\[id\]\)/);
+  assert.match(block, /outcome: current\.sessionOutcomes\[id\]/);
+  assert.match(block, /pending: sessionIsPending\(id, current\.sessionMeta\)/);
+  assert.match(
+    block,
+    /hasPendingPermission: \(current\.pendingPermissions\[id\]\?\.length \?\? 0\) > 0/,
+  );
+  assert.match(block, /if \(!allowed\) return;/);
+  assert.match(block, /persistCurrentSidebar\(get\)/);
+  assert.doesNotMatch(block, /sessions:/, "the toggle never rewrites the session list");
+});

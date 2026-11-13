@@ -11816,14 +11816,18 @@ This test plan spec is accepted when:
   pending → idle: start work on a marked row and the running mark wins, park a
   permission on it and the purple dot wins, settle an unread outcome and the
   terminal mark wins — the stored manual flag returns as each clears. A click on
-  a permission, running, or outcome mark selects nothing and replaces no glyph.
+  a permission, running, or outcome mark belongs to the row: it selects that
+  conversation, acknowledges only its own unread outcome, and never toggles the
+  manual flag or replaces a glyph on another row.
 - The idle/manual toggle is a shared tooltip button with `aria-pressed`, a
-  localized accessible name, Enter/Space activation, and a usable hit target;
-  it never selects the row or starts a row drag. Row height, title truncation,
+  localized accessible name, Enter/Space activation, and a hit target of at
+  least 24 × 24 px; it never selects the row or starts a row drag. Tab from the
+  preceding row paints its focus-visible outline. Row height, title truncation,
   pin icon, hover actions, and focus ring remain stable in both themes.
-- Reload and relaunch the renderer, and open the marked session. The manual
-  flag survives all three and repaints as the same static orange mark; a row
-  with no flag still reads as unmarked.
+- Select one marked conversation, run it, then reload and relaunch the renderer,
+  and open it again. The manual flag survives all of it and repaints as the same
+  static orange mark on the selected row; a row with no flag still reads as
+  unmarked.
 - Every indicator exposes localized Working / Pending marker / Done / Needs
   attention / Permission required text through its accessible name. Reduced
   motion makes the running halo static while keeping its ring, so running stays
@@ -11846,7 +11850,7 @@ This test plan spec is accepted when:
   an otherwise idle native macOS window shows no continuous frames from them.
   Under reduced motion all three are static from the first painted frame.
 - **Specs linked**: `04-ux/07-ui-design-system.md` §4.5, `04-ux/08-component-spec.md` §3.4/§3.5, decisions-log D135
-- **Status**: Partially automated — `scripts/e2e-sidebar-pending-marker.mjs` renders the real Sidebar and store in Electron and checks hollow/filled/halo geometry, click-without-select, run override and survival, outcome/permission precedence, keyboard activation, relaunch persistence, and the reduced-motion static halo; `apps/desktop/test/sidebar-session-status.test.mjs`, `idle-status-animations.test.mjs`, and `sidebar-preferences.test.mjs` cover precedence, motion bounds, and preference sanitization
+- **Status**: Partially automated — `scripts/e2e-sidebar-pending-marker.mjs` renders the real Sidebar and store in Electron and checks hollow/filled/halo geometry, the 24 px hit target, click-without-select for the toggle, row selection through running/permission/outcome marks without flipping the stored flag, run override and survival, selecting a marked row, outcome/permission precedence, real Tab focus with a painted focus outline plus Enter and Space activation, relaunch persistence, and the reduced-motion static halo; `apps/desktop/test/sidebar-session-status.test.mjs`, `app-store-sidebar.test.mjs`, `idle-status-animations.test.mjs`, and `sidebar-preferences.test.mjs` cover precedence, the action-boundary guard, motion bounds, and preference sanitization
 
 ### US-UI-68 Session-scoped inline permissions and artifacts (D138/D142)
 - Run two sessions concurrently and keep A visible while B reaches a tool

@@ -248,8 +248,9 @@ Light-surface polish (D148):
 ### 4.5 Sidebar task status semantics
 
 Compact task rows reserve one leading status slot in the row's left gutter. The
-slot is `20px` wide and spans the full row height, so the toggle is a real hit
-target centered on the same 10px the mark has always occupied. State is never
+slot is `24px` wide and spans the full row height, so the toggle meets the
+`24 × 24` pointer-target minimum and the row text starts after the slot. State
+is never
 communicated by color alone, and each status consumes an existing semantic
 token rather than introducing a decorative palette:
 
@@ -269,10 +270,12 @@ manual states toggle: clicking the mark fills it, clicking it again clears it,
 and the manual flag is device-local sidebar preference state (no host row,
 protocol field, or tray flag) that survives a turn starting or ending, opening
 or selecting the session, a renderer refresh, and a relaunch. Permission,
-in-progress, and unread-outcome marks stay informational: a click on them
-never selects the row and never replaces their glyph. The idle/manual control
-is the shared tooltip button with a localized accessible name, `aria-pressed`,
-and Enter/Space activation.
+in-progress, and unread-outcome marks stay informational: they are not
+controls, so a click reaches the row exactly as a click on the title does — it
+selects that conversation, acknowledges only its own unread outcome, and never
+toggles the stored manual flag. The idle/manual control is the shared tooltip
+button with a localized accessible name, `aria-pressed`, and Enter/Space
+activation.
 
 Starting another turn clears the prior terminal outcome; abort clears the live
 indicator without creating a failure. Opening a conversation acknowledges its

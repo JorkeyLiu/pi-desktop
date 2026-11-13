@@ -305,15 +305,15 @@
   opacity: 0.68;
 }
 
-/* One leading mark per row. The slot keeps the 10px gutter centre every status
-   already used; the toggleable variant fills the gutter as a full-row-height
-   hit target and never overlaps the row title. */
+/* One leading mark per row. The 24px slot doubles as the mark's minimum hit
+   target: it spans the full row height and the row text starts after it, so
+   the toggle never overlaps the title and the dot keeps its gutter centre. */
 .thread-item-status {
   position: absolute;
   left: 0;
   top: 0;
   display: inline-flex;
-  width: 20px;
+  width: 24px;
   height: 100%;
   flex: 0 0 auto;
   align-items: center;

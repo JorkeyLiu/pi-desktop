@@ -7,6 +7,7 @@ import fs from "node:fs";
 import test from "node:test";
 import {
   latestSessionOutcomes,
+  sessionPendingToggleAllowed,
   sidebarSessionStatus,
   sidebarSessionStatusIsTogglable,
 } from "../src/lib/sidebar-session-status.ts";
@@ -86,6 +87,37 @@ test("only the manual idle mark toggles; every reported state stays informationa
   assert.equal(sidebarSessionStatusIsTogglable("idle"), true);
 });
 
+test("a manual mark flips only for a known idle or marked session", () => {
+  const base = {
+    known: true,
+    running: false,
+    pending: false,
+    hasPendingPermission: false,
+  };
+  // The action boundary repeats this rule for direct callers, not just the row
+  // control, so no path can flip the flag under a glyph the user has not acted
+  // on yet, and an unknown id cannot create sidebar metadata.
+  assert.equal(sessionPendingToggleAllowed(base), true, "idle");
+  assert.equal(sessionPendingToggleAllowed({ ...base, pending: true }), true, "marked");
+  assert.equal(sessionPendingToggleAllowed({ ...base, known: false }), false, "unknown session");
+  assert.equal(sessionPendingToggleAllowed({ ...base, running: true }), false, "running");
+  assert.equal(
+    sessionPendingToggleAllowed({ ...base, hasPendingPermission: true }),
+    false,
+    "permission",
+  );
+  assert.equal(
+    sessionPendingToggleAllowed({ ...base, outcome: "completed" }),
+    false,
+    "completed outcome",
+  );
+  assert.equal(
+    sessionPendingToggleAllowed({ ...base, outcome: "failed" }),
+    false,
+    "failed outcome",
+  );
+});
+
 test("opening a conversation acknowledges its outcome badge before loading details", () => {
   const sessionSource = readStoreModuleSync("slices/session-slice.ts");
   const catalogSource = readStoreModuleSync("slices/catalog-slice.ts");
@@ -140,6 +172,15 @@ test("renders semantic, shape-distinct sidebar status indicators", () => {
   assert.match(mark, /nav\.sessionClearPending/);
   assert.match(mark, /IconCheck[\s\S]*IconCircleAlert/);
   assert.match(mark, /onDragStart[\s\S]*preventDefault\(\)[\s\S]*stopPropagation\(\)/);
+  // Informational marks are not controls: the row keeps its original pointer
+  // behavior (select, shift/cmd multi-select), and only the toggle stops it.
+  const informationalMark = mark.match(/<span[\s\S]*?<\/span>/)?.[0] ?? "";
+  assert.match(informationalMark, /aria-label={label}/);
+  assert.doesNotMatch(
+    informationalMark,
+    /onClick/,
+    "an informational mark must not swallow the row's own click",
+  );
   assert.match(styles, /thread-item-status\.running::before[\s\S]*--ds-warning/);
   assert.match(styles, /thread-item-status\.idle::before[\s\S]*--ds-accent/);
   assert.match(styles, /thread-item-status\.pending::before[\s\S]*--ds-warning/);

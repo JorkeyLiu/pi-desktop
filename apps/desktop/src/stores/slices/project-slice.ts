@@ -35,6 +35,9 @@ import {
   type ProjectMeta,
 } from "../../lib/sidebar-preferences";
 import {
+  sessionPendingToggleAllowed,
+} from "../../lib/sidebar-session-status";
+import {
   sessionOrderRanks,
   withoutSessionOrder,
 } from "../../lib/sidebar-session-order";
@@ -535,9 +538,21 @@ export function createProjectSlice({
     },
 
     // The manual pending mark is sidebar preference state only: flipping it
-    // must never touch the session list, the host row, or a task outcome.
+    // must never touch the session list, the host row, or a task outcome. The
+    // action boundary repeats the rule the row control applies, so no caller
+    // can flip the flag under live work, a permission, or an unread outcome,
+    // and an id the sidebar does not hold cannot create metadata.
     toggleSessionPending: (id) => {
       if (!id) return;
+      const current = get();
+      const allowed = sessionPendingToggleAllowed({
+        known: current.sessions.some((session) => session.id === id),
+        running: Boolean(current.runningSessions[id]),
+        outcome: current.sessionOutcomes[id],
+        pending: sessionIsPending(id, current.sessionMeta),
+        hasPendingPermission: (current.pendingPermissions[id]?.length ?? 0) > 0,
+      });
+      if (!allowed) return;
       set((state) => {
         const pending = !sessionIsPending(id, state.sessionMeta);
         return {
