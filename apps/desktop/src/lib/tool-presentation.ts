@@ -4,6 +4,7 @@ import {
   getToolAction,
   getToolSummaryKey,
   isAskToolName,
+  isSubagentHandoffTool,
   type ToolAction,
 } from "./tool-display";
 import { reviewChangeFromMessage } from "./workspace-review";
@@ -41,6 +42,12 @@ export type ToolPresentationMessage = {
   toolStatus?: string;
   /** pi-ai's own error flag on the result envelope. */
   isError?: boolean;
+  /**
+   * The structured failure the runtime attached to the row, when it recorded
+   * one. A call that ended without a result reports through this rather than
+   * through a payload.
+   */
+  error?: { code?: string; message?: string } | null;
 };
 
 export type ToolChip =
@@ -176,6 +183,13 @@ export type ToolPresentationOptions = {
    * schedule keeps the clock alone rather than printing a number.
    */
   weekdayName?: (weekday: number) => string;
+  /**
+   * The localized sentence a failed call states when it recorded no reason of
+   * its own. Presentation stays label-free, so the React layer owns the
+   * wording; a row that ends in error always supplies it, so a failed call's
+   * disclosure never opens on an empty body.
+   */
+  failureNote?: (outcome: "failed" | "denied") => string;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -214,6 +228,112 @@ function envelopeText(envelope: Record<string, unknown>): string | null {
       : [];
   });
   return parts.length > 0 ? parts.join("\n") : null;
+}
+
+/**
+ * The failure sentence an error envelope states in its text blocks.
+ *
+ * `details` holds what the tool returned; the text blocks hold what the model
+ * read. On a failure those are not the same fact: a refusal explains itself in
+ * the sentence (`The handoff is empty: …`) while `details` only records the
+ * verdict (`accepted: false`), so the structured half cannot stand in for the
+ * explanation. A text block that merely re-serializes `details` is that payload
+ * again, not an explanation, so it is not a reason either.
+ */
+function envelopeFailureText(
+  message: ToolPresentationMessage,
+  details: Record<string, unknown> | null,
+): string | null {
+  const envelope = asRecord(message.toolResult);
+  if (!envelope) return null;
+  const text = envelopeText(envelope)?.trim() ?? "";
+  if (text === "") return null;
+  if (details && (text.startsWith("{") || text.startsWith("["))) {
+    try {
+      if (JSON.stringify(JSON.parse(text)) === JSON.stringify(details)) {
+        return null;
+      }
+    } catch {
+      // Prose that merely starts with a bracket is still an explanation.
+    }
+  }
+  return text;
+}
+
+/**
+ * The keys tools answer a refusal with: a false value is a verdict, not a
+ * result, so it names no fact the failure sentence does not already state.
+ */
+const FAILURE_VERDICT_KEYS = new Set(["accepted", "success", "ok"]);
+
+/**
+ * Whether a failed call's whole structured half is the verdict it refused with.
+ *
+ * A refusal answers `{ accepted: false }` and explains itself in the text, so
+ * the record is a restatement of "no" — the row's failure state and the sentence
+ * beside it already say that, and printing the verdict as fields beside the
+ * untouched JSON would only say it twice more. Only that exact shape qualifies:
+ * a record carrying any other field holds a diagnostic the sentence cannot
+ * replace, so it is preserved and rendered.
+ */
+function isBareFailureVerdict(details: Record<string, unknown> | null): boolean {
+  if (!details) return false;
+  const entries = Object.entries(details);
+  return (
+    entries.length > 0 &&
+    entries.every(
+      ([key, value]) => value === false && FAILURE_VERDICT_KEYS.has(key),
+    )
+  );
+}
+
+/**
+ * A failed self-handoff row's body: exactly one failure sentence.
+ *
+ * A handoff is a protocol submission, so its record is the verdict the runtime
+ * reached, not content. Extra diagnostics it may carry (`accepted: false`, a
+ * reason code, the dropped draft) either restate or qualify the refusal the row
+ * already shows, and a reader who expands the row is asking one thing: why it
+ * was refused. The body is therefore that sentence alone — never fields, never
+ * a raw dump — while the payload itself is left untouched for persistence. The
+ * reason follows the ordinary failure precedence: the structured `error`, the
+ * envelope's own sentence, the row's error message, then the renderer's
+ * localized sentence saying none was reported.
+ */
+function handoffFailureBlock(
+  message: ToolPresentationMessage,
+  options: ToolPresentationOptions,
+): ToolBlock[] {
+  const details = asRecord(toolResultPayload(message));
+  const structured = stringAt(details, "error");
+  if (structured) {
+    const code = stringAt(details, "code");
+    return [
+      {
+        kind: "note",
+        role: "error",
+        text: structured,
+        ...(code ? { code } : {}),
+      },
+    ];
+  }
+  const sentence = envelopeFailureText(message, details);
+  if (sentence) return [{ kind: "note", role: "error", text: sentence }];
+  const recorded = asRecord(message.error);
+  const recordedText = stringAt(recorded, "message");
+  const recordedCode = stringAt(recorded, "code");
+  const text =
+    recordedText ??
+    options.failureNote?.(message.toolStatus === "denied" ? "denied" : "failed");
+  if (!text) return [];
+  return [
+    {
+      kind: "note",
+      role: "error",
+      text,
+      ...(recordedCode ? { code: recordedCode } : {}),
+    },
+  ];
 }
 
 /**
@@ -923,7 +1043,13 @@ export function hasToolDetails(message: ToolPresentationMessage): boolean {
   }
   const args = asRecord(message.toolArgs);
   if (args) return Object.keys(args).length > 0;
-  return message.toolArgs !== undefined;
+  if (message.toolArgs !== undefined) return true;
+  // A failed call with neither arguments nor a result still states the failure
+  // it recorded, so that disclosure has something to open on.
+  return (
+    resultFailed(message) &&
+    stringAt(asRecord(message.error), "message") !== null
+  );
 }
 
 function resultBlocks(
@@ -942,6 +1068,13 @@ function resultBlocks(
    */
   let mapped = false;
   const error = stringAt(details, "error");
+  /**
+   * A failed call's own sentence about why it failed, when the structured half
+   * does not restate it. It leads whatever body the result resolves to; a
+   * mapping that prints the same sentence drops it below, so nothing is said
+   * twice.
+   */
+  let failureNote: Extract<ToolBlock, { kind: "note" }> | null = null;
   if (error) {
     const code = stringAt(details, "code");
     blocks.push({
@@ -950,6 +1083,9 @@ function resultBlocks(
       text: error,
       ...(code ? { code } : {}),
     });
+  } else if (resultFailed(message)) {
+    const reason = envelopeFailureText(message, details);
+    if (reason) failureNote = { kind: "note", role: "error", text: reason };
   }
 
   switch (action) {
@@ -1256,16 +1392,57 @@ function resultBlocks(
     blocks.push({ kind: "note", role: "notice", text: notice });
   }
 
-  if (blocks.length > 0 || mapped) return blocks;
+  /**
+   * Lead a body with the failure sentence, and never repeat it: a mapping that
+   * already prints the same sentence (a failed Skill answer, a generic payload
+   * echo) has said it once.
+   */
+  const withFailureNote = (result: ToolBlock[]): ToolBlock[] => {
+    const note = failureNote;
+    if (!note) return result;
+    return result.some((block) => "text" in block && block.text === note.text)
+      ? result
+      : [note, ...result];
+  };
+
+  if (blocks.length > 0 || mapped) return withFailureNote(blocks);
   // No per-tool mapping matched: render the payload itself readably, and keep
   // the untouched payload one explicit disclosure away (never in the summary
-  // and never as the body a reader has to wade through).
+  // and never as the body a reader has to wade through). A failure's sentence
+  // leads the payload it explains.
   if (typeof payload === "string" && payload.trim()) {
-    return [codeBlock("output", payload)];
+    return withFailureNote([codeBlock("output", payload)]);
   }
-  if (details) return withRawBlock(recordBlocks(details, "details"), details);
+  if (details) {
+    // A refusal whose record is only its verdict has nothing to add: the
+    // sentence above is the explanation, and "accepted false" beside its own
+    // JSON would make a reader expand a row to read "no" three times.
+    if (failureNote && isBareFailureVerdict(details)) return [failureNote];
+    return withFailureNote(withRawBlock(recordBlocks(details, "details"), details));
+  }
   if (payload !== undefined && payload !== null) {
-    return [codeBlock("output", safeJson(payload), "json")];
+    return withFailureNote([codeBlock("output", safeJson(payload), "json")]);
+  }
+  // A failed call that recorded no result at all still owes the reader what is
+  // known: the error the runtime attached, or an honest statement that none was
+  // reported. Inventing a cause would be worse than saying nothing.
+  if (resultFailed(message)) {
+    const recorded = asRecord(message.error);
+    const recordedText = stringAt(recorded, "message");
+    const recordedCode = stringAt(recorded, "code");
+    const text =
+      recordedText ??
+      options.failureNote?.(message.toolStatus === "denied" ? "denied" : "failed");
+    if (text) {
+      return [
+        {
+          kind: "note",
+          role: "error",
+          text,
+          ...(recordedCode ? { code: recordedCode } : {}),
+        },
+      ];
+    }
   }
   return [];
 }
@@ -1281,6 +1458,13 @@ export function buildToolPresentation(
   if (isAskToolName(message.toolName)) {
     const askToolBlock = askToolResultBlock(message);
     if (askToolBlock) return [askToolBlock];
+  }
+  // A failed self-handoff states its reason and nothing else: its record is a
+  // submission verdict, so the payload is never rendered as fields or a raw
+  // dump. Only the exact built-in takes this path; a plugin tool that merely
+  // sounds similar keeps the ordinary failure presentation.
+  if (isSubagentHandoffTool(message.toolName) && resultFailed(message)) {
+    return handoffFailureBlock(message, options);
   }
 
   const action = getToolAction(message.toolName);

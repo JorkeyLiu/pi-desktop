@@ -1653,3 +1653,107 @@ test("an unknown payload keeps its fields and one clearly named raw entry", () =
   assert.equal(raw.labelKey, undefined);
   assert.equal(raw.label, undefined);
 });
+
+test("a failed handoff states only its reason, and another tool keeps its record", () => {
+  const reason = "The handoff is empty: write what your future self needs to continue this task.";
+  const refusal = {
+    toolName: "SubagentHandoff",
+    toolStatus: "error",
+    isError: true,
+    toolArgs: { handoff: "" },
+    toolResult: {
+      content: [{ type: "text", text: reason }],
+      details: { accepted: false },
+      isError: true,
+    },
+  };
+  const blocks = buildToolPresentation(refusal, { failureNote: () => "unused" });
+  // The text is the explanation; `details` only records the verdict, which
+  // restates the failure the row already shows, so the sentence is the body.
+  assert.deepEqual(roles(blocks), ["error"]);
+  assert.equal(blocks[0].text, reason);
+  // Anything beyond the verdict is still not a second section on a handoff row:
+  // the reader expanded it to read why the submission was refused.
+  const diagnostic = buildToolPresentation(
+    {
+      ...refusal,
+      toolResult: {
+        content: [{ type: "text", text: reason }],
+        details: { accepted: false, reasonCode: "handoff_empty" },
+      },
+    },
+    { failureNote: () => "unused" },
+  );
+  assert.deepEqual(roles(diagnostic), ["error"]);
+  assert.equal(diagnostic[0].text, reason);
+  // Another failed tool with the same record keeps every diagnostic: the
+  // handoff rule is scoped to that one built-in.
+  const plugin = buildToolPresentation(
+    {
+      toolName: "plugin_deploy",
+      toolStatus: "error",
+      isError: true,
+      toolResult: {
+        content: [{ type: "text", text: "The deployment was rejected by the gate." }],
+        details: { accepted: false, reasonCode: "gate_rejected" },
+      },
+    },
+    { failureNote: () => "unused" },
+  );
+  assert.deepEqual(roles(plugin), ["error", "details", "details"]);
+  assert.equal(plugin[0].text, "The deployment was rejected by the gate.");
+  assert.deepEqual(plugin[1].rows, [
+    { label: "accepted", value: "false" },
+    { label: "reasonCode", value: "gate_rejected" },
+  ]);
+  // The echo of a payload is not a reason: it may not be printed twice.
+  const echoed = buildToolPresentation(
+    {
+      toolName: "plugin_job",
+      toolStatus: "error",
+      isError: true,
+      toolResult: {
+        content: [{ type: "text", text: JSON.stringify({ status: "failed" }) }],
+        details: { status: "failed" },
+      },
+    },
+    { failureNote: () => "unused" },
+  );
+  assert.deepEqual(roles(echoed), ["details", "details"]);
+});
+
+test("a failed call with no result states what was recorded, or says it recorded nothing", () => {
+  const recorded = buildToolPresentation({
+    toolName: "SubagentHandoff",
+    toolStatus: "error",
+    isError: true,
+    error: { code: "E_ABORTED", message: "The provider cancelled this call." },
+  });
+  assert.deepEqual(roles(recorded), ["error"]);
+  assert.equal(recorded[0].text, "The provider cancelled this call.");
+  assert.equal(recorded[0].code, "E_ABORTED");
+
+  // Without a recorded error the row states that honestly instead of
+  // inventing a cause, in the wording the renderer supplies.
+  const silent = buildToolPresentation(
+    { toolName: "SubagentHandoff", toolStatus: "error", isError: true },
+    { failureNote: (outcome) => `no reason reported (${outcome})` },
+  );
+  assert.deepEqual(roles(silent), ["error"]);
+  assert.equal(silent[0].text, "no reason reported (failed)");
+  const denied = buildToolPresentation(
+    { toolName: "SubagentHandoff", toolStatus: "denied" },
+    { failureNote: (outcome) => `no reason reported (${outcome})` },
+  );
+  assert.equal(denied[0].text, "no reason reported (denied)");
+
+  // A failure's recorded error is what makes its disclosure exist at all.
+  assert.equal(
+    hasToolDetails({
+      toolStatus: "error",
+      error: { code: "E_ABORTED", message: "The provider cancelled this call." },
+    }),
+    true,
+  );
+  assert.equal(hasToolDetails({ toolStatus: "success" }), false);
+});

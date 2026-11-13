@@ -119,6 +119,16 @@ export function isAskToolName(toolName?: string): boolean {
   return bareToolName(toolName) === "asktool";
 }
 
+/**
+ * The self-handoff built-in, matched on the exact bare name for the same reason
+ * as the question tool: a provider namespace (`functions.SubagentHandoff`) still
+ * reaches its own row, while a plugin tool whose name merely ends in the word
+ * keeps the generic presentation.
+ */
+export function isSubagentHandoffTool(toolName?: string): boolean {
+  return bareToolName(toolName) === "subagenthandoff";
+}
+
 /** The tool that STARTS a subagent (ADR 0062). The lifecycle tools of ADR 0089
  * (TaskWait/TaskList/TaskStop) drive an existing delegation and are not
  * delegation activity items themselves. */
@@ -253,7 +263,8 @@ export type ToolIdentityKey =
   | "chat.toolIdentityBrowser"
   | "chat.toolIdentityImage"
   | "chat.toolIdentitySchedule"
-  | "chat.toolIdentityAskTool";
+  | "chat.toolIdentityAskTool"
+  | "chat.toolIdentitySubagentHandoff";
 
 const TOOL_IDENTITY_KEYS: Record<ToolAction, ToolIdentityKey | null> = {
   read: "chat.toolIdentityRead",
@@ -286,6 +297,14 @@ export function getToolIdentityKey(toolName?: string): ToolIdentityKey | null {
   // exact name reaches its own card and its history row must not print the
   // raw provider word.
   if (isAskToolName(toolName)) return "chat.toolIdentityAskTool";
+  // The self-handoff built-in has no action of its own, so `use` would name it
+  // from its protocol identifier, which reads as English words or the raw
+  // provider word in every other language. Its identity is matched exactly, like
+  // the question tool's, so a plugin tool that merely sounds similar keeps its
+  // own name.
+  if (isSubagentHandoffTool(toolName)) {
+    return "chat.toolIdentitySubagentHandoff";
+  }
   const action = exactBuiltinAction(toolName);
   return action ? TOOL_IDENTITY_KEYS[action] : null;
 }

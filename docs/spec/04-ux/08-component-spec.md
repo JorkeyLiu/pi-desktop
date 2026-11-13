@@ -2275,8 +2275,15 @@ replaced.
 - Wire field names, raw arguments, and result JSON are never printed; the row
   reads the call's `handoff` argument and the result's `accepted` flag only.
 - The ordinary tool row above and below it is unaffected, including its
-  running spinner, failure state, and disclosed details. A refused submission
-  is an error tool row like any other and keeps its own explanation.
+  running spinner, failure state, and disclosed details. A refused or otherwise
+  failed submission is the one row whose disclosure is only its failure:
+  opening it states the reason the runtime refused it, and nothing else — never
+  the `accepted` verdict, a reason code, any other recorded field, or the raw
+  payload. Extra diagnostics the result happens to carry are suppressed here
+  rather than drawn as sections, because the record of a submission is its
+  verdict and the explanation is the whole answer a reader expands for. This
+  suppression is scoped to this built-in's own row: every other failed tool
+  keeps the ordinary failure rule below.
 
 ### 8.5 Accessibility
 
@@ -2667,6 +2674,12 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
   tables (`TOOL_ACTION_KEYS`, `TOOL_RUNNING_KEYS`, `LIFECYCLE_*_KEYS`) may still
   name progress in aggregate surfaces such as the activity group, but they never
   select a row's identity.
+  A built-in with no action of its own still has a localized identity
+  (`SubagentHandoff` reads as its catalog name, not its protocol identifier);
+  the protocol name stays the tool's name on the wire and in the row's
+  `data-tool-name`. An unknown tool with no summarizable argument falls back to
+  its display name as its hint, so the head would print that name twice: the row
+  drops that repeat rather than broadening the hint rules.
 - The primary argument is a clamped single-line hint. Natural-language
   descriptions use the UI sans face at the header size; structured commands and
   paths remain monospace.
@@ -2726,7 +2739,17 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
 The expanded body is a list of labeled blocks, never a JSON dump (D192). The
 pi-ai result envelope carries the structured payload in `details` and repeats it
 as text for the model; only the structured half is rendered, so no byte appears
-twice.
+twice — with one exception: on a failure the text blocks state the reason, and
+`details` records only the verdict (a refusal's explanation beside
+`accepted: false`), so that sentence is the reason a reader expands the row for.
+When the record is nothing but that verdict, the sentence is the whole body: the
+verdict fields and their untouched payload would restate the failure the row
+already shows, so neither is printed. A failed `SubagentHandoff` takes that
+further: its record is a submission verdict rather than content, so the
+sentence is the whole body whether or not diagnostics came with it — never the
+`accepted` verdict, a reason code, any other field, or the payload. This
+suppression is scoped to that built-in's own row; every other failed tool keeps
+the record it came with.
 
 | Tool | Blocks |
 |---|---|
@@ -2742,7 +2765,7 @@ twice.
 | ScheduledTaskList/Create/Update/Delete | one row per automation under the `Scheduled task` heading: title, cadence, its clock, the weekly days **named in the session language** (the schema numbers them from Monday = 0, so a bare index is never printed), and enabled/paused |
 | ToolSearch, EnterPlanMode/SubmitPlan, NewContext, BrowserPreview, GenerateImages | the names they activated or matched, each name set listed once and read in the session language (the legacy `addedToolNames` carrier is used only when the row reports no `activated` list), the mode the tool's own name states (`Plan`, `Goal`), or the prompts and written images the call carried |
 | any host `notice` | `Note` — an error, warning or truncation notice stays visible after the blocks it qualifies; a routine informational notice is not printed in a successful row's body |
-| any failure | `Error` — message plus code, listed first |
+| any failure | `Error` — message plus code, listed first. A failure explains itself with the envelope's own sentence when `details` does not restate it; a text block that merely re-serializes `details` is never printed as a reason. The record it came with is listed beside its `Raw` disclosure — except when that record is only the refusal verdict the sentence already states (an all-false `accepted`/`success`/`ok`, nothing else): then the sentence is the whole body, and no verdict field or payload is drawn. A failed `SubagentHandoff` always keeps just that sentence, even when its record carries further diagnostics: for that built-in alone no field, reason code or payload is ever drawn. A failure that recorded no result states the `code` and `message` the row carries, or — recording neither — one localized sentence saying no reason was reported: it never opens on an empty body |
 | TaskWait/List/Stop roster | one table per roster group the runtime returned: `Subagents` for `delegations`, then `Stopped`, `Stop requested — still running` and `Already finished` as the runtime's own `stopped` / `stopPending` / `settled` groups. Each group keeps its heading so a worker whose cancellation was only requested never reads as stopped |
 | Task counters | `Stats` — the delegate's turns, tool calls and usage, after its brief and report |
 | unmapped payload | scalar entries as label/value fields; long or multi-line strings as their own labeled block; nested objects as JSON, all of it beside one explicit `Raw` disclosure of the untouched payload. The disclosure names itself in its own summary, so no second `Details` heading is drawn above it |
@@ -2755,6 +2778,10 @@ twice.
   a run that printed nothing opens on an empty body, not on its arguments. A
   workspace mutation whose review card owns the change prints no arguments at
   all: `path`, `tag` and `ops` are how the change was requested.
+- A row that offers a disclosure has a body: a failure that recorded neither a
+  result nor a reason still states the localized sentence saying so. "A run that
+  printed nothing" is the one empty body a reader may open, because the empty
+  terminal is itself the answer; a failed row is never published empty.
 - An ordinary labeled content block exposes a compact copy action that copies
   the full payload, not the visible slice. A block owned by a dedicated card
   takes the copy controls that card offers instead: the terminal panes copy

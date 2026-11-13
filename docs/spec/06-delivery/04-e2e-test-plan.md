@@ -19118,28 +19118,48 @@ host-created files. The full app's file-preview viewer is covered separately.
      line, with no field names the runtime asked for.
   2. Compare the accepted calls against the ordinary rows, then open one
      checkpoint and press the copy control in its section head.
+  3. Open the refused call's row and read the explanation it discloses.
 - **Expected**: Only the accepted calls become checkpoints, numbered by their
   order in the tab's own transcript; each collapsed row states only its title —
   no snippet of the delegate's text, never a lifecycle status, never argument
   or result JSON — and that title is centred on the transcript column at both
   wide and narrow pane widths, opening or not. The running and refused calls
-  keep the tool row and its own state (spinner, `Failed`) and their disclosed
-  details. Opening a checkpoint shows the standard tool detail section head —
+  keep the tool row and its own state (spinner, `Failed`); the refused row's
+  disclosure is only its reason. Opening a checkpoint shows the standard tool
+  detail section head —
   a translated heading naming the bytes and one copy control — above the whole
   authored handoff, as plain text with its own line breaks and bullets
   preserved — no field labels, no section list, no per-field structure.
   Model-authored markup in it renders as text, not HTML, and the copy control
   hands over every character of the handoff while reporting the copy without
-  collapsing the row.
+  collapsing the row. The refused call's own disclosure states the reason the
+  runtime refused it — the explanation the result carried as text — and nothing
+  else: never the `accepted: false` verdict, a reason code, any other recorded
+  field, or the payload drawer, even when the record carried diagnostics beyond
+  the verdict, and the reason is printed once. Every other failed tool still
+  keeps the record it came with beside its reason. The row is named by
+  its localized identity rather than its protocol identifier (`Subagent
+  Handoff` in English, `子代理交接` in Chinese), and the head states that name
+  once — never again as its own hint. A failed call that recorded no result
+  opens on the error `code`/`message` the row carries, or, recording neither,
+  on one localized sentence saying no reason was reported: an error row's
+  disclosure never opens on an empty body.
 - **Specs linked**: `04-ux/08-component-spec.md` (8.4a, 8.4b),
   `04-ux/02-i18n-english-first.md`.
 - **Status**: Automated render coverage plus a hidden-Electron click/Space probe
-  in `apps/desktop/test/subagent-handoff-checkpoint.test.mjs`; the probe
+  in `apps/desktop/test/subagent-handoff-checkpoint.test.mjs`, and renderer
+  coverage of the refused and result-less failure rows (opened through the
+  transcript reveal path) in `apps/desktop/test/tool-error-disclosure.test.mjs`;
+  the probe
   asserts the title is centred on the column at a wide and a narrow width, that
   the collapsed row carries no snippet of the handoff, that the expanded body
   equals the authored handoff character for character under the standard
   section head, and that pressing the head's copy control hands the renderer
   the whole authored handoff and shows the copied feedback.
+  The same file also asserts the refused row's opened body carries the reason
+  once with no verdict, diagnostic field or payload drawer, that another failed
+  tool still keeps its diagnostics, and that the row is named by its English and
+  Chinese catalog names exactly once.
 
 ### E2E-SUBAGENT-handoff-keeps-steering
 

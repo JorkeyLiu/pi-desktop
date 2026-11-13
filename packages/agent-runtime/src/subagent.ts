@@ -81,6 +81,7 @@ import {
 } from "./subagent-context.js";
 import { STREAM_PROGRESS_EVALUATION_CHARS } from "./subagent-progress.js";
 import {
+  SUBAGENT_HANDOFF_TOOL_NAME,
   buildSubagentHandoffContext,
   createSubagentHandoffState,
   createSubagentHandoffTool,
@@ -829,8 +830,7 @@ export class SubagentRun {
     this.handoffRequest = undefined;
     const normalized = normalizeHandoffPayload(args);
     if (!normalized.ok) {
-      this.handoffState.failures += 1;
-      this.handoffState.unanswered = 0;
+      this.chargeInvalidHandoffSubmission();
       return { ok: false, error: normalized.error };
     }
     this.pendingHandoff = normalized.payload;
@@ -839,6 +839,54 @@ export class SubagentRun {
     this.handoffState.unanswered = 0;
     this.handoffState.requestedAtToolCalls = 0;
     return { ok: true };
+  }
+
+  /**
+   * Charge one invalid submission to the consecutive-failure budget.
+   *
+   * The runtime reaches this exactly once per rejected submission, whichever
+   * layer refused it: `execute` when the text cannot be used, or the tool's
+   * own argument schema before `execute` runs. A submission the runtime turns
+   * down for its own reasons — nobody asked, or one is already recorded — is
+   * not an invalid submission and never gets here.
+   *
+   * The parked request is spent either way: it was delivered and answered, so
+   * it must not ride along with the delegate's correction. The failure resets
+   * the unanswered streak, because the delegate did answer — badly.
+   */
+  private chargeInvalidHandoffSubmission(): void {
+    this.handoffRequest = undefined;
+    this.handoffState.failures += 1;
+    this.handoffState.unanswered = 0;
+  }
+
+  /**
+   * Charge a handoff submission that the argument schema refused.
+   *
+   * The schema (`minLength: 1`, `maxLength: MAX_SUBAGENT_HANDOFF_CHARS`) is
+   * enforced before a tool runs, so a call it rejects produces a tool error the
+   * run never sees through `acceptHandoffSubmission`. pi-agent-core sets
+   * `durationMs` only for a tool it actually executed, which is the loop's own
+   * structural statement that `execute` was skipped — no provider error prose
+   * is inspected to decide this.
+   *
+   * Charging here is what puts both layers in one budget: a submission the
+   * schema rejects and one the runtime's own normalizer rejects cost the same,
+   * once each, and a delegate that keeps re-sending either one stops being
+   * asked at the same bound. Only a submission answered against an outstanding
+   * request is charged; a call with none open, or one refused as a duplicate,
+   * stays free.
+   */
+  private chargeSchemaRejectedHandoffSubmission(event: {
+    toolName: string;
+    isError: boolean;
+    durationMs?: number;
+  }): void {
+    if (event.toolName !== SUBAGENT_HANDOFF_TOOL_NAME) return;
+    if (!event.isError) return;
+    if (event.durationMs !== undefined) return;
+    if (!this.handoffState.requested) return;
+    this.chargeInvalidHandoffSubmission();
   }
 
   /** Occupancy the next request would carry, or undefined when unmeasurable. */
@@ -1681,6 +1729,9 @@ export class SubagentRun {
           result: event.result,
           isError: event.isError,
         });
+        // A handoff submission the argument schema refused never reached
+        // `execute`, so its rejection is charged from here.
+        this.chargeSchemaRejectedHandoffSubmission(event);
         break;
       default:
         break;

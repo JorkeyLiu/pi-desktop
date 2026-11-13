@@ -55,6 +55,8 @@ test("built-in identities are stable, localized action names and unknown tools r
     ["BrowserPreview", "chat.toolIdentityBrowser"],
     ["GenerateImages", "chat.toolIdentityImage"],
     ["ScheduledTaskCreate", "chat.toolIdentitySchedule"],
+    ["SubagentHandoff", "chat.toolIdentitySubagentHandoff"],
+    ["functions.SubagentHandoff", "chat.toolIdentitySubagentHandoff"],
   ]) {
     assert.equal(getToolIdentityKey(name), key, name);
   }
@@ -62,12 +64,17 @@ test("built-in identities are stable, localized action names and unknown tools r
     "plugin_issue_tracker_create",
     "plugin_tasks_list",
     "plugin_read_file",
+    "plugin_subagent_handoff",
     "some_custom_read_file",
     "mcp__weather__forecast",
     "mcp__weather__read_file",
   ]) {
     assert.equal(getToolIdentityKey(name), null, name);
   }
+  // The self-handoff keeps its protocol name as a name: it is a built-in only
+  // for its displayed identity, not an action with its own card.
+  assert.equal(getToolAction("SubagentHandoff"), "use");
+  assert.equal(getToolDisplayName("SubagentHandoff"), "Subagent Handoff");
   // Action/icon classification keeps its existing suffix behavior; identity
   // localization deliberately requires an exact built-in alias.
   assert.equal(getToolAction("plugin_tasks_list"), "list");
