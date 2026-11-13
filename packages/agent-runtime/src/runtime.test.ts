@@ -248,6 +248,60 @@ function runtimeTool(runtime: DesktopAgentRuntime, name: string): AgentTool {
   return tool;
 }
 
+/**
+ * The acceptance boundary pi-agent-core applies: an accepted message is
+ * pushed into `state.messages` first, then `message_end` listeners run. A
+ * delegation report batch counts as delivered here, never at assembly or at
+ * prompt-call time.
+ */
+async function acceptAcceptedMessage(
+  runtime: DesktopAgentRuntime,
+  message: unknown,
+) {
+  const agent = (runtime as any).agent;
+  agent.state.messages.push(message);
+  await (runtime as any).handleAgentEvent({ type: "message_end", message });
+}
+
+/**
+ * Stub the parent prompt while still modelling acceptance, so tests that
+ * replace the model boundary observe the same delivery point production does.
+ */
+function stubAcceptedPrompt(
+  runtime: DesktopAgentRuntime,
+  respond: (text: string) => void | Promise<void> = () => {},
+) {
+  const prompt = vi.fn(async (text: string) => {
+    await respond(text);
+    await acceptAcceptedMessage(runtime, {
+      role: "user",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+  });
+  const agent = (runtime as any).agent;
+  agent.prompt = prompt;
+  agent.waitForIdle = vi.fn(async () => undefined);
+  return prompt;
+}
+
+/** Accept one `TaskWait` result as history, as the loop does after executing it. */
+async function acceptTaskWaitResult(
+  runtime: DesktopAgentRuntime,
+  toolCallId: string,
+  result: { content: unknown; details?: unknown },
+) {
+  await acceptAcceptedMessage(runtime, {
+    role: "toolResult",
+    toolCallId,
+    toolName: "TaskWait",
+    content: result.content,
+    details: result.details,
+    isError: false,
+    timestamp: Date.now(),
+  });
+}
+
 /** Minimal pi-ai assistant message; overrides carry the shape under test. */
 function assistantMessage(overrides: {
   content: unknown[];
@@ -9651,9 +9705,7 @@ describe("DesktopAgentRuntime subagents", () => {
     subagentRuns.deferred = true;
     subagentRuns.resolveRun = undefined;
     const tool = taskTool(runtime);
-    const prompt = vi.fn(async () => undefined);
-    (runtime as any).agent.prompt = prompt;
-    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
+    const prompt = stubAcceptedPrompt(runtime);
 
     const started = await tool.execute("task-1", {
       agent: "explorer",
@@ -9728,6 +9780,9 @@ describe("DesktopAgentRuntime subagents", () => {
     });
 
     const result = await wait.execute("wait-1", { delegationIds: [delegationId] });
+    // The loop's acceptance step: the report counts as delivered only once the
+    // complete tool result message is history.
+    await acceptTaskWaitResult(runtime, "wait-1", result);
     expect(result.content[0].text).toContain("src/app.ts:12 misses the null check.");
     expect((runtime as any).keepTurnOpenForDelegates()).toBe(false);
 
@@ -9748,9 +9803,7 @@ describe("DesktopAgentRuntime subagents", () => {
     const wait = (runtime as any).agent.state.tools.find(
       (entry: any) => entry.name === "TaskWait",
     );
-    const prompt = vi.fn(async () => undefined);
-    (runtime as any).agent.prompt = prompt;
-    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
+    const prompt = stubAcceptedPrompt(runtime);
 
     const ids: string[] = [];
     for (let index = 0; index < 5; index += 1) {
@@ -9776,6 +9829,7 @@ describe("DesktopAgentRuntime subagents", () => {
     }
 
     const result = await wait.execute("wait-1", { delegationIds: ids });
+    await acceptTaskWaitResult(runtime, "wait-1", result);
     expect(result.content[0].text).toContain("deferred to keep this batch bounded");
     expect(result.content[0].text).toContain("No report is truncated or lost");
     expect((runtime as any).delegations.get(ids[0]).reportDelivered).toBe(true);
@@ -9827,6 +9881,7 @@ describe("DesktopAgentRuntime subagents", () => {
     });
 
     const result = await wait.execute("wait-1", { delegationIds: [delegationId] });
+    await acceptTaskWaitResult(runtime, "wait-1", result);
     const text = String(result.content[0].text);
     expect(text.length).toBeGreaterThan(50_000);
     expect(text).toContain("REPORT-HEAD");
@@ -9847,9 +9902,7 @@ describe("DesktopAgentRuntime subagents", () => {
     subagentRuns.deferred = true;
     subagentRuns.resolveRun = undefined;
     const task = taskTool(runtime);
-    const prompt = vi.fn(async () => undefined);
-    (runtime as any).agent.prompt = prompt;
-    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
+    const prompt = stubAcceptedPrompt(runtime);
     const report = `REPORT-HEAD\n${"w".repeat(30_000)}\nREPORT-MIDDLE\n${"w".repeat(30_000)}\nREPORT-TAIL`;
 
     const started = await task.execute("task-1", {
@@ -9897,9 +9950,7 @@ describe("DesktopAgentRuntime subagents", () => {
     const wait = (runtime as any).agent.state.tools.find(
       (entry: any) => entry.name === "TaskWait",
     );
-    const prompt = vi.fn(async () => undefined);
-    (runtime as any).agent.prompt = prompt;
-    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
+    const prompt = stubAcceptedPrompt(runtime);
 
     const ids: string[] = [];
     for (let index = 0; index < 4; index += 1) {
@@ -9931,6 +9982,7 @@ describe("DesktopAgentRuntime subagents", () => {
     }
 
     const result = await wait.execute("wait-1", { delegationIds: ids });
+    await acceptTaskWaitResult(runtime, "wait-1", result);
     const text = String(result.content[0].text);
     expect(text).toContain("report-0-");
     expect(text).toContain("report-2-");
@@ -12737,6 +12789,8 @@ describe("DesktopAgentRuntime subagent wakeup, progress and child steer", () => 
       });
       expect(held.details.status).toBe("completed");
       expect(held.content[0].text).toContain("Found it.");
+      // The result becomes delivery when pi accepts it into history.
+      await acceptTaskWaitResult(runtime, "wait-held", held);
       // The first wait delivers exactly once; observing it again is a re-read.
       expect(
         (runtime as any).delegations.get(delegationId).reportDelivered,
@@ -12936,10 +12990,9 @@ describe("DesktopAgentRuntime subagent wakeup, progress and child steer", () => 
         totalTokens: 12,
       },
     };
-    (runtime as any).agent.prompt = vi.fn(async (text: string) => {
+    stubAcceptedPrompt(runtime, (text) => {
       prompts.push(text);
     });
-    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
     try {
       const started = await taskTool(runtime).execute("task-1", {
         agent: "explorer",
@@ -13198,10 +13251,9 @@ describe("DesktopAgentRuntime subagent wakeup, progress and child steer", () => 
     subagentRuns.resolveRun = undefined;
     subagentRuns.steered.length = 0;
     const prompts: string[] = [];
-    (runtime as any).agent.prompt = vi.fn(async (text: string) => {
+    stubAcceptedPrompt(runtime, (text) => {
       prompts.push(text);
     });
-    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
     try {
       const started = await taskTool(runtime).execute("task-1", {
         agent: "explorer",
@@ -13385,10 +13437,9 @@ describe("DesktopAgentRuntime subagent wakeup, progress and child steer", () => 
     subagentRuns.deferred = true;
     subagentRuns.resolveRun = undefined;
     const prompts: string[] = [];
-    (runtime as any).agent.prompt = vi.fn(async (text: string) => {
+    stubAcceptedPrompt(runtime, (text) => {
       prompts.push(text);
     });
-    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
     try {
       const started = await taskTool(runtime).execute("task-1", {
         agent: "explorer",

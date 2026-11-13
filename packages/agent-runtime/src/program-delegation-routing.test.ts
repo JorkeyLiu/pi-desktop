@@ -161,6 +161,49 @@ function completedResult(report: string) {
   return { agentName: "explorer", status: "completed", report, turns: 1, toolCalls: 1 };
 }
 
+/**
+ * pi-agent-core's acceptance step for a stubbed parent prompt: push the
+ * caller's message into `state.messages`, then run `message_end` listeners.
+ * A delegation report batch is delivered there, never at prompt-call time.
+ */
+async function acceptAcceptedMessage(runtime: DesktopAgentRuntime, message: unknown) {
+  const agent = (runtime as any).agent;
+  agent.state.messages.push(message);
+  await (runtime as any).handleAgentEvent({ type: "message_end", message });
+}
+
+function stubAcceptedPrompt(runtime: DesktopAgentRuntime, prompts: string[]) {
+  const prompt = vi.fn(async (text: string) => {
+    prompts.push(text);
+    await acceptAcceptedMessage(runtime, {
+      role: "user",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+  });
+  const agent = (runtime as any).agent;
+  agent.prompt = prompt;
+  agent.waitForIdle = vi.fn(async () => undefined);
+  return prompt;
+}
+
+/** Accept one `TaskWait` result as history, as the loop does after executing it. */
+async function acceptTaskWaitResult(
+  runtime: DesktopAgentRuntime,
+  toolCallId: string,
+  result: { content: unknown; details?: unknown },
+) {
+  await acceptAcceptedMessage(runtime, {
+    role: "toolResult",
+    toolCallId,
+    toolName: "TaskWait",
+    content: result.content,
+    details: result.details,
+    isError: false,
+    timestamp: Date.now(),
+  });
+}
+
 beforeEach(() => {
   subagentRuns.calls.length = 0;
   subagentRuns.instances.length = 0;
@@ -267,8 +310,7 @@ describe("program delegation routing", () => {
   it("fast child delivers through idle immediately while its sibling still runs", async () => {
     const runtime = createRuntime({ subagentWakeup: { kind: "off" } });
     const prompts: string[] = [];
-    (runtime as any).agent.prompt = vi.fn(async (text: string) => { prompts.push(text); });
-    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
+    stubAcceptedPrompt(runtime, prompts);
     subagentRuns.deferred = true;
     try {
       const first = await taskTool(runtime).execute("task-1", { agent: "explorer", task: "A." });
@@ -311,6 +353,7 @@ describe("program delegation routing", () => {
       await settleStatus(runtime, secondId);
       // Wait on the first only: the omitted sibling stays pending.
       const waited = await waitTool(runtime).execute("wait-1", { delegationIds: [firstId] });
+      await acceptTaskWaitResult(runtime, "wait-1", waited);
       expect(waited.details.status).toBe("completed");
       expect((runtime as any).delegations.get(firstId).reportDelivered).toBe(true);
       expect((runtime as any).delegations.get(secondId).reportDelivered).toBe(false);
@@ -344,7 +387,10 @@ describe("program delegation routing", () => {
       const delegationId = (started.details as any).delegationId as string;
       subagentRuns.resolveRun!(completedResult("done src/app.ts:9"));
       await settleStatus(runtime, delegationId);
-      await waitTool(runtime).execute("wait-1", { delegationIds: [delegationId] });
+      const waitedSingle = await waitTool(runtime).execute("wait-1", {
+        delegationIds: [delegationId],
+      });
+      await acceptTaskWaitResult(runtime, "wait-1", waitedSingle);
       expect((runtime as any).delegations.get(delegationId).reportDelivered).toBe(true);
       const listed = await listTool(runtime).execute("list-1", {});
       expect(listed.details.delegations).toHaveLength(1);

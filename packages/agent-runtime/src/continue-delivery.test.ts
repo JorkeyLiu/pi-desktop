@@ -190,6 +190,49 @@ async function settleStatus(runtime: DesktopAgentRuntime, delegationId: string) 
   });
 }
 
+/**
+ * pi-agent-core's acceptance step for a stubbed parent prompt: push the
+ * caller's message into `state.messages`, then run `message_end` listeners.
+ * A delegation report batch is delivered there, never at prompt-call time.
+ */
+async function acceptAcceptedMessage(runtime: DesktopAgentRuntime, message: unknown) {
+  const agent = (runtime as any).agent;
+  agent.state.messages.push(message);
+  await (runtime as any).handleAgentEvent({ type: "message_end", message });
+}
+
+function stubAcceptedPrompt(runtime: DesktopAgentRuntime, prompts: string[]) {
+  const prompt = vi.fn(async (text: string) => {
+    prompts.push(text);
+    await acceptAcceptedMessage(runtime, {
+      role: "user",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+  });
+  const agent = (runtime as any).agent;
+  agent.prompt = prompt;
+  agent.waitForIdle = vi.fn(async () => undefined);
+  return prompt;
+}
+
+/** Accept one `TaskWait` result as history, as the loop does after executing it. */
+async function acceptTaskWaitResult(
+  runtime: DesktopAgentRuntime,
+  toolCallId: string,
+  result: { content: unknown; details?: unknown },
+) {
+  await acceptAcceptedMessage(runtime, {
+    role: "toolResult",
+    toolCallId,
+    toolName: "TaskWait",
+    content: result.content,
+    details: result.details,
+    isError: false,
+    timestamp: Date.now(),
+  });
+}
+
 beforeEach(() => {
   subagentRuns.calls.length = 0;
   subagentRuns.instances.length = 0;
@@ -203,12 +246,8 @@ describe("attached continuation", () => {
   it("running steer stays attached and its report delivers exactly once", async () => {
     const seen: any[] = [];
     const runtime = createRuntime({ onEvent: (envelope) => seen.push(envelope) });
-    (runtime as any).agent.prompt = vi.fn(async () => undefined);
-    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
     const prompts: string[] = [];
-    (runtime as any).agent.prompt = vi.fn(async (text: string) => {
-      prompts.push(text);
-    });
+    stubAcceptedPrompt(runtime, prompts);
     subagentRuns.deferred = true;
     try {
       subagentRuns.result = completedResult("Found it.");
@@ -266,6 +305,7 @@ describe("attached continuation", () => {
       const waited = await waitTool(runtime).execute("wait-1", {
         delegationIds: [continued.delegationId],
       });
+      await acceptTaskWaitResult(runtime, "wait-1", waited);
       expect((waited.content[0] as { text: string }).text).toContain("Deeper findings.");
       expect(record.reportDelivered).toBe(true);
     } finally {
@@ -280,10 +320,7 @@ describe("detached user continuation", () => {
     const seen: any[] = [];
     const runtime = createRuntime({ onEvent: (envelope) => seen.push(envelope) });
     const prompts: string[] = [];
-    (runtime as any).agent.prompt = vi.fn(async (text: string) => {
-      prompts.push(text);
-    });
-    (runtime as any).agent.waitForIdle = vi.fn(async () => undefined);
+    stubAcceptedPrompt(runtime, prompts);
     try {
       subagentRuns.result = completedResult("First report.", {
         operationId: "op-1",
@@ -299,7 +336,10 @@ describe("detached user continuation", () => {
       await settleStatus(runtime, firstId);
       seedChildRow(runtime, "task-1", "child-1");
       // Deliver the first report so the parent no longer expects this chain.
-      await waitTool(runtime).execute("wait-0", { delegationIds: [firstId] });
+      const waitedFirst = await waitTool(runtime).execute("wait-0", {
+        delegationIds: [firstId],
+      });
+      await acceptTaskWaitResult(runtime, "wait-0", waitedFirst);
       expect((runtime as any).delegations.get(firstId).reportDelivered).toBe(true);
       expect((runtime as any).getStatus().isRunning).toBe(false);
 
@@ -739,4 +779,58 @@ describe("post-restart hydration continuation", () => {
       }
     },
   );
+});
+
+/**
+ * The direct continuation entry is user text: the retired 20000-character
+ * payload check must not clip what the user wrote, and the resumed run must
+ * receive the whole text. Only the chain, turn, and run identities stay
+ * bounded.
+ */
+describe("continuation input bound", () => {
+  it("passes a continuation past the retired text bound whole to the resumed run", async () => {
+    const runtime = createRuntime();
+    (runtime as any).agent.state.isStreaming = true;
+    try {
+      subagentRuns.result = completedResult("First report.");
+      const started = await taskTool(runtime).execute("task-long", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const firstId = (started.details as any).delegationId as string;
+      await settleStatus(runtime, firstId);
+      seedChildRow(runtime, "task-long", "child-long");
+      const authored = [
+        "CONTINUE-HEAD: go deeper from the first report.",
+        "follow-up detail with a path and a line number. ".repeat(1_000),
+        "CONTINUE-MIDDLE: the constraint that still binds.",
+        "astral marker \u{1F642} and CJK marker \u{4EA4}\u{63A5} ".repeat(500),
+        "CONTINUE-TAIL: report the exact line.",
+      ].join("\n");
+      expect(authored.length).toBeGreaterThan(20_000);
+      subagentRuns.calls.length = 0;
+
+      const continued = await runtime.continueSubagent({
+        delegationId: firstId,
+        expectedParentTurnId: "parent-turn",
+        text: authored,
+      });
+
+      expect(continued.delivery).toBe("parent");
+      // The spawned run's opening input is the whole continuation, unchanged.
+      const spawn = subagentRuns.calls.at(-1) as { task?: string };
+      expect(spawn.task).toBe(authored);
+      expect(spawn.task?.startsWith("CONTINUE-HEAD")).toBe(true);
+      expect(spawn.task).toContain("CONTINUE-TAIL: report the exact line.");
+      expect(spawn.task).toContain("CONTINUE-MIDDLE");
+      // The child's own echo row keeps it exactly once.
+      const echoed = ((runtime as any).transcriptHistory as any[]).filter(
+        (row) => row.role === "user" && row.content === authored,
+      );
+      expect(echoed).toHaveLength(1);
+    } finally {
+      (runtime as any).agent.state.isStreaming = false;
+      await runtime.dispose();
+    }
+  });
 });

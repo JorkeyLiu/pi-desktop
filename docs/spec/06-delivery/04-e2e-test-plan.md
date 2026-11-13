@@ -3926,6 +3926,28 @@ window; opening a normal panel afterward must still work.
 - **Acceptance**: G (MCP bridge) + E (tools & permissions) + Security
 - **Status**: Unit-covered (`plugin-mcp.test.mjs` stdio + HTTP stubs); agent-facing scenario Draft
 
+#### E2E-MCP-stdio-frame-limit: stdio frames are bounded in actual UTF-8 bytes
+
+- **Preconditions**: Offline stdio fixture process speaking newline-delimited
+  JSON-RPC; no live MCP server, network, provider, or user credential.
+- **Steps**: 1) Write one frame just below and one just above the 4 MiB
+  (4,194,304-byte) budget. 2) Deliver several complete small frames coalesced
+  into one read whose total exceeds 4 MiB. 3) Split a multibyte character across
+  two writes so it straddles a read boundary.
+- **Expected**: Each newline-delimited (`0x0A`) frame is measured in actual
+  UTF-8 bytes before decoding, so a frame over the budget is refused rather than
+  buffered. Coalesced frames are counted one by one — a read carrying several
+  individually small frames is accepted even when their sum is larger than the
+  budget. A multibyte character split across writes is rejoined before the frame
+  is measured and arrives intact. The failing-frame error code and the
+  child-stop behavior are unchanged.
+- **Specs linked**: `07-plugins/04-plugin-security.md` §8.1,
+  `07-plugins/03-plugin-api.md`
+- **Acceptance criterion**: G (MCP bridge) + Security
+- **Milestone**: M6+
+- **Status**: Unit-covered (`apps/desktop/test/plugin-mcp-frame-limit.test.mjs`,
+  `apps/desktop/test/plugin-mcp.test.mjs`); packaged Electron journey NOT RUN.
+
 #### E2E-MCP-pi-client-owner-policy: Pi protocol under existing Desktop owners
 
 - **Preconditions**: Pi 1.1.0 with the pinned host-policy patch; offline stdio and
@@ -12824,7 +12846,10 @@ This test plan spec is accepted when:
       five delegates whose combined reports exceed the batch budget and confirm
       the first `TaskWait` returns at least one complete report plus a deferred
       count, and that the idle resume delivers the deferred reports whole one
-      batch later.
+      batch later. Also exercise the acceptance boundary: submit a new parent
+      input while the delegate finishes so the automatic hand-off is rejected,
+      then confirm the delegate's report is still owed and arrives with the
+      next wait or resume rather than being counted as delivered.
 - **Expected**: `Task` returns immediately with a `delegationId` and the parent
   keeps working; `TaskWait` converges with per-delegation reports and statuses;
   every terminal child state resumes the parent even if transcript publication
@@ -12850,6 +12875,11 @@ This test plan spec is accepted when:
   settled report in a batch is delivered whole even past the batch budget,
   the result states how many results were deferred, deferred reports arrive
   whole in a later batch, and the delivered ids match exactly the reports inlined.
+  A report also counts as delivered only after the carrying message actually
+  reaches the parent transcript: a hand-off rejected before that (parent busy,
+  a replaced tool result, a canceled wait) leaves the report owed, so a later
+  wait or resume delivers it once; a report that did reach the transcript is
+  never sent again, even when the provider request that follows fails.
 - **Specs linked**: `03-runtime/02-agent-runtime.md` §5f/§5f.1/§7.1,
   `03-runtime/03-tools-and-permissions.md` §10.2,
   `08-meta/decisions-log.md` (D242 amends D231), ADR 0089 and ADR 0100
@@ -12867,8 +12897,13 @@ This test plan spec is accepted when:
   `packages/agent-runtime/src/subagent.test.ts` and
   `packages/agent-runtime/src/runtime.test.ts`: `Task` -> settlement ->
   `TaskWait` / idle auto-resume over the real runtime wiring, with only the
-  delegate loop faked. The renderer journey (steps 2/3/7) stays pending over a
-  capable environment.
+  delegate loop faked. The acceptance boundary — a prompt rejected before
+  history, a report accepted and then followed by a provider failure, a
+  replaced tool result, and an assembled result that is not yet history — is
+  automated over the real pi loop in
+  `packages/agent-runtime/src/delivery-acceptance.test.ts`, with the model
+  gateway and the delegate loop as the only faked boundaries. The renderer
+  journey (steps 2/3/7) stays pending over a capable environment.
 
 #### E2E-162 / E2E-173: Delegate workflow scrolling
 
@@ -19202,6 +19237,60 @@ host-created files. The full app's file-preview viewer is covered separately.
   `packages/agent-runtime/src/subagent-handoff.test.ts` for the provenance
   rules. No Electron journey is required because the behavior is internal to
   the child's model context and adds no rendered or persisted state.
+
+### E2E-SUBAGENT-handoff-and-continuation-text-without-limit
+
+- **Preconditions**: A delegated run with a `tool-calls` self-handoff trigger,
+  driven through the production `SubagentRun.run()` entry and the real pi agent
+  loop, and a settled chain continued through the runtime's direct continuation
+  entry. Only the provider transport is scripted, so every request the delegate
+  or the resumed run would send is observable; no provider, paid API, or user
+  desktop instance is used.
+- **Steps**:
+  1. Cross the trigger so the runtime asks for a handoff, and answer with one
+     `SubagentHandoff` call whose text is far past the retired 12000-character
+     count, with distinct markers at the beginning, middle, and end and non-BMP
+     characters among them.
+  2. Read the request that follows the rollover.
+  3. Continue the settled chain with text far past the retired 20000-character
+     payload check, and read the opening request of the resumed run.
+  4. Repeat with a handoff call whose arguments fail the schema and with one
+     whose message hit the output token limit, then let a further tool call
+     arrive.
+  5. Steer the running delegate through the production `agent.steerSubagent`
+     route with text far past the retired 20000-character payload check, and
+     read the request that follows.
+- **Expected**: The long handoff is accepted by one call and installs one
+  generation carrying every character — all three markers and the non-BMP text
+  — with no validation error reaching the delegate and no charged failure or
+  unanswered retry. The long continuation passes both entry layers and both
+  synthetic rows keep it, while the resumed run's first request carries it
+  whole. The long steer passes the main-process handler and the sidecar parser
+  and reaches the running child's next request whole, ahead of the handoff
+  summary. The schema-invalid and truncated calls install nothing: the segment,
+  the transcript rows, and the durable checkpoint are unchanged, and the next
+  request states their refusal or truncation deterministically; each refusal
+  costs one entry in the existing consecutive-failure budget, so the asks stay
+  bounded without the delegate silently losing the ability to hand off. A long
+  but valid submission costs no failure. Empty text stays refused, and the
+  chain, turn, delegation, and image-count bounds are unchanged.
+- **Specs linked**: `03-runtime/02-agent-runtime.md` (delegate self-handoff,
+  direct user continuation), ADR 0299, ADR 0333.
+- **Acceptance criterion**: C — Conversation & stream; Quality
+- **Milestone**: M6+
+- **Status**: Unit-covered. No UI surface: the runtime paths are covered by
+  `packages/agent-runtime/src/subagent-self-handoff-loop.test.ts` (an oversized
+  handoff installed in one call, schema-invalid and truncated submissions
+  through the real loop, and an oversized steer reaching the child's request
+  whole across the rollover),
+  `packages/agent-runtime/src/subagent-handoff.test.ts`,
+  `packages/agent-runtime/src/subagent-continue.test.ts`,
+  `packages/agent-runtime/src/continue-delivery.test.ts` (the continuation
+  entry passing an oversized text to the resumed run), and
+  `apps/desktop/test/subagent-steer-long-text.test.mjs` (the steer text
+  crossing the main-process boundary unchanged). No Electron journey is
+  required because the change removes validation bounds inside the child's own
+  input path and adds no rendered or persisted state.
 
 ### E2E-SUBAGENT-handoff-checkpoint-durable
 

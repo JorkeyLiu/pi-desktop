@@ -37,7 +37,7 @@ import type {
   DelegationRecord,
   DelegationStatus,
 } from "./runtime.js";
-import { markProgramDelivery } from "./delegation-coordinator.js";
+import type { DeliveryBatch } from "./delivery-receipt.js";
 
 function codedError(message: string, errorCode: string): Error {
   return Object.assign(new Error(message), { errorCode });
@@ -640,8 +640,10 @@ export function buildWaitNote(input: WaitNoteInput): string | undefined {
 }
 
 /**
- * Finish one wait: bounded note, assembled result, exactly-once delivery
- * marking for the included settled records, and the result status. Omitted
+ * Finish one wait: bounded note, assembled result, the delivery batch the
+ * accepted result may consume, and the result status. Assembly never marks
+ * delivery by itself — the caller hands the batch to the acceptance boundary
+ * (a `toolResult` message accepted into the parent transcript). Omitted
  * reports stay pending; running delegates keep their future report.
  */
 export function finalizeWaitResult(options: {
@@ -663,7 +665,10 @@ export function finalizeWaitResult(options: {
     unknownIds?: string[];
     delegations: Array<WaitResultSnapshot & { metrics: string }>;
   };
-} {
+  /** The assembled report batch, waiting for acceptance into history. */
+  receipt: DeliveryBatch;
+}
+{
   const settledCount = options.snapshots.filter(
     (snapshot) => snapshot.status !== "running",
   ).length;
@@ -682,7 +687,6 @@ export function finalizeWaitResult(options: {
       .map(formatDelegationHeartbeat),
   });
   const assembled = assembleWaitResult(options.snapshots, note);
-  markProgramDelivery(options.targets, assembled.includedDelegationIds);
   const status = subagentWaitStatus({
     interrupted: options.interrupted,
     timedOut: options.timedOut,
@@ -698,6 +702,11 @@ export function finalizeWaitResult(options: {
         : {}),
       ...(options.unknownIds.length ? { unknownIds: options.unknownIds } : {}),
       delegations: assembled.delegations,
+    },
+    receipt: {
+      text: assembled.text,
+      records: options.targets,
+      includedDelegationIds: assembled.includedDelegationIds,
     },
   };
 }

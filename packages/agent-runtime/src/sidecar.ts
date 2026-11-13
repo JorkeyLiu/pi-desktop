@@ -30,9 +30,8 @@ import { applySubagentWakeupConfigure } from "./sidecar-subagent-wakeup.js";
 import { applySubagentSelfHandoffConfigure } from "./sidecar-subagent-self-handoff.js";
 import {
   continueHydrationSource,
-  parseChildInputAttachments,
-  parseChildInputImages,
   parseContinueSidecarParams,
+  parseSteerSubagentParams,
 } from "./subagent-continue.js";
 import { applyNodeNetworkProxy } from "./node-proxy.js";
 import { applyAdditiveDefaultCaCertificates } from "./system-ca.js";
@@ -591,30 +590,16 @@ async function handle(method: string, params: any): Promise<unknown> {
       if (!runtime) {
         throw Object.assign(new Error("No active runtime for this session"), { errorCode: "TURN_NOT_FOUND" });
       }
-      const delegationId = String(params.delegationId ?? "");
-      const expectedTurnId = String(params.expectedTurnId ?? "");
-      const content = String(params.content ?? "");
-      const images = parseChildInputImages(params.images);
-      const attachments = parseChildInputAttachments(params.attachments);
-      const messageId = typeof params.messageId === "string" && params.messageId.trim()
-        ? params.messageId.trim()
-        : undefined;
-      // An image-only steer is a real input; requiring text would drop it.
-      if (!delegationId.trim() || !expectedTurnId.trim() || (!content.trim() && images.length === 0)) {
-        throw Object.assign(new Error("delegationId, expectedTurnId and content required"), { errorCode: "INVALID_ARGUMENT" });
-      }
-      if (delegationId.length > 128 || expectedTurnId.length > 128 || content.length > 20_000) {
-        throw Object.assign(new Error("steerSubagent payload out of bounds"), { errorCode: "INVALID_ARGUMENT" });
-      }
+      const parsed = parseSteerSubagentParams(params);
       // The runtime revalidates turn ownership after this dispatch, so a
       // stale target fails there rather than steering the wrong turn.
       return runtime.steerSubagent({
-        delegationId,
-        expectedParentTurnId: expectedTurnId,
-        text: content,
-        ...(images.length ? { images } : {}),
-        ...(attachments.length ? { attachments } : {}),
-        ...(messageId ? { messageId } : {}),
+        delegationId: parsed.delegationId,
+        expectedParentTurnId: parsed.expectedTurnId,
+        text: parsed.content,
+        ...(parsed.images?.length ? { images: parsed.images } : {}),
+        ...(parsed.attachments?.length ? { attachments: parsed.attachments } : {}),
+        ...(parsed.messageId ? { messageId: parsed.messageId } : {}),
       });
     }
     case "agent.continueSubagent": {

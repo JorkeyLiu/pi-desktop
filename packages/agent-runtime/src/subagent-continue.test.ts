@@ -9,6 +9,7 @@ import {
   isUserContinueTaskRow,
   mapContinueSpawnError,
   parseContinueSidecarParams,
+  parseSteerSubagentParams,
   prepareSubagentContinue,
   validateSubagentContinue,
   type ContinueSourceState,
@@ -48,12 +49,65 @@ function ownership(overrides = {}) {
 }
 
 describe("validateSubagentContinue", () => {
-  it("rejects unknown chains, empty text, and oversized payloads", () => {
+  it("rejects unknown chains and empty text", () => {
     expect(() =>
       validateSubagentContinue(undefined, { delegationId: "x", text: "hi" }, ownership(), new Set()),
     ).toThrow(expect.objectContaining({ errorCode: "DELEGATION_NOT_FOUND" }));
     expect(() =>
       validateSubagentContinue(chain(), { delegationId: "del-1", text: "  " }, ownership(), new Set()),
+    ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
+  });
+
+  /**
+   * A continuation is user text: it is as long as the user wrote, and the new
+   * run receives every character. Only structure — the chain identity, the
+   * turn, the run — stays bounded.
+   */
+  it("carries any length of continuation text whole", () => {
+    const authored = [
+      "CONTINUE-HEAD: keep going from the settled run.",
+      "follow-up detail with a path and a line number. ".repeat(1_000),
+      "CONTINUE-MIDDLE: the constraint that still binds.",
+      "astral marker \u{1F642} and CJK marker \u{4EA4}\u{63A5} ".repeat(500),
+      "CONTINUE-TAIL: report when done.",
+    ].join("\n");
+    // Comfortably past the retired 20000-character bound.
+    expect(authored.length).toBeGreaterThan(60_000);
+
+    const out = validateSubagentContinue(
+      chain(),
+      { delegationId: "del-1", text: authored },
+      ownership(),
+      new Set(),
+    );
+    expect(out.outcome).toBe("continue");
+    if (out.outcome !== "continue") return;
+    expect(out.text).toBe(authored);
+    expect(out.text.startsWith("CONTINUE-HEAD")).toBe(true);
+    expect(out.text).toContain("CONTINUE-TAIL: report when done.");
+    // The synthetic rows carry the same text, once each.
+    expect(out.childMessage.content).toBe(authored);
+    // The structural identities are untouched by the text.
+    expect(out.toolCallId).toBeTruthy();
+    expect(out.chain.delegationIds).toEqual(["del-1"]);
+  });
+
+  it("still bounds the identifiers", () => {
+    expect(() =>
+      validateSubagentContinue(
+        chain(),
+        { delegationId: "del-1", text: "go", messageId: "m".repeat(129) },
+        ownership(),
+        new Set(),
+      ),
+    ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
+    expect(() =>
+      validateSubagentContinue(
+        chain(),
+        { delegationId: "del-1", text: "go" },
+        ownership({ expectedParentTurnId: "t".repeat(129) }),
+        new Set(),
+      ),
     ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
   });
 
@@ -272,9 +326,120 @@ describe("parseContinueSidecarParams", () => {
     expect(() => parseContinueSidecarParams({ sessionId: "s1", content: "go" })).toThrow(
       expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }),
     );
+    // No text bound on the transport entry either: the whole continuation
+    // crosses the sidecar and is revalidated by the runtime.
+    const long = `${"x".repeat(20_001)}CONTINUE-TAIL`;
+    expect(
+      parseContinueSidecarParams({ sessionId: "s1", delegationId: "del-1", content: long }).content,
+    ).toBe(long);
+    // Identifiers stay bounded, and an image-only input keeps its own count.
     expect(() =>
-      parseContinueSidecarParams({ sessionId: "s1", delegationId: "del-1", content: "x".repeat(20_001) }),
+      parseContinueSidecarParams({ sessionId: "s1", delegationId: "d".repeat(129), content: "go" }),
     ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
+    expect(() =>
+      parseContinueSidecarParams({
+        sessionId: "s1",
+        delegationId: "del-1",
+        expectedTurnId: "t".repeat(129),
+        content: "go",
+      }),
+    ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
+    const image = { type: "image", data: "aGk=", mimeType: "image/png" };
+    expect(() =>
+      parseContinueSidecarParams({
+        sessionId: "s1",
+        delegationId: "del-1",
+        content: "",
+        images: Array.from({ length: 9 }, () => image),
+      }),
+    ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
+    expect(
+      parseContinueSidecarParams({
+        sessionId: "s1",
+        delegationId: "del-1",
+        content: "",
+        images: Array.from({ length: 8 }, () => image),
+      }).images,
+    ).toHaveLength(8);
+  });
+});
+
+describe("parseSteerSubagentParams", () => {
+  it("passes a steer past the retired text bound whole", () => {
+    const authored = [
+      "STEER-HEAD: also check the escape handler in PermissionDialog.tsx.",
+      "steer detail with a path and a line number. ".repeat(1_000),
+      "STEER-MIDDLE: the props stay unchanged.",
+      "astral marker \u{1F642} and CJK marker \u{4EA4}\u{63A5} ".repeat(500),
+      "STEER-TAIL: report the exact line before you finish.",
+    ].join("\n");
+    // Comfortably past the retired 20000-character payload check.
+    expect(authored.length).toBeGreaterThan(60_000);
+
+    const parsed = parseSteerSubagentParams({
+      delegationId: "del-1",
+      expectedTurnId: "parent-turn",
+      content: authored,
+    });
+
+    // Every authored character crosses the sidecar unchanged.
+    expect(parsed.delegationId).toBe("del-1");
+    expect(parsed.expectedTurnId).toBe("parent-turn");
+    expect(parsed.content).toBe(authored);
+    expect(parsed.content).toContain("STEER-MIDDLE");
+    expect(parsed.content).toContain("STEER-TAIL: report the exact line before you finish.");
+  });
+
+  it("keeps the structural guards: identity, a non-empty input, image count", () => {
+    expect(() =>
+      parseSteerSubagentParams({ delegationId: "del-1", expectedTurnId: "parent-turn", content: "  " }),
+    ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
+    expect(() =>
+      parseSteerSubagentParams({ expectedTurnId: "parent-turn", content: "go" }),
+    ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
+    expect(() =>
+      parseSteerSubagentParams({ delegationId: "del-1", content: "go" }),
+    ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
+    expect(() =>
+      parseSteerSubagentParams({
+        delegationId: "d".repeat(129),
+        expectedTurnId: "parent-turn",
+        content: "go",
+      }),
+    ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
+    expect(() =>
+      parseSteerSubagentParams({
+        delegationId: "del-1",
+        expectedTurnId: "t".repeat(129),
+        content: "go",
+      }),
+    ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
+    const image = { type: "image", data: "aGk=", mimeType: "image/png" };
+    // An image-only steer is a real input, and the transport count still binds.
+    const imageOnly = parseSteerSubagentParams({
+      delegationId: "del-1",
+      expectedTurnId: "parent-turn",
+      content: "",
+      images: [image],
+    });
+    expect(imageOnly.images).toHaveLength(1);
+    expect(() =>
+      parseSteerSubagentParams({
+        delegationId: "del-1",
+        expectedTurnId: "parent-turn",
+        content: "",
+        images: Array.from({ length: 9 }, () => image),
+      }),
+    ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
+    // The caller's retry id rides through trimmed, exactly once.
+    expect(
+      parseSteerSubagentParams({
+        delegationId: "del-1",
+        expectedTurnId: "parent-turn",
+        content: "go",
+        messageId: " mid-1 ",
+      }).messageId,
+    ).toBe("mid-1");
   });
 });
 

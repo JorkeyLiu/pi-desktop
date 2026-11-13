@@ -863,7 +863,7 @@ export class SubagentRun {
   /**
    * Charge a handoff submission that the argument schema refused.
    *
-   * The schema (`minLength: 1`, `maxLength: MAX_SUBAGENT_HANDOFF_CHARS`) is
+   * The schema (`minLength: 1`, no length maximum) is
    * enforced before a tool runs, so a call it rejects produces a tool error the
    * run never sees through `acceptHandoffSubmission`. pi-agent-core sets
    * `durationMs` only for a tool it actually executed, which is the loop's own
