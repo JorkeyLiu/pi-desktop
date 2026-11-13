@@ -437,11 +437,15 @@ visually distinct from list content.
 | Expanded | Full session titles visible |
 | Sidebar width | 240–520px (default 275px); drag below 160px collapses |
 | Collapsed | Icon rail — hover shows tooltip with session title |
-| Active session | Accent-blue outlined status ring plus active row background |
+| Active session | Active row background; the selected idle conversation carries the hollow idle mark, while manual, running, and outcome marks show on selected and unselected rows |
 | Selecting session | Destination row receives the active treatment immediately while transcript/workspace resolution continues |
-| Session in progress | Orange breathing dot; static under reduced motion |
-| Session completed | Green check mark from the latest unread task notification when the row is not selected |
-| Session failed | Red circled alert mark from the latest unread task notification when the row is not selected |
+| Session idle | Hollow accent outlined mark on the selected idle conversation only; it is the manual pending toggle at rest. An unselected unmarked row shows no mark and leaves the 24px gutter empty |
+| Session pending (manual) | Static orange filled mark after the user marks the row, shown whether or not that row is selected; no halo, no animation; device-local preference that survives a run, opening the session, refresh, and relaunch |
+| Session in progress | Orange filled dot with an externally visible halo that animates only while the turn runs; the static halo remains under reduced motion; running outranks the manual mark without clearing it |
+| Session completed | Green check mark from the latest unread task notification, also on the selected row |
+| Session failed | Red circled alert mark from the latest unread task notification, also on the selected row |
+| Session permission | Purple dot with two pulse cycles from a pending tool approval; it outranks every other status |
+| Session outcomes acknowledged | Opening the row clears its unread outcome mark and marks the matching task notification read |
 | Hover row | Project headers and all conversation rows share one full-row `--ds-bg-hover` surface, radius and transition; selected conversation fill takes precedence |
 | Current workspace | Project header shows the workspace dot, never a persistent selection fill; topbar follows that workspace; composer exposes no workspace identity |
 | Navigation selection | Only the selected conversation on the chat page uses `--ds-bg-active`, including pinned and standalone rows; folding its group never transfers selection to the header. No conversation or a non-chat page means no selected conversation row |
@@ -463,6 +467,15 @@ visually distinct from list content.
 - Click the project directory row (chevron, folder, label, or remaining
   disclosure hit area): activate its path when necessary, then toggle only
   that project's conversation group; retain the other project groups
+- Click the session status mark: the hollow mark on the selected idle conversation
+  and the orange marked state on any row toggle the device-local manual pending
+  mark, with `aria-pressed`, a localized accessible name, and Enter/Space
+  activation. It never selects the row and never starts a row drag. An
+  unselected unmarked row renders no status element, so a click in its gutter
+  belongs to the row. Permission, in-progress, and unread-outcome marks are not
+  controls: the click belongs to the row exactly as it does on the title, so it
+  selects that conversation and acknowledges only its own unread outcome, and
+  it never toggles the manual flag.
 - Click session: activate its bound project when necessary and switch the active
   session. A destination that still has a retained pane (warm switch) is revealed
   immediately with its own content and its own scroll position, so the first
@@ -758,7 +771,7 @@ controls.
 | Project memory | row-menu editor reads and saves a compact list of titled or untitled memory cards for the exact project path; cards can be added, edited, and removed, the context is available in later chats, and it is never a higher-priority instruction |
 | Session list | exact-path matches only; no basename grouping; the latest ten unpinned sessions appear initially, Load more reveals the remaining history, and collapsing the project clears that expanded-list state so the next expansion returns to the initial ten |
 | Active group | exactly one group reflects the selected host workspace |
-| Task state | In-progress, selected, completed, and failed indicators update by session without replacing the visible transcript; precedence is in-progress, selected, then terminal outcome |
+| Task state | Permission, in-progress, completed, failed, manual pending, and the selected idle mark update by session without replacing the visible transcript; precedence is permission, in-progress, terminal outcome, manual pending, then the selected idle mark |
 
 ### 3.10 Local profile footer contract
 

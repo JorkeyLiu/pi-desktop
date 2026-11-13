@@ -7,7 +7,9 @@ import fs from "node:fs";
 import test from "node:test";
 import {
   latestSessionOutcomes,
+  sessionPendingToggleAllowed,
   sidebarSessionStatus,
+  sidebarSessionStatusIsTogglable,
 } from "../src/lib/sidebar-session-status.ts";
 import { loadStylesSync } from "./helpers/styles.mjs";
 
@@ -50,20 +52,113 @@ test("read task notifications leave no sidebar indicator", () => {
   assert.deepEqual(outcomes, {});
 });
 
-test("prioritizes in-progress and selected states over terminal outcomes", () => {
+test("permission, in-progress work, and unread outcomes outrank the manual mark", () => {
   assert.equal(
-    sidebarSessionStatus({ running: true, selected: true, outcome: "failed" }),
+    sidebarSessionStatus({
+      running: true,
+      outcome: "failed",
+      pending: true,
+      hasPendingPermission: true,
+      selected: false,
+    }),
+    "permission",
+  );
+  assert.equal(
+    sidebarSessionStatus({
+      running: true,
+      outcome: "failed",
+      pending: true,
+      selected: false,
+    }),
     "running",
   );
   assert.equal(
-    sidebarSessionStatus({ running: false, selected: true, outcome: "failed" }),
-    "selected",
+    sidebarSessionStatus({
+      running: false,
+      outcome: "failed",
+      pending: true,
+      selected: false,
+    }),
+    "failed",
   );
   assert.equal(
-    sidebarSessionStatus({ running: false, selected: false, outcome: "completed" }),
+    sidebarSessionStatus({ running: false, outcome: "completed", selected: false }),
     "completed",
   );
+  assert.equal(
+    sidebarSessionStatus({ running: false, pending: true, selected: false }),
+    "pending",
+  );
+});
+
+test("only the selected unmarked row shows the hollow idle mark", () => {
+  // An unselected row with nothing to report renders no mark, so idle rows are
+  // never decorated and the gutter holds no invisible control. Selecting it
+  // reveals the hollow toggle at rest.
   assert.equal(sidebarSessionStatus({ running: false, selected: false }), null);
+  assert.equal(sidebarSessionStatus({ running: false, selected: true }), "idle");
+  // A manual mark stays visible on unselected rows, and an unread outcome does
+  // not wait for selection either.
+  assert.equal(
+    sidebarSessionStatus({ running: false, pending: true, selected: false }),
+    "pending",
+  );
+  assert.equal(
+    sidebarSessionStatus({ running: false, outcome: "completed", selected: true }),
+    "completed",
+  );
+});
+
+test("only the manual idle mark toggles; every reported state stays informational", () => {
+  for (const status of ["permission", "running", "completed", "failed"]) {
+    assert.equal(sidebarSessionStatusIsTogglable(status), false, status);
+  }
+  assert.equal(sidebarSessionStatusIsTogglable("pending"), true);
+  assert.equal(sidebarSessionStatusIsTogglable("idle"), true);
+});
+
+test("a manual mark flips only for a selected idle row or a marked row", () => {
+  const base = {
+    known: true,
+    running: false,
+    pending: false,
+    hasPendingPermission: false,
+    selected: true,
+  };
+  // The action boundary repeats this rule for direct callers, not just the row
+  // control, so no path can flip the flag under a glyph the user has not acted
+  // on yet, and an unknown id cannot create sidebar metadata. A hidden idle row
+  // is refused because its mark is not rendered; an unselected manual mark is
+  // still allowed so its filled dot can be cleared.
+  assert.equal(sessionPendingToggleAllowed(base), true, "selected idle");
+  assert.equal(
+    sessionPendingToggleAllowed({ ...base, selected: false }),
+    false,
+    "unselected idle",
+  );
+  assert.equal(
+    sessionPendingToggleAllowed({ ...base, pending: true, selected: false }),
+    true,
+    "unselected marked",
+  );
+  assert.equal(sessionPendingToggleAllowed({ ...base, pending: true }), true, "marked");
+  assert.equal(sessionPendingToggleAllowed({ ...base, known: false }), false, "unknown session");
+  assert.equal(sessionPendingToggleAllowed({ ...base, running: true }), false, "running");
+  assert.equal(
+    sessionPendingToggleAllowed({ ...base, hasPendingPermission: true }),
+    false,
+    "permission",
+  );
+  assert.equal(
+    sessionPendingToggleAllowed({ ...base, outcome: "completed" }),
+    false,
+    "completed outcome",
+  );
+  assert.equal(
+    sessionPendingToggleAllowed({ ...base, outcome: "failed" }),
+    false,
+    "failed outcome",
+  );
 });
 
 test("opening a conversation acknowledges its outcome badge before loading details", () => {
@@ -92,6 +187,10 @@ test("opening a conversation acknowledges its outcome badge before loading detai
 });
 
 test("renders semantic, shape-distinct sidebar status indicators", () => {
+  const mark = fs.readFileSync(
+    new URL("../src/features/sessions/SessionStatusMark.tsx", import.meta.url),
+    "utf8",
+  );
   const sidebar = fs.readFileSync(
     new URL("../src/components/Sidebar.tsx", import.meta.url),
     "utf8",
@@ -105,15 +204,40 @@ test("renders semantic, shape-distinct sidebar status indicators", () => {
   );
   const main = readMainSourceSync();
 
-  assert.match(sidebar, /sessionSelected[\s\S]*sessionCompleted[\s\S]*sessionFailed/);
-  assert.match(sidebar, /IconCheck[\s\S]*IconCircleAlert/);
+  assert.match(sidebar, /<SessionStatusMark/);
+  assert.match(sidebar, /selected: active/);
+  assert.match(sidebar, /\{status \? \(/);
+  assert.doesNotMatch(sidebar, /nav\.sessionSelected/);
+  // The idle mark is the toggle: a shared button primitive, a pressed state,
+  // and a localized name, so it is reachable by pointer and keyboard.
+  assert.match(mark, /aria-pressed={marked}/);
+  assert.match(mark, /nav\.sessionPendingMarker/);
+  assert.match(mark, /nav\.sessionMarkPending/);
+  assert.match(mark, /nav\.sessionClearPending/);
+  assert.match(mark, /IconCheck[\s\S]*IconCircleAlert/);
+  assert.match(mark, /onDragStart[\s\S]*preventDefault\(\)[\s\S]*stopPropagation\(\)/);
+  // Informational marks are not controls: the row keeps its original pointer
+  // behavior (select, shift/cmd multi-select), and only the toggle stops it.
+  const informationalMark = mark.match(/<span[\s\S]*?<\/span>/)?.[0] ?? "";
+  assert.match(informationalMark, /aria-label={label}/);
+  assert.doesNotMatch(
+    informationalMark,
+    /onClick/,
+    "an informational mark must not swallow the row's own click",
+  );
   assert.match(styles, /thread-item-status\.running::before[\s\S]*--ds-warning/);
-  assert.match(styles, /thread-item-status\.selected::before[\s\S]*--ds-accent/);
+  assert.match(styles, /thread-item-status\.idle::before[\s\S]*--ds-accent/);
+  assert.match(styles, /thread-item-status\.pending::before[\s\S]*--ds-warning/);
   assert.match(styles, /thread-item-status\.completed[\s\S]*--ds-success/);
   assert.match(styles, /thread-item-status\.failed[\s\S]*--ds-error/);
+  // The manual mark carries no halo and no animation.
+  const pendingBlock = styles.match(
+    /\.thread-item-status\.pending::before {[\s\S]*?\n}/,
+  )?.[0] ?? "";
+  assert.doesNotMatch(pendingBlock, /animation|box-shadow/);
   assert.match(
     styles,
-    /prefers-reduced-motion: reduce[\s\S]*thread-item-status\.running::before[\s\S]*animation: none/,
+    /prefers-reduced-motion: reduce[\s\S]*thread-item-status\.running::after[\s\S]*animation: none/,
   );
   assert.match(
     app,

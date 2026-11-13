@@ -327,6 +327,8 @@ export type AppState = {
   deleteProject: (path: string) => Promise<void>;
   toggleSessionPinned: (id: string) => void;
   toggleSessionArchived: (id: string) => void;
+  /** Flip the device-local manual "still needs me" mark on one session row. */
+  toggleSessionPending: (id: string) => void;
   archiveSession: (id: string) => void;
   restoreSession: (id: string) => void;
   renameSession: (id: string, title: string) => Promise<void>;

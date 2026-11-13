@@ -305,31 +305,72 @@
   opacity: 0.68;
 }
 
+/* One leading mark per row. The 24px slot doubles as the mark's minimum hit
+   target: it spans the full row height and the row text starts after it, so
+   the toggle never overlaps the title and the dot keeps its gutter centre. */
 .thread-item-status {
+  position: absolute;
+  left: 0;
+  top: 0;
   display: inline-flex;
-  width: 12px;
-  height: 12px;
+  width: 24px;
+  height: 100%;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   color: var(--ds-text-muted);
-  position: absolute;
-  left: 4px;
-  top: 50%;
-  transform: translateY(-50%);
+}
+
+.thread-item-status.toggleable {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.thread-item-status.toggleable:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 1px solid var(--ds-accent);
+  outline-offset: -2px;
 }
 
 .thread-item-status.running::before {
+  position: absolute;
+  inset: 0;
+  margin: auto;
   width: 7px;
   height: 7px;
   border-radius: var(--radius-full);
   background: var(--ds-warning);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ds-warning) 15%, transparent);
   content: "";
-  animation: sidebar-status-breathe 1.6s ease-in-out 2;
+}
+
+/*
+  The halo is the sidebar's only continuously animated mark: it exists only
+  while a turn is actually in flight, so the transparent window is never kept
+  dirty by an idle row (see `04-ux/07-ui-design-system.md` §4.5). Reduced
+  motion stops the motion but keeps this ring, so running still reads as more
+  than a plain fill.
+*/
+.thread-item-status.running::after {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 13px;
+  height: 13px;
+  border-radius: var(--radius-full);
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--ds-warning) 45%, transparent),
+    0 0 0 3px color-mix(in oklab, var(--ds-warning) 18%, transparent);
+  content: "";
+  animation: sidebar-status-halo 1.6s ease-in-out infinite;
 }
 
 .thread-item-status.permission::before {
+  position: absolute;
+  inset: 0;
+  margin: auto;
   width: 7px;
   height: 7px;
   border-radius: var(--radius-full);
@@ -339,11 +380,31 @@
   animation: sidebar-status-pulse-purple 1.2s ease-in-out 2;
 }
 
-.thread-item-status.selected::before {
+/* Hollow mark: the selected idle conversation carries it as the manual
+   pending toggle's unpressed face. An unselected unmarked row renders no mark
+   element at all, so the gutter stays empty and spans nothing clickable. */
+.thread-item-status.idle::before {
+  position: absolute;
+  inset: 0;
+  margin: auto;
   width: 9px;
   height: 9px;
   border: 1.5px solid var(--ds-accent);
   border-radius: var(--radius-full);
+  content: "";
+}
+
+/* Manual pending: a filled orange dot on the selected or an unselected row,
+   deliberately still — no halo, no animation. Work in flight outranks it
+   visually without clearing the stored mark. */
+.thread-item-status.pending::before {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--radius-full);
+  background: var(--ds-warning);
   content: "";
 }
 
@@ -363,15 +424,15 @@
   stroke-width: 2.25;
 }
 
-@keyframes sidebar-status-breathe {
+@keyframes sidebar-status-halo {
   0%,
   100% {
-    opacity: 1;
-    transform: scale(1);
+    opacity: 0.9;
+    transform: scale(0.85);
   }
   50% {
-    opacity: 0.68;
-    transform: scale(0.78);
+    opacity: 0.35;
+    transform: scale(1.15);
   }
 }
 
@@ -388,7 +449,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .thread-item-status.running::before {
+  .thread-item-status.running::after {
     animation: none;
   }
   .thread-item-status.permission::before {

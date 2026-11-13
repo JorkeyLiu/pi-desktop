@@ -28,7 +28,7 @@
   flex: 1;
   align-items: center;
   gap: 5px;
-  padding: 5px 6px 5px 20px;
+  padding: 5px 6px 5px 24px;
   text-align: left;
   color: inherit;
 }
@@ -266,7 +266,7 @@
 }
 
 .sidebar-time-group-header {
-  padding: 4px 6px 4px 20px;
+  padding: 4px 6px 4px 24px;
   color: var(--ds-text-muted);
   font-size: var(--text-2xs);
   font-weight: var(--font-weight-medium);
@@ -281,7 +281,7 @@
   display: flex;
   width: 100%;
   align-items: center;
-  padding: 4px 6px 4px 20px;
+  padding: 4px 6px 4px 24px;
   border-radius: var(--radius-sm);
   color: var(--ds-text-muted);
   font-size: var(--text-xs-plus);
