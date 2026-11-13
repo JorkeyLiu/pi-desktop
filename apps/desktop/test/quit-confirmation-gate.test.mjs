@@ -27,7 +27,7 @@ const { registerShutdownHandlers } = await import("../electron/main/bootstrap/sh
 
 function createHarness({ sessionIds = [], confirm = true, installingUpdate = false } = {}) {
   const activeTurns = new Map(sessionIds.map((id, index) => [id, `turn-${index}`]));
-  const calls = { confirm: 0, quit: 0 };
+  const calls = { confirm: 0, quit: 0, modelMetadataDispose: 0 };
   const state = {
     shutdownComplete: false, shutdownPromise: null, quitting: false,
     quitConfirmed: false, closeBehavior: "quit", tray: null,
@@ -54,6 +54,9 @@ function createHarness({ sessionIds = [], confirm = true, installingUpdate = fal
     browserHost: { dispose: noop }, pluginViews: { dispose: asyncNoop },
     updater: { dispose: noop, isInstallingUpdate: () => installingUpdate },
     logger: { app: noop },
+    // Canonical model metadata caches an in-flight acquisition; shutdown is
+    // its only owner-side release point.
+    modelMetadata: { dispose: () => { calls.modelMetadataDispose += 1; } },
     confirmQuitDialog: async () => { calls.confirm += 1; return confirm; },
     disposePowerSaveBlockers: noop,
   });
@@ -74,6 +77,7 @@ test("idle quit exits directly without a confirmation dialog", async (t) => {
   assert.ok(state.shutdownPromise, "the ordered shutdown must start immediately");
   await state.shutdownPromise;
   assert.equal(state.shutdownComplete, true);
+  assert.equal(calls.modelMetadataDispose, 1, "shutdown releases the model-metadata cache");
 });
 
 test("a running background session triggers the quit confirmation", async (t) => {

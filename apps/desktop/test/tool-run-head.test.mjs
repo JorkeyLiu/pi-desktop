@@ -48,7 +48,10 @@ test("collapsed rows have no copy control and all expandable rows use one header
 test("the left identity is localized and independent of lifecycle; unknown names stay formatted", () => {
   assert.match(transcript, /const identityKey =/);
   assert.match(transcript, /: getToolIdentityKey\(message\.toolName\);/);
-  assert.match(transcript, /const rawName = identityKey \? t\(identityKey\) : getToolDisplayName\(message\.toolName\) \|\| t\("chat\.tool"\);/);
+  // The display name is resolved once; the identity is the localized catalog
+  // key when one exists, else that formatted name, else the generic label.
+  assert.match(transcript, /const formattedName = getToolDisplayName\(message\.toolName\);/);
+  assert.match(transcript, /const rawName = identityKey \? t\(identityKey\) : formattedName \|\| t\("chat\.tool"\);/);
   assert.match(transcript, /<span className="tool-row-name" title=\{waitTitle\}> \{rawName\} <\/span>/);
   assert.doesNotMatch(transcript, /TOOL_ACTION_KEYS|TOOL_RUNNING_KEYS/);
   assert.doesNotMatch(transcript, /className=\{`tool-row-name/);

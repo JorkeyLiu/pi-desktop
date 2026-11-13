@@ -95,6 +95,8 @@ test(`quit settles a regenerated branch when the host is ${outcome}`, async (t) 
     plugins: { disposeAll: async () => {} }, userMcp: { disposeAll: dispose },
     browserHost: { dispose }, pluginViews: { dispose: async () => {} },
     updater: { dispose, isInstallingUpdate: () => false }, logger,
+    // Shutdown is the owner-side release point for cached model metadata.
+    modelMetadata: { dispose },
     confirmQuitDialog: async () => true, disposePowerSaveBlockers: dispose,
   });
   t.after(async () => {

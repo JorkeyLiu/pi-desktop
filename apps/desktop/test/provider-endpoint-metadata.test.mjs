@@ -1,17 +1,17 @@
 /**
- * A custom endpoint gets the metadata the catalog can justify for it.
+ * A custom endpoint gets only the metadata the catalog can justify for it.
  *
- * Two reported failures live here. A custom row pointed at
- * `https://open.bigmodel.cn/api/v1` (Zhipu's OpenAI Responses endpoint) listed
- * its models but showed a generic 128k / 8k text-only row for every one of them,
- * because the catalog only accepted that host's own published path. A row on a
- * relay the catalog cannot place used to get nothing at all; it now still reads
- * the weight owner's published record for ids the owner states, so a relay-only
- * `deepseek-v4-flash` keeps DeepSeek's window instead of the generic seed.
+ * models.dev answers for a configured row only inside the publisher that
+ * explicitly owns that endpoint. A relay the snapshot cannot place therefore
+ * keeps conservative generic metadata for ids that some other publisher states
+ * — a relay id never proves the relay serves that publisher's record — while a
+ * row on a published endpoint still reads the owner's record. Capacity the
+ * endpoint itself reports outranks metadata for that field, wire ids are never
+ * rewritten, and a hand-typed id follows the same ownership boundary.
  *
  * This drives the real handlers with the bundled snapshot, so it pins the whole
- * chain: discovery, endpoint resolution, catalog anchoring, and the hand-typed
- * id channel.
+ * chain: discovery, endpoint resolution, catalog anchoring, the hand-typed id
+ * channel, and Pi's own exact operation models.
  */
 import assert from "node:assert/strict";
 import { register } from "node:module";
@@ -93,6 +93,19 @@ function rowOf(overrides) {
   };
 }
 
+function modelById(models) {
+  return new Map(models.map((model) => [model.modelId, model]));
+}
+
+/** Conservative seed values the host uses when the catalog stays silent. */
+function assertGeneric(model, label) {
+  assert.equal(model.catalogSource, undefined, `${label}: an unowned endpoint has no catalog record`);
+  assert.equal(model.contextWindow, 128_000, `${label}: generic context window`);
+  assert.equal(model.maxTokens, 8_192, `${label}: generic output limit`);
+  assert.deepEqual(model.capabilities, ["text"], `${label}: generic capabilities`);
+  assert.deepEqual(model.supportedThinkingLevels, [], `${label}: no invented thinking levels`);
+}
+
 test("a custom row on a published host gets that publisher's model metadata", async (t) => {
   const row = rowOf({
     id: "row-1",
@@ -118,31 +131,31 @@ test("a custom row on a published host gets that publisher's model metadata", as
   }
 });
 
-test("a relay's list reads the shipped publisher's record for a known id", async (t) => {
+test("an unowned relay list does not borrow a publisher's record for a known id", async (t) => {
   const row = rowOf({
     id: "row-2",
     name: "Relay",
     baseUrl: "https://relay.example/v1",
   });
-  const { result } = await handlersFor(t, row, {
+  const { result, calls } = await handlersFor(t, row, {
     data: [{ id: "claude-sonnet-4-5" }, { id: "some-private-model" }],
   });
 
-  const byId = new Map(result.models.map((model) => [model.modelId, model]));
+  assert.deepEqual(calls, ["https://relay.example/v1/models"]);
+  const byId = modelById(result.models);
+
+  // Anthropic publishes this id, but the relay does not own Anthropic's
+  // endpoint, so its record is never borrowed here.
   const known = byId.get("claude-sonnet-4-5");
-  assert.equal(known.catalogSource, "models.dev", "several publishers state this id");
-  // Anthropic's current published window, not larger reseller deployment values.
-  assert.equal(known.contextWindow, 200_000);
-  assert.equal(known.maxTokens, 64_000);
-  assert.ok(known.capabilities.includes("tools"));
-  // An id no publisher states still lands on the generic seed.
+  assert.equal(known.modelId, "claude-sonnet-4-5", "the wire id stays as served");
+  assertGeneric(known, "known publisher id on a relay");
+  // An id no publisher states lands on the same conservative seed.
   const unknown = byId.get("some-private-model");
-  assert.equal(unknown.catalogSource, undefined);
-  assert.equal(unknown.contextWindow, 128_000);
-  assert.deepEqual(unknown.capabilities, ["text"]);
+  assert.equal(unknown.modelId, "some-private-model");
+  assertGeneric(unknown, "unpublished id on a relay");
 });
 
-test("a model-list capacity report takes precedence over catalog limits", async (t) => {
+test("an unowned relay's reported capacity is kept over generic metadata", async (t) => {
   const row = rowOf({
     id: "row-reported-capacity",
     name: "Relay",
@@ -153,42 +166,72 @@ test("a model-list capacity report takes precedence over catalog limits", async 
   });
 
   const [model] = result.models;
+  // The live list states what the endpoint actually gives, field by field.
   assert.equal(model.contextWindow, 321_000, "the endpoint reports its actual context window");
   assert.equal(model.maxTokens, 12_345, "the endpoint reports its actual output limit");
-  assert.equal(model.catalogSource, "models.dev", "catalog metadata still identifies the model");
+  // Reported capacity is not catalog ownership; the remaining fields stay generic.
+  assert.equal(model.catalogSource, undefined);
+  assert.deepEqual(model.capabilities, ["text"]);
+  assert.deepEqual(model.supportedThinkingLevels, []);
 });
 
-test("a hand-typed id on the same relay answers with the same record", async (t) => {
-  const row = rowOf({
-    id: "row-3",
-    name: "Relay",
-    baseUrl: "https://relay.example/v1",
+test("a hand-typed id resolves only inside the publisher that owns the endpoint", async (t) => {
+  const owned = rowOf({
+    id: "row-typed-owned",
+    name: "Xiaomi",
+    vendorKey: "xiaomi",
+    baseUrl: "https://api.xiaomimimo.com/v1",
   });
-  const { lookup } = await handlersFor(t, row, { data: [] });
+  const { calls, lookup } = await handlersFor(t, owned, { data: [] });
+  const networkCallsBeforeLookup = calls.length;
 
-  const known = await lookup({
+  const exact = await lookup({
+    modelId: "mimo-v2.5-pro",
+    baseUrl: owned.baseUrl,
+    vendorKey: owned.vendorKey,
+    providerId: owned.id,
+  });
+  assert.ok(exact.info, "an id the owning publisher states must reach its record");
+  assert.equal(exact.info.modelId, "mimo-v2.5-pro");
+  assert.equal(exact.info.providerId, owned.id);
+  assert.equal(exact.info.catalogSource, "models.dev");
+  assert.ok(exact.info.capabilities.includes("tools"), "the owner's record supplies capabilities");
+
+  // A deployment suffix the owner does not state is never stripped.
+  const suffix = await lookup({
+    modelId: "mimo-v2.5-pro-1m",
+    baseUrl: owned.baseUrl,
+    vendorKey: owned.vendorKey,
+    providerId: owned.id,
+  });
+  assert.equal(suffix.info, null, "variant suffix is not guessed");
+  // Another publisher's id is not borrowed through the owning publisher.
+  const foreign = await lookup({
     modelId: "claude-sonnet-4-5",
-    baseUrl: row.baseUrl,
-    vendorKey: row.vendorKey,
-    providerId: row.id,
+    baseUrl: owned.baseUrl,
+    vendorKey: owned.vendorKey,
+    providerId: owned.id,
   });
-  assert.ok(known.info, "a typed id the catalog knows must reach its record");
-  assert.equal(known.info.modelId, "claude-sonnet-4-5");
-  assert.ok(known.info.capabilities.includes("tools"));
+  assert.equal(foreign.info, null, "another owner's record is not borrowed");
 
-  // A private id stays generic, and the lookup never contacts the network.
-  const unknown = await lookup({ modelId: "some-private-model", baseUrl: row.baseUrl });
-  assert.equal(unknown.info, null);
+  // A hand-typed id on a relay the catalog cannot place stays unknown.
+  const relay = rowOf({ id: "row-typed-relay", name: "Relay", baseUrl: "https://relay.example/v1" });
+  const { lookup: relayLookup } = await handlersFor(t, relay, { data: [] });
+  const relayKnown = await relayLookup({
+    modelId: "claude-sonnet-4-5",
+    baseUrl: relay.baseUrl,
+    vendorKey: relay.vendorKey,
+    providerId: relay.id,
+  });
+  assert.equal(relayKnown.info, null, "an unowned endpoint keeps a known id unresolved");
+  const relayPrivate = await relayLookup({ modelId: "some-private-model", baseUrl: relay.baseUrl });
+  assert.equal(relayPrivate.info, null);
+  assert.equal(calls.length, networkCallsBeforeLookup, "lookup must not contact the network");
 });
 
-test("a relay enriches official IDs, strips safe deployment labels, and preserves variants", async (t) => {
-  /*
-    Exact last-segment matches run first. A unique official publisher wins over
-    reseller copies, and only whitelisted deployment labels such as `-1m` are
-    stripped as a fallback; semantic variants and release dates stay distinct.
-  */
-  const row = rowOf({ id: "row-4", name: "Relay", baseUrl: "https://relay.example/v1" });
-  const { result } = await handlersFor(t, row, {
+test("ownership bounds matching: an unowned relay borrows nothing, an owning endpoint matches exact ids", async (t) => {
+  const relay = rowOf({ id: "row-4", name: "Relay", baseUrl: "https://relay.example/v1" });
+  const { result } = await handlersFor(t, relay, {
     data: [
       { id: "deepseek-v4-flash" },
       { id: "mimo-v2.5-pro" },
@@ -198,57 +241,66 @@ test("a relay enriches official IDs, strips safe deployment labels, and preserve
       { id: "claude-sonnet-4-5" },
     ],
   });
+  const byId = modelById(result.models);
 
-  const byId = new Map(result.models.map((model) => [model.modelId, model]));
-
-  // The weight owner (DeepSeek) publishes this id, so an unanchored relay reads
-  // the owner's record instead of dropping to the generic seed.
-  const deepseek = byId.get("deepseek-v4-flash");
-  assert.equal(deepseek.catalogSource, "models.dev");
-  assert.equal(deepseek.contextWindow, 1_000_000);
-  assert.equal(deepseek.maxTokens, 393_216);
-  // Xiaomi publishes the base id, so both the plain and the `-1m` alias read
-  // the owner's record without rewriting the served wire ID.
-  for (const id of ["mimo-v2.5-pro", "mimo-v2.5-pro-1m"]) {
-    const mimo = byId.get(id);
-    assert.equal(mimo.modelId, id); // lookup never rewrites the served wire ID
-    assert.equal(mimo.catalogSource, "models.dev");
-    assert.equal(mimo.contextWindow, 1_048_576);
-    assert.equal(mimo.maxTokens, 131_072);
+  // These ids belong to other publishers; the relay owns none of their endpoints.
+  for (const id of [
+    "deepseek-v4-flash",
+    "mimo-v2.5-pro",
+    "mimo-v2.5-pro-1m",
+    "gemini-2.5-pro-1m",
+    "claude-sonnet-4-5",
+  ]) {
+    const model = byId.get(id);
+    assert.equal(model.modelId, id, `${id}: the wire id is never rewritten`);
+    assertGeneric(model, id);
   }
 
-  // Matching Xiaomi reseller records agree on the published speech limits.
+  // Pi still owns its exact speech model; that is an operation record, not an
+  // endpoint match, so it carries no models.dev catalog source.
   const tts = byId.get("mimo-v2.5-tts");
-  assert.equal(tts.source, "discovered");
-  assert.equal(tts.catalogSource, "models.dev");
-  assert.ok(tts.capabilities.includes("audio"));
+  assert.equal(tts.source, "bundled");
+  assert.equal(tts.catalogSource, undefined);
+  assert.deepEqual(tts.capabilities, ["text", "audio"]);
   assert.equal(tts.contextWindow, 8_192);
+  assert.equal(tts.maxTokens, 8_192);
 
-  // Google and Vertex now publish matching metadata, so the `-1m` alias can
-  // safely use their shared record without changing the served model id.
-  const gemini = byId.get("gemini-2.5-pro-1m");
-  assert.equal(gemini.catalogSource, "models.dev");
-  assert.equal(gemini.contextWindow, 1_048_576);
+  const owned = rowOf({
+    id: "row-4-owned",
+    name: "Xiaomi",
+    vendorKey: "xiaomi",
+    baseUrl: "https://api.xiaomimimo.com/v1",
+  });
+  const { result: ownedResult } = await handlersFor(t, owned, {
+    data: [
+      { id: "mimo-v2.5-pro" },
+      { id: "mimo-v2.5-pro-1m" },
+      { id: "claude-sonnet-4-5" },
+    ],
+  });
+  const ownedById = modelById(ownedResult.models);
 
-  // Official Anthropic disambiguation still enriches exact leaves.
-  const claude = byId.get("claude-sonnet-4-5");
-  assert.equal(claude.catalogSource, "models.dev");
-  assert.equal(claude.contextWindow, 200_000);
+  // The exact Xiaomi id matches inside the publisher that owns the endpoint.
+  const exact = ownedById.get("mimo-v2.5-pro");
+  assert.equal(exact.modelId, "mimo-v2.5-pro");
+  assert.equal(exact.catalogSource, "models.dev");
+  for (const capability of ["tools", "reasoning"]) {
+    assert.ok(exact.capabilities.includes(capability), `expected ${capability} capability`);
+  }
+
+  // A suffix alias and another publisher's id stay generic even on an owned row.
+  for (const id of ["mimo-v2.5-pro-1m", "claude-sonnet-4-5"]) {
+    const model = ownedById.get(id);
+    assert.equal(model.modelId, id, `${id}: the wire id is never rewritten`);
+    assertGeneric(model, id);
+  }
 });
-test("a relay enriches a uniquely published dated leaf without reseller majority voting", async (t) => {
-  /*
-    #1047: exact leaf match. If the dated id is published uniquely (or shares
-    identical capabilities / a unique official), enrich; otherwise stay generic.
-    No shipped-publisher majority override beyond official/source disambiguation.
-  */
+
+test("an unowned relay does not borrow a uniquely published dated leaf", async (t) => {
   const row = rowOf({ id: "row-5", name: "Relay", baseUrl: "https://relay.example/v1" });
   const { result } = await handlersFor(t, row, { data: [{ id: "doubao-seed-2-0-pro-260215" }] });
 
   const [model] = result.models;
-  // Accept either enrichment from an exact leaf hit, or generic when ambiguous.
-  if (model.catalogSource === "models.dev") {
-    assert.ok(model.contextWindow > 0);
-  } else {
-    assert.equal(model.catalogSource, undefined);
-  }
+  assert.equal(model.modelId, "doubao-seed-2-0-pro-260215", "the served wire id is preserved");
+  assertGeneric(model, "dated leaf on a relay");
 });

@@ -92,7 +92,7 @@ child.stdout.on("data", (data) => {
 child.stderr.on("data", (data) => {
   output += data;
 });
-let ws;
+let ws, primaryError, cleanupError;
 try {
   let target;
   await waitFor(
@@ -174,7 +174,32 @@ try {
     evaluate(
       `(async () => { const r = await window.piDesktop.invoke(window.piDesktop.channels.invoke[${JSON.stringify(name)}], ...${JSON.stringify(args)}); if (!r.ok) throw new Error(JSON.stringify(r.error)); return r.data; })()`,
     );
+  // Chromium reports a download only when the page enabled its download events,
+  // and the route it reports is where Electron saves the file.
+  let downloadsStarted = 0;
+  ws.addEventListener("message", ({ data }) => {
+    const event = JSON.parse(data);
+    if (event.method === "Page.downloadWillBegin") downloadsStarted += 1;
+  });
   await send("Page.enable");
+  // Both halves of the click go out together: a product re-render between them
+  // would leave Chromium without a shared target and drop the activation.
+  const press = async (point) => {
+    await Promise.all([
+      send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        ...point,
+        button: "left",
+        clickCount: 1,
+      }),
+      send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        ...point,
+        button: "left",
+        clickCount: 1,
+      }),
+    ]);
+  };
   const click = async (text, selector = "button", byLabel = false) => {
     await waitFor(
       () =>
@@ -188,18 +213,14 @@ try {
       `(() => { const button = [...document.querySelectorAll(${JSON.stringify(selector)})].find(e => (${byLabel} ? e.getAttribute('aria-label') : e.textContent.trim()) === ${JSON.stringify(text)}); if (!button || button.disabled) return null; button.scrollIntoView({block:'nearest'}); const r=button.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2; return button.contains(document.elementFromPoint(x,y)) ? {x,y} : null; })()`,
     );
     assert.ok(point, `button hit target: ${text}`);
-    await send("Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      ...point,
-      button: "left",
-      clickCount: 1,
-    });
-    await send("Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      ...point,
-      button: "left",
-      clickCount: 1,
-    });
+    await press(point);
+  };
+  const clickSelector = async (selector) => {
+    const point = await evaluate(
+      `(() => { const element = document.querySelector(${JSON.stringify(selector)}); if (!element || element.disabled) return null; element.scrollIntoView({block:'nearest'}); const r=element.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2; return element.contains(document.elementFromPoint(x,y)) ? {x,y} : null; })()`,
+    );
+    assert.ok(point, `hit target: ${selector}`);
+    await press(point);
   };
   const key = async (name, code) => {
     await send("Input.dispatchKeyEvent", { type: "keyDown", key: name, code: name, windowsVirtualKeyCode: code, ...(name === "Enter" ? { text: "\r" } : {}) });
@@ -229,16 +250,34 @@ try {
   const gap = await evaluate(`(() => {const rows=[...document.querySelectorAll('.settings-row')];const image=rows.find(e=>e.innerText.includes('生图模型'));return image.getBoundingClientRect().top-document.querySelector('.model-default-row').getBoundingClientRect().bottom})()`);
   await screenshot("settings.png");
   assert.ok(gap>=11 && gap<=13, `defaults gap ${gap}px`);
-  await evaluate(`document.querySelector('.model-default-trigger').click()`);
-  await waitFor(() => evaluate(`!!document.querySelector('.model-default-option')`),5000,"default option ready");
-  await evaluate(`document.querySelector('.model-default-option').click()`);
-  await waitFor(() => evaluate(`document.body.innerText.includes('默认 AI 服务已更新')`),5000,"settings save success feedback");
+  // The summary resolves only once the provider list arrives, so wait for the
+  // pairing the row stands behind instead of sampling its first paint.
+  await waitFor(() => evaluate(`(() => {const row=document.querySelector('.model-image-row');return row?.querySelector('.model-default-provider')?.textContent.trim()==='Image-only fixture' && row?.querySelector('.model-default-model')?.textContent.trim()==='fixture'})()`),10000,"image summary names the configured binding");
+  // The defaults panel writes through the shared Settings menu select: open it
+  // by its accessible name and pick a row, so the save travels the same
+  // renderer -> preload -> Host path a user's click takes.
+  await click("快速模型","button[aria-haspopup=\"listbox\"]",true);
+  await waitFor(() => evaluate(`!!document.querySelector('.settings-menu-select-menu.is-open [role=\"option\"]')`),5000,"quick model menu open");
+  // The rows come from the provider list, which arrives after the panel paints.
+  await waitFor(() => evaluate(`(() => {const labels=[...document.querySelectorAll('.settings-menu-select-menu.is-open [role="option"]')].map(e=>e.textContent.trim());return ["未配置","本地测试服务 · fixture","Image-only fixture · fixture"].every(label=>labels.includes(label))})()`),10000,"quick model menu lists every configured model");
+  assert.equal(await evaluate(`document.querySelectorAll('.settings-menu-select-menu.is-open [role="option"]').length`),3,"quick model menu offers every configured model and the cleared row");
+  await click("本地测试服务 · fixture",".settings-menu-select-menu.is-open [role=\"option\"]");
+  await waitFor(async () => { const saved = await invoke("settingsGet"); return saved.fastModelProviderId === provider.id && saved.fastModelId === "fixture"; },5000,"quick model saved");
+  await waitFor(() => evaluate(`document.querySelector('button[aria-haspopup="listbox"][aria-label="快速模型"] .settings-menu-select-trigger-label')?.textContent.trim()==='本地测试服务 · fixture'`),5000,"quick model trigger shows the saved binding");
+  // Restore the unset row through the same control: an idle quick model keeps
+  // automatic session-title requests out of the deterministic model fixture.
+  await click("快速模型","button[aria-haspopup=\"listbox\"]",true);
+  await waitFor(() => evaluate(`!!document.querySelector('.settings-menu-select-menu.is-open [role="option"]')`),5000,"quick model menu reopened");
+  await click("未配置",".settings-menu-select-menu.is-open [role=\"option\"]");
+  await waitFor(async () => { const cleared = await invoke("settingsGet"); return (cleared.fastModelProviderId ?? null) === null && (cleared.fastModelId ?? null) === null; },5000,"quick model cleared");
   await waitFor(async () => (await invoke("settingsGet")).infiniteProviderRetry === false,5000,"normalized settings save round trip");
   assert.ok(await evaluate(`!document.body.innerText.includes('infiniteProviderRetry is invalid')`));
   await click("返回应用");
-  await evaluate(`document.querySelector('.composer-model-thinking-chip').click()`);
-  await waitFor(() => evaluate(`!!document.querySelector('.composer-menu-entry')`),5000,"composer model root");
-  await evaluate(`document.querySelector('.composer-menu-entry').click()`);
+  // A fresh profile has no recent models, so the picker opens on every
+  // provider group at once: the "other models" entry the old flow expanded
+  // only exists when recent rows are shown above it.
+  await waitFor(() => evaluate(`(() => {const chip=document.querySelector('.composer-model-thinking-chip');return !!chip && !chip.disabled})()`),5000,"composer model chip");
+  await clickSelector(".composer-model-thinking-chip");
   await waitFor(() => evaluate(`document.querySelectorAll('.composer-model-option').length>0`),5000,"composer model options");
   assert.equal(await evaluate(`document.querySelectorAll('.composer-model-option').length`),1,"image-only provider must not be a chat candidate");
   assert.ok(await evaluate(`![...document.querySelectorAll('.composer-model-group-label')].some(e=>e.textContent.includes('Image-only fixture'))`));
@@ -257,12 +296,14 @@ try {
   assert.equal(await evaluate(`document.querySelectorAll('.generated-image-thumbnails button[aria-current="true"]').length`),1);
   const downloadDir = join(root, "downloads");
   mkdirSync(downloadDir);
-  await send("Page.setDownloadBehavior", { behavior: "allow", downloadPath: downloadDir });
+  await send("Page.setDownloadBehavior", { behavior: "allow", downloadPath: downloadDir, eventsEnabled: true });
   assert.ok(await evaluate(`document.querySelector('.generated-image-actions a[download="generated-image-1.png"]')?.href.startsWith('data:image/png;base64,')`));
+  const downloadStarts = downloadsStarted;
   await click("下载", ".generated-image-actions a", true);
   const downloadedImage = join(downloadDir, "generated-image-1.png");
   const originalImage = model.results[0].value.results[0].path;
-  await waitFor(() => existsSync(downloadedImage) && statSync(downloadedImage).size === statSync(originalImage).size,10000,"generated image download");
+  await waitFor(() => downloadsStarted > downloadStarts,10000,"generated image download start");
+  await waitFor(() => existsSync(downloadedImage) && statSync(downloadedImage).size === statSync(originalImage).size,10000,"generated image download file");
   assert.deepEqual(readFileSync(downloadedImage),readFileSync(originalImage));
   await screenshot("chat-batch.png");
   await send("Emulation.setDeviceMetricsOverride", {width:700,height:700,deviceScaleFactor:1,mobile:false});
@@ -277,9 +318,11 @@ try {
   const cardContinuity = await imageStayedVisible();
   assert.ok(cardContinuity.every(Boolean), `batch image remains painted while switching selection: ${JSON.stringify(cardContinuity)}`);
   assert.ok(await evaluate(`document.querySelector('.generated-image-actions a[download="generated-image-2.png"]')?.href.startsWith('data:image/png;base64,')`));
+  const secondStart = downloadsStarted;
   await click("下载", ".generated-image-actions a", true);
   const secondDownload = join(downloadDir, "generated-image-2.png");
   const secondOriginal = model.results[0].value.results[1].path;
+  await waitFor(() => downloadsStarted > secondStart,10000,"selected image download start");
   await waitFor(() => existsSync(secondDownload) && statSync(secondDownload).size === statSync(secondOriginal).size,10000,"selected image download");
   assert.deepEqual(readFileSync(secondDownload),readFileSync(secondOriginal));
   await screenshot("chat-batch-selected-2.png");
@@ -356,29 +399,35 @@ try {
   await waitFor(() => evaluate(`!!document.querySelector('.model-default-row')`),10000,"setup action opens model settings");
   assert.equal(model.imageRequests.length,3,"unconfigured generation makes no image request");
   assert.deepEqual(model.failures,[]);
-  console.log(JSON.stringify({ok:true,gap,scenarios:["image-excluded-from-composer","settings-spacing","composer-batch-generation","result-download","composer-edit-generated-image","collapsed-previews","unconfigured-setup-navigation"],imageRequests:model.imageRequests,evidence}));
+  console.log(JSON.stringify({ok:true,gap,scenarios:["image-excluded-from-composer","settings-spacing","settings-save-round-trip","composer-batch-generation","result-download","composer-edit-generated-image","collapsed-previews","unconfigured-setup-navigation"],imageRequests:model.imageRequests,evidence}));
 } catch (error) {
   console.error("MODEL_FIXTURE_ERRORS",JSON.stringify(model.failures));
   console.error(output.slice(-4000));
-  throw error;
+  primaryError = error;
 } finally {
   ws?.close();
   try {
     if (process.platform === "win32") child.kill("SIGTERM");
     else process.kill(-child.pid, "SIGTERM");
   } catch (error) {
-    if (error.code !== "ESRCH") throw error;
+    if (error.code !== "ESRCH") cleanupError = error;
   }
-  if (!(await waitForChildExit(3000))) {
+  if (!cleanupError && !(await waitForChildExit(3000))) {
     try {
       if (process.platform === "win32") child.kill("SIGKILL");
       else process.kill(-child.pid, "SIGKILL");
     } catch (error) {
-      if (error.code !== "ESRCH") throw error;
+      if (error.code !== "ESRCH") cleanupError = error;
     }
-    if (!(await waitForChildExit(3000))) {
-      throw new Error("Electron process group did not close during E2E cleanup");
+    if (!cleanupError && !(await waitForChildExit(3000))) {
+      cleanupError = new Error("Electron process group did not close during E2E cleanup");
     }
   }
   server.close();
 }
+// Cleanup runs after the scenario, so a stuck Electron process must not replace
+// the scenario's own failure: report the cleanup fault, then surface the
+// primary error first.
+if (cleanupError && primaryError) console.error("E2E_CLEANUP_FAILED",cleanupError.message);
+if (primaryError) throw primaryError;
+if (cleanupError) throw cleanupError;

@@ -40,6 +40,7 @@ const launchErrorSource = await readFile(
 const providerCatalogSource = await readMainModule("runtime/provider-catalog.ts");
 const sessionIpcSource = await readMainModule("ipc/session-ipc.ts");
 const sessionLaunchSource = await readMainModule("runtime/session-launch.ts");
+const sidecarSource = await readMainModule("runtime/sidecar.ts");
 const storeSource = await readStoreSource();
 const sessionCoordinationSource = await readStoreModule("runtime/session-coordination.ts");
 const modelMenuSource = await readFile(
@@ -392,7 +393,17 @@ test("main forwards the complete models.dev model record to the sidecar", () => 
   // catalogModelConfigFor returns modelConfigFromModelsDev for a resolved record.
   assert.match(sessionLaunchSource, /catalogModelConfigFor/);
   assert.doesNotMatch(sessionLaunchSource, /resolvePiModelConfig/);
-  assert.match(sessionLaunchSource, /\.\.\.\(modelConfig \? \{ modelConfig \} : \{\}\)/);
+  // The forwarding itself is in the sidecar's provider binding: it builds each
+  // agent provider from the catalog record the launch resolved, and adds the
+  // complete record only when the catalog has one.
+  assert.match(
+    sidecarSource,
+    /\.\.\.\(modelConfig \? \{ modelConfig \} : \{\}\)/,
+  );
+  assert.match(
+    sidecarSource,
+    /effectiveSubagentModelConfig\(\s*provider,\s*modelId,\s*catalogModelConfig,/,
+  );
   assert.doesNotMatch(sessionLaunchSource, /modelCompat/);
 });
 

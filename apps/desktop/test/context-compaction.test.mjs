@@ -165,10 +165,19 @@ test("a delegate gets the session's turn-boundary budget protection (ADR 0299)",
   assert.match(subagentProgress, /contextCompactions: record\.result\.contextCompactions/);
   assert.match(subagentProgress, /contextDegraded: record\.result\.contextDegraded/);
   // A resumed chain is seeded within the delegate's own budget (decision 7):
-  // the oldest tool call/result pairs leave first, and a stripped carrier
-  // stops claiming "toolUse".
-  assert.match(subagentResume, /budget: contextBudgetLimitsFor\(model\)/);
-  assert.match(delegationHistory, /truncateSeededMessages/);
+  // the budget comes from the resumed run's model, reaches both seed paths,
+  // and each truncates against its hard limit so the oldest tool call/result
+  // pairs leave first and a stripped carrier stops claiming "toolUse".
+  assert.match(subagentResume, /const budget = contextBudgetLimitsFor\(model\);/);
+  assert.match(
+    subagentResume,
+    /seedDelegateMessages\(\{ originalTask, rows, provider, model, budget \}\)/,
+  );
+  assert.match(subagentResume, /seedHandoffCheckpointMessages\(\{[\s\S]{0,220}?budget,/);
+  assert.match(
+    delegationHistory,
+    /truncateSeededMessages\(history, options\.budget\.hardLimit\)/,
+  );
   assert.match(delegationHistory, /\.\.\.message, content, stopReason: "stop"/);
   // The compaction itself uses the runtime-owned preparation, the session's
   // retention rule, and the degradation ladder of decision 4.

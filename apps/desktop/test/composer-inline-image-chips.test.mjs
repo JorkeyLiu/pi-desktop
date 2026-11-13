@@ -26,8 +26,12 @@ test("pasted images become inline reference tokens like every other attachment",
     composer,
     /if \(isImageReference\(reference\)\) \{\n      imagePreview\.open\(reference\);\n      return;/,
   );
-  // The detached attachment row above the input shell is gone.
-  assert.doesNotMatch(composer, /ComposerImageAttachments/);
+  // The detached attachment row above the input shell is gone: images paint as
+  // inline reference tokens in the draft. `ComposerImageAttachments` now names
+  // only the subagent composer's staging hook result type, so the boundary is
+  // what this surface renders, not an aggregate substring.
+  assert.doesNotMatch(composer, /<ComposerImageAttachments/);
+  assert.doesNotMatch(composer, /<ComposerImageStrip/);
   assert.doesNotMatch(styles, /\.composer-image-attachments/);
   assert.doesNotMatch(styles, /\.composer-image-attachment\b/);
 });

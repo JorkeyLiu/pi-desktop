@@ -6,11 +6,14 @@ import {
   clampThinkingLevel,
   genericModelConfig,
   modelConfigWithBinding,
+  resolveThinkingIntent,
 } from "@pi-desktop/agent-runtime";
 import {
   buildProviderModel,
   createProviderModels,
+  providerForThinkingIntent,
 } from "../../../packages/agent-runtime/dist/provider-binding.js";
+import { requestThinkingLevel } from "../../../packages/agent-runtime/dist/thinking-level.js";
 import { InMemoryModelsStore } from "@earendil-works/pi-ai";
 import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
@@ -1174,13 +1177,12 @@ test("an explicit effort map on generic metadata governs the fallback's supporte
   assert.deepEqual(binding.supportedThinkingLevels, ["high"]);
 });
 
-test("a live-only Claude request keeps its wire ID without Pi sibling metadata", async () => {
-  const binding = await liveCopilotBinding({
-    ...adaptiveSonnet,
-    thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
-  });
-  const modelConfig = modelConfigWithBinding(binding.modelConfig);
-  const provider = {
+/**
+ * Adapter-facing row for one live-only OAuth binding: the real account row
+ * supplies identity and credentials, the binding supplies style and config.
+ */
+function liveOnlyRow(binding, modelConfig = binding.modelConfig) {
+  return {
     ...binding,
     modelConfig,
     ...capabilitiesFromModelConfig(modelConfig),
@@ -1192,28 +1194,83 @@ test("a live-only Claude request keeps its wire ID without Pi sibling metadata",
     apiKey: "",
     resolveAuth: async () => ({ apiKey: "test-copilot-access-token" }),
   };
-  const model = buildProviderModel(provider);
-  const models = createProviderModels(provider, model);
+}
+
+/**
+ * Drive the real Anthropic Messages adapter through the normal session path:
+ * resolve the selected level against the metadata, apply the replacement model
+ * the resolution carries for an explicit level, convert the level with the
+ * simple-stream rule, and capture the wire request.
+ */
+async function claudeRequest(provider, requested) {
+  const intent = resolveThinkingIntent(provider, requested);
+  const adapterProvider = providerForThinkingIntent(provider, intent);
+  const model = buildProviderModel(adapterProvider);
+  const models = createProviderModels(adapterProvider, model);
   let request;
   const result = await models.streamSimple(model, {
     messages: [{ role: "user", content: "fixture", timestamp: 1 }],
   }, {
-    reasoning: "off",
+    reasoning: requestThinkingLevel(model, intent.level),
     maxRetries: 0,
     fetch: async (input, init) => {
       request = new Request(input, init);
       return Response.json({ type: "error", error: { type: "invalid_request_error", message: "fixture response" } }, { status: 400 });
     },
   }).result();
-  assert.equal(result.stopReason, "error");
+  assert.equal(result.stopReason, "error", "the fixture response is the adapter's error path");
   assert.ok(request, "the real adapter must reach the HTTP boundary");
-  const body = await request.json();
-  assert.equal(body.model, "claude-sonnet-99");
-  assert.equal(body.thinking.type, "enabled");
-  assert.equal(body.thinking.budget_tokens, 1_024);
-  assert.equal(body.output_config, undefined);
+  return { intent, model, request, body: await request.json() };
+}
+
+test("a live-only Claude request keeps its wire ID and inherits no sibling thinking", async () => {
+  const binding = await liveCopilotBinding({
+    ...adaptiveSonnet,
+    thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+  });
+  // The live-only id is generic: no sibling limits, protocol, or effort map.
+  assert.equal(binding.modelConfig.source, "generic");
+  assert.equal(binding.modelConfig.reasoning, false);
+  assert.equal(binding.modelConfig.compat, undefined);
+  assert.equal(binding.modelConfig.thinkingLevelMap, undefined);
+  assert.deepEqual(binding.supportedThinkingLevels, ["off"]);
+
+  const provider = liveOnlyRow(binding);
+  const { intent, body, request } = await claudeRequest(provider, "off");
+  assert.equal(intent.level, "off", "a live-only model with no explicit level stays off");
+  assert.equal(intent.modelConfig, provider.modelConfig, "off synthesizes no adapter model");
+
+  assert.equal(body.model, "claude-sonnet-99", "the wire ID pi-ai was given is preserved");
+  assert.equal(body.thinking, undefined, "a sibling's thinking shape is not inherited");
+  assert.equal(body.output_config, undefined, "no sibling effort config is inherited");
   assert.equal(request.headers.get("Authorization"), "Bearer test-copilot-access-token");
   assert.equal(request.headers.get("x-api-key"), null);
+});
+
+test("an explicit thinking binding reaches the wire through the normal request path", async () => {
+  const binding = await liveCopilotBinding(adaptiveSonnet);
+  // What a user's per-model setting supplies on an otherwise unknown live id.
+  const explicit = modelConfigWithBinding(binding.modelConfig, {
+    maxTokens: 16_000,
+    thinkingLevels: ["off", "medium"],
+  });
+  const provider = liveOnlyRow(binding, explicit);
+  assert.equal(provider.supportsReasoning, true);
+  assert.deepEqual(provider.supportedThinkingLevels, ["off", "medium"]);
+
+  const medium = await claudeRequest(provider, "medium");
+  assert.equal(medium.intent.level, "medium");
+  assert.equal(medium.body.model, "claude-sonnet-99", "the wire ID is preserved");
+  assert.equal(medium.body.thinking.type, "enabled");
+  assert.equal(medium.body.thinking.budget_tokens, 8_192);
+  assert.equal(medium.body.output_config, undefined, "budget thinking sends no effort config");
+  assert.equal(medium.request.headers.get("Authorization"), "Bearer test-copilot-access-token");
+  assert.equal(medium.request.headers.get("x-api-key"), null);
+
+  const off = await claudeRequest(provider, "off");
+  assert.equal(off.intent.level, "off");
+  assert.equal(off.body.thinking.type, "disabled");
+  assert.equal(off.body.output_config, undefined);
 });
 
 test("legacy thinking siblings do not define an unknown model's thinking metadata", async () => {

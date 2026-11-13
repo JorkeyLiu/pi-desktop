@@ -142,8 +142,14 @@ test("a lifecycle row summarizes by agent name, never by delegation id", () => {
   // disclosure, so every wait stays reachable from the transcript.
   assert.match(transcriptSource, /export const FoldedWaitCheckpoints/);
   assert.match(transcriptSource, /messages\.map\(\(message\) => \(/);
-  // It never falls back to its own arguments, so a pending wait shows no ids.
-  assert.match(transcriptSource, /const summary = lifecycle \? rosterSummary : argSummary;/);
+  // A lifecycle row summarizes by the roster and never by its raw arguments:
+  // while it is running it has no roster yet, and a `delegationIds` payload
+  // would reach the head as a blob of UUIDs (D268). Every other row keeps its
+  // argument summary, except the one repeat the head already printed.
+  assert.match(
+    transcriptSource,
+    /const summary = lifecycle\s*\? rosterSummary\s*: argSummary === formattedName\s*\? ""\s*: argSummary;/,
+  );
   // ...and it is still not a topology node.
   assert.match(topologySource, /if \(isDelegationActivityItem\(item\)\) continue;/);
 });

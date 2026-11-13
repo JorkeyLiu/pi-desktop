@@ -385,8 +385,18 @@ test("a pasted session link becomes an inline chip with the link as its text", (
     /createFileReference\(span\.id, sessionChipName\(span\.id\), ownerSessionId, \{\s*kind: "session",\s*token,/,
   );
   assert.match(composer, /return `\$\{t\("chat\.sessionReference"\)\} · \$\{title \|\| id\.slice\(0, 8\)\}`;/);
-  // The chip opens its conversation, and its token serializes back to the link.
-  assert.match(composer, /if \(reference\.kind === "session"\) return "session";/);
-  assert.match(composer, /chip\.dataset\.action = editableText[\s\S]*?"open-session-reference"/);
-  assert.match(composer, /selectSession\(reference\.path\)/);
+  // The chip opens its conversation: the painted token takes its action from
+  // the reference, and activating it selects that conversation.
+  assert.match(composer, /if \(reference\.kind === "session"\) return "open-session-reference";/);
+  assert.match(composer, /const action = referenceAction\(reference\);/);
+  assert.match(composer, /element\.dataset\.action = action;/);
+  assert.match(
+    composer,
+    /if \(reference\.kind === "session"\) \{\s*void useAppStore\.getState\(\)\.selectSession\(reference\.path\)/,
+  );
+  // Its token still serializes back to the conversation link as plain text.
+  assert.match(
+    composer,
+    /if \(reference\.kind === "session"\) return formatSessionLink\(reference\.path\);/,
+  );
 });

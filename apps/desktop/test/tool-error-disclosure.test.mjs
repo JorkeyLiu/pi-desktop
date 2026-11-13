@@ -623,6 +623,18 @@ app.whenReady().then(async () => {
   win.webContents.on("console-message", (event) => console.error("[renderer] " + event.message));
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const read = () => win.webContents.executeJavaScript(READ);
+  // Input and render settle on React's own schedule, so every step waits for
+  // the state it asserts instead of a fixed delay that a loaded machine can
+  // outrun: the probe reads a committed DOM, never a stale one.
+  const waitForRows = async (predicate, timeoutMs) => {
+    const deadline = Date.now() + timeoutMs;
+    let rows = await read();
+    while (!predicate(rows) && Date.now() < deadline) {
+      await pause(25);
+      rows = await read();
+    }
+    return rows;
+  };
   const rowFor = (rows, id) => rows.find((row) => row.id === id);
   const clickHead = async (id) => {
     const point = await win.webContents.executeJavaScript(
@@ -631,13 +643,15 @@ app.whenReady().then(async () => {
     win.webContents.sendInputEvent({ type: "mouseMove", x: point.x, y: point.y });
     win.webContents.sendInputEvent({ type: "mouseDown", x: point.x, y: point.y, button: "left", clickCount: 1 });
     win.webContents.sendInputEvent({ type: "mouseUp", x: point.x, y: point.y, button: "left", clickCount: 1 });
-    await pause(150);
+    await waitForRows(
+      (rows) => rows.find((row) => row.id === id)?.expanded === "true",
+      5_000,
+    );
   };
   const steps = {};
   try {
     await win.loadFile(path.join(__dirname, "index.html"));
-    for (let i = 0; i < 100 && (await read()).length < 2; i += 1) await pause(50);
-    steps.mounted = await read();
+    steps.mounted = await waitForRows((rows) => rows.length >= 2, 10_000);
     await clickHead("h-error");
     steps.afterRefused = await read();
     await clickHead("h-lost");
