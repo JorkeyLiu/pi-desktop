@@ -222,9 +222,9 @@ import type {
 import { writeInstalledHandoffCheckpoint } from "./subagent-handoff-persistence.js";
 import {
   createDelegationCoordinator,
-  markProgramDelivery,
   type CoordinatorRecord,
 } from "./delegation-coordinator.js";
+import { DeliveryReceipts } from "./delivery-receipt.js";
 import {
   createSubagentWakeState,
   createWakeWaiterRegistry,
@@ -1817,6 +1817,12 @@ export class DesktopAgentRuntime {
    * returns; `TaskWait`/`TaskList`/`TaskStop` drive it afterwards.
    */
   private delegations = new Map<string, DelegationRecord>();
+  /**
+   * Report batches waiting for the acceptance boundary: a `TaskWait` result or
+   * the idle resume prompt counts as delivered only once pi accepts the
+   * complete message into the parent transcript.
+   */
+  private readonly deliveryReceipts = new DeliveryReceipts();
   /** Resumable chains rebuilt from the transcript and updated as Task settles. */
   private readonly delegationChains = new DelegationChainRegistry();
   /** Transcript rows used to rebuild a resumed delegate's context (ADR 0279):
@@ -5526,7 +5532,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         still.length > 0
           ? `Still running:\n${still.map(formatDelegationHeartbeat).join("\n")}`
           : "";
-      markProgramDelivery(settled, assembled.includedDelegationIds);
       const text = [
         DELEGATION_RESUME_PROMPT,
         assembled.text,
@@ -5535,7 +5540,25 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         .filter((part) => part.trim())
         .join("\n\n");
       this.requestStartedAt = Date.now();
-      await this.agent.prompt(text);
+      // The batch is consumed by acceptance, not by this prompt call: a prompt
+      // rejected before pi takes the message (busy agent, abort, disposal)
+      // leaves the reports pending for a later batch.
+      const receipt = this.deliveryReceipts.expectAutoResume({
+        text,
+        records: settled,
+        includedDelegationIds: assembled.includedDelegationIds,
+      });
+      try {
+        await this.agent.prompt(text);
+      } finally {
+        receipt.cancel();
+      }
+      if (!receipt.accepted()) {
+        // The prompt returned without the report reaching history. Repeating it
+        // would spin or replay, so stop here: the batch stays pending and the
+        // next idle turn picks it up.
+        return;
+      }
       await this.waitForIdleAndSteering();
       if (!(await this.runPendingRecoveries())) return;
       if (this.turnHadError || epoch !== this.turnEpoch) {
@@ -5572,7 +5595,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         ),
       }),
       executionMode: "sequential",
-      execute: async (_toolCallId, params, signal) => {
+      execute: async (toolCallId, params, signal) => {
         const record = isRecord(params) ? params : {};
         const ids = Array.isArray(record.delegationIds)
           ? record.delegationIds.map(String)
@@ -5654,7 +5677,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           : (wakeOutcome.wakeReason ??
             (wakeOutcome.timedOut && effectiveKind === "time" ? "time" : undefined));
         const timedOut = !interrupted && wakeOutcome.timedOut;
-        return finalizeWaitResult({
+        const finalized = finalizeWaitResult({
           targets,
           snapshots: targets.map(snapshotWaitRecord),
           interrupted,
@@ -5665,6 +5688,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           mode,
           unknownIds,
         });
+        // The result is not delivery yet: pi may replace or drop it before it
+        // reaches history, so the batch is consumed by the accepted
+        // `toolResult` message that echoes this exact text.
+        if (finalized.receipt.includedDelegationIds.size > 0) {
+          this.deliveryReceipts.expectWaitResult(toolCallId, finalized.receipt);
+        }
+        return { content: finalized.content, details: finalized.details };
       },
     };
   }
@@ -8328,6 +8358,10 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         break;
       }
       case "message_end": {
+        // pi pushes an accepted message into `state.messages` before awaiting
+        // listeners, so this is the delivery acceptance boundary: a report
+        // batch is consumed here and nowhere earlier.
+        this.deliveryReceipts.accept(event.message);
         if (event.message.role === "user") {
           const steering = this.pendingSteering.get(event.message);
           const id = steering?.id ?? this.pendingUserMessageId ?? randomUUID();
@@ -8774,6 +8808,10 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         });
         break;
       case "agent_end":
+        // Nothing more can reach history in this run: a receipt still pending
+        // here answers a result the loop replaced, dropped, or aborted. Drop it
+        // unmarked so the report stays pending.
+        this.deliveryReceipts.clear();
         // Input admitted after pi's last queue poll still belongs to this turn.
         // Continue after the current run settles; never wake the follow-up FIFO.
         if (this.pendingSteering.size && this.acceptingSteering && !this.runCancelled && !this.turnHadError) break;
@@ -9426,6 +9464,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     this.abortRunningDelegations();
     this.delegationWaitTargets = undefined;
     this.wakeWaiters.clear();
+    this.deliveryReceipts.clear();
     this.pathInstructionClaims.clear();
     this.failedHostToolCalls.clear();
     this.mutationFailureCounts.clear();

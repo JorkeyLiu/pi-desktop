@@ -185,10 +185,12 @@ invents a missing boundary.
   history is gone by design — and its first request is still bounded by ADR 0299
   §7 truncation, which protects the head and summary and reduces only the
   replayed tail.
-- The `Task` row's details grow by the summary (bounded by
-  `MAX_SUBAGENT_HANDOFF_CHARS`), the original task, and the delivered
-  directions' text and refs. Images are refs only; bytes stay in the attachment
-  store and are hydrated on replay like any other row.
+- The `Task` row's details grow by the summary (the delegate's own free-form
+  text, which carries no length bound of its own), the original task, and the
+  delivered directions' text and refs. Images are refs only; bytes stay in the
+  attachment store and are hydrated on replay like any other row. The request
+  that replays the summary stays bounded by ADR 0299 §7, not by a handoff
+  character count.
 - Older sessions have no `handoffCheckpoint` in their `Task` details and behave
   exactly as before. No conversion is required, and there is no downlevel
   reader: a build that does not know the field ignores it.

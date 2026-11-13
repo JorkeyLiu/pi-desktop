@@ -143,6 +143,23 @@ later batch that `TaskWait` returns by id or that the idle auto-resume prompts
 with. The omission line states how many results were deferred and that no
 report was truncated or lost, and the delivery marking covers exactly the
 reports inlined in that batch.
+
+Delivery is counted at acceptance, not at assembly. A batch is consumed only
+when pi puts the complete message carrying it into the parent transcript
+(`Agent.state.messages`, observed at `message_end`): the idle auto-resume
+prompt whose accepted user message echoes the assembled text, or the
+`toolResult` message answering that `TaskWait` call with the same text. Assembly,
+a returned `TaskWait` result, a resolved prompt, and a successful model
+response are not that boundary. A prompt pi rejects before it takes the
+message (the agent busy with another run, abort, disposal), a tool result the
+loop replaces or drops (`afterToolCall`, cancellation), and a result that
+failed before acceptance all leave their reports pending, so a later batch
+delivers them exactly once. A batch accepted into history stays delivered even
+when the provider request after it fails: accepted history is never replayed.
+Receipts for a pending batch are transient bookkeeping — dropped when the run
+ends or the runtime is disposed, without marking — never persisted state or a
+second delivery protocol, and the public tool schema is unchanged.
+
 When a delegate truncates due to model output token limits (`SUBAGENT_OUTPUT_TRUNCATED`),
 the failure result includes character count statistics and a resume hint for ADR 0279
 chains (`Task(resume: "<delegationId>")`).

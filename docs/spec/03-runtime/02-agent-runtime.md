@@ -974,7 +974,14 @@ core set rather than the on-demand catalog of §7.1:
   whole, even when that report alone exceeds the bound. Reports a batch defers stay
   pending undelivered until the runtime sends them on the idle resume or the parent
   calls `TaskWait` with their ids — one assembly on both paths, whole reports at every
-  step, and the result states how many results were deferred rather than clipping any. A program wake is not a failure and does not stop delegates (D328): the wait
+  step, and the result states how many results were deferred rather than clipping any.
+  Delivery is counted at acceptance: a batch is consumed only when pi puts the complete
+  carrying message into the parent transcript (`message_end`) — the idle prompt whose
+  accepted user message echoes the assembled text, or the `toolResult` answering
+  `TaskWait` with it. A prompt rejected before acceptance (busy agent, abort, disposal),
+  a replaced, dropped, or failed tool result, and cancellation leave the reports pending
+  for a later batch; an accepted batch is never replayed even if the following provider
+  request fails. A program wake is not a failure and does not stop delegates (D328): the wait
   returns a heartbeat (agent, status, elapsed, turns, last tool) plus any finished reports.
   The runtime keeps the parent turn open and delivers remaining reports when they finish,
   even if the parent already stopped calling tools. Only `TaskStop` or user Stop aborts a
@@ -1024,6 +1031,10 @@ core set rather than the on-demand catalog of §7.1:
   a caller `messageId` dedups retries and post-restart hydration rebuilds
   history from the transcript with no parent provider call. Only an
   explicit parent `Task(resume)` reattaches the chain as a new parent-owned run.
+  The continuation text is the user's own input: only empty text without images
+  is refused, so any length reaches the resumed run whole; the chain, turn, and
+  run identifiers stay encoded and bounded, and the resumed request itself stays
+  bounded by the model-context seed truncation (ADR 0299 §7).
 
 **Program coordinator (one cadence, model resumes on program terms).** One persistent
 `AppSettings.subagentWakeup` selects a single program trigger:
@@ -1075,10 +1086,11 @@ message estimate the compaction guard uses — never on cumulative spend; `tool-
 minutes) measures elapsed segment time. Only the settings UI converts units; the stored
 value is always canonical. At a safe turn boundary that crosses the trigger the runtime
 adds one transient request message asking the delegate to call `SubagentHandoff` with one
-free-form text: the handoff its future self needs to continue this task, in whatever
-form and up to 12000 characters it chooses, with no required outline. The runtime imposes
-no field list — what a continuation needs depends on the task — so the handoff may be
-prose, bullets, notes, or a plan, and the prompt names the usual content (facts that still
+free-form text: the handoff its future self needs to continue this task, in whatever form
+it chooses, with no required outline and no character limit. The runtime imposes no field
+list, no item count, and no length bound — what a continuation needs depends on the task —
+so the handoff may be prose, bullets, notes, or a plan, and the prompt names the usual
+content (facts that still
 matter, binding decisions and constraints, files and state, what was verified and how,
 remaining work, pending or background operations) only as examples. The text is written
 by the delegate, never by the compaction summarizer: a handoff is the run's own account
@@ -1105,16 +1117,18 @@ single report relationship are unaffected — nothing terminal happens, no paren
 handoff is required, and `agent_end`/`turn_end` are never emitted for a rollover. Counts and
 time reset only after a successful handoff (context occupancy is re-measured); a rejected,
 invalid, or unrequested submission changes nothing and is reported to the model as a tool
-error carrying the reason it can correct (an empty text, or one over the bound; the text
-is never silently truncated). The bound is declared on the parameter itself (`minLength:
-1`, `maxLength: 12000`) and is enforced by the argument schema before the tool's `execute`
-runs, so a submission refused there — empty text, more than 12000 characters, a missing
-or non-text `handoff` — reaches the delegate as that schema error and is charged to the
-same streak as one the runtime's own normalizer refuses. Each submission of either kind
-costs exactly one entry, while a submission nobody asked for and one refused as a
-duplicate cost none. The request prompt, the tool description, and the acceptance result
-all state it: one submission answers one request, an accepted handoff waits for a new
-request before the tool is called again, and the text is at most 12000 characters.
+error carrying the reason it can correct (an empty text, or a missing or non-text
+`handoff`; the text is never silently truncated, and there is no upper length bound to
+correct against). There is no arbitrary length bound on a submission at all: the text
+carries no character maximum, so a legitimate handoff of any length is one accepted
+submission that costs no failure and installs every character. The only declared bound is
+`minLength: 1`, enforced by the argument schema before the tool's `execute` runs, so a
+submission refused there — empty text, a missing or non-text `handoff` — reaches the
+delegate as that schema error and is charged to the same streak as one the runtime's own
+normalizer refuses. Each submission of either kind costs exactly one entry, while a
+submission nobody asked for and one refused as a duplicate cost none. The request prompt,
+the tool description, and the acceptance result all state it: one submission answers one
+request, and an accepted handoff waits for a new request before the tool is called again.
 Successful rollovers are unlimited; only the failure side is bounded, and every streak
 counter resets on a valid, useful handoff: at most 3 consecutive unanswered requests, 3
 consecutive invalid submissions, and 2 consecutive no-progress rollovers (the fixed
@@ -1418,6 +1432,11 @@ parent-model `Task(resume)` reattaches a chain as a new parent-owned run. A
 steered direction in a live run is also part of what a self-handoff rollover
 must preserve: it is replayed verbatim, in order, exactly once, ahead of the
 new handoff summary.
+Steering and continuation text is the user's own input: both entry layers — the
+Electron main handler and the sidecar parser the runtime revalidates with —
+refuse only empty text without an image, so a direction of any length reaches
+the running child or the resumed run whole; the delegation, turn, and chain
+identifiers stay encoded and bounded at 128 characters.
 The renderer exposes one Send composer: while running it steers via
 `agent.steerSubagent` with the owning turn identity; while settled and
 continuable it continues via `agent.continueSubagent`; there is no second

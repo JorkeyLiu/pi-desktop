@@ -235,7 +235,10 @@ export function registerAgentIpc({
         errorCode: ErrorCodes.INVALID_ARGUMENT,
       });
     }
-    if (req.delegationId.length > 128 || req.content.length > 20_000) {
+    // Only the delegation identifier is structurally bounded. Steer text is
+    // freeform child input: the child's own context window is the real limit,
+    // not an arbitrary transport byte count.
+    if (req.delegationId.length > 128) {
       throw Object.assign(new Error("steerSubagent payload out of bounds"), {
         errorCode: ErrorCodes.INVALID_ARGUMENT,
       });
@@ -303,7 +306,7 @@ export function registerAgentIpc({
         errorCode: ErrorCodes.INVALID_ARGUMENT,
       });
     }
-    if (delegationId.length > 128 || content.length > 20_000 || (expectedTurnId && expectedTurnId.length > 128)) {
+    if (delegationId.length > 128 || (expectedTurnId && expectedTurnId.length > 128)) {
       throw Object.assign(new Error("continueSubagent payload out of bounds"), {
         errorCode: ErrorCodes.INVALID_ARGUMENT,
       });

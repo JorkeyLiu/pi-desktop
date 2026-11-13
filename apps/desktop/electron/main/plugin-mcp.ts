@@ -28,8 +28,15 @@ const MAX_MCP_REDIRECTS = 5;
 const MAX_TOOL_PAGES = 100;
 /** A whole `tools/list` traversal must finish inside this budget. */
 export const MCP_TOOL_DISCOVERY_TIMEOUT_MS = 30_000;
-/** Guard against a server streaming an unbounded line at us. */
+/**
+ * Guard against a server streaming an unbounded frame at us. MCP stdio frames
+ * are UTF-8 bytes, so the ceiling is counted in bytes: a decoded string length
+ * would count UTF-16 units and let a multibyte payload through at up to three
+ * times the budget.
+ */
 const MAX_STDIO_LINE_BYTES = 4 * 1024 * 1024;
+/** Frame delimiter. 0x0A never appears inside a UTF-8 multibyte sequence. */
+const STDIO_FRAME_DELIMITER = 0x0a;
 /** Guard against a remote MCP server streaming an unbounded response body. */
 const MAX_HTTP_RESPONSE_BYTES = 4 * 1024 * 1024;
 
@@ -182,7 +189,14 @@ function createStdioTransport(
   });
 
   let closed = false;
-  let buffer = "";
+  /**
+   * A frame still arriving, kept as the raw UTF-8 bytes of the transport. The
+   * budget is per frame, so bytes are accounted for one frame at a time:
+   * holding decoded text would count UTF-16 units, and splitting a per-read
+   * string would break a code point cut across two reads.
+   */
+  let pendingChunks: Buffer[] = [];
+  let pendingBytes = 0;
   let lastStderr = "";
   let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -207,19 +221,40 @@ function createStdioTransport(
     forceKillTimer ??= setTimeout(() => signalChildTree("SIGKILL"), 1_000);
     forceKillTimer.unref?.();
   };
-  child.stdout?.setEncoding("utf8");
-  child.stdout?.on("data", (chunk: string) => {
-    buffer += chunk;
-    if (buffer.length > MAX_STDIO_LINE_BYTES) {
-      buffer = "";
-      handlers.onClose("mcp server sent an oversized message");
-      stopChild();
-      return;
-    }
-    let index = buffer.indexOf("\n");
-    while (index >= 0) {
-      const line = buffer.slice(0, index).trim();
-      buffer = buffer.slice(index + 1);
+  const oversized = () => {
+    pendingChunks = [];
+    pendingBytes = 0;
+    handlers.onClose("mcp server sent an oversized message");
+    stopChild();
+  };
+  child.stdout?.on("data", (chunk: Buffer) => {
+    let rest = chunk;
+    while (rest.length > 0) {
+      const newline = rest.indexOf(STDIO_FRAME_DELIMITER);
+      if (newline < 0) {
+        pendingBytes += rest.length;
+        if (pendingBytes > MAX_STDIO_LINE_BYTES) {
+          oversized();
+          return;
+        }
+        pendingChunks.push(rest);
+        return;
+      }
+      // The cap applies to a frame, not to a read: one read coalescing several
+      // frames each inside the budget is ordinary traffic.
+      const head = rest.subarray(0, newline);
+      const frameBytes = pendingBytes + head.length;
+      if (frameBytes > MAX_STDIO_LINE_BYTES) {
+        oversized();
+        return;
+      }
+      const line = (
+        pendingChunks.length === 0
+          ? head.toString("utf8")
+          : Buffer.concat([...pendingChunks, head], frameBytes).toString("utf8")
+      ).trim();
+      pendingChunks = [];
+      pendingBytes = 0;
       if (line) {
         try {
           handlers.onMessage(JSON.parse(line) as JsonRpcMessage);
@@ -228,7 +263,7 @@ function createStdioTransport(
           // must not tear down a working session.
         }
       }
-      index = buffer.indexOf("\n");
+      rest = rest.subarray(newline + 1);
     }
   });
   child.stderr?.on("data", (chunk: Buffer | string) => {

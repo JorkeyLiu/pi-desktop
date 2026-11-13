@@ -405,8 +405,12 @@ manifest did not name:
   `{ "setting": "<key>" }`. The host environment is never passed through, and a
   literal secret in the manifest is a review smell, not a supported pattern
   (D018).
-- Connection budget: 10s to complete `initialize`, 100s per `tools/call`, 4MB
-  per stdio line. Remote HTTP requests use the budget of the operation they
+- Connection budget: 10s to complete `initialize`, 100s per `tools/call`, and
+  4 MiB (4,194,304 bytes) per newline-delimited (`0x0A`) stdio frame, measured
+  in actual UTF-8 bytes before the frame is decoded. Frames are counted one by
+  one: several coalesced small frames arriving in a single read each keep their
+  own budget, and a multibyte character split across reads is rejoined before
+  the frame is measured. Remote HTTP requests use the budget of the operation they
   carry, so a successful handshake does not impose its 10s limit on a later
   tool call. `tools/list` is followed to its last page under the per-server
   guards of §8.1 — 2048 tools, 100 pages, a cursor that repeats or is malformed,

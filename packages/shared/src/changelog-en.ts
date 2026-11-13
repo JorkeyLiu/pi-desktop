@@ -29,6 +29,9 @@ export const enEntries: ChangelogEntry[] = [
       "A long paste you send now reaches the model as the text you pasted, at the point you pasted it, instead of a file path the model had to open. The draft and the transcript keep the compact chip, and every send path — retry, a queued message, or a reopened conversation — carries the same text.",
       "Checking on running subagents answers immediately: the task list reports the current snapshot instead of blocking until one finishes, and waiting stays an explicit step.",
       "A subagent's report now reaches the main agent whole, however long it is: no length cap clips it, no file path stands in for it, and a wait that batches several reports still delivers the first one in full before deferring the rest.",
+      "A subagent's report counts as delivered only once it actually reaches the main agent's conversation: if the hand-off is rejected or replaced before that, the report keeps waiting, arrives with the next wait or resume, and is never sent twice.",
+      "A subagent's own context handoff and a follow-up you send it now accept text of any length: long continuations reach the delegate whole instead of being refused at a fixed character count.",
+      "Plugin and MCP server stdio output is now measured frame by frame in the UTF-8 bytes each frame actually carries: a frame holding multibyte text counts the bytes it really has, and several small frames arriving in one read are measured separately instead of having their sizes added up.",
     ],
   },
   {

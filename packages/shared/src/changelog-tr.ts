@@ -29,6 +29,9 @@ export const trEntries: ChangelogEntry[] = [
       "Uzun bir yapıştırma artık modele açması gereken bir dosya yolu yerine, yapıştırdığınız konumda yapıştırdığınız metnin kendisi olarak ulaşıyor. Taslak ve geçmiş kompakt çipi korur; yeniden deneme, kuyruktaki mesaj ve yeniden açılan sohbet dahil her gönderim yolu aynı metni taşır.",
       "Çalışan alt ajanları kontrol etmek artık anında yanıtlanır: görev listesi bir ajanın bitmesini beklemek yerine güncel durumu gösterir; bekleme ayrı bir adım olarak kalır.",
       "Bir alt ajanın raporu artık ne kadar uzun olursa olsun ana ajana bütün olarak ulaşır: hiçbir uzunluk sınırı metni kısaltmaz, hiçbir dosya yolu metnin yerini almaz ve birden çok raporu toplayan bir bekleme önce ilk raporu tam olarak teslim eder, kalanları sonraki partilere bırakır.",
+      "Bir alt ajan raporu ancak ana ajanın konuşmasına gerçekten ulaştığında teslim edilmiş sayılır: aktarım öncesinde reddedilirse veya değiştirilirse rapor beklemeye devam eder, bir sonraki bekleme veya sürdürmede gelir ve asla iki kez gönderilmez.",
+      "Bir alt ajanın kendi bağlam devri ve ona gönderdiğiniz devam mesajı artık her uzunlukta metni kabul ediyor: uzun devam metinleri sabit bir karakter sınırında reddedilmek yerine yetkilendirilmiş çalışana olduğu gibi ulaşıyor.",
+      "Eklenti ve MCP sunucularının stdio çıktısı artık her çerçevenin gerçekten taşıdığı UTF-8 baytlarıyla çerçeve çerçeve ölçülüyor: çok baytlı metin taşıyan bir çerçeve gerçek bayt sayısıyla sayılır ve tek bir okumada gelen birkaç küçük çerçeve, boyutları toplanmak yerine ayrı ayrı ölçülür.",
     ],
   },
   {
