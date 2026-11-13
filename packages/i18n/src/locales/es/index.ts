@@ -513,6 +513,8 @@ export const es = {
     "toolFailed": "Fallido",
     "toolDenied": "Denegado",
     "toolCompleted": "Hecho",
+    "toolFailedNoDetail": "La llamada falló sin indicar un motivo.",
+    "toolDeniedNoDetail": "La llamada se denegó sin indicar un motivo.",
     "toolCall": "Herramienta",
     "toolInput": "Entrada",
     "toolOutput": "Salida",

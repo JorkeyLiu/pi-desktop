@@ -512,6 +512,8 @@ export const ptBR = {
     toolFailed: "Falhou",
     toolDenied: "Negada",
     toolCompleted: "Concluída",
+    toolFailedNoDetail: "A chamada falhou sem informar um motivo.",
+    toolDeniedNoDetail: "A chamada foi negada sem informar um motivo.",
     toolCall: "Ferramenta",
     toolInput: "Entrada",
     toolOutput: "Saída",

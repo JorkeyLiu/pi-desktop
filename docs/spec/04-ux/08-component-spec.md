@@ -2276,7 +2276,9 @@ replaced.
   reads the call's `handoff` argument and the result's `accepted` flag only.
 - The ordinary tool row above and below it is unaffected, including its
   running spinner, failure state, and disclosed details. A refused submission
-  is an error tool row like any other and keeps its own explanation.
+  is an error tool row like any other: opening it states the reason the runtime
+  refused it (beside the `accepted` verdict it recorded), because that reason
+  is the whole point of the row.
 
 ### 8.5 Accessibility
 
@@ -2726,7 +2728,9 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
 The expanded body is a list of labeled blocks, never a JSON dump (D192). The
 pi-ai result envelope carries the structured payload in `details` and repeats it
 as text for the model; only the structured half is rendered, so no byte appears
-twice.
+twice — with one exception: on a failure the text blocks state the reason, and
+`details` records only the verdict (a refusal's explanation beside
+`accepted: false`), so that sentence is the reason a reader expands the row for.
 
 | Tool | Blocks |
 |---|---|
@@ -2742,7 +2746,7 @@ twice.
 | ScheduledTaskList/Create/Update/Delete | one row per automation under the `Scheduled task` heading: title, cadence, its clock, the weekly days **named in the session language** (the schema numbers them from Monday = 0, so a bare index is never printed), and enabled/paused |
 | ToolSearch, EnterPlanMode/SubmitPlan, NewContext, BrowserPreview, GenerateImages | the names they activated or matched, each name set listed once and read in the session language (the legacy `addedToolNames` carrier is used only when the row reports no `activated` list), the mode the tool's own name states (`Plan`, `Goal`), or the prompts and written images the call carried |
 | any host `notice` | `Note` — an error, warning or truncation notice stays visible after the blocks it qualifies; a routine informational notice is not printed in a successful row's body |
-| any failure | `Error` — message plus code, listed first |
+| any failure | `Error` — message plus code, listed first. A failure explains itself with the envelope's own sentence when `details` does not restate it; the structured payload it came with is still listed beside its `Raw` disclosure, and a text block that merely re-serializes `details` is never printed as a reason. A failure that recorded no result states the `code` and `message` the row carries, or — recording neither — one localized sentence saying no reason was reported: it never opens on an empty body |
 | TaskWait/List/Stop roster | one table per roster group the runtime returned: `Subagents` for `delegations`, then `Stopped`, `Stop requested — still running` and `Already finished` as the runtime's own `stopped` / `stopPending` / `settled` groups. Each group keeps its heading so a worker whose cancellation was only requested never reads as stopped |
 | Task counters | `Stats` — the delegate's turns, tool calls and usage, after its brief and report |
 | unmapped payload | scalar entries as label/value fields; long or multi-line strings as their own labeled block; nested objects as JSON, all of it beside one explicit `Raw` disclosure of the untouched payload. The disclosure names itself in its own summary, so no second `Details` heading is drawn above it |
@@ -2755,6 +2759,10 @@ twice.
   a run that printed nothing opens on an empty body, not on its arguments. A
   workspace mutation whose review card owns the change prints no arguments at
   all: `path`, `tag` and `ops` are how the change was requested.
+- A row that offers a disclosure has a body: a failure that recorded neither a
+  result nor a reason still states the localized sentence saying so. "A run that
+  printed nothing" is the one empty body a reader may open, because the empty
+  terminal is itself the answer; a failed row is never published empty.
 - An ordinary labeled content block exposes a compact copy action that copies
   the full payload, not the visible slice. A block owned by a dedicated card
   takes the copy controls that card offers instead: the terminal panes copy

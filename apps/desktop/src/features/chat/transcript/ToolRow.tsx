@@ -347,6 +347,14 @@ function HostToolRow({
       blocks: buildToolPresentation(message, {
         hideSummaryArg: true,
         weekdayName: (weekday) => weekdayNames.format(weekdayAnchor(weekday)),
+        // A failed call with nothing recorded still opens on a sentence that
+        // says so; presentation is label-free, so the wording is the renderer's.
+        failureNote: (outcome) =>
+          t(
+            outcome === "denied"
+              ? "chat.toolDeniedNoDetail"
+              : "chat.toolFailedNoDetail",
+          ),
         ...(nestedReport ? { hideDelegateReport: true } : {}),
       }),
     };

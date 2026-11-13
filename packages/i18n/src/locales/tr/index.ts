@@ -522,6 +522,8 @@ export const tr = {
     toolFailed: "Başarısız",
     toolDenied: "Reddedildi",
     toolCompleted: "Bitti",
+    toolFailedNoDetail: "Çağrı, bir neden bildirilmeden başarısız oldu.",
+    toolDeniedNoDetail: "Çağrı, bir neden bildirilmeden reddedildi.",
     toolCall: "Araç",
     toolInput: "Girdi",
     toolOutput: "Çıktı",

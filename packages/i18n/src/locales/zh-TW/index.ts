@@ -515,6 +515,8 @@ export const zhTW = {
     toolFailed: "失敗",
     toolDenied: "已拒絕",
     toolCompleted: "已完成",
+    toolFailedNoDetail: "呼叫失敗，未說明原因。",
+    toolDeniedNoDetail: "呼叫被拒絕，未說明原因。",
     toolCall: "工具",
     toolInput: "輸入",
     toolOutput: "輸出",

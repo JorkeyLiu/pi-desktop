@@ -513,6 +513,8 @@ export const de = {
     "toolFailed": "Fehlgeschlagen",
     "toolDenied": "Abgelehnt",
     "toolCompleted": "Fertig",
+    "toolFailedNoDetail": "Der Aufruf ist fehlgeschlagen, ohne einen Grund zu nennen.",
+    "toolDeniedNoDetail": "Der Aufruf wurde abgelehnt, ohne einen Grund zu nennen.",
     "toolCall": "Tool",
     "toolInput": "Eingabe",
     "toolOutput": "Ausgabe",

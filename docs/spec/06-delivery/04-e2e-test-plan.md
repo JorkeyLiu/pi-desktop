@@ -19096,6 +19096,7 @@ host-created files. The full app's file-preview viewer is covered separately.
      line, with no field names the runtime asked for.
   2. Compare the accepted calls against the ordinary rows, then open one
      checkpoint and press the copy control in its section head.
+  3. Open the refused call's row and read the explanation it discloses.
 - **Expected**: Only the accepted calls become checkpoints, numbered by their
   order in the tab's own transcript; each collapsed row states only its title —
   no snippet of the delegate's text, never a lifecycle status, never argument
@@ -19108,11 +19109,20 @@ host-created files. The full app's file-preview viewer is covered separately.
   preserved — no field labels, no section list, no per-field structure.
   Model-authored markup in it renders as text, not HTML, and the copy control
   hands over every character of the handoff while reporting the copy without
-  collapsing the row.
+  collapsing the row. The refused call's own disclosure states the reason the
+  runtime refused it — the explanation the result carried as text — instead of
+  only the `accepted: false` verdict, and it still lists the structured detail
+  it came with; the reason is printed once. A failed call that recorded no
+  result opens on the error `code`/`message` the row carries, or, recording
+  neither, on one localized sentence saying no reason was reported: an error
+  row's disclosure never opens on an empty body.
 - **Specs linked**: `04-ux/08-component-spec.md` (8.4a, 8.4b),
   `04-ux/02-i18n-english-first.md`.
 - **Status**: Automated render coverage plus a hidden-Electron click/Space probe
-  in `apps/desktop/test/subagent-handoff-checkpoint.test.mjs`; the probe
+  in `apps/desktop/test/subagent-handoff-checkpoint.test.mjs`, and renderer
+  coverage of the refused and result-less failure rows (opened through the
+  transcript reveal path) in `apps/desktop/test/tool-error-disclosure.test.mjs`;
+  the probe
   asserts the title is centred on the column at a wide and a narrow width, that
   the collapsed row carries no snippet of the handoff, that the expanded body
   equals the authored handoff character for character under the standard

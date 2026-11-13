@@ -515,6 +515,8 @@ export const zhCN = {
     toolFailed: "失败",
     toolDenied: "已拒绝",
     toolCompleted: "已完成",
+    toolFailedNoDetail: "调用失败，未说明原因。",
+    toolDeniedNoDetail: "调用被拒绝，未说明原因。",
     toolCall: "工具",
     toolInput: "输入",
     toolOutput: "输出",

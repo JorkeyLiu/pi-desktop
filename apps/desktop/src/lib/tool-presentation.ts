@@ -41,6 +41,12 @@ export type ToolPresentationMessage = {
   toolStatus?: string;
   /** pi-ai's own error flag on the result envelope. */
   isError?: boolean;
+  /**
+   * The structured failure the runtime attached to the row, when it recorded
+   * one. A call that ended without a result reports through this rather than
+   * through a payload.
+   */
+  error?: { code?: string; message?: string } | null;
 };
 
 export type ToolChip =
@@ -176,6 +182,13 @@ export type ToolPresentationOptions = {
    * schedule keeps the clock alone rather than printing a number.
    */
   weekdayName?: (weekday: number) => string;
+  /**
+   * The localized sentence a failed call states when it recorded no reason of
+   * its own. Presentation stays label-free, so the React layer owns the
+   * wording; a row that ends in error always supplies it, so a failed call's
+   * disclosure never opens on an empty body.
+   */
+  failureNote?: (outcome: "failed" | "denied") => string;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -214,6 +227,36 @@ function envelopeText(envelope: Record<string, unknown>): string | null {
       : [];
   });
   return parts.length > 0 ? parts.join("\n") : null;
+}
+
+/**
+ * The failure sentence an error envelope states in its text blocks.
+ *
+ * `details` holds what the tool returned; the text blocks hold what the model
+ * read. On a failure those are not the same fact: a refusal explains itself in
+ * the sentence (`The handoff is empty: …`) while `details` only records the
+ * verdict (`accepted: false`), so the structured half cannot stand in for the
+ * explanation. A text block that merely re-serializes `details` is that payload
+ * again, not an explanation, so it is not a reason either.
+ */
+function envelopeFailureText(
+  message: ToolPresentationMessage,
+  details: Record<string, unknown> | null,
+): string | null {
+  const envelope = asRecord(message.toolResult);
+  if (!envelope) return null;
+  const text = envelopeText(envelope)?.trim() ?? "";
+  if (text === "") return null;
+  if (details && (text.startsWith("{") || text.startsWith("["))) {
+    try {
+      if (JSON.stringify(JSON.parse(text)) === JSON.stringify(details)) {
+        return null;
+      }
+    } catch {
+      // Prose that merely starts with a bracket is still an explanation.
+    }
+  }
+  return text;
 }
 
 /**
@@ -923,7 +966,13 @@ export function hasToolDetails(message: ToolPresentationMessage): boolean {
   }
   const args = asRecord(message.toolArgs);
   if (args) return Object.keys(args).length > 0;
-  return message.toolArgs !== undefined;
+  if (message.toolArgs !== undefined) return true;
+  // A failed call with neither arguments nor a result still states the failure
+  // it recorded, so that disclosure has something to open on.
+  return (
+    resultFailed(message) &&
+    stringAt(asRecord(message.error), "message") !== null
+  );
 }
 
 function resultBlocks(
@@ -942,6 +991,13 @@ function resultBlocks(
    */
   let mapped = false;
   const error = stringAt(details, "error");
+  /**
+   * A failed call's own sentence about why it failed, when the structured half
+   * does not restate it. It leads whatever body the result resolves to; a
+   * mapping that prints the same sentence drops it below, so nothing is said
+   * twice.
+   */
+  let failureNote: Extract<ToolBlock, { kind: "note" }> | null = null;
   if (error) {
     const code = stringAt(details, "code");
     blocks.push({
@@ -950,6 +1006,9 @@ function resultBlocks(
       text: error,
       ...(code ? { code } : {}),
     });
+  } else if (resultFailed(message)) {
+    const reason = envelopeFailureText(message, details);
+    if (reason) failureNote = { kind: "note", role: "error", text: reason };
   }
 
   switch (action) {
@@ -1256,16 +1315,53 @@ function resultBlocks(
     blocks.push({ kind: "note", role: "notice", text: notice });
   }
 
-  if (blocks.length > 0 || mapped) return blocks;
+  /**
+   * Lead a body with the failure sentence, and never repeat it: a mapping that
+   * already prints the same sentence (a failed Skill answer, a generic payload
+   * echo) has said it once.
+   */
+  const withFailureNote = (result: ToolBlock[]): ToolBlock[] => {
+    const note = failureNote;
+    if (!note) return result;
+    return result.some((block) => "text" in block && block.text === note.text)
+      ? result
+      : [note, ...result];
+  };
+
+  if (blocks.length > 0 || mapped) return withFailureNote(blocks);
   // No per-tool mapping matched: render the payload itself readably, and keep
   // the untouched payload one explicit disclosure away (never in the summary
-  // and never as the body a reader has to wade through).
+  // and never as the body a reader has to wade through). A failure's sentence
+  // leads the payload it explains.
   if (typeof payload === "string" && payload.trim()) {
-    return [codeBlock("output", payload)];
+    return withFailureNote([codeBlock("output", payload)]);
   }
-  if (details) return withRawBlock(recordBlocks(details, "details"), details);
+  if (details) {
+    return withFailureNote(withRawBlock(recordBlocks(details, "details"), details));
+  }
   if (payload !== undefined && payload !== null) {
-    return [codeBlock("output", safeJson(payload), "json")];
+    return withFailureNote([codeBlock("output", safeJson(payload), "json")]);
+  }
+  // A failed call that recorded no result at all still owes the reader what is
+  // known: the error the runtime attached, or an honest statement that none was
+  // reported. Inventing a cause would be worse than saying nothing.
+  if (resultFailed(message)) {
+    const recorded = asRecord(message.error);
+    const recordedText = stringAt(recorded, "message");
+    const recordedCode = stringAt(recorded, "code");
+    const text =
+      recordedText ??
+      options.failureNote?.(message.toolStatus === "denied" ? "denied" : "failed");
+    if (text) {
+      return [
+        {
+          kind: "note",
+          role: "error",
+          text,
+          ...(recordedCode ? { code: recordedCode } : {}),
+        },
+      ];
+    }
   }
   return [];
 }

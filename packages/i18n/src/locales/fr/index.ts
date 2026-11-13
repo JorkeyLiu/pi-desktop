@@ -513,6 +513,8 @@ export const fr = {
     "toolFailed": "Échec",
     "toolDenied": "Refusé",
     "toolCompleted": "Terminé",
+    "toolFailedNoDetail": "L'appel a échoué sans indiquer de raison.",
+    "toolDeniedNoDetail": "L'appel a été refusé sans indiquer de raison.",
     "toolCall": "Outil",
     "toolInput": "Entrée",
     "toolOutput": "Sortie",

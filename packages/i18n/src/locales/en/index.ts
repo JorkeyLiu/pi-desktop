@@ -525,6 +525,8 @@ export const en = {
     toolFailed: "Failed",
     toolDenied: "Denied",
     toolCompleted: "Done",
+    toolFailedNoDetail: "The call failed without reporting a reason.",
+    toolDeniedNoDetail: "The call was denied without reporting a reason.",
     toolCall: "Tool",
     toolInput: "Input",
     toolOutput: "Output",
