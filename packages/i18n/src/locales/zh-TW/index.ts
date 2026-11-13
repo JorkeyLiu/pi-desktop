@@ -983,8 +983,7 @@ sklm: {
     groupExtensions: "擴充功能",
     nav: {
       general: "常規",
-      ai: "AI",
-      shortcuts: "快捷鍵",
+      chat: "對話",
       instructions: "指令",
       models: "模型",
       skills: "技能",
@@ -994,7 +993,6 @@ sklm: {
       sync: "雲端同步",
       remoteHosts: "遠端主機",
       info: "資訊",
-      voice: "語音",
     },
     configSync: {
       title: "雲端同步",
@@ -1151,8 +1149,7 @@ sklm: {
       },
     },
     general: "常規",
-    ai: "全域性 AI",
-    shortcuts: "快捷鍵",
+    chat: "對話",
     instructions: "指令",
     instructionsGlobal: "全域性指令",
     instructionsGlobalDesc: "優先於專案指令生效。",
@@ -1510,6 +1507,14 @@ sklm: {
     noResults: "沒有匹配的設定項",
     enterToSend: "回車傳送",
     enterToSendDesc: "關閉後按 ⌘/Ctrl+Enter 傳送。",
+    sendWhileRunningMode: "執行中的傳送方式",
+    sendWhileRunningModeDesc:
+      "立即傳送：訊息直接指向正在執行的回合，無需等待。排隊：等目前回合結束後再傳送。",
+    sendWhileRunningModeImmediate: "立即傳送",
+    sendWhileRunningModeQueue: "排隊",
+    // Synonyms global settings search answers to.
+    searchAliasSendMode: "傳送模式 · 執行中傳送 · 立即傳送 · 排隊傳送",
+    searchAliasImageModel: "圖片模型 · 生圖模型 · 圖像生成",
     infiniteProviderRetry: "無盡重試",
     infiniteProviderRetryDesc: "網路或暫時性服務故障會持續重試直到成功。仍可隨時停止，但開啟後可能持續消耗 API 用量。",
     smoothStreaming: "平滑串流顯示",

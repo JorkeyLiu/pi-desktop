@@ -22,13 +22,21 @@ test("settings hides and inerts chat without aria-hiding a focused descendant", 
   assert.doesNotMatch(chatShell, /aria-hidden/);
 });
 
-test("entering Settings moves focus to its first search control", () => {
-  assert.match(settingsPage, /const settingsSearchRef = useRef<HTMLInputElement>\(null\)/);
+test("entering Settings moves focus to the rail's first control", () => {
+  // The in-page search pill is gone, so the back action at the rail's top-left
+  // is the first focus stop and must receive focus on entry.
   assert.match(
     settingsPage,
-    /settingsSearchRef\.current\?\.focus\(\{ preventScroll: true \}\)/,
+    /const settingsBackRef = useRef<HTMLButtonElement>\(null\)/,
   );
-  assert.match(settingsPage, /<input\s+ref=\{settingsSearchRef\}/);
+  assert.match(
+    settingsPage,
+    /settingsBackRef\.current\?\.focus\(\{ preventScroll: true \}\)/,
+  );
+  assert.match(settingsPage, /ref=\{settingsBackRef\}/);
+  assert.doesNotMatch(settingsPage, /settingsSearchRef/);
+  assert.doesNotMatch(settingsPage, /settings-search-wrap/);
+  assert.doesNotMatch(settingsPage, /<input\s+ref=/);
 });
 
 test("chat code loads inside the existing route boundary and stays mounted in Settings", () => {

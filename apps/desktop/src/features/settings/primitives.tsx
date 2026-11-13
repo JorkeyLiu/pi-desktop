@@ -4,11 +4,13 @@ import type {
   AppSettings,
   CommandShellCatalog,
   CommandShellId,
+  SendWhileRunningMode,
 } from "@pi-desktop/shared";
 import {
   MAX_LARGE_PASTE_THRESHOLD,
   MIN_LARGE_PASTE_THRESHOLD,
   normalizeLargePasteThreshold,
+  resolveSendWhileRunningMode,
 } from "@pi-desktop/shared";
 import { api } from "../../lib/api";
 import { resolveContextUsageDisplay } from "../../lib/context-usage";
@@ -274,6 +276,45 @@ export function ContextUsageDisplayRow({
           { value: "used", label: t("settings.contextUsageDisplayUsed") },
         ]}
         label={t("settings.contextUsageDisplay")}
+      />
+    </SettingsRow>
+  );
+}
+
+/**
+ * What an ordinary send does when the target session is still running. The
+ * default steers the live turn; queueing keeps the older wait-for-idle
+ * behavior. The explicit steering shortcut stays available either way.
+ */
+export function SendWhileRunningModeRow({
+  settings,
+  saveSettings,
+}: {
+  settings: AppSettings;
+  saveSettings: (patch: Partial<AppSettings>) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const current = resolveSendWhileRunningMode(settings.sendWhileRunningMode);
+  return (
+    <SettingsRow
+      title={t("settings.sendWhileRunningMode")}
+      description={t("settings.sendWhileRunningModeDesc")}
+    >
+      <SegmentedControl<SendWhileRunningMode>
+        value={current}
+        onChange={(value) => void saveSettings({ sendWhileRunningMode: value })}
+        options={[
+          {
+            value: "immediate",
+            label: t("settings.sendWhileRunningModeImmediate"),
+          },
+          {
+            value: "queue",
+            label: t("settings.sendWhileRunningModeQueue"),
+          },
+        ]}
+        label={t("settings.sendWhileRunningMode")}
+        role="group"
       />
     </SettingsRow>
   );

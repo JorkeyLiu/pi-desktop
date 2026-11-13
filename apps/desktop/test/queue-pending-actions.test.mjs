@@ -110,6 +110,8 @@ test("Send now promotes queued input without stopping the running session", asyn
     let state = {
       activeSessionId: "session-a", sessions: [{ id: "session-a", source: "desktop" }],
       pendingPlans: {}, runningSessions: { "session-a": true }, queuedPrompts: {}, showToast: assert.fail,
+      // Queueing is the explicit preference; this test covers the Send-now row.
+      settings: { sendWhileRunningMode: "queue" },
     };
     const slice = createQueueSlice({
       get: () => state,
@@ -301,6 +303,217 @@ test("editing a restored queue preserves attachments when resubmitted", async (t
         assert.deepEqual(submitted.attachments ?? [], attachments ?? [], "resubmitting must keep the same attachments");
       });
     }
+  } finally {
+    globalThis.window = previousWindow;
+    await server.close();
+  }
+});
+
+test("a running session follows the send-while-running preference", async (t) => {
+  const server = await createServer({
+    root: fileURLToPath(new URL("..", import.meta.url)),
+    configFile: false,
+    server: { middlewareMode: true, hmr: false, ws: false },
+    appType: "custom",
+    optimizeDeps: { noDiscovery: true, include: [] },
+  });
+  const previousWindow = globalThis.window;
+  try {
+    const { createQueueSlice } = await server.ssrLoadModule(
+      "/src/stores/slices/queue-slice.ts",
+    );
+    const makeHarness = ({
+      settings,
+      running = true,
+      statuses = { "session-a": { currentTurnId: "turn-1" } },
+      steerFailure,
+    } = {}) => {
+      const invoked = [];
+      const toasts = [];
+      let entries = [];
+      globalThis.window = { piDesktop: { invoke: async (channel, payload) => {
+        invoked.push([channel, payload]);
+        if (channel === IPC.invoke.agentSteer) {
+          if (steerFailure instanceof Error) throw steerFailure;
+          if (steerFailure) return { ok: false, error: steerFailure };
+          return { ok: true, data: { turnId: "turn-1" } };
+        }
+        if (channel === IPC.invoke.agentPrompt) return { ok: true, data: { turnId: "turn-2" } };
+        if (channel === IPC.invoke.agentQueuePush) {
+          const entry = { ...payload, id: "queued-turn", position: 1, createdAt: "2026-10-13T00:00:00Z" };
+          entries = [entry];
+          return { ok: true, data: entry };
+        }
+        if (channel === IPC.invoke.agentQueueList) return { ok: true, data: { entries } };
+        throw new Error(`Unexpected IPC: ${channel}`);
+      } } };
+      let state = {
+        activeSessionId: "session-a",
+        sessions: [{ id: "session-a", title: "Existing chat", source: "desktop" }],
+        messages: [],
+        pendingPlans: {},
+        runningSessions: running ? { "session-a": true } : {},
+        agentStatuses: statuses,
+        queuedPrompts: {},
+        latestTurnResults: {},
+        sessionOutcomes: {},
+        settings,
+        showToast: (message) => toasts.push(message),
+        rememberModel() {},
+        refreshSessions: async () => {},
+      };
+      const slice = createQueueSlice({
+        get: () => state,
+        set: (patch) => {
+          state = { ...state, ...(typeof patch === "function" ? patch(state) : patch) };
+        },
+        runtime: {
+          submittedComposerDrafts: new Map(),
+          sessionTranscriptCache: new Map(),
+          insertOptimisticUserMessage() {},
+          retractOptimisticUserMessage() {},
+        },
+        promptAttachmentsFromDraft: () => [],
+        withoutRecordKey: (record, key) => {
+          const next = { ...record };
+          delete next[key];
+          return next;
+        },
+        viewingSessionIdForPrompt: () => "session-a",
+        messageErrorFromUnknown: (error) => ({
+          code: error?.code ?? "FAILED",
+          message: error?.message ?? String(error),
+        }),
+        assistantErrorMessage: () => ({ role: "assistant", content: "failed" }),
+        materializeDraftSession: async () => null,
+      });
+      Object.assign(state, slice);
+      return { invoked, toasts, slice, state: () => state };
+    };
+    const channels = (harness, channel) =>
+      harness.invoked.filter(([invokedChannel]) => invokedChannel === channel);
+
+    await t.test("the default steers the turn that is already running", async () => {
+      const harness = makeHarness();
+      const accepted = [];
+      assert.equal(
+        await harness.slice.sendPrompt("Adjust the plan", undefined, "session-a", (id) => accepted.push(id)),
+        true,
+      );
+      const steerCalls = channels(harness, IPC.invoke.agentSteer);
+      assert.equal(steerCalls.length, 1);
+      assert.equal(steerCalls[0][1].sessionId, "session-a");
+      assert.equal(steerCalls[0][1].expectedTurnId, "turn-1");
+      assert.equal(steerCalls[0][1].content, "Adjust the plan");
+      assert.equal(channels(harness, IPC.invoke.agentQueuePush).length, 0);
+      assert.deepEqual(accepted, ["session-a"]);
+      assert.deepEqual(harness.toasts, []);
+    });
+
+    await t.test("a settings document without the field keeps steering", async () => {
+      for (const stored of [{}, { enterToSend: true }]) {
+        const harness = makeHarness({ settings: stored });
+        assert.equal(await harness.slice.sendPrompt("Follow up", undefined, "session-a"), true);
+        assert.equal(channels(harness, IPC.invoke.agentSteer).length, 1);
+        assert.equal(channels(harness, IPC.invoke.agentQueuePush).length, 0);
+      }
+    });
+
+    await t.test("the queue preference waits for the turn to finish", async () => {
+      const harness = makeHarness({ settings: { sendWhileRunningMode: "queue" } });
+      assert.equal(await harness.slice.sendPrompt("Original request", undefined, "session-a"), true);
+      assert.equal(channels(harness, IPC.invoke.agentSteer).length, 0);
+      assert.equal(channels(harness, IPC.invoke.agentQueuePush).length, 1);
+      assert.equal(harness.state().queuedPrompts["session-a"].length, 1);
+    });
+
+    await t.test("a session that cannot be steered queues instead of losing the message", async () => {
+      const harness = makeHarness({ statuses: {} });
+      assert.equal(await harness.slice.sendPrompt("Keep this", undefined, "session-a"), true);
+      assert.equal(channels(harness, IPC.invoke.agentSteer).length, 0);
+      assert.equal(channels(harness, IPC.invoke.agentQueuePush).length, 1);
+      assert.deepEqual(
+        harness.toasts,
+        [],
+        "an automatic fallback does not explain a mode the user did not pick",
+      );
+      assert.equal(harness.state().queuedPrompts["session-a"][0].content, "Keep this");
+    });
+
+    await t.test("a refusal raised before acceptance queues the message once, quietly", async () => {
+      const harness = makeHarness({
+        steerFailure: { code: "TURN_NOT_FOUND", message: "Turn not found" },
+      });
+      assert.equal(await harness.slice.sendPrompt("Race the turn", undefined, "session-a"), true);
+      assert.equal(
+        channels(harness, IPC.invoke.agentQueuePush).length,
+        1,
+        "a pre-acceptance refusal queues exactly once",
+      );
+      assert.equal(harness.state().queuedPrompts["session-a"].length, 1);
+      assert.equal(harness.state().queuedPrompts["session-a"][0].content, "Race the turn");
+      assert.deepEqual(
+        harness.toasts,
+        [],
+        "the message waits in the queue, so no draft-kept notice is shown",
+      );
+    });
+
+    await t.test("an unconfirmed steering failure keeps the draft instead of queueing", async () => {
+      for (const steerFailure of [
+        new Error("sidecar transport closed"),
+        { code: "INTERNAL", message: "sidecar transport closed" },
+      ]) {
+        const harness = makeHarness({ steerFailure });
+        const accepted = [];
+        assert.equal(
+          await harness.slice.sendPrompt("Unconfirmed", undefined, "session-a", (id) => accepted.push(id)),
+          false,
+          "the caller must restore the draft, not report a claim it cannot verify",
+        );
+        assert.equal(
+          channels(harness, IPC.invoke.agentQueuePush).length,
+          0,
+          "an accepted copy may exist, so queueing could send the message twice",
+        );
+        assert.deepEqual(harness.state().queuedPrompts, {});
+        assert.deepEqual(accepted, []);
+        assert.deepEqual(
+          harness.toasts,
+          ["sidecar transport closed"],
+          "the failure is surfaced with its own message",
+        );
+      }
+    });
+
+    await t.test("the steering shortcut still explains a refusal the Host raised", async () => {
+      for (const steerFailure of [
+        { code: "TURN_NOT_FOUND", message: "Turn not found" },
+        new Error("sidecar transport closed"),
+      ]) {
+        const harness = makeHarness({ steerFailure });
+        assert.equal(await harness.slice.steerPrompt("Try to steer"), false);
+        assert.equal(channels(harness, IPC.invoke.agentQueuePush).length, 0);
+        assert.equal(harness.toasts.length, 1, "the explicit shortcut explains every refusal");
+      }
+    });
+
+    await t.test("the steering shortcut still explains an unavailable turn", async () => {
+      const harness = makeHarness({ statuses: {} });
+      assert.equal(await harness.slice.steerPrompt("Try to steer"), false);
+      assert.equal(harness.invoked.length, 0);
+      assert.equal(harness.toasts.length, 1);
+    });
+
+    await t.test("a settled session still sends a normal prompt", async () => {
+      const harness = makeHarness({ running: false });
+      assert.equal(await harness.slice.sendPrompt("Start something new", undefined, "session-a"), true);
+      assert.equal(channels(harness, IPC.invoke.agentSteer).length, 0);
+      assert.equal(channels(harness, IPC.invoke.agentQueuePush).length, 0);
+      const promptCalls = channels(harness, IPC.invoke.agentPrompt);
+      assert.equal(promptCalls.length, 1);
+      assert.equal(promptCalls[0][1].content, "Start something new");
+    });
   } finally {
     globalThis.window = previousWindow;
     await server.close();

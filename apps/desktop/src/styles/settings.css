@@ -127,7 +127,7 @@
 }
 
 .settings-shell-full .settings-nav {
-  /* Column rail: search band, scrolling directory, pinned back-to-app footer. */
+  /* Column rail: back-to-app band, scrolling directory. */
   display: flex;
   flex-direction: column;
   /* Gold coding-shell settings rail ~275px at 1200-wide captures */
@@ -140,35 +140,21 @@
 }
 
 /*
- * The rail's top band keeps only the search pill: traffic-light clearance plus
- * the rail's control grid.
+ * The rail's top band holds the native drag strip and the Back to app
+ * control: traffic-light clearance plus the rail's control grid. The action
+ * sits at the rail's top-left, where the removed search field used to be.
  */
 .settings-nav-top {
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
+  align-items: flex-start;
   gap: 8px;
   /* traffic-light / titlebar clearance */
   padding: 48px 12px 6px;
 }
 
-/*
- * Back to app is pinned to the foot of the rail, on the same horizontal line as
- * the main shell's sidebar footer icon row. That row centres its 32px controls
- * 24px above the window bottom (.sidebar-body's 6px inset + .sidebar-footer's
- * own 2px + half of the 32px control). The rail has no body inset of its own,
- * so the footer carries the whole 8px and the same 32px control lands on the
- * same centre line. Band height and top padding mirror .sidebar-footer.
- */
-.settings-nav-footer {
-  display: flex;
-  min-height: 40px;
-  flex: 0 0 auto;
-  align-items: center;
-  padding: 7px 12px 8px;
-}
-
-/* 32px, like the footer icon buttons it lines up with. */
+/* 32px control, sitting under the rail's traffic-light clearance. */
 .settings-back {
   display: inline-flex;
   height: 32px;
@@ -243,12 +229,6 @@
   font-size: var(--text-md);
   font-weight: var(--font-weight-medium);
   line-height: var(--leading-tight);
-}
-
-.settings-nav-empty {
-  padding: 12px 10px;
-  color: var(--ds-text-muted);
-  font-size: var(--text-sm-plus);
 }
 
 .settings-nav-item {

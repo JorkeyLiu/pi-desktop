@@ -981,8 +981,7 @@ sklm: {
     "groupExtensions": "Erweiterungen",
     "nav": {
       "general": "Allgemein",
-      "ai": "KI",
-      "shortcuts": "Verknüpfungen",
+      "chat": "Chat",
       "instructions": "Anweisungen",
       "models": "Modelle",
       "skills": "Fähigkeiten",
@@ -992,7 +991,6 @@ sklm: {
       "sync": "Cloud-Synchronisierung",
       "remoteHosts": "Remote-Hosts",
       "info": "Informationen",
-      "voice": "Sprache"
     },
     "configSync": {
       title: "Cloud sync",
@@ -1155,8 +1153,7 @@ sklm: {
       },
     },
     "general": "Allgemein",
-    "ai": "AI",
-    "shortcuts": "Verknüpfungen",
+    "chat": "Chat",
     "instructions": "Anweisungen",
     "instructionsGlobal": "Globale Anweisungen",
     "instructionsGlobalDesc": "Wird vor Projektanweisungen angewendet.",
@@ -1514,6 +1511,14 @@ sklm: {
     "noResults": "Keine passenden Einstellungen",
     "enterToSend": "Zum Senden eingeben",
     "enterToSendDesc": "Aus: Zum Senden ⌘/Strg+Eingabe drücken.",
+    "sendWhileRunningMode": "Nachricht bei laufendem Agenten",
+    "sendWhileRunningModeDesc":
+      "Sofort senden: Die Nachricht lenkt die bereits laufende Runde. Warteschlange: Sie wartet, bis diese Runde endet.",
+    "sendWhileRunningModeImmediate": "Sofort senden",
+    "sendWhileRunningModeQueue": "Warteschlange",
+    // Synonyms global settings search answers to.
+    "searchAliasSendMode": "Sende-Modus · während der Ausführung senden · Warteschlange",
+    "searchAliasImageModel": "Bildmodell · Bildgenerierungsmodell · Bilderzeugung",
     "infiniteProviderRetry": "Bis zum Erfolg wiederholen",
     "infiniteProviderRetryDesc": "Netzwerk- und vorübergehende Anbieterfehler werden bis zum Erfolg wiederholt. Du kannst den Lauf weiterhin stoppen; der API-Verbrauch kann fortlaufen.",
     "smoothStreaming": "Sanftes Streaming",

@@ -981,8 +981,7 @@ sklm: {
     "groupExtensions": "Extensiones",
     "nav": {
       "general": "General",
-      "ai": "AI",
-      "shortcuts": "Atajos",
+      "chat": "Chat",
       "instructions": "Instrucciones",
       "models": "Modelos",
       "skills": "Habilidades",
@@ -992,7 +991,6 @@ sklm: {
       "sync": "Sincronización en la nube",
       "remoteHosts": "Hosts remotos",
       "info": "Información",
-      "voice": "Voz"
     },
     "configSync": {
       title: "Cloud sync",
@@ -1155,8 +1153,7 @@ sklm: {
       },
     },
     "general": "General",
-    "ai": "AI",
-    "shortcuts": "Atajos",
+    "chat": "Chat",
     "instructions": "Instrucciones",
     "instructionsGlobal": "Instrucciones globales",
     "instructionsGlobalDesc": "Se aplica antes de las instrucciones del proyecto.",
@@ -1514,6 +1511,14 @@ sklm: {
     "noResults": "No hay configuraciones coincidentes",
     "enterToSend": "Ingresar para enviar",
     "enterToSendDesc": "Desactivado: presione ⌘/Ctrl+Entrar para enviar.",
+    "sendWhileRunningMode": "Mensaje con el agente en marcha",
+    "sendWhileRunningModeDesc":
+      "Enviar de inmediato: el mensaje orienta el turno que ya está en curso. En cola: espera a que ese turno termine.",
+    "sendWhileRunningModeImmediate": "Enviar de inmediato",
+    "sendWhileRunningModeQueue": "En cola",
+    // Synonyms global settings search answers to.
+    "searchAliasSendMode": "modo de envío · enviar mientras se ejecuta · cola",
+    "searchAliasImageModel": "modelo de imagen · modelo de imágenes · generación de imágenes",
     "infiniteProviderRetry": "Reintentar hasta tener éxito",
     "infiniteProviderRetryDesc": "Reintenta los errores de red y temporales hasta que la solicitud tenga éxito. Puedes detener el turno; el uso de la API puede continuar.",
     "smoothStreaming": "Transmisión suave",

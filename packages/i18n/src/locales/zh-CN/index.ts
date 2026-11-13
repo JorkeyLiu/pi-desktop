@@ -983,8 +983,7 @@ sklm: {
     groupExtensions: "扩展",
     nav: {
       general: "常规",
-      ai: "AI",
-      shortcuts: "快捷键",
+      chat: "对话",
       instructions: "指令",
       models: "模型",
       skills: "技能",
@@ -994,7 +993,6 @@ sklm: {
       sync: "云同步",
       remoteHosts: "远程主机",
       info: "信息",
-      voice: "语音",
     },
     configSync: {
       title: "云同步",
@@ -1151,8 +1149,7 @@ sklm: {
       },
     },
     general: "常规",
-    ai: "全局 AI",
-    shortcuts: "快捷键",
+    chat: "对话",
     instructions: "指令",
     instructionsGlobal: "全局指令",
     instructionsGlobalDesc: "优先于项目指令生效。",
@@ -1510,6 +1507,15 @@ sklm: {
     noResults: "没有匹配的设置项",
     enterToSend: "回车发送",
     enterToSendDesc: "关闭后按 ⌘/Ctrl+Enter 发送。",
+    sendWhileRunningMode: "运行中的发送方式",
+    sendWhileRunningModeDesc:
+      "立即发送：消息直接指向正在运行的轮次，无需等待。排队：等当前轮次结束后再发送。",
+    sendWhileRunningModeImmediate: "立即发送",
+    sendWhileRunningModeQueue: "排队",
+    // Synonyms global settings search answers to: users type the short name of
+    // the setting, while the row label describes it in full.
+    searchAliasSendMode: "发送模式 · 运行中发送 · 立即发送 · 排队发送",
+    searchAliasImageModel: "图片模型 · 生图模型 · 图像生成",
     infiniteProviderRetry: "无尽重试",
     infiniteProviderRetryDesc: "网络或临时服务故障会一直重试直到成功。仍可随时停止，但开启后可能持续消耗 API 用量。",
     smoothStreaming: "平滑流式显示",

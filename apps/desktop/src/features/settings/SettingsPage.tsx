@@ -10,6 +10,7 @@ import { useAppStore } from "../../stores/app-store";
 import { api } from "../../lib/api";
 import {
   isSettingsDestinationHidden,
+  resolveSettingsTab,
   SETTINGS_NAV_GROUP_LABELS,
   visibleSettingsNav,
   type SettingsNavGroupId,
@@ -19,18 +20,15 @@ import {
   IconArchive,
   IconBookOpen,
   IconBot,
+  IconChat,
   IconChevronLeft,
   IconFileText,
   IconGlobe,
   IconInfo,
-  IconKeyboard,
   IconPalette,
-  IconSearch,
   IconServer,
   IconSliders,
-  IconSparkles,
   IconCloudDown,
-  IconMic,
 } from "../../components/icons";
 import { Badge, Button, cx, SegmentedControl, SettingsToggle } from "../../components/ui";
 import { ModelConfigPage } from "../../components/settings/ModelConfigPage";
@@ -53,6 +51,7 @@ import {
   ContextUsageDisplayRow,
   LargePasteThresholdRow,
   LinkOpenTargetRow,
+  SendWhileRunningModeRow,
   SettingsCard,
   SettingsRow,
 } from "./primitives";
@@ -71,13 +70,13 @@ type NavItem = {
   icon: ReactNode;
   group: SettingsNavGroupId;
   experimentalBadgeKey?: string;
-  /** i18n keys of the rows inside the tab; search matches their translations. */
-  keywordKeys: string[];
 };
 
 export function SettingsPage() {
   const { t } = useTranslation();
-  const tab = useAppStore((s) => s.settingsTab);
+  // Retired destinations keep their stored/deep-linked ids, but their content
+  // renders inside General now; resolve before anything reads the tab.
+  const tab = resolveSettingsTab(useAppStore((s) => s.settingsTab));
   const setSettingsTab = useAppStore((s) => s.setSettingsTab);
   const settingsAnchor = useAppStore((s) => s.settingsAnchor);
   const settingsTabNonce = useAppStore((s) => s.settingsTabNonce);
@@ -101,7 +100,6 @@ export function SettingsPage() {
     includeDevelopmentOnly,
   );
 
-  const [query, setQuery] = useState("");
   const [recoveringSettings, setRecoveringSettings] = useState(!settings);
   const [settingsRecoveryFailed, setSettingsRecoveryFailed] = useState(false);
   const [extensions, setExtensions] = useState<PluginScenicThemesDestinationMeta[]>([]);
@@ -118,11 +116,14 @@ export function SettingsPage() {
     if (activeExtension) setActiveExtension(null);
   }
   const contentRef = useRef<HTMLDivElement>(null);
-  const settingsSearchRef = useRef<HTMLInputElement>(null);
+  const settingsBackRef = useRef<HTMLButtonElement>(null);
   const destination = activeExtension ? `extension:${activeExtension.ref}` : `builtin:${tab}`;
 
+  // Entering Settings moves focus to the rail's first control. The local
+  // search pill that used to own that focus is gone, and the back action is
+  // the rail's first stop, so keyboard users still land inside the page.
   useLayoutEffect(() => {
-    settingsSearchRef.current?.focus({ preventScroll: true });
+    settingsBackRef.current?.focus({ preventScroll: true });
   }, []);
 
   useLayoutEffect(() => {
@@ -228,11 +229,11 @@ export function SettingsPage() {
   // so the global search dialog and this page stay in sync; only the icons
   // are view-level.
   const navItems: NavItem[] = useMemo(() => {
-    const iconFor: Record<SettingsTab, ReactNode> = {
-      // Semantic Lucide glyphs for the settings destinations.
+    // Semantic Lucide glyphs for the settings destinations. Retired ids
+    // (voice, shortcuts) have no rail row, so they carry no glyph.
+    const iconFor: Partial<Record<SettingsTab, ReactNode>> = {
       general: <IconSliders size={14} />,
-      ai: <IconSparkles size={14} />,
-      shortcuts: <IconKeyboard size={14} />,
+      ai: <IconChat size={14} />,
       instructions: <IconFileText size={14} />,
       agent: <IconBot size={14} />,
       skills: <IconBookOpen size={14} />,
@@ -241,7 +242,6 @@ export function SettingsPage() {
       projects: <IconArchive size={14} />,
       sync: <IconCloudDown size={14} />,
       remoteHosts: <IconGlobe size={14} />,
-      voice: <IconMic size={14} />,
       about: <IconInfo size={14} />,
     };
     return navEntries.map((entry) => ({
@@ -251,97 +251,75 @@ export function SettingsPage() {
       icon: iconFor[entry.id],
       group: entry.group,
       experimentalBadgeKey: entry.experimentalBadgeKey,
-      keywordKeys: entry.keywordKeys,
     }));
   }, [navEntries]);
 
-  // Search matches the tab label and the titles of the rows inside it, so
-  // typing e.g. "theme" or "主题" surfaces Basics even though the tab is
-  // named differently.
-  const filteredItems = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return navItems;
-    return navItems.filter((item) =>
-      [t(item.labelKey), ...item.keywordKeys.map((key) => t(key))].some((text) =>
-        text.toLowerCase().includes(q),
-      ),
-    );
-  }, [navItems, query, t]);
-
-  // Keep the destination index flat for search, while giving the rail titled
-  // visual clusters so the eight rows do not read as one dense block.
-  const filteredGroups = useMemo(() => {
+  // The rail keeps the destination index flat for search, while giving the
+  // rows titled visual clusters so they do not read as one dense block.
+  const navGroups = useMemo(() => {
     const groups = new Map<SettingsNavGroupId, NavItem[]>();
-    for (const item of filteredItems) {
+    for (const item of navItems) {
       const items = groups.get(item.group) ?? [];
       items.push(item);
       groups.set(item.group, items);
     }
     return [...groups.entries()].map(([id, items]) => ({ id, items }));
-  }, [filteredItems]);
+  }, [navItems]);
 
   const activeNavItem = navItems.find((item) => item.id === tab);
   const activeTitleKey = activeNavItem?.titleKey ?? "settings.title";
-  const tabNeedsSettings = ["general", "ai", "shortcuts", "agent"].includes(tab);
+  const tabNeedsSettings = ["general", "ai", "agent"].includes(tab);
 
   return (
     <div className="settings-shell settings-shell-full">
       <div className="settings-titlebar" aria-hidden="true" />
       <aside className="settings-nav sidebar-surface" aria-label={t("settings.title")}>
+        {/* Back to app sits at the rail's top-left, in the same band that holds
+            the native drag strip; the control stays explicitly non-draggable. */}
         <div className="settings-nav-top drag">
-          <div className="settings-search-wrap no-drag">
-            <IconSearch size={14} />
-            <input
-              ref={settingsSearchRef}
-              className="settings-search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t("settings.searchPlaceholder")}
-              aria-label={t("settings.search")}
-              spellCheck={false}
-              autoCorrect="off"
-              autoCapitalize="off"
-            />
-          </div>
+          <button
+            ref={settingsBackRef}
+            type="button"
+            className="settings-back no-drag"
+            data-nav="back-to-app"
+            aria-label={t("settings.backToApp")}
+            onClick={() => setPage("chat")}
+          >
+            <IconChevronLeft size={15} />
+            <span>{t("settings.backToApp")}</span>
+          </button>
         </div>
 
         <div className="settings-nav-scroll no-drag">
-          {filteredGroups.length === 0 ? (
-            <div className="settings-nav-empty">{t("settings.noResults")}</div>
-          ) : (
-            filteredGroups.map(({ id, items }) => (
-              <div key={id} className="settings-nav-group">
-                <div className="settings-nav-group-label">
-                  {t(SETTINGS_NAV_GROUP_LABELS[id])}
-                </div>
-                {items.map((item) => (
-                  <button
-                    key={item.id}
-                    className={cx("settings-nav-item", tab === item.id && "active")}
-                    onClick={() => {
-                      setActiveExtension(null);
-                      setSettingsTab(item.id);
-                    }}
-                  >
-                    <span className="settings-nav-icon">{item.icon}</span>
-                    <span className="settings-nav-label">{t(item.labelKey)}</span>
-                    {item.experimentalBadgeKey ? (
-                      <Badge tone="warning" className="settings-nav-experimental">
-                        {t(item.experimentalBadgeKey)}
-                      </Badge>
-                    ) : null}
-                  </button>
-                ))}
+          {navGroups.map(({ id, items }) => (
+            <div key={id} className="settings-nav-group">
+              <div className="settings-nav-group-label">
+                {t(SETTINGS_NAV_GROUP_LABELS[id])}
               </div>
-            ))
-          )}
+              {items.map((item) => (
+                <button
+                  key={item.id}
+                  className={cx("settings-nav-item", tab === item.id && "active")}
+                  onClick={() => {
+                    setActiveExtension(null);
+                    setSettingsTab(item.id);
+                  }}
+                >
+                  <span className="settings-nav-icon">{item.icon}</span>
+                  <span className="settings-nav-label">{t(item.labelKey)}</span>
+                  {item.experimentalBadgeKey ? (
+                    <Badge tone="warning" className="settings-nav-experimental">
+                      {t(item.experimentalBadgeKey)}
+                    </Badge>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          ))}
           {extensions.length > 0 && (
             <div className="settings-nav-group">
               <div className="settings-nav-group-label">{t("settings.groupExtensions")}</div>
-              {extensions.filter((entry) => {
-                const q = query.trim().toLowerCase();
-                return !q || [entry.label, ...entry.keywords].some((value) => value.toLowerCase().includes(q));
-              }).map((entry) => {
+              {extensions.map((entry) => {
                 const ExtensionIcon = pluginViewIcon(entry.icon) ?? IconPalette;
                 return (
                   <button
@@ -356,21 +334,6 @@ export function SettingsPage() {
               })}
             </div>
           )}
-        </div>
-
-        {/* Pinned to the rail's bottom so it lands on the same line as the
-            main shell's sidebar footer icon row. Both the band and the control
-            stay explicitly non-draggable, like the rail's other controls. */}
-        <div className="settings-nav-footer no-drag">
-          <button
-            type="button"
-            className="settings-back no-drag"
-            data-nav="back-to-app"
-            onClick={() => setPage("chat")}
-          >
-            <IconChevronLeft size={15} />
-            <span>{t("settings.backToApp")}</span>
-          </button>
         </div>
       </aside>
 
@@ -445,6 +408,21 @@ export function SettingsPage() {
               </SettingsCard>
 
               {platform !== "darwin" && <CloseBehaviorSection />}
+
+              {/* Live Voice and keyboard shortcuts used to own their own rail
+                  rows; both render inside General now, each under its own card
+                  heading, so no setting lost its home. */}
+              <VoiceSettingsSection
+                t={t}
+                settings={settings}
+                saveSettings={saveSettings}
+              />
+
+              <KeyboardShortcutsSection
+                settings={settings}
+                platform={platform}
+                saveSettings={saveSettings}
+              />
             </div>
           )}
 
@@ -507,6 +485,10 @@ export function SettingsPage() {
                     onChange={() => void saveSettings({ enterToSend: !settings.enterToSend })}
                   />
                 </SettingsRow>
+                <SendWhileRunningModeRow
+                  settings={settings}
+                  saveSettings={saveSettings}
+                />
                 <SettingsRow
                   title={t("settings.infiniteProviderRetry")}
                   description={t("settings.infiniteProviderRetryDesc")}
@@ -533,24 +515,6 @@ export function SettingsPage() {
                 />
               </SettingsCard>
 
-            </div>
-          )}
-
-          {tab === "voice" && !tabHidden && settings && (
-            <VoiceSettingsSection
-              t={t}
-              settings={settings}
-              saveSettings={saveSettings}
-            />
-          )}
-
-          {tab === "shortcuts" && settings && (
-            <div className="settings-stack">
-              <KeyboardShortcutsSection
-                settings={settings}
-                platform={platform}
-                saveSettings={saveSettings}
-              />
             </div>
           )}
 

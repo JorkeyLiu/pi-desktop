@@ -989,8 +989,7 @@ sklm: {
     groupExtensions: "Uzantılar",
     nav: {
       general: "Genel",
-      ai: "AI",
-      shortcuts: "Kısayollar",
+      chat: "Sohbet",
       instructions: "Yönergeler",
       models: "Modeller",
       skills: "Beceriler",
@@ -1000,7 +999,6 @@ sklm: {
       sync: "Bulut senkronizasyonu",
       remoteHosts: "Uzak ana bilgisayarlar",
       info: "Bilgi",
-      voice: "Ses",
     },
     configSync: {
       title: "Bulut senkronizasyonu",
@@ -1157,8 +1155,7 @@ sklm: {
       },
     },
     general: "Genel",
-    ai: "AI",
-    shortcuts: "Kısayollar",
+    chat: "Sohbet",
     instructions: "Yönergeler",
     instructionsGlobal: "Genel yönergeler",
     instructionsGlobalDesc: "Proje yönergelerinden önce uygulanır.",
@@ -1517,6 +1514,14 @@ sklm: {
     noResults: "Eşleşen ayar yok",
     enterToSend: "Enter ile gönder",
     enterToSendDesc: "Kapalı: göndermek için ⌘/Ctrl+Enter.",
+    sendWhileRunningMode: "Aracı çalışırken mesaj",
+    sendWhileRunningModeDesc:
+      "Hemen gönder: mesaj, çalışmakta olan tura doğrudan yönlendirilir. Sıraya al: o tur bitene kadar bekler.",
+    sendWhileRunningModeImmediate: "Hemen gönder",
+    sendWhileRunningModeQueue: "Sıraya al",
+    // Synonyms global settings search answers to.
+    searchAliasSendMode: "gönderme modu · çalışırken gönderme · sıraya alma",
+    searchAliasImageModel: "görsel modeli · resim modeli · görsel oluşturma",
     infiniteProviderRetry: "Başarılı olana kadar yeniden dene",
     infiniteProviderRetryDesc: "Ağ ve geçici sağlayıcı hataları istek başarılı olana kadar yeniden denenir. Çalışmayı yine durdurabilirsiniz; açıkken API kullanımı sürebilir.",
     smoothStreaming: "Düzgün akış",

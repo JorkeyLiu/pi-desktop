@@ -102,6 +102,15 @@ export type AppSettings = {
    */
   fontSize?: number;
   enterToSend: boolean;
+  /**
+   * What an ordinary composer send does while the target session still runs.
+   * `immediate` delivers the message into the active turn (the default, and
+   * the behavior of every settings document written before this field
+   * existed); `queue` waits for that turn to finish and reuses the
+   * queued-turn channel. The explicit steering shortcut and the queue row's
+   * "send now" action are unaffected by this preference.
+   */
+  sendWhileRunningMode?: SendWhileRunningMode;
   /** Text length above which a plain-text paste becomes a session file reference. */
   largePasteThreshold?: number;
   /**
@@ -205,3 +214,9 @@ export type VoiceInputSettings = {
 export type LinkOpenTarget = "workpanel" | "external";
 
 export type ContextUsageDisplay = "remaining" | "used";
+
+/**
+ * An ordinary send into a session that is still running: `immediate` steers it
+ * into the active turn, `queue` waits for that turn to finish.
+ */
+export type SendWhileRunningMode = "immediate" | "queue";

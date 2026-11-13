@@ -29,51 +29,59 @@ Settings is a **full-window page** that replaces the app sidebar + main chrome (
   without a sidebar entrance animation or a width ramp. Real toggle and
   automatic collapse/restore transitions on the visible shell still animate;
   initial presentation and route restoration do not.
-- Top of rail: traffic-light clearance and the pill **Search settings…**
-- The **Back to app** (`返回应用`) action is pinned to the foot of the rail, not
-  the top: it keeps its chevron + label form as a 32px control, and it shares
-  the horizontal band of the main shell's sidebar footer icon row (settings /
-  plugins / notifications), so the action does not jump vertically when the
-  full-page takeover opens or closes. The directory above it scrolls when the
-  window is too short for every destination, so a pinned action never covers a
-  row
+- Top-left of the rail: the **Back to app** (`返回应用`) action, keeping its
+  chevron + label form as a 32px control. It sits inside the rail's own top
+  band but stays explicitly non-draggable, and it is the first focus stop when
+  Settings opens, so entering Settings never lands on an unfocused page. The
+  rail has no pinned footer and no in-page **Search settings…** pill; settings
+  destinations are found through the global command palette / Settings search
+  only. The directory below the back action scrolls when the window is too short
+  for every destination.
 - The 46px top band is a native window drag region across both the rail and the
   content pane, but it is drawn in two parts so each keeps its own surface: the
   rail drags via its own top strip on the rail surface, and the content pane's
   band starts at the rail edge on the primary surface. The band must never paint
   the primary surface over the rail, which would show two colors in one top row.
-  Interactive controls remain explicitly non-draggable
+  Interactive controls remain explicitly non-draggable, and the drag strip must
+  never capture clicks meant for the back action.
 - A compact navigation directory with short, parallel labels and icons, in this
   exact order:
-  1. **General / 常规** — Lucide `SlidersHorizontal` (appearance)
-  2. **AI** — Lucide `Sparkles` (permissions, defaults, command shell)
-  3. **Shortcuts / 快捷键** — Lucide `Keyboard` (keyboard shortcuts)
+  1. **General / 常规** — Lucide `SlidersHorizontal` (appearance, language, font,
+     network, storage, power, Live Voice, keyboard shortcuts)
+  2. **Chat / 对话** — Lucide `MessageSquare` (permissions, default behavior,
+     command shell)
+  3. **Models / 模型** — Lucide `Bot` (providers, default model, image model)
   4. **Instructions / 指令** — Lucide `FileText` (global and project instruction files)
-  5. **Models / 模型** — Lucide `Bot` (providers and default model)
-  6. **Skills / 技能** — Lucide `BookOpen` (reusable agent instructions)
-  7. **MCP** — Lucide `Server` (agent connections)
-  8. **Subagents / 子智能体** — Lucide `Bot` (built-in and personal parallel agents)
-  9. **Projects / 项目** — Lucide `Archive` (durable project index)
-  10. **Cloud sync / 云同步** — Lucide `CloudDownload` (encrypted portable configuration backup and bidirectional sync; Experimental, all builds)
-  11. **Remote Hosts / 远程主机** — Lucide `Globe` (experimental SSH hosts, sessions, and explicit model copy)
-  12. **Info / 信息** — Lucide `Info` (versions, logs, updates, developer)
+  5. **Skills / 技能** — Lucide `BookOpen` (reusable agent instructions)
+  6. **MCP** — Lucide `Server` (agent connections)
+  7. **Subagents / 子智能体** — Lucide `Bot` (built-in and personal parallel agents)
+  8. **Projects / 项目** — Lucide `Archive` (durable project index)
+  9. **Cloud sync / 云同步** — Lucide `CloudDownload` (encrypted portable configuration backup and bidirectional sync; Experimental, all builds)
+  10. **Remote Hosts / 远程主机** — Lucide `Globe` (experimental SSH hosts, sessions, and explicit model copy)
+  11. **Info / 信息** — Lucide `Info` (versions, logs, updates, developer)
   Icons are decorative (`aria-hidden` via the SVG default) and stay monochrome
-  with the rail label; do not reuse refresh/rotate glyphs here.
-- The directory remains a flat searchable list in the same exact order. For
-  scanability, the destinations are shown in four titled visual clusters:
-  `Preferences` / `偏好` (General, AI, Shortcuts), `Agent` / `智能体`
-  (Instructions, Models, Skills, MCP, Subagents), `Workspace` / `工作区`
-  (Projects), and `System` / `系统` (Cloud sync, Remote Hosts, Info; Cloud sync
-  and Remote Hosts are Experimental destinations available in all builds). Headings are
-  muted, non-interactive labels and use whitespace for separation; no divider
-  lines are rendered. These are visual landmarks only, not a second navigation
-  level.
-  When search filters the directory, empty clusters and their headings disappear.
-- **Voice** is a regular Preferences destination between AI and Shortcuts,
-  present in every build with no Experimental badge and no developer-mode
-  requirement. Its rail row, page, search hits, and idle Composer entry are
-  available to all users.
-  It is the only place to enable Live Voice. See the Voice section below.
+  with the rail label; do not reuse refresh/rotate glyphs here. The destination
+  formerly labelled **AI** is user-visible as **Chat / 对话**; its internal tab id
+  and deep links are unchanged.
+- The directory keeps the same flat, ordered index for the global settings
+  search. For scanability, the destinations are shown in four titled visual
+  clusters: `Preferences` / `偏好` (General), `Agent` / `智能体` (Chat, Models,
+  Instructions, Skills, MCP, Subagents), `Workspace` / `工作区` (Projects), and
+  `System` / `系统` (Cloud sync, Remote Hosts, Info; Cloud sync and Remote Hosts
+  are Experimental destinations available in all builds). Headings are muted,
+  non-interactive labels and use whitespace for separation; no divider lines are
+  rendered. These are visual landmarks only, not a second navigation level. The
+  rail itself is never filtered in place; narrowing happens in the global search
+  dialog.
+- **Live Voice** and **keyboard shortcuts** have no rail row. They render inside
+  **General** under their own card headings, present in every build with no
+  Experimental badge and no developer-mode requirement. Their rows, the idle
+  Composer entry, and the global settings search hits remain available to all
+  users; voice and keyboard search matches resolve to General, and the image
+  model default resolves to Models. The retired `voice` and `shortcuts` tab ids
+  resolve to General instead of dead-ending, so deep links, restored sessions,
+  and plugin navigation that still name them keep working. General remains the
+  only place to enable Live Voice. See the Voice section below.
 - **Cloud sync / 云同步** is an Experimental `System` / `系统` destination
   available in development and packaged builds. Its rail row, page, and
   settings-search hits are available in every build, and both the row and page
@@ -209,6 +217,11 @@ Settings is a **full-window page** that replaces the app sidebar + main chrome (
   application-window behavior rather than agent behavior.
 - File-open target, menu-bar behavior, and bottom-panel behavior are not
   rendered until their host-backed settings schemas and runtime effects exist.
+- The **Live Voice** card and the **Keyboard shortcuts** card render here instead
+  of owning rail rows of their own; each keeps its own card heading and keeps
+  its behavior, persistence, and plugin-facing semantics unchanged. Their rows
+  are indexed by settings search under General, and the retired `voice` /
+  `shortcuts` tab ids resolve here.
 
 ### Cloud sync
 
@@ -257,7 +270,10 @@ Settings is a **full-window page** that replaces the app sidebar + main chrome (
   these semantics. Both retain local recovery and approval requirements.
   Password changes are key rewrapping, not revocation of unlocked devices.
 
-### 全局 AI (`ai` tab)
+### Chat (`ai` tab)
+The destination keeps the internal `ai` tab id and deep links, but it is
+user-visible as **Chat / 对话**. It owns the agent's permission mode, default
+operating behavior, and composer defaults below.
 - **Permissions** card: the global permission-mode control
   (ask / accept-edits / auto) that governs how autonomously the agent acts.
   The control is a menu select on the shared anchored-menu surface rather than
@@ -267,10 +283,18 @@ Settings is a **full-window page** that replaces the app sidebar + main chrome (
 - **Defaults** card: the host-backed default operating mode (Agent / Plan / Goal),
   command shell selection, Link open destination, context usage display
   (remaining or used), thinking display mode, Enter-to-send control, the
-  infinite provider retry switch, and the large text paste threshold. The
-  retry switch is off by default and explains that network/transient provider
-  failures keep retrying until success; Stop still cancels the turn and the
-  setting may continue API usage while enabled. Link open destination uses the Work panel browser by default
+  **Message while the agent is running** row (`sendWhileRunningMode`), the
+  infinite provider retry switch, and the large text paste threshold.
+  Send immediately is the default and delivers the message into the turn that
+  is already running; Queue is the opt-in that waits for it to finish. A send
+  that cannot steer — no running turn, no reported turn id, or a session whose
+  capability model forbids steering — falls back to the queue instead of being
+  dropped. A pending plan decision is not a queue fallback: it blocks the send
+  and keeps the draft, and an unknown steering failure also keeps the draft
+  rather than risking a duplicate. The retry switch is off by default and
+  explains that network/transient provider failures keep retrying until
+  success; Stop still cancels the turn and the setting may continue API usage
+  while enabled. Link open destination uses the Work panel browser by default
   and routes chat, transcript, and plugin HTTP(S) clicks to the system
   browser when set to Default OS browser. Plugin/settings clicks that want
   the work panel return to chat first so the dock is visible, without
@@ -331,12 +355,16 @@ The user-facing dashboard is marketplace plugin `pi.token-insights`, opened from
 the command palette (`usage`, `tokens`, `用量`). Settings search does not index
 a usage tab.
 
-### Voice
+### Live Voice (inside General)
 
-- This destination owns Live Voice enablement and provider bindings, and is
-  reachable in every build without developer mode. Its enable card keeps the
-  explanation behind the heading's help mark and the Model configuration link
-  on the card's heading line, so no control floats between the rows. Disabled
+- Live Voice has no rail row; its enablement and provider bindings render inside
+  **General** under their own card heading. It is reachable in every build
+  without developer mode, and the retired `voice` tab id resolves to General so
+  existing deep links and plugin navigation still arrive at it. Its enable card
+  keeps the explanation behind the heading's help mark and the Model
+  configuration link on the card's heading line, so no control floats between
+  the rows.
+  Disabled
   Live Voice has no Composer voice or work icon; enabling it reveals one
   preparation entry, never auto-starts a call, and never grants work access.
 - Bind an existing compatible provider account, choose the exact next-call
@@ -362,7 +390,9 @@ a usage tab.
   [Live Voice](../03-runtime/live-voice.md) and
   [Live Work](../03-runtime/live-work-session.md).
 
-### Shortcuts (`shortcuts` tab)
+### Keyboard shortcuts (inside General)
+The retired `shortcuts` tab id resolves to General, which renders the keyboard
+shortcuts card. There is no rail row of its own.
 - **Keyboard shortcuts** card:
   - lists navigation, agent, and window actions from one shared shortcut map
   - renders platform-native modifier labels (`⌘` on macOS, `Ctrl` on
@@ -402,7 +432,7 @@ a usage tab.
   picker without duplicating the current value. The picker groups model-level
   options by provider, marks the exact current entry, and keeps its searchable
   list bounded. Account labels are not appended to model IDs. Global operating
-  mode, command shell, and Enter-to-send are owned by the AI destination.
+  mode, command shell, and Enter-to-send are owned by the Chat destination.
 - **Vendor accounts** card (D237/D240), between Defaults and Providers:
   - the card lists accounts, not vendors: one row per local OAuth provider row,
     including multiple rows for the same vendor. Its list surface uses the same
@@ -970,7 +1000,9 @@ system while preserving their different data ownership:
   not duplicated in Settings
 - Project archive is indexed by Settings search and is not duplicated as a home
   sidebar destination or standalone global-search page
-- Back to app returns to chat shell from the rail's pinned footer action
+- Back to app returns to the chat shell from the rail's top-left action, which is
+  the first focus stop when Settings opens; the rail has no pinned footer
+  action, and the in-page search pill is gone.
 - Developer-only destinations, where declared, join and leave the rail, page,
   and search as one unit. Cloud sync and Remote Hosts are Experimental but not
   developer-only, so both remain available in packaged builds and are not
@@ -979,23 +1011,22 @@ system while preserving their different data ownership:
 ## 4. Acceptance
 
 1. Opening Settings hides the coding app sidebar (full-page takeover)
-2. Rail shows the search pill at the top, the back-to-app action pinned at the
-   foot on the main sidebar's footer icon line, and exactly General / 常规, AI,
-   Shortcuts / 快捷键, Instructions / 指令, Models / 模型, Skills / 技能, MCP,
-   Subagents / 子智能体, Projects / 项目, Cloud sync / 云同步 and Remote Hosts /
-   远程主机 (both Experimental, all builds), and Info / 信息 in that order. Voice
-   appears between AI and Shortcuts only in development builds with developer
-   mode on. The rows are grouped under Preferences / 偏好,
-   Agent / 智能体, Workspace / 工作区, and System / 系统. There is no
-   Usage / 用量 destination.
+2. Rail shows the back-to-app action at its top-left, focused on entry, and
+   exactly General / 常规, Chat / 对话, Models / 模型, Instructions / 指令,
+   Skills / 技能, MCP, Subagents / 子智能体, Projects / 项目, Cloud sync / 云同步
+   and Remote Hosts / 远程主机 (both Experimental, all builds), and Info / 信息 in
+   that order. There is no in-page search pill, no pinned footer action, and no
+   Shortcuts / 快捷键 or Voice rail row: Live Voice and keyboard shortcuts render
+   inside General. The rows are grouped under Preferences / 偏好, Agent / 智能体,
+   Workspace / 工作区, and System / 系统. There is no Usage / 用量 destination.
 3. Appearance is part of General and has no standalone rail destination
 4. Providers is part of Agent and has no standalone rail destination
 5. Plugins has no Settings destination; the app-shell Plugins page supports
    load, enable, disable, and uninstall
-6. General shows the host-backed Appearance card; the AI destination shows
-   Permissions and Defaults, including the Command shell row; the
-   Shortcuts destination shows the Keyboard shortcuts card; Info shows the
-   Developer card. Plugin-contributed destinations, when present, appear after
+6. General shows the host-backed Appearance card plus the Live Voice and
+   Keyboard shortcuts cards; the Chat destination shows Permissions and
+   Defaults, including the Command shell and send-while-running rows; Info shows
+   the Developer card. Plugin-contributed destinations, when present, appear after
    every core group under Extensions. Each destination is a renderer-composited
    sandboxed surface: it preserves the existing Settings rail, titlebar,
    Windows/Linux minimize/maximize controls, native drag/resize regions, and
@@ -1012,7 +1043,7 @@ system while preserving their different data ownership:
    default model) is data rather than prose and stays visible, and a form
    field's hint follows the same rule as a row's explanation
 10. Dragging the empty top band from either side of Settings moves the native
-   window without blocking Back, search, or navigation controls
+   window without blocking Back or navigation controls
 11. Resizing the window expands or contracts the content cards with the
     available content pane; the fixed rail and pane gutters remain intact and
     the page does not gain horizontal overflow

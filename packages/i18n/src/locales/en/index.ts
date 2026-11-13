@@ -996,8 +996,7 @@ sklm: {
     groupExtensions: "Extensions",
     nav: {
       general: "General",
-      ai: "AI",
-      shortcuts: "Shortcuts",
+      chat: "Chat",
       instructions: "Instructions",
       models: "Models",
       skills: "Skills",
@@ -1007,11 +1006,9 @@ sklm: {
       sync: "Cloud sync",
       remoteHosts: "Remote hosts",
       info: "Info",
-      voice: "Voice",
     },
     general: "General",
-    ai: "AI",
-    shortcuts: "Shortcuts",
+    chat: "Chat",
     instructions: "Instructions",
     instructionsGlobal: "Global instructions",
     instructionsGlobalDesc: "Applied before project instructions.",
@@ -1530,6 +1527,15 @@ sklm: {
     noResults: "No matching settings",
     enterToSend: "Enter to send",
     enterToSendDesc: "Off: press ⌘/Ctrl+Enter to send.",
+    sendWhileRunningMode: "Message while the agent is running",
+    sendWhileRunningModeDesc:
+      "Send immediately: the message steers the turn that is already running. Queue: it waits until that turn finishes.",
+    sendWhileRunningModeImmediate: "Send immediately",
+    sendWhileRunningModeQueue: "Queue",
+    // Synonyms global settings search answers to: the row labels spell out the
+    // setting, while users type the short name of what they want to change.
+    searchAliasSendMode: "send mode · send while running · steering · follow-up send",
+    searchAliasImageModel: "image model · picture model · image generation",
     infiniteProviderRetry: "Retry until success",
     infiniteProviderRetryDesc: "Keep retrying network and transient provider failures until the request succeeds. You can still stop the turn; API usage may continue while enabled.",
     smoothStreaming: "Smooth streaming",

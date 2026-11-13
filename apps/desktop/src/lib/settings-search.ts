@@ -33,6 +33,22 @@ export const SETTINGS_NAV_GROUP_LABELS: Record<SettingsNavGroupId, string> = {
   system: "settings.groupSystem",
 };
 
+export type SettingsSearchAlias = {
+  /**
+   * i18n key holding the synonyms a row's own label does not spell out —
+   * "send mode" for "Message while the agent is running", "图片模型" for
+   * "生图模型". Users type those phrases, so the index answers to the
+   * translation instead of a hard-coded English string.
+   */
+  key: string;
+  /**
+   * Row-title key inside the same destination. A hit scrolls to a row the page
+   * actually renders, so an alias never produces an anchor that matches
+   * nothing.
+   */
+  anchorKey: string;
+};
+
 export type SettingsNavEntry = {
   id: SettingsTabId;
   /** Short label used by the rail and settings search results. */
@@ -43,6 +59,8 @@ export type SettingsNavEntry = {
   group: SettingsNavGroupId;
   /** i18n keys of the rows inside the tab; search matches their translations. */
   keywordKeys: string[];
+  /** Synonyms of the rows inside the tab; see `SettingsSearchAlias`. */
+  searchAliases?: SettingsSearchAlias[];
   /**
    * Destination only exists while `AppSettings.developerMode` is on; the
    * rail, the page, and settings search drop it together.
@@ -89,13 +107,31 @@ export const SETTINGS_NAV: SettingsNavEntry[] = [
       "settings.networkRelaxedModeStrictDesc",
       "settings.preventScreenSleep",
       "settings.preventScreenSleepDesc",
+      // Live Voice and keyboard shortcuts render inside General now; their
+      // rows still have to surface General from a global settings search.
+      "liveVoice.title",
+      "liveVoice.description",
+      "liveVoice.enable",
+      "liveVoice.enableDetail",
+      "liveVoice.provider",
+      "liveVoice.model",
+      "liveVoice.voice",
+      "liveVoice.adapters.codex-live.title",
+      "liveVoice.adapters.gemini-live.title",
+      "liveVoice.adapters.openai-realtime.title",
+      "settings.keyboard",
+      "settings.shortcutResetAll",
+      "settings.shortcutAction.openSearch",
+      "settings.shortcutAction.openCommandPalette",
+      "settings.shortcutAction.toggleSidebar",
+      "settings.shortcutAction.openWorkPanel",
     ],
   },
   {
     id: "ai",
-    labelKey: "settings.nav.ai",
-    titleKey: "settings.ai",
-    group: "preferences",
+    labelKey: "settings.nav.chat",
+    titleKey: "settings.chat",
+    group: "agent",
     keywordKeys: [
       "settings.permissions",
       "settings.permissionMode",
@@ -103,11 +139,14 @@ export const SETTINGS_NAV: SettingsNavEntry[] = [
       "settings.permissionModeAcceptEdits",
       "settings.permissionModeAuto",
       "settings.defaultsTitle",
-      "settings.imageModel",
       "settings.mode",
       "settings.commandShell",
       "settings.linkOpenTarget",
       "settings.enterToSend",
+      "settings.sendWhileRunningMode",
+      "settings.sendWhileRunningModeDesc",
+      "settings.sendWhileRunningModeImmediate",
+      "settings.sendWhileRunningModeQueue",
       "settings.infiniteProviderRetry",
       "settings.infiniteProviderRetryDesc",
       "settings.smoothStreaming",
@@ -120,45 +159,11 @@ export const SETTINGS_NAV: SettingsNavEntry[] = [
       "settings.contextUsageDisplayUsed",
       "settings.largePasteThreshold",
     ],
-  },
-  {
-    id: "voice",
-    labelKey: "liveVoice.title",
-    titleKey: "liveVoice.title",
-    group: "preferences",
-    keywordKeys: [
-      "liveVoice.title",
-      "liveVoice.description",
-      "liveVoice.enable",
-      "liveVoice.provider",
-      "liveVoice.model",
-      "liveVoice.voice",
-      "liveVoice.adapters.codex-live.title",
-      "liveVoice.adapters.gemini-live.title",
-      "liveVoice.adapters.openai-realtime.title",
-    ],
-  },
-  {
-    id: "shortcuts",
-    labelKey: "settings.nav.shortcuts",
-    titleKey: "settings.shortcuts",
-    group: "preferences",
-    keywordKeys: [
-      "settings.keyboard",
-      "settings.shortcutAction.openSearch",
-      "settings.shortcutAction.openCommandPalette",
-      "settings.shortcutAction.toggleSidebar",
-      "settings.shortcutAction.openWorkPanel",
-    ],
-  },
-  {
-    id: "instructions",
-    labelKey: "settings.nav.instructions",
-    titleKey: "settings.instructions",
-    group: "agent",
-    keywordKeys: [
-      "settings.instructionsGlobal",
-      "settings.instructionsPath",
+    searchAliases: [
+      {
+        key: "settings.searchAliasSendMode",
+        anchorKey: "settings.sendWhileRunningMode",
+      },
     ],
   },
   {
@@ -172,6 +177,10 @@ export const SETTINGS_NAV: SettingsNavEntry[] = [
       "settings.apiKey",
       "settings.baseUrl",
       "settings.apiStyle",
+      // The image-generation default row renders on the model page.
+      "settings.imageModel",
+      "settings.imageModelUnset",
+      "settings.imageModelUnavailable",
       // Subscription accounts share the service list (D625).
       "settings.vendorAccounts",
       "settings.vendorSubscription",
@@ -183,6 +192,22 @@ export const SETTINGS_NAV: SettingsNavEntry[] = [
       "settings.importSourceCodex",
       "settings.importSourcePi",
       "settings.importSourceCcSwitch",
+    ],
+    searchAliases: [
+      {
+        key: "settings.searchAliasImageModel",
+        anchorKey: "settings.imageModel",
+      },
+    ],
+  },
+  {
+    id: "instructions",
+    labelKey: "settings.nav.instructions",
+    titleKey: "settings.instructions",
+    group: "agent",
+    keywordKeys: [
+      "settings.instructionsGlobal",
+      "settings.instructionsPath",
     ],
   },
   {
@@ -339,6 +364,21 @@ export const SETTINGS_NAV: SettingsNavEntry[] = [
 ];
 
 /**
+ * Retired destinations that older builds, deep links, and plugin surfaces can
+ * still name. Their content now renders inside General, so the id keeps
+ * working instead of dead-ending on an empty page.
+ */
+export const SETTINGS_LEGACY_TAB_ALIASES: Partial<Record<SettingsTabId, SettingsTabId>> = {
+  voice: "general",
+  shortcuts: "general",
+};
+
+/** The destination actually rendered for a stored or deep-linked tab id. */
+export function resolveSettingsTab(tab: SettingsTabId): SettingsTabId {
+  return SETTINGS_LEGACY_TAB_ALIASES[tab] ?? tab;
+}
+
+/**
  * Destinations the current mode offers. Unavailable destinations are omitted
  * from navigation and search rather than disabled.
  */
@@ -359,8 +399,9 @@ export function isSettingsDestinationHidden(
   developerMode: boolean,
   includeDevelopmentOnly = true,
 ): boolean {
+  const destination = resolveSettingsTab(tab);
   return !visibleSettingsNav(developerMode, includeDevelopmentOnly).some(
-    (entry) => entry.id === tab,
+    (entry) => entry.id === destination,
   );
 }
 
@@ -398,6 +439,14 @@ export function searchSettings(
     for (const key of entry.keywordKeys) {
       if (t(key).toLowerCase().includes(q)) {
         hits.push({ tab: entry.id, tabLabelKey: entry.labelKey, rowKey: key });
+      }
+    }
+    for (const alias of entry.searchAliases ?? []) {
+      // The hit carries the row's own title key, never the alias key: the
+      // settings page scrolls by translated row title, so an alias-only anchor
+      // would point at text no row renders.
+      if (t(alias.key).toLowerCase().includes(q)) {
+        hits.push({ tab: entry.id, tabLabelKey: entry.labelKey, rowKey: alias.anchorKey });
       }
     }
   }

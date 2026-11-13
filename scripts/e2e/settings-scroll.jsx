@@ -101,6 +101,13 @@ const root = createRoot(document.getElementById("root"));
 flushSync(() => root.render(<SettingsPage />));
 const frame = () => new Promise(requestAnimationFrame);
 async function settle() { await frame(); await frame(); }
+async function waitFor(predicate, message) {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    if (predicate()) return;
+    await frame();
+  }
+  throw new Error(message ?? "Timed out waiting for condition");
+}
 function assert(value, message) { if (!value) throw new Error(message); }
 const pane = () => document.querySelector(".settings-content");
 const navButton = (label) => [...document.querySelectorAll(".settings-nav-item")]
@@ -111,21 +118,12 @@ async function select(label) {
   flushSync(() => button.click());
   await settle();
 }
-async function setSettingsSearch(value) {
-  const input = document.querySelector(".settings-search");
-  assert(input instanceof HTMLInputElement, "Settings search input must be rendered");
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-  assert(setter, "Settings search input must expose its value setter");
-  setter.call(input, value);
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  await settle();
-}
 async function checkCloudSyncVisibility() {
   // The isolated renderer is a development build; packaged-build visibility is
-  // asserted by settings-developer-only-destinations.test.mjs.
-  await setSettingsSearch("Cloud sync");
+  // asserted by settings-developer-only-destinations.test.mjs. The rail has no
+  // in-page search filter any more, so destinations are checked directly.
   const syncButton = navButton("Cloud sync");
-  assert(syncButton, "Cloud sync must appear in Settings search");
+  assert(syncButton, "Cloud sync must appear in the Settings rail");
   assert(
     syncButton.querySelector(".settings-nav-experimental")?.textContent?.trim() === "Experimental",
     "Cloud sync's rail entry must carry the Experimental badge",
@@ -138,7 +136,6 @@ async function checkCloudSyncVisibility() {
     document.querySelector(".settings-section-title")?.textContent?.includes("Experimental"),
     "Cloud sync's page title must carry the Experimental badge",
   );
-  await setSettingsSearch("");
 
   // Developer mode does not gate Cloud sync or Remote Hosts.
   settings = { ...settings, developerMode: true };
@@ -151,9 +148,8 @@ async function checkCloudSyncVisibility() {
   assert(useAppStore.getState().settingsTab === "sync", "Cloud sync must stay selected");
   assert(navButton("Cloud sync"), "Cloud sync must stay in the rail without developer mode");
 
-  await setSettingsSearch("Remote hosts");
   const remoteButton = navButton("Remote hosts");
-  assert(remoteButton, "Remote hosts must appear in Settings search");
+  assert(remoteButton, "Remote hosts must appear in the Settings rail");
   assert(
     remoteButton.querySelector(".settings-nav-experimental")?.textContent?.trim() === "Experimental",
     "Remote hosts must carry the Experimental badge",
@@ -165,7 +161,6 @@ async function checkCloudSyncVisibility() {
     document.querySelector(".settings-section-title")?.textContent?.includes("Experimental"),
     "Remote hosts page title must carry the Experimental badge",
   );
-  await setSettingsSearch("");
 
   for (const developerMode of [true, false]) {
     settings = { ...settings, developerMode };
@@ -217,7 +212,7 @@ async function exerciseUpdatePreference() {
     "Manual mode must offer the release page for an available version",
   );
 
-  await select("AI");
+  await select("Chat");
   await select("Info");
   await settle();
   assert(trigger().textContent?.includes("Manual"), "Manual preference must survive leaving and reopening Info");
@@ -263,6 +258,11 @@ async function exerciseBrazilianPortuguese() {
 }
 async function exerciseProxyDraftRestoration() {
   await select("General");
+  // General hosts the two sections that used to own rail rows of their own.
+  assert(document.querySelector(".live-voice-settings"),
+    "General must host the Live Voice settings section");
+  assert(document.querySelector(".settings-panel.shortcut-map"),
+    "General must host the Keyboard shortcuts section");
   const urlInput = () => document.querySelector('input[aria-label="Proxy URL"]');
   const input = urlInput();
   assert(input instanceof HTMLInputElement, "Custom proxy URL field must render");
@@ -295,29 +295,94 @@ async function exerciseProxyDraftRestoration() {
   assert(settings.networkProxy.url === rememberedUrl, "Re-entry must not replace the saved URL with the default");
   return { proxyMode: settings.networkProxy.mode, proxyUrl: settings.networkProxy.url };
 }
+/**
+ * The Chat page owns the send-while-running preference; an unset value must
+ * read as the immediate default, and a change must persist through the settings
+ * boundary and survive leaving and reopening the page.
+ */
+async function exerciseSendWhileRunning() {
+  await select("Chat");
+  const group = () => document.querySelector('.settings-segment[aria-label="Message while the agent is running"]');
+  const option = (label) => [...(group()?.querySelectorAll(".settings-segment-item") ?? [])]
+    .find((candidate) => candidate.textContent?.trim() === label);
+  assert(group(), "Chat must expose the send-while-running preference");
+  assert(option("Send immediately")?.getAttribute("aria-pressed") === "true",
+    "An unset preference must default to sending immediately");
+  assert(option("Queue")?.getAttribute("aria-pressed") === "false",
+    "Queue must not be selected by default");
+
+  // The fixture settings boundary answers by replacing the whole settings
+  // object, so a one-key diff against the settings the page renders from shows
+  // the patch it actually persisted.
+  const before = useAppStore.getState().settings;
+  const target = option("Queue");
+  assert(target instanceof HTMLButtonElement, "Queue must be selectable");
+  flushSync(() => target.click());
+  await waitFor(() => settings.sendWhileRunningMode === "queue" &&
+    useAppStore.getState().settings?.sendWhileRunningMode === "queue",
+  "Queue must persist through settings IPC and reach the renderer store");
+  assert(settings.sendWhileRunningMode === "queue",
+    "Choosing Queue must persist the preference through settings IPC");
+  // Nested values are rebuilt objects, so compare them by content.
+  const changed = Object.keys(settings).filter(
+    (key) => JSON.stringify(settings[key]) !== JSON.stringify(before?.[key]),
+  );
+  assert(changed.length === 1 && changed[0] === "sendWhileRunningMode",
+    `Choosing Queue must persist only the changed preference, got ${changed.join(", ")}`);
+  assert(useAppStore.getState().settings?.sendWhileRunningMode === "queue",
+    "The renderer store must carry the saved preference");
+  assert(option("Queue")?.getAttribute("aria-pressed") === "true",
+    "Queue must render as selected after saving");
+  assert(option("Send immediately")?.getAttribute("aria-pressed") === "false",
+    "Send immediately must stop reading as selected");
+
+  // Leaving the page and coming back must render the stored value.
+  await select("General");
+  await select("Chat");
+  assert(option("Queue")?.getAttribute("aria-pressed") === "true",
+    "Reopening Chat must show the persisted Queue preference");
+
+  flushSync(() => option("Send immediately").click());
+  await waitFor(() => settings.sendWhileRunningMode === "immediate" &&
+    useAppStore.getState().settings?.sendWhileRunningMode === "immediate",
+  "The immediate default must be restorable");
+  return { preferenceHost: "chat", defaultMode: "immediate", saved: "queue", reloaded: "queue", restored: "immediate" };
+}
 window.settingsScrollProbe = async () => {
   await settle();
   assert(
-    document.activeElement === document.querySelector(".settings-search"),
-    "Mounting Settings must move focus to its search control",
+    document.activeElement === document.querySelector(".settings-back"),
+    "Mounting Settings must move focus to the rail's back action",
   );
+  // The retired in-page rail search is gone; the back action stays in the rail's
+  // top band, above the scrollable destination list, on the same left edge.
+  assert(document.querySelector(".settings-search") === null,
+    "The Settings rail must not carry a page-local search input");
+  const back = document.querySelector(".settings-back");
+  const navScroll = document.querySelector(".settings-nav-scroll");
+  assert(back && navScroll, "Settings must render the back action and the destination list");
+  const backBounds = back.getBoundingClientRect();
+  const navBounds = navScroll.getBoundingClientRect();
+  assert(backBounds.bottom <= navBounds.top + 1, "Back to app must sit above the destination list");
+  const railBounds = document.querySelector(".settings-nav").getBoundingClientRect();
+  assert(backBounds.left - railBounds.left < 24, "Back to app must sit at the rail's left edge");
   const checks = [];
   checks.push(await exerciseProxyDraftRestoration());
   await checkCloudSyncVisibility();
   for (const theme of ["light", "dark"]) {
     document.documentElement.dataset.theme = theme;
-    await select("AI");
+    await select("Chat");
     const position = await scroll();
-    await select("AI");
-    assert(pane().scrollTop === position, "Re-selecting AI must retain scroll");
+    await select("Chat");
+    assert(pane().scrollTop === position, "Re-selecting Chat must retain scroll");
     flushSync(() => useAppStore.setState({ settings: { ...settings, enterToSend: false } }));
     await settle();
     assert(pane().scrollTop === position, "Settings updates must retain scroll");
-    await select("Shortcuts");
-    assert(pane().scrollTop === 0, "AI → Shortcuts must start at top");
+    await select("General");
+    assert(pane().scrollTop === 0, "Chat → General must start at top");
     await scroll();
-    await select("AI");
-    assert(pane().scrollTop === 0, "Returning to AI must start at top");
+    await select("Chat");
+    assert(pane().scrollTop === 0, "Returning to Chat must start at top");
     await scroll();
     await select("Themes A");
     assert(pane().scrollTop === 0, "Built-in → extension must start at top");
@@ -327,13 +392,16 @@ window.settingsScrollProbe = async () => {
     await select("Themes B");
     assert(pane().scrollTop === 0, "Extension → extension must start at top");
     await scroll();
-    await select("AI");
+    await select("Chat");
     assert(pane().scrollTop === 0, "Extension → unchanged built-in tab must start at top");
     await select("Themes A");
     await scroll();
     flushSync(() => useAppStore.getState().setSettingsTab("shortcuts"));
     assert(!document.querySelector(".plugin-scenic-theme-card"), "External tab change must leave the plugin");
-    assert(document.querySelector(".settings-section-title")?.textContent?.includes("Shortcuts"), "Shortcuts must replace the plugin");
+    // The retired shortcuts tab id resolves to General, which owns the
+    // keyboard-shortcuts section.
+    assert(document.querySelector(".settings-section-title")?.textContent?.includes("General"), "Legacy shortcuts tab must resolve to General");
+    assert(document.querySelector(".shortcut-map"), "Legacy shortcuts tab must land on the keyboard shortcuts section");
     assert(pane().scrollTop === 0, "External tab change must start at the top");
     await select("Themes A");
     await scroll();
@@ -349,7 +417,7 @@ window.settingsScrollProbe = async () => {
     assert(fromPluginBounds.top >= fromPluginViewport.top && fromPluginBounds.bottom <= fromPluginViewport.bottom,
       "Search from a plugin must show the target");
     // The same public store entry points used by SearchDialog.openSettingsHit.
-    await select("Shortcuts");
+    await select("General");
     await scroll();
     flushSync(() => {
       useAppStore.getState().setSettingsAnchor("settings.enterToSend");
@@ -374,6 +442,7 @@ window.settingsScrollProbe = async () => {
     checks.push({ theme, ok: true });
   }
   checks.push(await exerciseUpdatePreference());
+  checks.push(await exerciseSendWhileRunning());
   checks.push(await exerciseBrazilianPortuguese());
   return { ok: true, checks };
 };

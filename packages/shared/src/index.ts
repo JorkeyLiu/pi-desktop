@@ -8,6 +8,7 @@ export * from "./transcript-truncation.js";
 export * from "./keyboard-shortcuts.js";
 export * from "./changelog.js";
 export * from "./composer-trigger.js";
+export * from "./send-while-running.js";
 export * from "./inline-attachments.js";
 export * from "./auto-pasted-text.js";
 export * from "./session-link.js";

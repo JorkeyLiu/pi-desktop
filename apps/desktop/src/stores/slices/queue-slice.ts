@@ -1,5 +1,5 @@
 import i18n from "i18next";
-import { formatFileInsert } from "@pi-desktop/shared";
+import { formatFileInsert, resolveSendWhileRunningMode } from "@pi-desktop/shared";
 import type {
   AgentQueueChangedEvent,
   AgentPromptAttachment,
@@ -39,6 +39,19 @@ import type { StoreAccess } from "./types";
 type PromptAttachmentConverter = (
   references: ComposerDraftSnapshot["fileReferences"],
 ) => AgentPromptAttachment[];
+
+/**
+ * Outcome of one attempt to deliver a draft into the session's active turn.
+ *
+ * `accepted`       – the Host took the message into the running turn.
+ * `queue-fallback` – steering provably never reached the turn, so the caller
+ *                    may queue the message instead without duplicating it.
+ * `undelivered`    – the outcome is unknown, or the Host refused it for a
+ *                    reason queueing cannot fix: a copy may already have been
+ *                    accepted, so the caller must keep the draft rather than
+ *                    send the message a second time.
+ */
+type SteerOutcome = "accepted" | "queue-fallback" | "undelivered";
 
 export type QueueSliceDependencies = StoreAccess & {
   runtime: SessionRuntime;
@@ -138,6 +151,82 @@ export function createQueueSlice({
       );
       void get().refreshQueuedPrompts(sessionId);
     });
+  }
+
+  /** Whether this session's capability model permits steering at all. */
+  function sessionCanSteer(sessionId: string | null | undefined): boolean {
+    return sessionAllows(
+      get().sessions.find((session) => session.id === sessionId),
+      "canSteer",
+    );
+  }
+
+  /**
+   * The turn a fresh send would steer, or null when this session cannot take a
+   * steering message right now: not running, still waiting on a plan decision,
+   * or no active turn has been reported yet.
+   */
+  function steerableTurnId(sessionId: string | null | undefined): string | null {
+    if (!sessionId) return null;
+    const state = get();
+    if (!state.runningSessions[sessionId]) return null;
+    if (state.pendingPlans[sessionId]?.status === "pending") return null;
+    return state.agentStatuses[sessionId]?.currentTurnId ?? null;
+  }
+
+  /**
+   * Deliver a draft into the session's active turn.
+   *
+   * `intent` names who asked. The explicit steering shortcut must explain every
+   * refusal because the user picked that path and the draft stays in the
+   * composer. An ordinary send in the default immediate mode instead falls back
+   * to the queue, where the message is visibly waiting, so a draft-kept notice
+   * would describe the opposite of what happened.
+   */
+  async function steerRunningTurn(
+    sessionId: string | null | undefined,
+    content: string,
+    draft: ComposerDraftSnapshot | undefined,
+    intent: "explicit" | "implicit",
+  ): Promise<SteerOutcome> {
+    if (!sessionCanSteer(sessionId)) return "queue-fallback";
+    const expectedTurnId = steerableTurnId(sessionId);
+    if (!sessionId || !expectedTurnId) {
+      if (intent === "explicit") {
+        get().showToast(i18n.t("chat.steeringUnavailable"), { variant: "info" });
+      }
+      return "queue-fallback";
+    }
+    const message = optimisticUserMessage(
+      crypto.randomUUID(), content, draft?.fileReferences ?? [],
+    );
+    message.steering = true;
+    runtime.insertOptimisticUserMessage(sessionId, message);
+    try {
+      await api.steer({
+        sessionId, expectedTurnId, content, messageId: message.id,
+        attachments: draft ? promptAttachmentsFromDraft(draft.fileReferences) : [],
+      });
+      return "accepted";
+    } catch (error) {
+      runtime.retractOptimisticUserMessage(sessionId, message);
+      const failure = messageErrorFromUnknown(error);
+      // Only a structured refusal the Host raises before the turn takes the
+      // message proves that queueing cannot duplicate it: the named turn is
+      // gone (agent-ipc isTurnDispatchable, the sidecar runtime lookup, and
+      // runtime steeringContext all answer TURN_NOT_FOUND before acceptance).
+      if (failure.code === "TURN_NOT_FOUND") {
+        if (intent === "explicit") {
+          get().showToast(i18n.t("chat.steeringUnavailable"), { variant: "error" });
+        }
+        return "queue-fallback";
+      }
+      // A dropped receipt, a dead transport, or any other refusal leaves the
+      // outcome unknown. Report it and keep the draft: retrying as a queued
+      // prompt could deliver a message the turn already accepted.
+      get().showToast(failure.message, { variant: "error" });
+      return "undelivered";
+    }
   }
 
   return {
@@ -320,41 +409,10 @@ export function createQueueSlice({
       applyQueueEntries(event.sessionId, event.entries);
     },
 
-    steerPrompt: async (content, draft) => {
-      const state = get();
-      const sessionId = state.activeSessionId;
-      if (!sessionAllows(state.sessions.find((session) => session.id === sessionId), "canSteer")) return false;
-      const expectedTurnId = sessionId ? state.agentStatuses[sessionId]?.currentTurnId : undefined;
-      if (
-        !sessionId || !expectedTurnId || !state.runningSessions[sessionId] ||
-        state.pendingPlans[sessionId]?.status === "pending"
-      ) {
-        get().showToast(i18n.t("chat.steeringUnavailable"), { variant: "info" });
-        return false;
-      }
-      const message = optimisticUserMessage(
-        crypto.randomUUID(), content, draft?.fileReferences ?? [],
-      );
-      message.steering = true;
-      runtime.insertOptimisticUserMessage(sessionId, message);
-      try {
-        await api.steer({
-          sessionId, expectedTurnId, content, messageId: message.id,
-          attachments: draft ? promptAttachmentsFromDraft(draft.fileReferences) : [],
-        });
-        return true;
-      } catch (error) {
-        runtime.retractOptimisticUserMessage(sessionId, message);
-        const failure = messageErrorFromUnknown(error);
-        get().showToast(
-          failure.code === "TURN_NOT_FOUND"
-            ? i18n.t("chat.steeringUnavailable")
-            : failure.message,
-          { variant: "error" },
-        );
-        return false;
-      }
-    },
+    /** Explicit steering shortcut: the user asked for the running turn. */
+    steerPrompt: async (content, draft) =>
+      (await steerRunningTurn(get().activeSessionId, content, draft, "explicit")) ===
+      "accepted",
 
     sendPrompt: async (content, draft, requestedSessionId, onAccepted) => {
       let sessionId = requestedSessionId ?? get().activeSessionId;
@@ -393,6 +451,23 @@ export function createQueueSlice({
           ) {
             get().showToast(i18n.t("chat.nativeSessionBusy"), { variant: "info" });
             return false;
+          }
+          // An ordinary send follows the user's running-turn preference: by
+          // default it steers the active turn; queueing is the opt-in. A
+          // refusal the Host raises before acceptance, or a session that
+          // cannot steer at all, falls back to the queue so the message is
+          // never dropped. An unknown failure keeps the draft instead, since
+          // the turn may already hold the accepted copy.
+          if (
+            resolveSendWhileRunningMode(get().settings?.sendWhileRunningMode) ===
+            "immediate"
+          ) {
+            const steer = await steerRunningTurn(sessionId, content, draft, "implicit");
+            if (steer === "accepted") {
+              onAccepted?.(sessionId);
+              return true;
+            }
+            if (steer === "undelivered") return false;
           }
           const accepted = await get().enqueuePrompt(content, draft, sessionId);
           if (accepted) onAccepted?.(sessionId);

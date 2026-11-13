@@ -3619,12 +3619,25 @@ reasoning-level control.
   next localized command/file or keyboard hint with an opacity fade; there is no
   timer, and clearing or sending a draft never changes the guidance.
 - Escape: when textarea focused, clears input or blurs (not abort)
-- Send while running: clears the current draft and appends one FIFO row to the
-  active session's Host-owned queue when the draft has content. The row is sent
-  as a new normal prompt only after the current run reaches `agent_end`; a
-  different session's queue is not affected by switching sessions. Running with
-  an empty draft changes this same submit slot to Stop. Clear the draft to
-  expose the immediate-stop action.
+- Send while running: `AppSettings.sendWhileRunningMode` decides what an
+  ordinary send does while the target session already has a running turn.
+  Unset or `immediate` (the default) steers that turn — the prompt joins the
+  run already in flight instead of opening a second one. `queue` is the opt-in
+  that keeps the waiting behavior: the current draft clears and one FIFO row is
+  appended to the active session's Host-owned queue when the draft has content,
+  and the row is sent as a new normal prompt only after the current run reaches
+  `agent_end`; a different session's queue is not affected by switching
+  sessions. When steering cannot apply — no running turn, no turn id reported
+  yet, or a session whose capability model forbids steering — an ordinary send
+  falls back to the queue instead of dropping the message. A Host
+  `TURN_NOT_FOUND` refusal, raised before the turn accepts anything, takes the
+  same fallback. A pending plan decision is not a fallback: it blocks the send
+  and keeps the draft. Any other steering failure leaves the outcome unknown,
+  reports it, and keeps the draft, because retrying as a queued prompt could
+  deliver a message the turn already accepted. The explicit steering shortcut
+  never queues: it reports `chat.steeringUnavailable` or the Host's failure,
+  and keeps the draft. Running with an empty draft changes this same submit slot
+  to Stop. Clear the draft to expose the immediate-stop action.
 - Queued row: the text, then move up, move down, Send now, edit, and remove.
   Move up/down swaps the row with its adjacent waiting neighbour and mirrors the
   Host's durable `position`; at the waiting-block boundary it is a no-op and
@@ -3669,7 +3682,10 @@ reasoning-level control.
   on its matching `compaction_end`.
 - Auto-grow: textarea measures wrapped visual lines, starts at one visible
   line, expands through seven lines, then scrolls internally; deleting content
-  shrinks it back to one line
+  shrinks it back to one line. Past the ceiling, a line added by Enter or
+  Shift+Enter scrolls the textarea's own overflow so the new line, and the
+  character typed on it, are inside the visible box in the same frame — without
+  waiting for the next keystroke and without scrolling backwards.
 - Resize writes are idempotent (D264): an unchanged height performs no DOM
   write, so `--composer-dock-height` is not republished and the document's
   style is not invalidated while typing inside one row. The `height: auto`

@@ -166,8 +166,7 @@ test("settings rail labels stay concise and parallel across locales", () => {
   const chinese = flattenCatalog(zhCN);
   const keys = [
     "general",
-    "ai",
-    "shortcuts",
+    "chat",
     "instructions",
     "models",
     "skills",
@@ -181,8 +180,7 @@ test("settings rail labels stay concise and parallel across locales", () => {
     keys.map((key) => english[key]),
     [
       "General",
-      "AI",
-      "Shortcuts",
+      "Chat",
       "Instructions",
       "Models",
       "Skills",
@@ -196,8 +194,7 @@ test("settings rail labels stay concise and parallel across locales", () => {
     keys.map((key) => chinese[key]),
     [
       "常规",
-      "AI",
-      "快捷键",
+      "对话",
       "指令",
       "模型",
       "技能",
@@ -211,6 +208,22 @@ test("settings rail labels stay concise and parallel across locales", () => {
   assert.equal(chinese["settings.nav.import"], undefined);
   assert.equal(english["settings.import"], undefined);
   assert.equal(chinese["settings.import"], undefined);
+  // The retired "AI" rail label, its shortcuts row, and the standalone voice
+  // page title are gone; voice and shortcuts now render inside General.
+  for (const key of [
+    "settings.nav.ai",
+    "settings.nav.shortcuts",
+    "settings.nav.voice",
+    "settings.ai",
+    "settings.shortcuts",
+  ]) {
+    assert.equal(english[key], undefined, key);
+    assert.equal(chinese[key], undefined, key);
+  }
+  assert.equal(english["settings.nav.chat"], "Chat");
+  assert.equal(chinese["settings.nav.chat"], "对话");
+  assert.equal(english["settings.chat"], "Chat");
+  assert.equal(chinese["settings.chat"], "对话");
   assert.equal(english["settings.groupPreferences"], "Preferences");
   assert.equal(chinese["settings.groupPreferences"], "偏好");
   assert.equal(english["settings.groupSystem"], "System");

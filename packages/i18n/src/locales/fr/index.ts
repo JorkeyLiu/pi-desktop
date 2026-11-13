@@ -981,8 +981,7 @@ sklm: {
     "groupExtensions": "Extensions",
     "nav": {
       "general": "Général",
-      "ai": "IA",
-      "shortcuts": "Raccourcis",
+      "chat": "Chat",
       "instructions": "Instructions",
       "models": "Modèles",
       "skills": "Compétences",
@@ -992,7 +991,6 @@ sklm: {
       "sync": "Synchronisation cloud",
       "remoteHosts": "Hôtes distants",
       "info": "Informations",
-      "voice": "Voix"
     },
     "configSync": {
       title: "Cloud sync",
@@ -1155,8 +1153,7 @@ sklm: {
       },
     },
     "general": "Général",
-    "ai": "AI",
-    "shortcuts": "Raccourcis",
+    "chat": "Chat",
     "instructions": "Instructions",
     "instructionsGlobal": "Instructions globales",
     "instructionsGlobalDesc": "Appliqué avant les instructions du projet.",
@@ -1514,6 +1511,14 @@ sklm: {
     "noResults": "Aucun paramètre correspondant",
     "enterToSend": "Entrez pour envoyer",
     "enterToSendDesc": "Désactivé : appuyez sur ⌘/Ctrl+Entrée pour envoyer.",
+    "sendWhileRunningMode": "Message pendant que l'agent travaille",
+    "sendWhileRunningModeDesc":
+      "Envoyer immédiatement : le message réoriente le tour en cours. File d'attente : il attend la fin de ce tour.",
+    "sendWhileRunningModeImmediate": "Envoyer immédiatement",
+    "sendWhileRunningModeQueue": "File d'attente",
+    // Synonyms global settings search answers to.
+    "searchAliasSendMode": "mode d’envoi · envoyer pendant l’exécution · file d’attente",
+    "searchAliasImageModel": "modèle d’image · modèle de génération d’images · génération d’images",
     "infiniteProviderRetry": "Réessayer jusqu’à réussite",
     "infiniteProviderRetryDesc": "Réessaie les erreurs réseau et temporaires jusqu’à la réussite. Vous pouvez toujours arrêter le tour ; la consommation d’API peut continuer.",
     "smoothStreaming": "Streaming fluide",

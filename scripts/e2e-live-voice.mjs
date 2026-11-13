@@ -58,11 +58,13 @@ const waitIdle = () => waitFor(async () => {
     ? widget.evaluate(`!document.querySelector('${ACTIVE_CALL_BAR}')`)
     : true;
 }, 12_000, "Live call media and Composer controls released");
-const navVoice = () => desktop.clickText("Live voice", ".settings-nav-label");
+// Live Voice settings live inside the General page: the rail no longer carries a
+// dedicated voice entry, so navigation asserts the merged section itself.
+const navGeneral = () => desktop.clickText("General", ".settings-nav-label");
 const openSettings = async () => {
   await desktop.clickSelector('[data-nav="settings"]');
   await waitFor(() => desktop.evaluate("!!document.querySelector('.settings-nav')"), 10_000, "Settings navigation");
-  await navVoice();
+  await navGeneral();
   await waitFor(() => desktop.evaluate("!!document.querySelector('.live-voice-settings')"), 10_000, "Live Voice settings");
 };
 const backToChat = () => desktop.clickSelector('[data-nav="back-to-app"]');
@@ -125,11 +127,6 @@ try {
   assert.equal(fixture.stats.connections, 0);
   await desktop.screenshot("live-voice-disabled.png");
   pass("ordinary users can reach Voice settings without starting capture");
-
-  await desktop.input(".settings-search", "Live voice");
-  await waitFor(() => desktop.evaluate("[...document.querySelectorAll('.settings-nav-label')].some(el => el.textContent.trim() === 'Live voice')"), 5_000, "Voice search match");
-  await navVoice();
-  await desktop.input(".settings-search", "");
   await openRealtimePicker();
   await desktop.clickText("Local Live Voice fixture", '[role="option"]');
   await waitFor(async () => (await settings()).liveVoice?.bindings.some((binding) => binding.providerId === providerId), 5_000, "provider binding persists");
@@ -153,8 +150,32 @@ try {
     true, "the explicitly selected fixture provider is usable");
   assert.equal(fixture.stats.connections, 0);
   await desktop.screenshot("live-voice-configured.png");
-  pass("normal settings search, explicit account binding and enablement preserve legacy voice settings");
+  pass("General hosts the merged voice settings; explicit account binding and enablement preserve legacy voice settings");
 
+  await backToChat();
+  // The composer's prepare menu links to the merged card. Live Voice lives
+  // inside General, below appearance, storage, network, and power, so the link
+  // must scroll the card into view instead of dropping the user at the page
+  // top. The control only exists once the feature is enabled, which is why this
+  // runs here rather than from the disabled-state screenshot above.
+  await desktop.clickSelector(".live-voice-control button");
+  await waitFor(() => desktop.evaluate(
+    `!!document.querySelector('.live-voice-preparation button[aria-label="Open settings"]')`),
+  5_000, "Live Voice prepare menu settings action");
+  await desktop.clickSelector('.live-voice-preparation button[aria-label="Open settings"]');
+  await waitFor(() => desktop.evaluate(
+    `!![...document.querySelectorAll('.settings-nav-item.active')].find(e => e.textContent.trim() === 'General')`),
+  10_000, "Live Voice entry selects General");
+  await waitFor(() => desktop.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card-block')]
+      .find(el => el.querySelector('.settings-card-heading')?.textContent.trim() === 'Live voice');
+    const pane = document.querySelector('.settings-content');
+    if (!card || !pane) return false;
+    const box = card.getBoundingClientRect(), view = pane.getBoundingClientRect();
+    return card.checkVisibility() && box.top >= view.top - 1 && box.bottom <= view.bottom + 1;
+  })()`), 10_000, "Live Voice card scrolled into view in General");
+  await desktop.screenshot("live-voice-entry-anchored.png");
+  pass("prepare-menu settings action lands on the merged General card");
   await backToChat();
   await startCall();
   assert.equal((await status()).call.muted, true);

@@ -42,6 +42,13 @@ test("settings drag band stops at the nav rail so surfaces stay consistent", () 
 
   // The rail still drags the window even though the band no longer covers it.
   assert.match(settingsSource, /className="settings-nav-top drag"/);
+  // The back action moved from the pinned footer to the rail's top-left: it
+  // sits inside the drag band but ahead of the scrolling destination list.
+  const topBand = settingsSource.indexOf('className="settings-nav-top drag"');
+  const backAction = settingsSource.indexOf('className="settings-back no-drag"');
+  const navScroll = settingsSource.indexOf('className="settings-nav-scroll no-drag"');
+  assert.ok(topBand >= 0 && backAction >= 0 && navScroll >= 0);
+  assert.ok(topBand < backAction && backAction < navScroll);
 });
 
 test("settings drag region does not capture control clicks", () => {
@@ -50,6 +57,5 @@ test("settings drag region does not capture control clicks", () => {
     /\.settings-titlebar\s*\{[^}]*pointer-events:\s*none;/s,
   );
   assert.match(settingsSource, /className="settings-back no-drag"/);
-  assert.match(settingsSource, /className="settings-search-wrap no-drag"/);
   assert.match(settingsSource, /className="settings-nav-scroll no-drag"/);
 });

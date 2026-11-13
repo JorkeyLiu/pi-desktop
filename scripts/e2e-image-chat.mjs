@@ -222,8 +222,8 @@ try {
   );
   await waitFor(() => evaluate(`!!document.querySelector('[data-nav="settings"]') && !document.querySelector('.startup-splash')`),30000,"desktop ready");
   await evaluate(`document.querySelector('[data-nav="settings"]').click()`);
-  await waitFor(() => evaluate(`!![...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='AI')`),10000,"AI settings");
-  await click("AI");
+  await waitFor(() => evaluate(`!![...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='对话')`),10000,"chat settings");
+  await click("对话");
   await click("模型");
   await waitFor(() => evaluate(`!!document.querySelector('.model-default-row')`),10000,"model defaults");
   const gap = await evaluate(`(() => {const rows=[...document.querySelectorAll('.settings-row')];const image=rows.find(e=>e.innerText.includes('生图模型'));return image.getBoundingClientRect().top-document.querySelector('.model-default-row').getBoundingClientRect().bottom})()`);

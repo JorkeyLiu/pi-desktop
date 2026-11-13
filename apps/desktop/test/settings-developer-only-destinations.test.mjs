@@ -10,6 +10,7 @@ import test from "node:test";
 import {
   SETTINGS_NAV,
   isSettingsDestinationHidden,
+  resolveSettingsTab,
   searchSettings,
   visibleSettingsNav,
 } from "../src/lib/settings-search.ts";
@@ -46,12 +47,26 @@ const settingsPrimitives = readFileSync(
 const identity = (key) => key;
 const developerOnlyIds = SETTINGS_NAV.filter(entry => entry.developerOnly === true).map(entry => entry.id);
 
-test("Live Voice is reachable in every build without developer mode", () => {
+test("Live Voice and keyboard shortcuts stay reachable inside General", () => {
   for (const developerMode of [false, true]) {
     for (const includeDevelopmentOnly of [false, true]) {
-      assert.ok(visibleSettingsNav(developerMode, includeDevelopmentOnly)
-        .some((entry) => entry.id === "voice"));
-      assert.equal(isSettingsDestinationHidden("voice", developerMode, includeDevelopmentOnly), false);
+      // Retired rail ids keep working: deep links and plugin navigation that
+      // still name voice/shortcuts resolve to the page that renders them.
+      assert.equal(resolveSettingsTab("voice"), "general");
+      assert.equal(resolveSettingsTab("shortcuts"), "general");
+      assert.equal(resolveSettingsTab("general"), "general");
+      for (const legacyId of ["voice", "shortcuts"]) {
+        assert.equal(
+          isSettingsDestinationHidden(legacyId, developerMode, includeDevelopmentOnly),
+          false,
+        );
+      }
+      // Neither retired id owns a rail row any more.
+      assert.equal(
+        visibleSettingsNav(developerMode, includeDevelopmentOnly)
+          .some((entry) => entry.id === "voice"),
+        false,
+      );
       for (const query of [
         "liveVoice.title",
         "liveVoice.enable",
@@ -61,16 +76,55 @@ test("Live Voice is reachable in every build without developer mode", () => {
         "liveVoice.adapters.openai-realtime.title",
       ]) {
         assert.ok(searchSettings(query, identity, { developerMode, includeDevelopmentOnly })
-          .some((hit) => hit.tab === "voice"));
+          .some((hit) => hit.tab === "general"));
       }
     }
   }
-  // Voice is a regular Preferences destination now: no Experimental badge on
-  // the rail row or the page title.
+  // General has no Experimental badge of its own; the merged rows live there.
   assert.equal(
-    SETTINGS_NAV.find((entry) => entry.id === "voice")?.experimentalBadgeKey,
+    SETTINGS_NAV.find((entry) => entry.id === "general")?.experimentalBadgeKey,
     undefined,
   );
+});
+test("Live Voice navigation enters General and anchors its merged card", () => {
+  const navigation = readFileSync(
+    new URL("../src/features/voice/live/live-voice-navigation.ts", import.meta.url),
+    "utf8",
+  );
+  // Voice is a retired id: the merged page renders General, so navigation
+  // resolves the id instead of storing one the rail no longer offers.
+  assert.match(navigation, /resolveSettingsTab\("voice"\)/);
+  assert.doesNotMatch(navigation, /setSettingsTab\("voice"\)/);
+  assert.match(navigation, /setSettingsTab\(hidden \? "agent" : destination\)/);
+  // The card sits below Appearance, storage, network, and power, so the entry
+  // also seeds the heading anchor the settings page scrolls to and flashes.
+  assert.match(navigation, /setSettingsAnchor\(hidden \? null : "liveVoice\.title"\)/);
+  assert.match(navigation, /setPage\("settings"\)/);
+  // The anchor key is the card's own heading, which is what the page matches
+  // against when it positions the row.
+  assert.match(settingsPage, /"\.settings-content \.settings-row-title, \.settings-content \.settings-card-heading/);
+  assert.match(liveVoiceSettings, /title={t\("liveVoice\.title"\)}/);
+});
+
+test("global settings search lands on the page that renders the row", () => {
+  const cases = [
+    // Chat owns permissions and default behavior, including the
+    // send-while-running mode row.
+    ["settings.sendWhileRunningMode", "ai"],
+    ["settings.defaultsTitle", "ai"],
+    // Live Voice and keyboard shortcuts render inside General.
+    ["liveVoice.enable", "general"],
+    ["settings.keyboard", "general"],
+    ["settings.shortcutResetAll", "general"],
+    // The image-generation default row renders on the model page.
+    ["settings.imageModel", "agent"],
+  ];
+  for (const [query, tab] of cases) {
+    assert.ok(
+      searchSettings(query, identity).some((hit) => hit.tab === tab),
+      `${query} must resolve to the ${tab} destination`,
+    );
+  }
 });
 
 test("Cloud sync is Experimental and available in every build", () => {

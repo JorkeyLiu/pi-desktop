@@ -989,8 +989,7 @@ sklm: {
     groupExtensions: "확장 기능",
     nav: {
       general: "일반",
-      ai: "AI",
-      shortcuts: "단축키",
+      chat: "대화",
       instructions: "지침",
       models: "모델",
       skills: "스킬",
@@ -1000,7 +999,6 @@ sklm: {
       sync: "클라우드 동기화",
       remoteHosts: "원격 호스트",
       info: "정보",
-      voice: "음성",
     },
     configSync: {
       title: "Cloud sync",
@@ -1163,8 +1161,7 @@ sklm: {
       },
     },
     general: "일반",
-    ai: "AI",
-    shortcuts: "단축키",
+    chat: "대화",
     instructions: "지침",
     instructionsGlobal: "전역 지침",
     instructionsGlobalDesc: "프로젝트 지침보다 먼저 적용됩니다.",
@@ -1523,6 +1520,14 @@ sklm: {
     noResults: "일치하는 설정 없음",
     enterToSend: "Enter로 보내기",
     enterToSendDesc: "끔: ⌘/Ctrl+Enter를 눌러 보내세요.",
+    sendWhileRunningMode: "에이전트 실행 중 메시지",
+    sendWhileRunningModeDesc:
+      "즉시 보내기: 메시지가 실행 중인 차례로 바로 전달됩니다. 대기열: 해당 차례가 끝날 때까지 기다립니다.",
+    sendWhileRunningModeImmediate: "즉시 보내기",
+    sendWhileRunningModeQueue: "대기열에 추가",
+    // Synonyms global settings search answers to.
+    searchAliasSendMode: "전송 모드 · 실행 중 전송 · 대기열에 추가",
+    searchAliasImageModel: "이미지 모델 · 이미지 생성 모델 · 이미지 생성",
     infiniteProviderRetry: "성공할 때까지 재시도",
     infiniteProviderRetryDesc: "네트워크 및 일시적인 제공자 오류가 성공할 때까지 계속 재시도됩니다. 언제든 중지할 수 있지만 API 사용량이 계속 발생할 수 있습니다.",
     smoothStreaming: "부드러운 스트리밍",

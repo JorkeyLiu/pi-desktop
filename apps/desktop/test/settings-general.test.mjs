@@ -8,6 +8,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { loadStyles } from "./helpers/styles.mjs";
+import { catalogs, flattenCatalog } from "@pi-desktop/i18n";
+import { SETTINGS_NAV, searchSettings } from "../src/lib/settings-search.ts";
 
 const settingsPageSource = await readSettingsSource();
 const settingsSearchSource = await readFile(
@@ -118,14 +120,14 @@ const voiceSettingsSource = await readFile(
   "utf8",
 );
 
-test("Basics and AI tabs expose their respective app and AI controls", () => {
+test("General and Chat tabs expose their respective app and agent controls", () => {
   const generalStart = settingsPageSource.indexOf('{tab === "general" && settings && (');
   const aiStart = settingsPageSource.indexOf('{tab === "ai" && settings && (');
-  const voiceStart = settingsPageSource.indexOf(
-    '{tab === "voice" && !tabHidden && settings && (',
+  const modelsStart = settingsPageSource.indexOf(
+    '{tab === "agent" && <ModelConfigPage />}',
   );
   const generalSource = settingsPageSource.slice(generalStart, aiStart);
-  const aiSource = settingsPageSource.slice(aiStart, voiceStart);
+  const aiSource = settingsPageSource.slice(aiStart, modelsStart);
 
   assert.match(generalSource, /<ThemeRow /);
   assert.match(generalSource, /<LanguageRow /);
@@ -177,9 +179,12 @@ test("Basics and AI tabs expose their respective app and AI controls", () => {
   // The AI tab keeps the Settings picker control: a native <select> popup is
   // platform-drawn and cannot carry the shared menu surface or its check mark.
   assert.doesNotMatch(aiSource, /<select/);
-  // Voice owns a separate destination; the AI tab does not duplicate it.
+  // Live Voice and keyboard shortcuts are General content now: the Chat page
+  // keeps no second copy, and both sections render from the shared primitives.
   assert.doesNotMatch(aiSource, /VoiceSettingsCard|VoiceSettingsSection|voice-settings/);
-  assert.match(settingsPageSource, /tab === "voice" && !tabHidden && settings && [\s\S]*?<VoiceSettingsSection/);
+  assert.doesNotMatch(aiSource, /KeyboardShortcutsSection/);
+  assert.match(generalSource, /<VoiceSettingsSection/);
+  assert.match(generalSource, /<KeyboardShortcutsSection/);
   assert.match(voiceSettingsSource, /LiveVoiceSettings as VoiceSettingsSection/);
   assert.doesNotMatch(voiceSettingsSource, /voiceIpc|voiceEnable|voiceMicrophone|voiceModel/);
   assert.doesNotMatch(settingsSearchSource, /settings\.voiceEnable|settings\.voiceMicrophone|settings\.voiceModel/);
@@ -393,9 +398,8 @@ test("OAuth account identity is provider-scoped across IPC and pi-ai", () => {
 
 test("settings nav icons map each destination to a semantic lucide glyph", () => {
   assert.match(settingsPageSource, /general: <IconSliders/);
-  assert.match(settingsPageSource, /ai: <IconSparkles/);
+  assert.match(settingsPageSource, /ai: <IconChat/);
   assert.doesNotMatch(settingsPageSource, /usage: <IconActivity/);
-  assert.match(settingsPageSource, /shortcuts: <IconKeyboard/);
   assert.match(settingsPageSource, /instructions: <IconFileText/);
   assert.match(settingsPageSource, /agent: <IconBot/);
   assert.doesNotMatch(settingsPageSource, /import: <IconDownload/);
@@ -407,7 +411,7 @@ test("settings nav icons map each destination to a semantic lucide glyph", () =>
 });
 
 test("settings nav keeps a flat searchable index with titled visual groups", () => {
-  assert.match(settingsPageSource, /filteredGroups\.map/);
+  assert.match(settingsPageSource, /navGroups\.map/);
   assert.match(settingsPageSource, /className="settings-nav-group"/);
   assert.match(settingsPageSource, /SETTINGS_NAV_GROUP_LABELS/);
   assert.match(settingsPageSource, /className="settings-nav-group-label"/);
@@ -431,9 +435,8 @@ test("settings nav keeps a flat searchable index with titled visual groups", () 
   const navOrder = [
     "general",
     "ai",
-    "shortcuts",
-    "instructions",
     "agent",
+    "instructions",
     "skills",
     "mcp",
     "subagents",
@@ -444,14 +447,22 @@ test("settings nav keeps a flat searchable index with titled visual groups", () 
   assert.deepEqual(navOrder, [...navOrder].sort((a, b) => a - b));
   const generalStart = settingsSearchSource.indexOf('id: "general"');
   const aiStart = settingsSearchSource.indexOf('id: "ai"');
-  const shortcutsStart = settingsSearchSource.indexOf('id: "shortcuts"');
+  const modelsStart = settingsSearchSource.indexOf('id: "agent"');
   const generalEntry = settingsSearchSource.slice(generalStart, aiStart);
-  const aiEntry = settingsSearchSource.slice(aiStart, shortcutsStart);
+  const aiEntry = settingsSearchSource.slice(aiStart, modelsStart);
+  const instructionsStart = settingsSearchSource.indexOf('id: "instructions"');
+  const modelsEntry = settingsSearchSource.slice(modelsStart, instructionsStart);
+  assert.doesNotMatch(settingsSearchSource, /id: "voice"/);
+  assert.doesNotMatch(settingsSearchSource, /id: "shortcuts"/);
   assert.equal(settingsSearchSource.indexOf('id: "usage"'), -1);
   assert.doesNotMatch(generalEntry, /settings\.defaultsTitle/);
+  assert.match(generalEntry, /liveVoice\.title/);
+  assert.match(generalEntry, /settings\.keyboard/);
   assert.match(aiEntry, /settings\.defaultsTitle/);
   assert.match(aiEntry, /settings\.commandShell/);
   assert.doesNotMatch(aiEntry, /settings\.promptEnhancementModelTitle/);
+  assert.doesNotMatch(aiEntry, /settings\.imageModel/);
+  assert.match(modelsEntry, /settings\.imageModel/);
   assert.match(settingsSearchSource, /keywordKeys/);
   assert.match(settingsSearchSource, /settings\.projectArchive/);
   assert.doesNotMatch(stylesSource, /\.token-usage-page/);
@@ -468,8 +479,7 @@ test("settings nav keeps a flat searchable index with titled visual groups", () 
 test("settings rail uses short parallel labels and descriptive page titles", () => {
   const navKeys = [
     "settings.nav.general",
-    "settings.nav.ai",
-    "settings.nav.shortcuts",
+    "settings.nav.chat",
     "settings.nav.instructions",
     "settings.nav.models",
     "settings.nav.skills",
@@ -485,10 +495,15 @@ test("settings rail uses short parallel labels and descriptive page titles", () 
     assert.match(zhTWLocaleSource, new RegExp(`${key.split(".").at(-1)}:`));
     assert.match(trLocaleSource, new RegExp(`${key.split(".").at(-1)}:`));
   }
+  assert.match(settingsSearchSource, /titleKey: "settings\.chat"/);
   assert.match(settingsSearchSource, /titleKey: "settings\.configuration"/);
   assert.match(settingsSearchSource, /titleKey: "settings\.projectArchive"/);
   assert.match(settingsPageSource, /activeTitleKey/);
   assert.match(settingsPageSource, /titleKey: entry\.titleKey/);
+  // The retired "AI" rail label must not return as user-visible copy.
+  assert.doesNotMatch(settingsSearchSource, /settings\.nav\.ai/);
+  assert.doesNotMatch(enLocaleSource, /\n\s+ai: /);
+  assert.doesNotMatch(zhLocaleSource, /\n\s+ai: /);
 });
 
 test("Plugins marketplace keeps official refresh without source settings", () => {
@@ -540,4 +555,71 @@ test("Live Voice account cards show their options only after a provider is chose
   assert.match(source, /\{current && adapter !== "codex-live" \? \(/);
   assert.match(source, /\{current && adapter === "openai-realtime" \? \(/);
   assert.doesNotMatch(source, /disabled=\{!current/);
+});
+
+// The settings index is a destination list, not a full-text of the page copy,
+// so a row whose label describes the setting in full also carries the short
+// phrases users actually type. These assertions run against the real catalogs
+// through searchSettings, not the index as text.
+const catalogLookup = (locale) => {
+  const flat = flattenCatalog(catalogs[locale]);
+  return (key) => flat[key] ?? key;
+};
+
+test("common setting phrases reach the row that renders them", () => {
+  const cases = [
+    { locale: "en", query: "send mode", tab: "ai", anchor: "settings.sendWhileRunningMode" },
+    { locale: "zh-CN", query: "发送模式", tab: "ai", anchor: "settings.sendWhileRunningMode" },
+    { locale: "en", query: "image model", tab: "agent", anchor: "settings.imageModel" },
+    { locale: "zh-CN", query: "图片模型", tab: "agent", anchor: "settings.imageModel" },
+  ];
+  for (const { locale, query, tab, anchor } of cases) {
+    const t = catalogLookup(locale);
+    const hits = searchSettings(query, t);
+    assert.ok(hits.length > 0, `${locale} "${query}" finds something`);
+    assert.equal(hits[0].tab, tab, `${locale} "${query}" leads with ${tab}`);
+    const hit = hits.find((candidate) => candidate.tab === tab);
+    assert.ok(hit, `${locale} "${query}" reaches ${tab}`);
+    // The anchor is the row's own title key, which the page renders as a
+    // `.settings-row-title`; an alias key would flash text no row shows.
+    assert.equal(hit.rowKey, anchor, `${locale} "${query}" anchors ${anchor}`);
+    const entry = SETTINGS_NAV.find((candidate) => candidate.id === tab);
+    assert.ok(entry.keywordKeys.includes(anchor), `${anchor} is an indexed ${tab} row`);
+    assert.notEqual(t(anchor), anchor, `${locale} translates ${anchor}`);
+  }
+
+  // Existing label matching is unchanged: the full row label still resolves,
+  // and a models query still lands on the same anchor through keywordKeys.
+  const english = catalogLookup("en");
+  assert.equal(
+    searchSettings("message while the agent is running", english)[0]?.rowKey,
+    "settings.sendWhileRunningMode",
+  );
+  assert.ok(
+    searchSettings("image generation model", english)
+      .some((hit) => hit.tab === "agent" && hit.rowKey === "settings.imageModel"),
+  );
+});
+
+test("settings search indexes only keys the catalogs define", () => {
+  for (const locale of ["en", "zh-CN", "zh-TW", "tr", "de", "es", "fr", "ko", "pt-BR"]) {
+    const flat = flattenCatalog(catalogs[locale]);
+    for (const entry of SETTINGS_NAV) {
+      for (const key of [entry.labelKey, entry.titleKey, ...entry.keywordKeys]) {
+        assert.equal(typeof flat[key], "string", `${locale} defines ${key} (${entry.id})`);
+      }
+      for (const alias of entry.searchAliases ?? []) {
+        assert.equal(typeof flat[alias.key], "string", `${locale} defines ${alias.key}`);
+        assert.ok(
+          entry.keywordKeys.includes(alias.anchorKey),
+          `${alias.key} anchors a ${entry.id} row that is indexed`,
+        );
+      }
+    }
+  }
+  // The k-token hand-off unit is a row label; the kind names carry their own
+  // prefix. A near-miss key would index a row that nothing translates.
+  const subagents = SETTINGS_NAV.find((entry) => entry.id === "subagents");
+  assert.ok(subagents.keywordKeys.includes("settings.subagentSelfHandoffUnitKTokens"));
+  assert.ok(!subagents.keywordKeys.includes("settings.subagentSelfHandoffKindUnitKTokens"));
 });

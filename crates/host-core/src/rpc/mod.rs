@@ -808,6 +808,19 @@ fn normalize_settings_value(mut value: Value) -> Value {
                 Value::Number(DEFAULT_LARGE_PASTE_THRESHOLD.into()),
             );
         }
+        // A settings document written before this preference existed carries
+        // no value, and an ordinary send into a running session must keep
+        // steering that turn; queueing is the explicit opt-in.
+        let valid_send_while_running_mode = matches!(
+            object.get("sendWhileRunningMode").and_then(Value::as_str),
+            Some("immediate") | Some("queue")
+        );
+        if !valid_send_while_running_mode {
+            object.insert(
+                "sendWhileRunningMode".into(),
+                Value::String("immediate".into()),
+            );
+        }
         // The network policy replaced three per-feature switches. A section that
         // is present is written back in the shape
         // `packages/shared/src/network-policy.ts` defines: a usable `mode`, plus
@@ -1086,6 +1099,15 @@ fn validate_settings_value(value: &Value) -> Result<(), JsonRpcError> {
             return Err(rpc_err(
                 1002,
                 "keepAwakeWhileRunning must be a boolean",
+                "INVALID_PARAMS",
+            ));
+        }
+    }
+    if let Some(mode) = object.get("sendWhileRunningMode") {
+        if !matches!(mode.as_str(), Some("immediate") | Some("queue")) {
+            return Err(rpc_err(
+                1002,
+                "sendWhileRunningMode must be immediate or queue",
                 "INVALID_PARAMS",
             ));
         }
@@ -2412,6 +2434,7 @@ async fn handle_request(
                     "defaultCommandShell": tools::shell::default_shell_id(),
                     "theme": "dark",
                     "enterToSend": true,
+                    "sendWhileRunningMode": "immediate",
                     "largePasteThreshold": DEFAULT_LARGE_PASTE_THRESHOLD,
                     "contextCompaction": {
                         "enabled": true,
@@ -8066,6 +8089,59 @@ mod tests {
         );
         assert!(catalog["choices"].is_array());
         assert!(catalog["effective"].is_object() || catalog["effective"].is_null());
+    }
+
+    #[tokio::test]
+    async fn send_while_running_mode_defaults_to_immediate_and_accepts_queue() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let state = Arc::new(Mutex::new(app_state));
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        let defaults = handle_request(state.clone(), "settings.get", json!({}), tx.clone())
+            .await
+            .unwrap();
+        assert_eq!(defaults["sendWhileRunningMode"], "immediate");
+
+        // A document written before the preference existed carries no value and
+        // must keep steering a running turn instead of losing the switch.
+        {
+            let st = state.lock().await;
+            st.db
+                .set_setting(
+                    "app",
+                    &json!({ "theme": "dark", "enterToSend": true, "onboardingDismissed": true }),
+                )
+                .unwrap();
+        }
+        let legacy = handle_request(state.clone(), "settings.get", json!({}), tx.clone())
+            .await
+            .unwrap();
+        assert_eq!(legacy["sendWhileRunningMode"], "immediate");
+
+        handle_request(
+            state.clone(),
+            "settings.set",
+            json!({ "sendWhileRunningMode": "queue" }),
+            tx.clone(),
+        )
+        .await
+        .unwrap();
+        let queued = handle_request(state.clone(), "settings.get", json!({}), tx.clone())
+            .await
+            .unwrap();
+        assert_eq!(queued["sendWhileRunningMode"], "queue");
+
+        let invalid = handle_request(
+            state.clone(),
+            "settings.set",
+            json!({ "sendWhileRunningMode": "steer" }),
+            tx.clone(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(invalid.data.unwrap()["errorCode"], "INVALID_PARAMS");
     }
 
     #[tokio::test]

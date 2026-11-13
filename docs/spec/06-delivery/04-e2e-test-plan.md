@@ -105,10 +105,13 @@
   fixture CA in the child process; do not disable TLS, sender, sandbox or
   microphone checks.
 - **Steps:** Open Live from Composer while disabled and follow Open settings.
-  Find Voice through settings search, bind the fixture account, enable Live,
-  connect, unmute, receive audio/captions, mute and hang up. Cancel a delayed
-  startup, disconnect the provider and explicitly reconnect. Restart with the
-  same isolated profile, inspect persisted settings and disable Live.
+  Live Voice has no rail row of its own: Settings opens on General, where the
+  card sits below appearance, storage, network, and power, and the prepare
+  menu's settings action must scroll that card into view. Bind the fixture
+  account, enable Live, connect, unmute, receive audio/captions, mute and hang
+  up. Cancel a delayed startup, disconnect the provider and explicitly
+  reconnect. Restart with the same isolated profile, inspect persisted settings
+  and disable Live.
 - **Expected:** Voice is reachable without developer mode. Enabling settings
   does not capture audio; the real built Renderer passes the exact main-frame
   owner check. Only the chosen account is used. Mute stops input, every end
@@ -120,7 +123,9 @@
   --plain-http` repeats the call flow against a loopback `ws://` endpoint.
   `live-voice-websocket-endpoint.test.mjs` connects the production transport to
   a local loopback WebSocket and verifies proxy refusal; `live-voice-owner.test.mjs`
-  bundles the production owner module and rejects other files/frames. Fixture
+  bundles the production owner module and rejects other files/frames. The same
+  run asserts that the prepare menu's Open settings action selects General and
+  scrolls the merged Live voice card fully into the content viewport. Fixture
   audio is not physical-device or real-provider acceptance. Commands and
   results are recorded in
   `docs/implementation/live-voice-public-readiness.md`.
@@ -197,7 +202,8 @@
 - **Steps:**
   1. Confirm neither Live nor Work Composer icon exists while disabled. Every
      account card shows only its provider picker until that account is bound.
-     Enable Live Voice only from Settings → Voice; verify exactly one idle
+     Enable Live Voice only from Settings → General → Live voice (the rail has
+     no Voice row); verify exactly one idle
      voice icon and that the card keeps its Model configuration link on the
      heading line beside the help mark.
   2. Open preparation and expand/collapse work options without starting. Verify
@@ -238,7 +244,7 @@
 - **Specs:** [Live Voice](../03-runtime/live-voice.md),
   [Live Work](../03-runtime/live-work-session.md),
   [Component spec](../04-ux/08-component-spec.md#1171-live-voice-preparation-compact-call-bar-and-details),
-  [Settings IA](../04-ux/06-settings-ia.md#voice).
+  [Settings IA](../04-ux/06-settings-ia.md#live-voice-inside-general).
 - **Acceptance:** C / E / Security / Quality.
 - **Milestone:** Post-MVP experimental interaction maintenance.
 - **Coverage:** Targeted controller/presentation regression tests and
@@ -1762,6 +1768,42 @@ validation still needed.
   itself remains source-level (`composer-ime.test.mjs`) because protocol smoke
   does not dispatch key events.
 
+#### E2E-008g: Composer send while the agent is still running
+
+- **Preconditions**: A turn is running in the open session and the runtime
+  reports it as steerable; `AppSettings.sendWhileRunningMode` is unset.
+- **Steps**: 1) Send a message while that turn runs. 2) Open Settings → Chat,
+  choose Queue in "Message while the agent is running", return, and repeat
+  step 1. 3) Choose Send immediately again and send while the session cannot
+  steer — a pending plan decision, a session that forbids steering, or a turn
+  id the Host no longer knows. 4) Use the explicit steering shortcut in the
+  same states.
+- **Expected**: An unset preference reads as Send immediately, so the message
+  steers the turn that is already running: it joins the live turn instead of
+  opening a second one. Queue is the opt-in and leaves the message waiting in
+  that session's queue until the running turn finishes; the chosen value is
+  persisted and survives leaving and reopening the Chat page. When steering
+  cannot apply, an ordinary send falls back to the queue so the message is
+  never dropped or reported under a mode the user did not choose — but only
+  when steering provably never reached the turn: no running turn, no reported
+  turn id, a session whose capability model forbids steering, or the Host's
+  `TURN_NOT_FOUND` before acceptance. A pending plan decision is not a queue
+  fallback: it blocks the send and keeps the draft. Any other steering failure
+  also keeps the draft and reports it, because the turn may already hold the
+  accepted copy. The explicit steering shortcut never queues: it announces
+  that steering is unavailable (`chat.steeringUnavailable`) and leaves the
+  draft where it was. No state starts a second turn and no send silently
+  duplicates or discards a message.
+- **Specs linked**: `04-ux/08-component-spec.md` §11.5,
+  `04-ux/06-settings-ia.md` (Chat page)
+- **Acceptance**: C (composer send)
+- **Milestone**: M2
+- **Status**: Source-level — `packages/shared/src/send-while-running.test.ts`
+  and `apps/desktop/test/settings-send-while-running.test.mjs` cover the
+  preference, `apps/desktop/test/queue-pending-actions.test.mjs` and the queue
+  slice tests cover steering, queueing, and the unavailable fallback, and
+  `pnpm test:e2e:settings-scroll` drives the Chat row, its saved settings write,
+  and the reloaded selection; a live provider steering lane remains manual.
 #### E2E-008f: Composer empty last line keeps the caret and the typed text
 
 - **Preconditions**: A draft with two lines whose second line holds one
@@ -3433,8 +3475,17 @@ validation still needed.
 #### E2E-039: Settings titlebar drag moves the window
 
 - **Preconditions**: App running windowed on macOS with Settings open.
-- **Steps**: 1) Record the window position. 2) Drag the empty 46px band above the settings rail. 3) Drag the same band above the content pane. 4) Use Back, search, Project archive, and navigation controls. 5) In light and dark themes, sample the top row's color above the rail and above the content pane.
-- **Expected**: Either top-band drag moves the native window; Back, search, and navigation remain interactive and never initiate a window drag. The top row above the rail matches the rail surface (`#f4f4f4` light / `#000` dark) and the top row above the content pane matches the primary surface, so the band never renders a mismatched color over the rail.
+- **Steps**: 1) Record the window position. 2) Confirm Back to app renders at
+  the rail's top-left inside the 46px drag band and carries focus on entry, and
+  that the rail exposes no page-local search field. 3) Drag the empty 46px band
+  above the settings rail. 4) Drag the same band above the content pane. 5) Use
+  Back, Project archive, and navigation controls. 6) In light and dark themes,
+  sample the top row's color above the rail and above the content pane.
+- **Expected**: Either top-band drag moves the native window; Back, Project
+  archive, and navigation remain interactive and never initiate a window drag.
+  The top row above the rail matches the rail surface (`#f4f4f4` light / `#000`
+  dark) and the top row above the content pane matches the primary surface, so
+  the band never renders a mismatched color over the rail.
 - **Specs linked**: `04-ux/06-settings-ia.md`, `04-ux/01-ui-ia.md`
 - **Acceptance**: Quality (key operations feel polished)
 - **Milestone**: M5
@@ -10825,7 +10876,7 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 | A — App startup | E2E-001, E2E-002, E2E-003, E2E-004, E2E-067, E2E-076, E2E-079, E2E-092, E2E-097, E2E-143, E2E-150, E2E-168, E2E-204 |
 | A / C / F / Quality — Tray session navigation | E2E-TRAY-bounded-session-navigation |
 | B — Model config | E2E-005, E2E-PROVIDER-custom-endpoint-no-api-key, E2E-006, E2E-007, E2E-038, E2E-050, E2E-052, E2E-055, E2E-066, E2E-080, E2E-082, E2E-102c, E2E-102d, E2E-102e, E2E-151, E2E-154, E2E-163, E2E-166, E2E-172, E2E-174, E2E-197, E2E-005G, E2E-005J, E2E-199, E2E-201, E2E-202, E2E-203, E2E-205, E2E-206, E2E-209, E2E-PLUGIN-provider-catalog-add-service |
-| C — Conversation & stream | E2E-CHAT-long-history-stream-keeps-responsive, E2E-CHAT-running-status-survives-output-pauses, E2E-008, E2E-008d, E2E-008e, E2E-008a, E2E-009, E2E-010, E2E-011, E2E-011a, E2E-011b, E2E-011d, E2E-011e, E2E-011g, E2E-031, E2E-040, E2E-047, E2E-048, E2E-048A, E2E-049, E2E-052, E2E-053, E2E-054, E2E-055, E2E-059, E2E-059a, E2E-060c, E2E-060d, E2E-061, E2E-061a, E2E-062, E2E-064, E2E-065, E2E-068, E2E-071, E2E-073, E2E-074, E2E-075, E2E-081, E2E-083, E2E-084, E2E-086, E2E-087, E2E-088, E2E-088b, E2E-089, E2E-090, E2E-COMPOSER-narrow-controls, E2E-094, E2E-095, E2E-096, E2E-097, E2E-098, E2E-099, E2E-102, E2E-102a, E2E-102b, E2E-102c, E2E-102d, E2E-102g, E2E-106, E2E-109, E2E-111, E2E-114, E2E-116, E2E-117, E2E-118, E2E-119, E2E-120, E2E-121, E2E-218, E2E-259, E2E-219, E2E-AGENTS-001, E2E-142, E2E-144, E2E-145, E2E-146, E2E-146a, E2E-147, E2E-151, E2E-154, E2E-155, E2E-158, E2E-159, E2E-161, E2E-162, E2E-166, E2E-172, E2E-173, E2E-174, E2E-177, E2E-178, E2E-179, E2E-180, E2E-182, E2E-183, E2E-187, E2E-198, E2E-199, E2E-202, E2E-203, E2E-207, E2E-208, E2E-CHAT-content-width-handles, E2E-250, E2E-102i, E2E-PLUGIN-session-orchestrator-real-workers, E2E-SUBAGENT-settlement-updates-before-parent-poll, E2E-SUBAGENT-resume-a-settled-delegation |
+| C — Conversation & stream | E2E-CHAT-long-history-stream-keeps-responsive, E2E-CHAT-running-status-survives-output-pauses, E2E-008, E2E-008d, E2E-008e, E2E-008g, E2E-008a, E2E-009, E2E-010, E2E-011, E2E-011a, E2E-011b, E2E-011d, E2E-011e, E2E-011g, E2E-031, E2E-040, E2E-047, E2E-048, E2E-048A, E2E-049, E2E-052, E2E-053, E2E-054, E2E-055, E2E-059, E2E-059a, E2E-060c, E2E-060d, E2E-061, E2E-061a, E2E-062, E2E-064, E2E-065, E2E-068, E2E-071, E2E-073, E2E-074, E2E-075, E2E-081, E2E-083, E2E-084, E2E-086, E2E-087, E2E-088, E2E-088b, E2E-089, E2E-090, E2E-COMPOSER-narrow-controls, E2E-094, E2E-095, E2E-096, E2E-097, E2E-098, E2E-099, E2E-102, E2E-102a, E2E-102b, E2E-102c, E2E-102d, E2E-102g, E2E-106, E2E-109, E2E-111, E2E-114, E2E-116, E2E-117, E2E-118, E2E-119, E2E-120, E2E-121, E2E-218, E2E-259, E2E-219, E2E-AGENTS-001, E2E-142, E2E-144, E2E-145, E2E-146, E2E-146a, E2E-147, E2E-151, E2E-154, E2E-155, E2E-158, E2E-159, E2E-161, E2E-162, E2E-166, E2E-172, E2E-173, E2E-174, E2E-177, E2E-178, E2E-179, E2E-180, E2E-182, E2E-183, E2E-187, E2E-198, E2E-199, E2E-202, E2E-203, E2E-207, E2E-208, E2E-CHAT-content-width-handles, E2E-250, E2E-102i, E2E-PLUGIN-session-orchestrator-real-workers, E2E-SUBAGENT-settlement-updates-before-parent-poll, E2E-SUBAGENT-resume-a-settled-delegation |
 | C — Conversation & stream (composer drafts) | E2E-011c, E2E-011c-1, E2E-011c-2 |
 | D — Workspace | E2E-012, E2E-013, E2E-022B, E2E-024I, E2E-047, E2E-049, E2E-057, E2E-058, E2E-060, E2E-068, E2E-075, E2E-078, E2E-153, E2E-158, E2E-182, E2E-187, E2E-252 |
 | C / D / Quality — Project session history resets after collapse | E2E-263 |
@@ -10886,7 +10937,7 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 |---|---|
 | Post-MVP experimental interaction maintenance | E2E-LIVE-VOICE-four-stage-ui |
 | M1 | E2E-001, E2E-002, E2E-003, E2E-028, E2E-029 |
-| M2 | E2E-004, E2E-005, E2E-006, E2E-007, E2E-008, E2E-008d, E2E-008e, E2E-009, E2E-010, E2E-011, E2E-011a, E2E-011b, E2E-011d, E2E-011e, E2E-011g, E2E-020, E2E-021, E2E-021a, E2E-027, E2E-031, E2E-042, E2E-087, E2E-088, E2E-088b, E2E-089, E2E-090, E2E-COMPOSER-narrow-controls, E2E-144, E2E-005J, E2E-201, E2E-202, E2E-207, E2E-206 |
+| M2 | E2E-004, E2E-005, E2E-006, E2E-007, E2E-008, E2E-008d, E2E-008e, E2E-008g, E2E-009, E2E-010, E2E-011, E2E-011a, E2E-011b, E2E-011d, E2E-011e, E2E-011g, E2E-020, E2E-021, E2E-021a, E2E-027, E2E-031, E2E-042, E2E-087, E2E-088, E2E-088b, E2E-089, E2E-090, E2E-COMPOSER-narrow-controls, E2E-144, E2E-005J, E2E-201, E2E-202, E2E-207, E2E-206 |
 | M2 (sidebar menu placement) | E2E-021c |
 | M3 | E2E-012, E2E-013, E2E-014, E2E-015, E2E-016, E2E-017, E2E-018, E2E-019, E2E-040 |
 | M4 | E2E-022, E2E-023, E2E-024, E2E-025, E2E-026, E2E-030, E2E-038 |
@@ -11292,20 +11343,25 @@ This test plan spec is accepted when:
 
 ### US-UI-44 Settings compact directory + merged sections
 - Open Settings light theme at ~1200×690.
-- Full-page shell: rail ~260px on `#f3f3f3`, main `#fff`; search pill at the
-  rail top; Back to app pinned at the rail foot and vertically centred on the
-  main shell's sidebar footer icon line; General active pill with icon.
-- Rail order is exactly General / 常规, AI, Shortcuts / 快捷键,
-  Instructions / 指令, Models / 模型, Skills / 技能, MCP,
-  Subagents / 子智能体, Import / 导入, Projects / 项目, and Info / 信息;
-  the rows are grouped under muted Preferences / 偏好, Agent / 智能体,
-  Workspace / 工作区, and System / 系统 headings without divider lines,
-  duplicate destinations, or placeholder rows. The selected page keeps its
-  descriptive title, such as Model configuration or Project archive.
+- Full-page shell: rail ~260px on `#f3f3f3`, main `#fff`; Back to app at the
+  rail's top-left inside the drag band, carrying the entry focus ring because
+  opening Settings focuses it, and no page-local search field anywhere in the
+  rail; General active pill with icon.
+- Rail order is exactly General / 常规 under muted Preferences / 偏好, then
+  Chat / 对话, Models / 模型, Instructions / 指令, Skills / 技能, MCP,
+  Subagents / 子智能体 under Agent / 智能体, Projects / 项目 under
+  Workspace / 工作区, and Cloud sync / 云同步, Remote hosts / 远程主机,
+  Info / 信息 under System / 系统 — without divider lines, duplicate
+  destinations, retired Live voice / Keyboard shortcuts / Import rows, or
+  placeholder rows. The selected page keeps its descriptive title, such as
+  Model configuration or Project archive.
 - General content: large title and an **Appearance** card with working
-  system/light/dark controls. 全局 AI holds Permissions, Defaults, and the
-  Command shell row; Context management has no settings card. Shortcuts holds
-  the Keyboard shortcuts card.
+  system/light/dark controls, then the network, storage, and power cards, and
+  finally the Live Voice settings section and the Keyboard shortcuts card.
+  Chat holds Permissions, Defaults with the default mode, command shell, link
+  target, thinking and context display, Enter-to-send, message-while-running,
+  retry, streaming, and large-paste rows; Context management has no settings
+  card. Plugin Themes entries stay in a trailing Extensions group.
   File-open target, language
   override, menu-bar behavior, and bottom-panel behavior are absent until
   host-backed implementations exist.
@@ -18536,17 +18592,26 @@ the latest destination. These assertions measure work counts, not device FPS.
 
 ### E2E-SETTINGS-destination-scroll-reset
 
-- Open Settings → AI and scroll midway down. Select Shortcuts: its title and
-  first settings appear at the top. Scroll and return to AI: it starts at top.
+- Open Settings → Chat and scroll midway down. Select Models: its title and
+  first settings appear at the top. Scroll and return to Chat: it starts at
+  top.
+- The rail carries General, Chat, Models, Instructions, Skills, MCP, Subagents,
+  Projects, Cloud sync, Remote hosts, and Info under the Preferences / Agent /
+  Workspace / System groupings, with plugin destinations last under Extensions.
+  There is no in-page search pill, no pinned footer action, no Voice row, and
+  no Shortcuts row: the back-to-app action sits at the rail's top-left above
+  the destination list, and General hosts the Live Voice and Keyboard shortcuts
+  cards below the appearance/storage/network/power sections.
 - Re-select the active destination and update settings without navigating:
   the content keeps its scroll position.
 - Repeat for built-in → plugin, plugin → plugin, and plugin → the previously
   selected built-in destination. Re-selecting a plugin keeps its position.
-- Follow a global search setting anchor into AI from another destination,
-  from an open plugin destination, and within AI: the plugin page is gone and
+- Follow a global search setting anchor into Chat from another destination,
+  from an open plugin destination, and within Chat: the plugin page is gone and
   the target row is visible before the next paint. Consuming the anchor keeps
   that position. An external tab change with no anchor also leaves the plugin
-  and starts at the top.
+  and starts at the top. Entering Live Voice from the composer's prepare menu
+  selects General and scrolls the merged Live voice card into view.
 - Run in light and dark themes.
 - Automated coverage: `pnpm test:e2e:settings-scroll` mounts the production
   SettingsPage, store, translations, and built CSS in isolated Electron. Only

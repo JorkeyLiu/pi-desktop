@@ -1608,6 +1608,13 @@ globalThis.composerHistoryProbe = async (phase) => {
       const started = new Promise<void>((resolve) => { signalStarted = resolve; });
       const sendGate = new Promise<void>((resolve) => { releaseSend = resolve; });
       const originalPrompt = api.prompt;
+      // The real sendPrompt answers an accepted prompt through the catalog
+      // slice (`rememberModel`) and, when a fallback title was derived, reloads
+      // the session list (`refreshSessions`). This fixture drives the real
+      // slice, so both dependencies must exist: without `rememberModel` the
+      // accepted prompt threw a TypeError, sendPrompt answered false, and the
+      // composer never recorded the input history this probe asserts.
+      const rememberedModels: Array<{ providerId?: string; modelId?: string }> = [];
       let queueState = {
         activeSessionId: null,
         pendingPlans: {},
@@ -1617,6 +1624,14 @@ globalThis.composerHistoryProbe = async (phase) => {
         latestTurnResults: {},
         sessionOutcomes: {},
         isRunning: false,
+        // Recent-model tracking stays in memory: this fixture has no persisted
+        // catalog to write, while the remembered ref stays observable here.
+        rememberModel: (model: { providerId?: string; modelId?: string }) => {
+          rememberedModels.push(model);
+        },
+        // The stub session list above is authoritative; this fixture has no
+        // host session page to reload, so a refresh observes nothing new.
+        refreshSessions: async () => {},
       } as unknown as AppState;
       const queueRuntime = {
         beginNavigationIntent: () => 1,

@@ -970,8 +970,7 @@ export const ptBR = {
     groupExtensions: "Extensões",
     nav: {
       general: "Geral",
-      ai: "IA",
-      shortcuts: "Atalhos",
+      chat: "Conversa",
       instructions: "Instruções",
       models: "Modelos",
       skills: "Habilidades",
@@ -981,11 +980,9 @@ export const ptBR = {
       sync: "Sincronização",
       remoteHosts: "Hosts remotos",
       info: "Sobre",
-      voice: "Voz"
     },
     general: "Geral",
-    ai: "IA",
-    shortcuts: "Atalhos",
+    chat: "Conversa",
     instructions: "Instruções",
     instructionsGlobal: "Instruções globais",
     instructionsGlobalDesc: "Anexadas a todas as conversas em todos os projetos.",
@@ -1489,6 +1486,14 @@ export const ptBR = {
     noResults: "Nenhum resultado encontrado",
     enterToSend: "Enter para enviar",
     enterToSendDesc: "Desativado: pressione ⌘/Ctrl+Enter para enviar.",
+    sendWhileRunningMode: "Mensagem com o agente em execução",
+    sendWhileRunningModeDesc:
+      "Enviar imediatamente: a mensagem entra no turno em andamento. Na fila: espera até esse turno terminar.",
+    sendWhileRunningModeImmediate: "Enviar imediatamente",
+    sendWhileRunningModeQueue: "Na fila",
+    // Synonyms global settings search answers to.
+    searchAliasSendMode: "modo de envio · enviar durante a execução · fila",
+    searchAliasImageModel: "modelo de imagem · modelo de imagens · geração de imagens",
     infiniteProviderRetry: "Tentar novamente até obter sucesso",
     infiniteProviderRetryDesc: "Continua tentando indefinidamente em caso de falhas temporárias de rede ou do provedor. Ainda é possível interromper a rodada; enquanto esta opção estiver ativada, o consumo e os custos da API podem continuar.",
     smoothStreaming: "Exibição gradual",
