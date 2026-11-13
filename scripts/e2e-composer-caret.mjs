@@ -285,6 +285,28 @@ try {
     { op: "step", label: "tab focused the token again" },
     { op: "key", key: "Space" },
     { op: "step", label: "space activated the focused token" },
+    // Q. A caret added at the autosize ceiling must be visible at once. The
+    // editor clips at its CSS max height, so a new last line is only reachable
+    // by scrolling the editor; the insertion itself must move the caret into
+    // the visible box instead of leaving it for the next keystroke to reveal.
+    { op: "set", text: "行1\n行2\n行3\n行4\n行5" },
+    { op: "step", label: "five lines, below the autosize ceiling" },
+    { op: "key", key: "Shift+Return" },
+    { op: "key", key: "Shift+Return" },
+    { op: "key", key: "Shift+Return" },
+    { op: "step", label: "eight lines, past the autosize ceiling" },
+    { op: "scrollToBottom" },
+    { op: "step", label: "scrolled to the editor content end" },
+    { op: "key", key: "Shift+Return" },
+    { op: "step", label: "Shift+Enter on the last visible line" },
+    { op: "type", text: "z" },
+    { op: "step", label: "typed on the line Shift+Enter added" },
+    { op: "scrollToBottom" },
+    { op: "step", label: "scrolled to the editor content end again" },
+    { op: "key", key: "Return" },
+    { op: "step", label: "plain Enter on the last visible line" },
+    { op: "type", text: "y" },
+    { op: "step", label: "typed on the line Enter added" },
   ];
 
   await writeFile(
@@ -371,10 +393,14 @@ app.whenReady().then(async () => {
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
-  for (const stream of [child.stdout, child.stderr])
+  for (const stream of [child.stdout, child.stderr]) {
+    // The trace carries CJK text; decoding per chunk would turn a character split
+    // across chunk boundaries into U+FFFD and fail an assertion at random.
+    stream.setEncoding("utf8");
     stream.on("data", (data) => {
       output += data;
     });
+  }
   const timeout = setTimeout(() => child.kill("SIGKILL"), 120_000);
   let code;
   try {
@@ -402,9 +428,11 @@ app.whenReady().then(async () => {
         result.trace.map(
           ({
             label, draft, live, caret, caretEnd, cursor, point, caretLine, lastTextLine, lastChild,
+            scrollTop, scrollHeight, clientHeight, lineHeight, caretBox, caretInView,
             html, references, labels, referenceAria, focused, activations,
           }) => ({
             label, draft, live, caret, caretEnd, cursor, point, caretLine, lastTextLine, lastChild,
+            scrollTop, scrollHeight, clientHeight, lineHeight, caretBox, caretInView,
             html, references, labels, referenceAria, focused, activations,
           }),
         ),
@@ -822,6 +850,97 @@ app.whenReady().then(async () => {
     beforeSpace.draft,
     `Space after activation must not type a space into the draft: ${spaceActivated.html}`,
   );
+
+  // Q. A line added at the autosize ceiling is visible immediately. The editor
+  // autosizes to its CSS ceiling and then clips, so the insertion point has to
+  // scroll into the visible box with the insertion itself.
+  const belowCeiling = step("five lines, below the autosize ceiling");
+  assert.equal(belowCeiling.draft, "行1\n行2\n行3\n行4\n行5", `seed: ${belowCeiling.html}`);
+  assert.equal(
+    belowCeiling.scrollHeight,
+    belowCeiling.clientHeight,
+    `five lines must not overflow the editor yet: ${belowCeiling.html}`,
+  );
+  assert.equal(belowCeiling.caretInView, true, JSON.stringify(belowCeiling.caretBox));
+  const pastCeiling = step("eight lines, past the autosize ceiling");
+  assert.equal(pastCeiling.draft, "行1\n行2\n行3\n行4\n行5\n\n\n", `Shift+Enter draft: ${pastCeiling.html}`);
+  // Autosize is unchanged: the box still stops at its CSS ceiling, and the
+  // content beneath it is exactly the lines that do not fit.
+  assert.ok(
+    Math.abs(pastCeiling.clientHeight - 7 * pastCeiling.lineHeight) <= 1,
+    `the editor box must stop at its CSS ceiling of seven lines: ${pastCeiling.clientHeight} at ${pastCeiling.lineHeight}`,
+  );
+  assert.ok(
+    pastCeiling.clientHeight > belowCeiling.clientHeight,
+    `the editor must still autosize below the ceiling: ${belowCeiling.clientHeight} -> ${pastCeiling.clientHeight}`,
+  );
+  assert.ok(
+    pastCeiling.scrollHeight > pastCeiling.clientHeight,
+    `the editor must clip once it reaches its ceiling: ${JSON.stringify(pastCeiling)}`,
+  );
+  assert.ok(
+    pastCeiling.scrollHeight - pastCeiling.clientHeight <= pastCeiling.lineHeight,
+    `one added line must overflow by at most one line: ${JSON.stringify(pastCeiling)}`,
+  );
+  const atContentEnd = step("scrolled to the editor content end");
+  assert.equal(
+    atContentEnd.scrollTop,
+    atContentEnd.scrollHeight - atContentEnd.clientHeight,
+    "the editor must be scrolled to its content end",
+  );
+  assert.equal(atContentEnd.caretInView, true, "the caret must be visible before the newline");
+  const shiftEnterAtCeiling = step("Shift+Enter on the last visible line");
+  assert.equal(
+    shiftEnterAtCeiling.draft,
+    "行1\n行2\n行3\n行4\n行5\n\n\n\n",
+    `Shift+Enter at the ceiling: ${shiftEnterAtCeiling.html}`,
+  );
+  assert.equal(shiftEnterAtCeiling.caret, shiftEnterAtCeiling.draft.length);
+  assert.equal(
+    shiftEnterAtCeiling.caretInView,
+    true,
+    `the line Shift+Enter added must be visible at once, not on the next keystroke: scrollTop ${atContentEnd.scrollTop} -> ${shiftEnterAtCeiling.scrollTop}, caret line ${shiftEnterAtCeiling.caretLineIndex}, ${JSON.stringify(shiftEnterAtCeiling.caretBox)}`,
+  );
+  assert.ok(
+    shiftEnterAtCeiling.scrollTop >= atContentEnd.scrollTop,
+    `revealing the new line must not scroll backwards: ${atContentEnd.scrollTop} -> ${shiftEnterAtCeiling.scrollTop}`,
+  );
+  const typedAtCeiling = step("typed on the line Shift+Enter added");
+  assert.equal(
+    typedAtCeiling.draft,
+    "行1\n行2\n行3\n行4\n行5\n\n\n\nz",
+    `typing on the added line: ${typedAtCeiling.html}`,
+  );
+  assert.equal(typedAtCeiling.caretInView, true);
+  // The browser's own rendered geometry agrees with the line the draft reports.
+  assert.equal(
+    typedAtCeiling.caretLine,
+    Math.round(typedAtCeiling.caretLineIndex - typedAtCeiling.scrollTop / typedAtCeiling.lineHeight),
+    `the caret's rendered line disagrees with the draft line: ${JSON.stringify(typedAtCeiling.caretBox)}`,
+  );
+  const atContentEndAgain = step("scrolled to the editor content end again");
+  assert.equal(atContentEndAgain.caretInView, true);
+  const enterAtCeiling = step("plain Enter on the last visible line");
+  assert.equal(
+    enterAtCeiling.draft,
+    "行1\n行2\n行3\n行4\n行5\n\n\n\nz\n",
+    `Enter at the ceiling: ${enterAtCeiling.html}`,
+  );
+  assert.equal(
+    enterAtCeiling.caretInView,
+    true,
+    `the line Enter added must be visible at once: scrollTop ${atContentEndAgain.scrollTop} -> ${enterAtCeiling.scrollTop}, caret line ${enterAtCeiling.caretLineIndex}`,
+  );
+  assert.equal(
+    enterAtCeiling.events.filter(
+      (event) => event.inputType === "insertParagraph" || event.inputType === "insertLineBreak",
+    ).length,
+    0,
+    `Enter at the ceiling reached the editor as a native paragraph: ${JSON.stringify(enterAtCeiling.events)}`,
+  );
+  const typedAfterEnterAtCeiling = step("typed on the line Enter added");
+  assert.equal(typedAfterEnterAtCeiling.draft, "行1\n行2\n行3\n行4\n行5\n\n\n\nz\ny");
+  assert.equal(typedAfterEnterAtCeiling.caretInView, true);
   console.log("COMPOSER_CARET_PROBE " + JSON.stringify({ ok: true, steps: result.trace.length }));
 } finally {
   await rm(temp, { recursive: true, force: true });

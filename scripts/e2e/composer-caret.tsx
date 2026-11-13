@@ -231,6 +231,39 @@ const caretLine = (el: HTMLElement) => {
   return rect && rect.height > 0 && (rect.top !== 0 || rect.left !== 0) ? lineOf(el, rect.top) : null;
 };
 
+/** The draft line the caret sits on, 0-based, counted from the draft newlines. */
+const caretDraftLine = (el: HTMLElement) => {
+  const value = readEditorValue(el);
+  const caret = editorSelectionRange(el).start;
+  return value.slice(0, caret).split("\n").length - 1;
+};
+
+/** The caret's own client box; a point the browser cannot render has none. */
+const caretBox = (el: HTMLElement) => {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+  const range = selection.getRangeAt(0).cloneRange();
+  range.collapse(true);
+  const rect = range.getClientRects()[0] ?? range.getBoundingClientRect();
+  if (!rect || (rect.width === 0 && rect.height === 0)) return null;
+  return { top: rect.top, bottom: rect.bottom };
+};
+
+/**
+ * Whether the caret's line sits inside the editor's visible box. The editor
+ * clips at its CSS ceiling, so a line below it is only visible when the editor
+ * is scrolled far enough. A caret on a line break has no client box of its
+ * own, so the line comes from the draft's newlines and is placed with the
+ * line height the browser renders.
+ */
+const caretInView = (el: HTMLElement) => {
+  const height = lineHeight(el);
+  const top = textTop(el) + caretDraftLine(el) * height - el.scrollTop;
+  const style = getComputedStyle(el);
+  const viewTop = el.getBoundingClientRect().top + parseFloat(style.borderTopWidth || "0");
+  const viewBottom = viewTop + el.clientHeight;
+  return top >= viewTop - 1 && top + height <= viewBottom + 1;
+};
 /** Which element currently owns DOM focus, and whether it is one draft token. */
 const describeNode = (node: Element | null) => {
   if (!node) return null;
@@ -243,6 +276,7 @@ const describeNode = (node: Element | null) => {
     insideEditor: Boolean(element.closest(".composer-input")),
   };
 };
+
 
 /** Bounding box of one element or text run, for a real pointer click. */
 const pointerRect = (target: Element | Node) => {
@@ -284,6 +318,15 @@ const snapshot = (label: string) => {
     valueLength: draftValue.length,
     caretLine: caretLine(el),
     lastTextLine: lastTextLine(el),
+    // Autosize and overflow: the editor grows to its CSS ceiling and then
+    // clips, so a caret past the ceiling is only reachable by scrolling.
+    scrollTop: el.scrollTop,
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+    lineHeight: lineHeight(el),
+    caretBox: caretBox(el),
+    caretInView: caretInView(el),
+    caretLineIndex: caretDraftLine(el),
     lastChild: el.lastChild?.nodeName ?? null,
     references: Array.from(el.querySelectorAll<HTMLElement>(".composer-reference")).map(
       (reference) => reference.dataset.token ?? "",
@@ -378,6 +421,14 @@ globalThis.composerCaretProbe = async (steps: CursorStep[]) => {
     if (step.op === "caret") {
       setEditorCaret(editor(), step.caret ?? 0);
       controller.updateCursor(editorSelectionRange(editor()).start);
+      await settle();
+      continue;
+    }
+    if (step.op === "scrollToBottom") {
+      // Put the editor where a user who has typed to the last line leaves it:
+      // scrolled to its own content end, the way native caret reveal does.
+      const el = editor();
+      el.scrollTop = el.scrollHeight - el.clientHeight;
       await settle();
       continue;
     }

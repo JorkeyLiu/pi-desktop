@@ -1824,7 +1824,10 @@ validation still needed.
   the token and repeat before its leading boundary. 10) With a token mid-text,
   type before it, click the text after it, type again, and undo. 11) Tab to the
   token and press Enter; on an image token press Tab and Enter; Tab again and
-  press Space.
+  press Space. 12) Fill the editor to five lines, press Shift+Enter three times
+  to pass the autosize ceiling, scroll the editor to its content end, then press
+  Shift+Enter, type a character, scroll to the content end again, press Enter,
+  and type.
 - **Expected**: The caret stays on the now-empty second line, the typed
   character lands there (`暂不配置。` newline `a`), and no phantom character or
   extra newline appears. Every step keeps the draft and the editor's DOM
@@ -1839,6 +1842,12 @@ validation still needed.
   the draft, so the text after the chip keeps its place. Chips, native undo,
   pasted text, selection deletion, and IME composition keep their behavior.
 - **Expected (token boundary)**: Text inserted by the browser at either token
+- **Expected (autosize ceiling)**: The editor keeps growing below its CSS ceiling
+  and then clips. A line added at the ceiling — by Enter or by Shift+Enter —
+  scrolls the editor's own overflow forward, so the new empty line and the
+  character typed on it sit inside the visible box immediately, without waiting
+  for the next keystroke; the caret never jumps to an earlier line and the
+  scroll offset never moves backwards while revealing the inserted line.
   boundary — typed, pasted, emoji, or an emulated IME commit — becomes ordinary
   draft characters outside the token, the label stays exactly `@name`, the
   accessible name stays intact, and the inserted text reaches the submitted
@@ -1855,8 +1864,8 @@ validation still needed.
 - **Status**: Automated by `pnpm test:e2e:composer-caret` (real Chromium key
   events, plus CDP `Input.insertText` and `Input.imeSetComposition` against the
   real `ComposerInput` + `useComposerDraft`, with rendered line geometry of the
-  typed text, boundary undo, and keyboard token activation). A real OS IME
-  remains manual.
+  typed text, the caret's own client box at the autosize ceiling, boundary undo,
+  and keyboard token activation). A real OS IME remains manual.
 
 #### E2E-008e: Host speech transcribe and speak
 

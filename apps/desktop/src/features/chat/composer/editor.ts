@@ -616,6 +616,57 @@ export function insertClipboardText(editor: HTMLElement, text: string): boolean 
 }
 
 /**
+ * The rendered box of the line an insertion point sits on. Chromium reports no
+ * client rect for a collapsed point at an element boundary, so the point is
+ * resolved to a neighbouring line box instead: the node after the offset (the
+ * line the point opens) first, then the node before it.
+ */
+function lineRectAtPoint(container: Node, offset: number): DOMRect | null {
+  const range = document.createRange();
+  for (const candidate of [container.childNodes[offset], container.childNodes[offset - 1]]) {
+    if (!candidate) continue;
+    if (candidate.nodeType === Node.TEXT_NODE) {
+      // An empty half-node left by a split renders no line of its own.
+      if ((candidate.nodeValue ?? "").length === 0) continue;
+      range.setStart(candidate, 0);
+      range.setEnd(candidate, 1);
+    } else if (candidate.nodeType === Node.ELEMENT_NODE) {
+      range.selectNode(candidate);
+    } else {
+      continue;
+    }
+    const rect = range.getClientRects()[0] ?? range.getBoundingClientRect();
+    if (rect.height > 0) return rect;
+  }
+  return null;
+}
+
+/**
+ * Keep a freshly placed insertion point inside the editable's visible box.
+ *
+ * The composer clips itself once the draft passes the autosize ceiling
+ * (`min-height`/`max-height` in `composer.css`): beyond that the content is
+ * programmatically scrollable but no longer scrolls the caret into view, so an
+ * inserted line break could leave the caret below the visible lines until the
+ * next keystroke. Scrolling belongs to this editing boundary, next to the code
+ * that moves the point, not to the component that calls it.
+ */
+function revealInsertionPoint(editor: HTMLElement, container: Node, offset: number): void {
+  const maxScroll = editor.scrollHeight - editor.clientHeight;
+  if (maxScroll <= 0) return;
+  const rect = lineRectAtPoint(container, offset);
+  if (!rect) return;
+  const borderTop = Number.parseFloat(getComputedStyle(editor).borderTopWidth) || 0;
+  const viewTop = editor.getBoundingClientRect().top + borderTop;
+  const viewBottom = viewTop + editor.clientHeight;
+  let target = editor.scrollTop;
+  if (rect.bottom > viewBottom) target += rect.bottom - viewBottom;
+  else if (rect.top < viewTop) target -= viewTop - rect.top;
+  target = Math.min(Math.max(target, 0), maxScroll);
+  if (target !== editor.scrollTop) editor.scrollTop = target;
+}
+
+/**
  * Insert one draft-model newline at the caret as a break pair: the inserted BR
  * opens the new line and, when it ends the editable, a companion BR keeps the
  * caret insertable on the empty line. No block wrapper and no literal "\n" text
@@ -648,6 +699,7 @@ export function insertNewlineAtCaret(editor: HTMLElement): boolean {
   after.collapse(true);
   selection.removeAllRanges();
   selection.addRange(after);
+  revealInsertionPoint(editor, after.startContainer, after.startOffset);
   return true;
 }
 
