@@ -1672,11 +1672,14 @@ pi-ai 结果信封携带 `details` 中的结构化有效负载并重复它
 | 全局 | `Files` — 可点击的工作空间路径 |
 | 格雷普 | `Matches` — 按文件分组，带有 `line` 装订线和 `outputMode: content` 的可点击路径标题； `filesWithMatches` 的可点击路径列表； `path` → `count` 的点击计数字段 |
 | TodoWrite | 本次调用写入的清单：宿主计数得到的进度行，加每个条目一行（含状态与优先级）；绝不显示序列化的 `todos` 参数 |
+| AskTool | 本次调用提出的问题与它记录的回答，位于会话语言的历史标题下：每个条目一个问题、带编号，并附其选中的回答或 `Skipped`。问题自身的 Markdown 按其内容渲染，有效负载的 `questions`／`answers` 数组绝不打印为 JSON |
 | Skill | 已加载文档卡片：技能名、工具报告的 `location`／`references`，正文按 Markdown 渲染；调用失败时改为 `Error` 说明 |
 | ScheduledTaskList/Create/Update/Delete | 每个自动化一行：标题、周期、时刻、**按会话语言命名的星期**（模式以周一 = 0 编号，因此绝不打印裸索引）、启用／暂停 |
 | ToolSearch、EnterPlanMode/SubmitPlan、NewContext、BrowserPreview、GenerateImages | 它们激活或匹配的名称（`activated`／`matches`），每类名称只列一次并按会话语言呈现（仅当该行没有自己的 `activated` 列表时才使用旧版 `addedToolNames` 载体）、工具名本身声明的模式（`Plan`、`Goal`），或调用携带的提示词与写出的图片 |
 | 任何主机 `notice` | `Note` — 错误、警告或截断提示在其合格的块之后保持可见；成功行的正文不再打印日常提示性信息 |
 | 任何失败 | `Error` — 消息加代码，首先列出。当 `details` 未复述失败原因时，失败会以信封自身的句子说明自己；仅把 `details` 重新序列化的文本块绝不会被当作原因打印。其携带的记录与 `Raw` 披露一起列出——除非该记录只有句子已经陈述的拒绝结论（除 `accepted`／`success`／`ok` 的假值外别无他物）：此时那句话就是整个正文，不再绘制任何结论字段或有效负载。失败的 `SubagentHandoff` 始终只保留那句话，即使其记录还带有其他诊断：仅对这一个内置工具，绝不绘制任何字段、原因代码或有效负载。没有记录任何结果的失败会陈述该行携带的 `code` 与 `message`；两者都没有时，用一句本地化文案说明未报告原因——该行绝不会展开为空正文 |
+| TaskWait/List/Stop 名单 | 运行时返回的每个名单分组各一张表：`delegations` 用 `Subagents`，随后按运行时自身的 `stopped` / `stopPending` / `settled` 分组给出 `Stopped`、`Stop requested — still running` 与 `Already finished`。每个分组都保留自己的标题，因此只被请求取消的 worker 绝不会读作已停止 |
+| Task 计数 | `Stats` — 被委派方在其简报与报告之后的轮次、工具调用与用量 |
 | 未映射的有效负载 | 标量条目作为 label/value 字段；长或多行字符串作为自己的标记块；嵌套对象为 JSON；以上内容旁边保留一个显式的 `Raw` 披露用于展示未被改动的原始有效负载 |
 | 名称列表 | 条目不是路径时（已激活工具、任务 id）显示带标题的值列表；是路径时显示文件列表 |
 

@@ -2621,6 +2621,7 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
 `90m` is rendered as `1h 30m`.
 
 ### 9.2 Anatomy
+```text
 [sparkle] Processed for 12s  3 tools                 [›]
           ├─ [file] Read /src/foo.ts                    [›]
           ├─ [search] Grep TODO  24 matches             [›]
@@ -3003,12 +3004,14 @@ never summarizes from its own arguments:
   `delegations[]` JSON. A lifecycle row has no brief of its own, so the ids it
   was called with do not reappear as an argument block.
 
+```text
 [sparkle] Processing · 40s  2 tools                                 [›]
   ┌─────────────────────────────────────────────────────────────────────┐
   │ [bot] check the store diff     Completed · 32s               [stop] │
   │ code-reviewer                                                       │
   │ Turns 1 · Tool calls 2 · Context 16.2K · Spent 30.3K                 │
   └─────────────────────────────────────────────────────────────────────┘
+```
 
 The group around the card stays the ordinary process group: there is no main
 agent node, no connector, no group-level subagent summary and no group-level
