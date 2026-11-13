@@ -13,6 +13,11 @@ import { useAppStore } from "../../apps/desktop/src/stores/app-store";
 declare global {
   var sidebarSessionOrderProbe: () => Promise<unknown>;
 }
+  var sidebarSessionOrderNativeDrag: {
+    setup: () => Promise<unknown>;
+    sample: () => unknown;
+    settle: () => Promise<unknown>;
+  };
 
 const i18n = createInstance();
 const ready = i18n.init({ lng: "en", resources: { en: { translation: en } }, initImmediate: false });
@@ -443,6 +448,11 @@ async function probe() {
   const crossGroup = document.querySelector(`[data-sidebar-project-group="${PROJECT}"]`);
   const crossGroupClass = crossGroup?.className ?? null;
   const crossMoveOffered = Boolean(crossGroup?.classList.contains("is-drop-target"));
+  const crossHeader =
+    crossGroup?.querySelector<HTMLElement>(".sidebar-session-group-header") ?? null;
+  const crossHeaderOutline = crossHeader
+    ? `${getComputedStyle(crossHeader).outlineWidth} ${getComputedStyle(crossHeader).outlineStyle}`
+    : null;
   row("temporary").dispatchEvent(
     new DragEvent("dragend", { bubbles: true, cancelable: true, dataTransfer: crossDrop }),
   );
@@ -453,6 +463,11 @@ async function probe() {
     { accepted: crossAccepted, groupClass: crossGroupClass },
   );
   await drag("temporary", "alpha", "before");
+  check(
+    "the project move target still paints the header outline as its own rule",
+    crossHeaderOutline === "1px solid",
+    { outline: crossHeaderOutline },
+  );
   check(
     "a drop from another list never rewrites the project order",
     projectRows().join(",") === "epsilon,alpha,delta,gamma,beta" &&
@@ -793,5 +808,168 @@ async function probe() {
   }
   return { ok: checks.every((entry) => entry.ok), checks };
 }
+
+/*
+ * Native pointer drag. A synthetic `DragEvent` can prove the reorder, but it
+ * never paints: the insertion line is a pseudo-element owned by the sidebar
+ * cascade, so it has to be read from the rendered row itself. The Electron
+ * runner drives the mouse through CDP and calls into this half to render the
+ * fixture and report what the sidebar shows before, during, and after the drop.
+ */
+const nativeSessions: FixtureSession[] = [
+  session({ id: "n-a", createdAt: iso(4 * MINUTE) }),
+  session({ id: "n-b", createdAt: iso(3 * MINUTE) }),
+  session({ id: "n-c", createdAt: iso(2 * MINUTE) }),
+  session({ id: "n-d", createdAt: iso(MINUTE) }),
+];
+const nativeCleanRecord = {
+  sessionMeta: {},
+  projectMeta: {},
+  projectSort: "recent",
+  sessionView: { sort: "created", archived: false },
+  openProjectPaths: [PROJECT],
+};
+
+type RowRect = {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  width: number;
+  height: number;
+};
+
+function rowRect(id: string): RowRect {
+  const rect = row(id).getBoundingClientRect();
+  return {
+    left: rect.left,
+    right: rect.right,
+    top: rect.top,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function pseudoStyle(element: HTMLElement | null, pseudo: "::before" | "::after") {
+  if (!element) return null;
+  const style = getComputedStyle(element, pseudo);
+  return {
+    content: style.content,
+    position: style.position,
+    height: style.height,
+    width: style.width,
+    top: style.top,
+    bottom: style.bottom,
+    backgroundColor: style.backgroundColor,
+    borderRadius: style.borderRadius,
+  };
+}
+
+async function nativeDragSetup() {
+  for (const root of elements.splice(0)) root.unmount();
+  const host = document.getElementById("root");
+  if (!host) throw new Error("missing #root");
+  host.innerHTML = "";
+  localStorage.setItem(SIDEBAR_PREFERENCES_KEY, JSON.stringify(nativeCleanRecord));
+  const preferences = loadSidebarPreferences();
+  useAppStore.setState({
+    ready: true,
+    page: "chat",
+    workspace: { path: PROJECT, name: "session-order" } as never,
+    openProjects: [{ path: PROJECT, name: "session-order" }] as never,
+    openProjectPaths: [PROJECT],
+    activeProjectPath: PROJECT,
+    activeSessionId: undefined,
+    sessions: nativeSessions as never,
+    sessionMeta: preferences.sessionMeta,
+    projectMeta: preferences.projectMeta,
+    projectSort: preferences.projectSort,
+    sessionView: preferences.sessionView,
+    // The dragged row runs a turn: local reordering must still work.
+    runningSessions: { "n-b": true },
+  });
+  mount(preferences);
+  await until(() => projectRows().length === 4, "the native drag fixture renders");
+  const source = rowRect("n-b");
+  const target = rowRect("n-d");
+  return {
+    order: projectRows(),
+    sourceId: "n-b",
+    targetId: "n-d",
+    source: {
+      x: Math.round(source.left + source.width / 2),
+      y: Math.round(source.top + source.height / 2),
+    },
+    targetBefore: {
+      x: Math.round(target.left + target.width / 2),
+      y: Math.round(target.top + 3),
+    },
+    targetAfter: {
+      x: Math.round(target.left + target.width / 2),
+      y: Math.round(target.bottom - 3),
+    },
+    row: target,
+  };
+}
+
+function nativeDragSample() {
+  const marked = document.querySelector<HTMLElement>(
+    ".thread-item.is-drop-before, .thread-item.is-drop-after",
+  );
+  const dragged = document.querySelector<HTMLElement>(".thread-item.is-dragging");
+  const markedId = marked?.getAttribute("data-sidebar-session-row") ?? null;
+  return {
+    order: projectRows(),
+    markedId,
+    markedClass: marked?.className ?? null,
+    draggingId: dragged?.getAttribute("data-sidebar-session-row") ?? null,
+    draggingOpacity: dragged ? getComputedStyle(dragged).opacity : null,
+    row: markedId ? rowRect(markedId) : null,
+    before: pseudoStyle(document.querySelector<HTMLElement>(".thread-item.is-drop-before"), "::before"),
+    after: pseudoStyle(document.querySelector<HTMLElement>(".thread-item.is-drop-after"), "::after"),
+    markedBefore: pseudoStyle(marked, "::before"),
+    markedAfter: pseudoStyle(marked, "::after"),
+  };
+}
+
+async function nativeDragSettle() {
+  await frame();
+  await frame();
+  const order = projectRows();
+  const stale = [
+    ...document.querySelectorAll<HTMLElement>(
+      ".thread-item.is-dragging, .thread-item.is-drop-before, .thread-item.is-drop-after",
+    ),
+  ].map((node) => node.className);
+  const persisted = loadSidebarPreferences();
+  const ranks = Object.fromEntries(
+    nativeSessions.map((item) => [item.id, persisted.sessionMeta[item.id]?.order ?? null]),
+  );
+
+  // The user path: the drop is stored, so a restart renders the same order.
+  for (const root of elements.splice(0)) root.unmount();
+  const host = document.getElementById("root");
+  if (!host) throw new Error("missing #root");
+  host.innerHTML = "";
+  const restored = loadSidebarPreferences();
+  seed(restored, nativeSessions, ["n-b"]);
+  mount(restored);
+  await until(() => projectRows().length === 4, "the native drag order renders after restart");
+
+  return {
+    order,
+    stale,
+    sort: persisted.sessionView.sort,
+    ranks,
+    restartOrder: projectRows(),
+  };
+}
+
+globalThis.sidebarSessionOrderNativeDrag = {
+  setup: nativeDragSetup,
+  sample: nativeDragSample,
+  settle: nativeDragSettle,
+};
 
 globalThis.sidebarSessionOrderProbe = probe;

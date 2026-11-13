@@ -131,6 +131,8 @@
   outline: 1px solid var(--ds-accent);
   outline-offset: -1px;
   background: color-mix(in oklab, var(--ds-accent) 12%, transparent);
+}
+
 /* Session row reorder feedback. Rows clip their own overflow, so the line sits
    inside the row's top or bottom edge instead of straddling it. */
 .thread-item.is-drop-before::before,
@@ -158,7 +160,6 @@
   opacity: 0.5;
 }
 
-}
 .sidebar-session-group-title {
   display: flex;
   min-width: 0;

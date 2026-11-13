@@ -1332,13 +1332,18 @@ the target group based on the pointer position and persists the result.
 
 Sidebar drag/drop is implemented:
 
-- A session row is draggable while idle. Dropping it on another project group
-  moves that session to the project: the host updates only the session's
-  project association, and the transcript, attachments, tasks, revisions,
-  artifacts, notifications, and scratch data stay with the session.
-- A running session is not draggable, and the session menu's project targets
-  are not available. The host rejects the move as well, so a turn that starts
-  mid-drag cannot leave the agent bound to the previous project's instructions.
+- A session row is draggable, and dragging it inside its own list reorders it,
+  running or not: dropping it stores the manual order and the row under the
+  pointer paints the 2px accent insertion line it will land against. Dropping
+  a row on another project group moves that session to the project: the host
+  updates only the session's project association, and the transcript,
+  attachments, tasks, revisions, artifacts, notifications, and scratch data
+  stay with the session.
+- A running session reorders locally but cannot change project. A
+  cross-project drop reports that the session must be stopped first, the
+  session menu offers no project target, and the host rejects the move as
+  well, so a turn that starts mid-drag cannot leave the agent bound to the
+  previous project's instructions.
 - The dragged row paints at opacity 0.5 and the eligible project group
   highlights with an accent outline. A session's own project group is not a
   drop target, so a same-project drag never issues a request.

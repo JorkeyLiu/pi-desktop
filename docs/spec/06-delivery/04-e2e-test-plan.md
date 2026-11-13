@@ -3550,12 +3550,14 @@ validation still needed.
   session, and one session somewhere is running a turn.
 - **Steps**: 1) Drag the idle session row onto the other project group and drop
   it. 2) Reopen that session and read its transcript. 3) Attempt to drag the
-  running session and, separately, open its session menu. 4) Drop a folder onto
+  running session onto the other project group, reorder it inside its own list,
+  and, separately, open its session menu. 4) Drop a folder onto
   the projects list. 5) Drop a folder on the composer.
 - **Expected**: The dragged idle session lists under the target project with its
   transcript, attachments, and tasks unchanged, and the move survives a restart
-  because the session's project membership is persisted. The running session is
-  not draggable, its context menu has no project-move list, and a move issued
+  because the session's project membership is persisted. The running session
+  still reorders inside its own project list, but a cross-project drop does not
+  move it: its context menu has no project-move list, and a move issued
   after a turn starts is rejected as busy rather than rebinding the agent.
   Dropping a folder on the projects list adds or switches to that project
   without creating a duplicate row, and a non-folder drop explains that a folder
@@ -11522,9 +11524,11 @@ This test plan spec is accepted when:
 - **Steps**: 1) Open the app and read the project-group order. 2) Send a turn
   so the oldest conversation gains the newest activity, then read both orders
   again. 3) Let several conversations in both projects gain activity and read
-  the project-group order. 4) Create a conversation. 5) Drag the running row
-  above the newest row. 6) Restart the app. 7) Create another conversation. 8)
-  Drag a conversation from Temporary onto a project row. 9) Pin a conversation.
+  the project-group order. 4) Create a conversation. 5) Press the running row
+  with the mouse and drag it above the newest row, reading the target row's
+  insertion line with the pointer over its upper half and then its lower half
+  before releasing. 6) Restart the app. 7) Create another conversation. 8) Drag
+  a conversation from Temporary onto a project row. 9) Pin a conversation.
   10) Open the sort menu, choose a Projects mode, then a Sessions mode, then
   Projects → Recently opened. 11) With two projects retained, click a
   conversation that lives in the project whose tab is not the most recent.
@@ -11536,7 +11540,12 @@ This test plan spec is accepted when:
 - **Expected**: Conversations list newest-created first and no row moves when
   activity changes. Project groups keep the order the user registered them in,
   and activity across several projects never reorders a group. A new
-  conversation appears on top. The dragged order is persisted as Manual order,
+  conversation appears on top. Dragging a row with native pointer input paints
+  the dragged row at reduced opacity and draws a 2px accent insertion line on
+  the row under the pointer, inside its own list only: the line sits on that
+  row's top edge while the pointer is over its upper half, moves to its bottom
+  edge over the lower half, and both the line and the drag style are cleared
+  when the drop completes. The dragged order is persisted as Manual order,
   survives the restart with the same rows in the same places, and the sort menu
   shows Manual order as the current state. A later conversation appears above
   the ranked rows without disturbing their relative order. A drop from another
@@ -11555,8 +11564,12 @@ This test plan spec is accepted when:
   existing project keeps its registered ordering time and only a new project
   appears at the top. `node scripts/e2e-sidebar-session-order.mjs`
   (`pnpm test:e2e:sidebar-session-order`) covers this scenario with the real
-  Sidebar component, and `apps/desktop/test/project-open-order.test.mjs` covers
-  the Projects index and home switcher ordering inputs.
+  Sidebar component and its real row stylesheet in an isolated Electron window:
+  the reorder runs once through synthetic row drag events and once through
+  native pointer input, where the insertion pseudo-element is read from the
+  rendered cascade rather than inferred from the row class.
+  `apps/desktop/test/project-open-order.test.mjs` covers the Projects index and
+  home switcher ordering inputs.
 - **Milestone**: M5
 - **Status**: Automated (`scripts/e2e-sidebar-session-order.mjs`)
 
