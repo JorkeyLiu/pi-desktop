@@ -1,5 +1,6 @@
 import type {
   AgentEventEnvelope,
+  SessionDetail,
   SessionSummary,
   UiMessage,
 } from "@pi-desktop/shared";
@@ -22,7 +23,11 @@ import {
   upsertLiveSessionMessage,
 } from "../../lib/session-transcript";
 import { getSessionMessageSnapshot, getSessionToolMessagePositions } from "../../lib/session-transcript-updates";
-import { sessionReadLooksEmpty } from "../../lib/session-transcript-read";
+import {
+  mergeOlderTranscriptWindow,
+  sessionReadLooksEmpty,
+  sessionWindowHasRenderableRow,
+} from "../../lib/session-transcript-read";
 import { sessionIsArchived, type SessionMeta } from "../../lib/sidebar-preferences";
 import {
   normalizeProjectPath,
@@ -127,6 +132,48 @@ export type SessionRuntime = {
 
 type ToolStart = NonNullable<ReturnType<SessionRuntime["getToolStart"]>>;
 
+type SessionDetailRead = { session: SessionDetail | null };
+
+/**
+ * A bounded window can open on nothing the transcript draws: a long delegation
+ * chain fills the whole physical tail with rows that belong under a `Task` card
+ * just before the window. The pane then has no row to render and no reader
+ * affordance to ask for older history, so selection must widen the same bounded
+ * pagination backwards until a row is renderable or the real head is reached.
+ *
+ * The widened window is still one continuous physical range: the tail read
+ * remains authoritative for `messageEnd`/`hasMoreAfter`, while `messageStart`
+ * and `hasMoreBefore` describe the older edge. A page that cannot move the
+ * cursor ends the walk, and a failed older read keeps the valid tail instead of
+ * turning a readable session into an error.
+ */
+async function readWindowWithRenderableRow(
+  id: string,
+  detail: SessionDetailRead,
+  options: { messageLimit?: number; contentLimit?: number },
+): Promise<SessionDetailRead> {
+  let session = detail.session;
+  if (!session || sessionWindowHasRenderableRow(session)) return detail;
+  const messageLimit = options.messageLimit ?? SESSION_TRANSCRIPT_PAGE_SIZE;
+  while (session.hasMoreBefore === true && (session.messageStart ?? 0) > 0) {
+    let older: SessionDetailRead;
+    try {
+      older = await api.getSession(id, {
+        messageBefore: session.messageStart ?? 0,
+        messageLimit,
+        contentLimit: options.contentLimit,
+      });
+    } catch {
+      break;
+    }
+    const merged = mergeOlderTranscriptWindow(session, older.session);
+    if (!merged) break;
+    session = merged;
+    if (sessionWindowHasRenderableRow(session)) break;
+  }
+  return { ...detail, session };
+}
+
 export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime {
   const navigationIntents = createNavigationIntentController();
   let pendingSessionSelection: SessionSelection | null = null;
@@ -171,7 +218,10 @@ export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime 
   ) {
     const active = sessionDetailLoads.get(id);
     if (active && options?.messageBefore === undefined) return active;
-    const request = api.getSession(id, options).then((detail) => {
+    const request = api.getSession(id, options).then(async (detail) => {
+      if (options?.messageBefore === undefined && detail.session) {
+        detail = await readWindowWithRenderableRow(id, detail, options ?? {});
+      }
       if (detail.session && options?.messageBefore === undefined) {
         const state = get();
         const liveMessages =

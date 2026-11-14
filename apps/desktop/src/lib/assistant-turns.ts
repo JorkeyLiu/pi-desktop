@@ -101,6 +101,16 @@ function isVisibleMessage(message: UiMessage): boolean {
   );
 }
 
+/**
+ * Whether a message becomes a row of its own in the turn stream.
+ *
+ * Delegate rows are not transcript rows of their own: they hang off their
+ * `Task` call, so they stay out of the turn stream and the minimap.
+ */
+export function isTranscriptRow(message: UiMessage): boolean {
+  return !message.parentToolCallId && isVisibleMessage(message);
+}
+
 /** A `Task` start call belongs on the delegation card; parent thinking, workspace
  * tools, and lifecycle rows (TaskWait/TaskList/TaskStop) do not (D319). */
 function isDelegationStartActivity(item: AssistantActivityItem): boolean {
@@ -236,11 +246,7 @@ export function buildTranscriptEntries(
   visible: UiMessage[];
 } {
   const runs = collectSubagentRuns(messages);
-  // Delegate rows are not transcript rows of their own: they hang off their
-  // `Task` call, so they stay out of the turn stream and the minimap.
-  const visible = messages.filter(
-    (message) => !message.parentToolCallId && isVisibleMessage(message),
-  );
+  const visible = messages.filter(isTranscriptRow);
   const anchored = new Map<string, ContextCompactionMark[]>();
   for (const mark of compactions) {
     const marks = anchored.get(mark.throughMessageId);

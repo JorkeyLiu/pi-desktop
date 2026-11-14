@@ -1554,6 +1554,12 @@ Renderer： `apps/desktop/src/components/Markdown.tsx` + `apps/desktop/src/lib/s
   后续边界、首次提交占位、运行时状态车道、重试行）被排除在锚点候选之外，使其后的行
   不会随之移动。`.message-row` 和 `.tool-activity-group` 使用真实高度（没有
   `content-visibility` 估算），屏外美人鱼图延迟加载和布局，直到它们接近视口。
+- **没有可绘制内容的受限窗口向后展开**：尾部窗口可能整段落在一个委派链内部，
+  其中每一行都属于窗口之前的某个 `Task` 调用。没有可渲染的行时，面板既没有内容可绘制，
+  也没有可触发续读的控件，因此打开会话会沿同一套受限向后分页继续读取，
+  直到窗口内出现顶层行或到达真正的开头。委派行仍保留在窗口中共其自身转录使用；
+  尾部读取的 `messageEnd` 与 `hasMoreAfter` 保持权威，`messageStart`/`hasMoreBefore`
+  取自最旧的那一页。无法前移游标的分页会结束读取，本就可渲染的尾部仍只需一次受限读取。
 
 #### Markdown table actions
 
