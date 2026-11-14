@@ -5,6 +5,11 @@
 - Deciders: PI-Desktop core
 - Related: D119, ADR 0041, `03-runtime/04-data-storage.md`,
   `03-runtime/06-host-rpc-protocol.md`
+- Amended by: [ADR 0335](0335-scoped-session-history-reads.md) — the
+  window-selection clauses (which records a renderer page counts and therefore
+  which rows a newest page contains) are scoped per reading surface. The bounded
+  payload, display-only truncation, lossless transcript, and unscoped-caller
+  decisions below remain in force.
 
 ## Context
 

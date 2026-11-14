@@ -1416,11 +1416,44 @@ indicator. The indicator is suppressed while the child waits on the user — a
 permission card or an asktool question opened for one of its calls — so the wait,
 not a working claim, is what the reader sees.
 
-- The selection is renderer-local and session-scoped: it stores only the
-  `sessionId` and delegation id, then re-finds the current Task and its
-  `parentToolCallId` rows from the live/retained transcript. The header and
-  process therefore update as thinking, tool calls, and answer fragments stream
-  in.
+- The selection is renderer-local and session-scoped: it stores the `sessionId`,
+  the chain identity, and the delegation id it was opened for. The panel reads
+  that chain through its own `session.get` delegation scope (ADR 0335) instead
+  of re-finding rows in the live/retained main transcript, so it keeps showing
+  what it loaded while the main reading window is reduced, replaced, paged, or
+  restored. Rows it already displayed stay displayed until the user closes or
+  switches the tab: the chain's own cached entry holds them, live child rows
+  are routed into that entry as they are published, and only the panel's own
+  read changes its content. A live row after the last durable read leaves the
+  entry stale, so a reopen refreshes the tail and merges it over the rows it
+  already holds rather than resetting them; a failed read keeps those rows on
+  screen with the failure stated inline and a retry. The rows are bounded
+  (§9.9): a trim or eviction can drop old rows, and only a main-window change
+  is guaranteed not to. The header and process follow that own source, so a
+  running child's thinking, tool calls, and answer fragments arrive and stream
+  there, not through the main pane.
+- A chain is read across all of its `Task(resume)` runs, so a delegation opened
+  by a resumed run is the same child conversation as its original dispatch, and
+  an older caller's `Task` tool-call id resolves to it too. The scoped read
+  answers with the chain's canonical identity — the earliest root dispatch's
+  `delegationId` — and returns every `Task` / `Task(resume)` message of that
+  chain as history context, so the brief row is readable even when those calls
+  sit far above any physical page. That context is display-only and is always
+  present for a resolved chain; an id that resolves to no chain returns no
+  session instead of a page with empty context. Three states stay distinct: loading while the
+  scoped read is in flight, unavailable for an id that resolves to no chain at
+  all (the host returns no session, with a retry) or a read failure, and empty
+  for a chain that exists but has produced no child row yet.
+- A search hit inside a child's rows is a nested target. Search stays a
+  physical read: it locates the row and returns `navigationParent`, the direct
+  parent `Task` call, and the reader's existing main range is restored exactly
+  as it was — the jump never retargets or rewrites the main view. Showing the
+  child means opening the dock on that chain: an open request for any identity
+  of a chain that already has a tab lands in that tab, which keeps its own key
+  and mounted surface, so the focused row follows the tab the request landed in
+  (the chain's root `delegationId`, not the call id that asked). The main pane
+  never pretends the child row is part of its own page, and reading the child
+  never widens the main page.
 - The task description is the Task call's `task` argument, rendered as the
   conversation's first selectable user row. The delegate's thinking, tool rows,
   and answer fragments reuse the same components and styling as the main
@@ -2559,16 +2592,27 @@ Renderer: `apps/desktop/src/components/Markdown.tsx` + `apps/desktop/src/lib/shi
   reading viewport, measured and applied while the veil still covers the
   scroller. A reader's own scroll gesture is a position on its own and continues
   history immediately.
-- **A bounded window with nothing to draw opens backwards**: a tail window can
-  land entirely inside one delegation chain, so every row belongs under a
-  `Task` call that lies just before the window. With no renderable row the pane
-  has nothing to draw and no continuation control to trigger from, so opening
-  the session keeps reading the same bounded backward pagination until a
-  top-level row is inside the window or the real head is reached. The delegate
-  rows stay in the window for their own transcript, the tail's `messageEnd` and
-  `hasMoreAfter` stay authoritative, and `messageStart`/`hasMoreBefore` follow
-  the oldest page read. A page that does not move the cursor ends the walk, and
-  an already renderable tail still costs one bounded read.
+- **Main-window pages select top-level records** (ADR 0335): the main transcript
+  reads `session.get` with the `main` scope, so a newest page holds top-level
+  physical records only and a delegation's `parentToolCallId` rows never fill —
+  or force extra reads out of — the pane. The budget counts selected top-level
+  records, not canonical visible rows: internal system and empty rows still
+  occupy a page and the renderer still decides what it draws. Physical
+  `messageStart`/`messageEnd` and the per-scope `hasMoreBefore`/
+  `hasMoreAfter` flags keep their meaning, so anchoring, paging, and search
+  navigation are unchanged. The walk recorded for E2E-207a — opening a session
+  by reading backwards until a top-level row entered the window — is historical:
+  it remains what an unscoped read does for legacy callers, and the main pane no
+  longer needs it because its pages contain records it can draw.
+- **Search targets inside a delegation** (ADR 0335): `session/searchContext`
+  keeps its physical address, so a nested hit resolves to the child row and
+  the physical answer still returns `navigationParent`, the direct parent
+  `Task` call. The renderer then opens the dock on that chain's `delegation`
+  scope, and the reader's existing main range is put back exactly as it was —
+  the pending jump never replaces or retargets the main view. An already open
+  tab for the chain is reused and keeps its own key and mounted surface, so the
+  focus follows the tab the request landed in, named by the chain's root
+  `delegationId` rather than the call id that asked.
 - **Minimap hover cost**: dash magnification is applied by writing a custom
   property per dash, and dash centers are measured in a separate read-only pass.
   Reading a dash's geometry inside the same loop that writes to it forces one
@@ -3082,8 +3126,35 @@ coexist as independent tabs. The tab renders the delegation as a conversation:
 - Tabs are never opened automatically when a delegate starts. They persist
   after the delegate settles until the user closes them and are scoped to
   their session like every other tab.
-- The conversation is re-found from the session's live/retained messages, so
-  streaming rows keep arriving in the open tab while the delegate runs.
+- The open tab renders the chain's own cached entry, never a re-find of the
+  session's live/retained messages: the entry owns the child rows it has
+  received, so a live row keeps streaming into the tab while the delegate runs
+  and a main read, window replacement, reduction, restore, or paging cannot
+  take those rows away. The entry, not the main viewport, is the tab's source of
+  truth.
+- Live rows arrive through the entry even when no read is in flight, and a live
+  row after the last durable read leaves it stale: reopening refreshes only the
+  tail and merges that page over what is already held instead of resetting it.
+  A failed refresh keeps the loaded rows laid out in the tab, with the failure
+  stated inline and a retry that repeats the same read; only a tab with nothing
+  to show yet becomes a failed panel.
+- The owned rows are bounded, not promised forever: one chain keeps 400 rows
+  (oldest non-focus rows trimmed first, the older cursor kept so paging
+  re-reads what a trim dropped) and one session keeps its 12 most recently read
+  chains. The tab states an omission when a trim leaves its search focus as an
+  island — the gap marker sits where adjacency breaks — and only the main
+  reading window's own changes are guaranteed not to remove loaded rows.
+- Reaching the newest rows after the tab already holds older ones is a joined,
+  bounded walk, not a jump: the newest page is read first, then the panel bridges
+  backwards over the physical `messageBefore` cursor until the walked range
+  overlaps the rows it holds or reaches the chain's head, and the walked pages
+  merge oldest first. The walk stops after 20 pages — 2000 selected rows — or
+  earlier when an answer cannot move the cursor; a stopped walk keeps the loaded
+  rows and offers the retry. A gap wider than the walk keeps a contiguous newest
+  window plus the retained focus row, prints the localized
+  "Earlier messages are omitted here" marker where the two ranges stop being
+  adjacent, keeps `Show earlier messages` active above the window, and re-reads
+  every omitted row through that control.
 - The tab's scroll area is the pane's only scrollbar — the composer sits below
   it and never scrolls — and it reserves that trailing gutter whether or not the
   rows overflow, so opening a long command detail never narrows the transcript

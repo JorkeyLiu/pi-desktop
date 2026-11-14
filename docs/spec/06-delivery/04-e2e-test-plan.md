@@ -2223,6 +2223,13 @@ validation still needed.
 
 #### E2E-207a: A bounded tail inside one delegation chain opens on visible history
 
+> **Superseded by E2E-207b (ADR 0335).** This entry required the main transcript
+> to open *backwards* until the delegate tail's owning top-level turn entered
+> its window. Scoped reads make the main page select top-level records and give
+> the delegation panel its own chain, so that walk is no longer current
+> behavior. It is still what an unscoped `session.get` returns to legacy
+> callers, and this entry keeps its evidence as historical context.
+
 - **Preconditions**: A session whose last 100+ physical rows are all delegate
   rows (`parentToolCallId` set), with the user turn and the parent `Task` call
   just before that tail; a second, ordinary session with a renderable tail.
@@ -2251,7 +2258,177 @@ validation still needed.
   the `Task` card one page earlier (15 rows, 400 messages) with the delegate
   rows still linked under it, the child transcript tab shows 165 rows,
   collapse and reopen are clean, no console errors, and an ordinary topic
-  still opens with one bounded read.
+  still opens with one bounded read. Superseded by E2E-207b (ADR 0335);
+  historical record only.
+
+#### E2E-207b: Thousands of delegate rows never fill the main transcript's pages
+
+- **Preconditions**: One session whose transcript holds thousands of delegate
+  rows (each carrying `parentToolCallId`) accumulated by one or more `Task`
+  calls, interleaved with ordinary user/assistant turns; a second session of
+  ordinary turns; a build whose host requests can be recorded.
+- **Steps**: 1) Open the delegate-heavy session from the sidebar and record the
+  first visible frame and the `session.get` request it sent. 2) Scroll to the
+  top until no older page remains. 3) Open the ordinary session and compare its
+  first read. 4) In an isolated Host fixture, issue an unscoped `session.get`
+  for the same delegate-heavy session.
+- **Expected**: The main transcript opens on its newest top-level page and its
+  read names `{ kind: "main" }`. Every returned page holds top-level records
+  only, so no page is filled with delegate rows and the pane never needs the
+  backward walk E2E-207a described. Paging upward ends at the transcript head
+  with `hasMoreBefore` false; `messageStart`/`messageEnd` stay physical
+  positions, so a page's span between them is a physical distance rather than a
+  count of returned records. The ordinary session still costs one bounded read.
+  Step 4 still returns the complete physical tail, delegate rows included,
+  exactly as before the scope existed.
+- **Specs linked**: `04-ux/08-component-spec.md` (transcript window),
+  `03-runtime/06-host-rpc-protocol.md`, `03-runtime/01-ipc-protocol.md`,
+  `03-runtime/04-data-storage.md`, ADR 0335
+- **Acceptance**: C (session open and scroll), F (persistence), Quality
+- **Milestone**: M5
+- **Status**: Passed. Host unit/contract coverage — `cargo test -p host-core`
+  (1014 passed, 1 ignored), including the main-scope selection and
+  physical-paging cases in `crates/host-core/src/sessions/history_scope_tests.rs`;
+  renderer units in `apps/desktop/test/history-scope-forward.test.mjs` and
+  `apps/desktop/test/scoped-history-main-transcript.test.mjs`. Real rendered
+  evidence — `node scripts/e2e-scoped-history-real-host.mjs` exits 0 over a real
+  built renderer, Main, and Host at base `2d5f6f893` in an isolated fixture
+  profile with no provider: the sidebar open sent `{ kind: "main" }`, returned
+  100 top-level rows and no child rows, and older paging reached the transcript
+  head; the unscoped comparison still returned the complete physical tail with
+  its delegate rows. Reported supporting evidence for this change:
+  agent-runtime 1722 passed, desktop 4496 passed / 4 skipped, shared 1382,
+  i18n 32, `pnpm lint` and the desktop typecheck pass.
+
+#### E2E-207c: A main-window change never disturbs an open delegation panel
+
+- **Preconditions**: A session holding one chain of at least two runs with
+  thousands of delegate rows, opened once so both surfaces have loaded
+  history; a build whose host requests can be recorded.
+- **Steps**: 1) Open the delegation tab and record the tab identity, the header
+  figures, and the first and last loaded row ids. 2) Deterministically change
+  the main reading window: scroll up until older pages are fetched and the
+  mounted window is replaced, then scroll back to the newest page and let it
+  regrow. 3) Reload the session while the tab is open. 4) Scroll the main
+  transcript far above the delegation's root `Task`.
+- **Expected**: After each step the tab still shows the same chain, stays
+  available, and keeps the rows and reading position it had already loaded; no
+  main-window change makes the tab switch chains, go unavailable, or drop
+- **Expected**: After each step the tab still shows the same chain, stays
+  available, and keeps the rows and reading position it had already loaded; no
+  main-window change makes the tab switch chains, go unavailable, or drop
+  displayed rows, and the tab keeps its brief even while the root `Task` is
+  outside the main page. The panel's own read is what refreshes it: a reopen
+  after a live row reads only the tail and merges it over the held rows without
+  resetting them, a wider gap is answered with a bounded newest window plus the
+  retained focus island, an explicit omission marker, and `hasMoreBefore` true
+  whose `Show earlier` re-reads every omitted row, and a failed read keeps the
+  rows on screen with the failure stated inline and a retry. A main-window
+  replacement is exactly the change that must not remove them, and a trim or
+  eviction of the bounded cache (§9.9) states the gap instead of silently
+  dropping it. A child search hit opens or reuses the owning chain's tab keyed
+  by the chain's root `delegationId` rather than the asking call id, and leaves
+  the main reading range exactly as it was. This is a deterministic-window
+  assertion; reproducing rapid flicker is out of scope.
+  `03-runtime/01-ipc-protocol.md`, ADR 0335
+- **Acceptance**: C (session open and switch), Quality
+- **Milestone**: M5
+- **Status**: Passed. Host unit/contract coverage — `cargo test -p host-core`
+  (1014 passed, 1 ignored), including the independent-read cases in
+  `crates/host-core/src/sessions/history_scope_tests.rs`
+  (`open_main_then_read_delegation_then_paginate`); renderer regressions in
+  `apps/desktop/test/subagent-tab-scoped-history.test.mjs`,
+  `apps/desktop/test/scoped-subagent-history.test.mjs`, and
+  `apps/desktop/test/subagent-search-focus-tab.test.mjs` — the owned cache
+  survives a main-window replacement, a tail sync merges newest-first without
+  resetting held rows, a bounded window states its omission and `Show earlier`
+  still reaches the omitted rows, a ready refresh is non-destructive, and a
+  failed read keeps its rows with an inline retry. Rendered evidence — the
+  Chromium fixture journey `node scripts/e2e-scoped-subagent-history.mjs`
+  (`scripts/e2e/scoped-subagent-history.tsx`: production `SubagentTranscriptTab`
+  over a stubbed preload that answers like a scoped backend) passes, and the
+  real-host run `node scripts/e2e-scoped-history-real-host.mjs` exits 0 with an
+  empty defect list: opening the panel and paging the chain's 1009 child rows
+  left the tab on its own canonical identity with 0 extra child reads across
+  main-window replacement, reselect, alias open, and close/reopen, and returning
+  to the session performed exactly one tail refresh.
+#### E2E-207d: One chain resolves by run id, legacy call id, and resume
+
+- **Preconditions**: A settled chain of at least three runs (`Task` dispatch,
+  a `Task(resume)` continuation, and one more continuation), with the root
+  `Task` call outside the newest page's budget and no nested delegation.
+- **Steps**: 1) Open the delegation tab by its latest run's `delegationId`. 2)
+  Open it again by the root `Task` tool call id. 3) Open it by the middle run's
+  `delegationId`. 4) Request a delegation page with an id that no longer exists.
+- **Expected**: Steps 1–3 show the same conversation, in transcript order,
+  made of the chain's direct child rows across all of its runs, with the
+  chain's original description naming the tab. The echoed `historyScope` is the
+  same canonical identity in all three — the root dispatch's `delegationId` —
+  and every `Task` / `Task(resume)` message of the chain arrives as
+  `historyContext` outside the page budget, so the brief is the first readable
+  row in every case. Step 4 returns no session (the host answers `session:
+  null`) and the panel shows its unavailable state rather than an empty one.
+- **Specs linked**: `03-runtime/06-host-rpc-protocol.md`,
+  `03-runtime/01-ipc-protocol.md`, `04-ux/08-component-spec.md` (§5.7), ADR 0279,
+  ADR 0335
+- **Acceptance**: C (session open), F (persistence), Quality
+- **Milestone**: M5
+- **Status**: Passed. Host unit/contract coverage — `cargo test -p host-core`
+  (1014 passed, 1 ignored): `delegation_resume_resolves_by_delegation_id_or_bare_call_id`
+  and the canonical-echo assertions in
+  `crates/host-core/src/sessions/history_scope_tests.rs`; renderer regressions in
+  `apps/desktop/test/subagent-tab-scoped-history.test.mjs` and
+  `apps/desktop/test/subagent-search-focus-tab.test.mjs`. Real rendered
+  evidence — `node scripts/e2e-scoped-history-real-host.mjs` exits 0 with an
+  empty defect list: opening the chain by its run id, by the legacy `Task`
+  call id, and after close/reopen all landed on the same active
+  `subagent:delegation-1` tab with the canonical echo and no extra child read.
+  The nested child search (rows 1–500) found the child, put one highlighted
+  range inside the viewport of that tab, and left the caller's main range
+  untouched; `Show latest` merged the retained target into the newest window
+  through 6 bridge reads over 400 unique retained rows and stated the omission
+  marker where the gap remains.
+
+#### E2E-207e: A settled result survives close, restart, and truncation without a prefix rewrite
+
+- **Preconditions**: An isolated Host profile with a session whose chain has
+  settled and whose final report is long, opened once so the delegation tab has
+  rendered it; a byte copy of the transcript file taken at that point; the
+  build's own `<sessionId>.snapshots.jsonl` written beside it.
+- **Steps**: 1) Reopen the session and the delegation tab and compare the
+  transcript with the copy. 2) Close the tab, reopen the session, reopen the
+  tab. 3) Restart the app and reopen the session and tab. 4) Truncate the
+  transcript from a message after the chain, then reopen the session. 5) Append
+  one line with a newer `schema`, one foreign-session line, and one torn tail,
+  then reopen and run a transcript rewrite. 6) Delete the session.
+- **Expected**: Every reopen, restart, and repeated read leaves the recorded
+  transcript byte-identical — reading a chain appends snapshot lines and never
+  rewrites the historical root `Task` line — and the final report reads back
+  verbatim, neither summarized nor truncated by the writer. The chain stays
+  settled across close/open and restart, no turn or delegation resumes, and the
+  tab renders the same detail each time. Settlement is applied only over a
+  still-`running` base row, so a settled row is never reopened and an older
+  build's in-place settlement wins over a stale line. Truncation drops only
+  entries whose rows left the transcript, and an entry whose launch row the
+  rewrite drops stays for a later revision restore. Step 5 does not fail the
+  session: the newer-schema, foreign, and torn lines are skipped on read and
+  copied back verbatim by the rewrite, and none of them is presented as a
+  recovered delegation. Deletion removes the whole file with the session.
+- **Specs linked**: `03-runtime/04-data-storage.md` (§4.6, §4.7a, §4.7b),
+  `04-ux/08-component-spec.md` (§5.7), ADR 0333, ADR 0335
+- **Acceptance**: F (persistence), Quality
+- **Milestone**: M5
+- **Status**: Passed. Host unit/contract coverage — `cargo test -p host-core`
+  (1014 passed, 1 ignored) including `crates/host-core/src/transcripts_snapshots_tests.rs`
+  and `crates/host-core/src/sessions/history_scope_tests.rs`; `cargo fmt` clean;
+  one pre-existing `filter_next` clippy warning is still open, so clippy is not
+  claimed clean. Real rendered evidence — `node scripts/e2e-scoped-history-real-host.mjs`
+  exits 0 with an empty defect list: the transcript's JSONL prefix hash stayed
+  unchanged, one `schema` 1 sidecar line with checkpoint generation 1 held the
+  full report verbatim, the chain stayed `completed` after restart, and no
+  phantom run started. The truncation and revision/fork reconciliation of that
+  overlay stay host-unit covered (`transcripts_snapshots_tests.rs`) rather than
+  rendered in this journey.
 
 #### E2E-011a: New session while another session is still streaming
 
@@ -13362,6 +13539,60 @@ This test plan spec is accepted when:
   needs a capable environment. Required suites: `test:e2e`,
   `test:e2e:subagents`, `test:e2e:transcript`.
 
+#### E2E-SUBAGENT-recovered-history-after-restart
+
+- **Preconditions**: A session on a deterministic local transport that settles
+  one delegation `completed`, fails one, and leaves one open when the app closes;
+  a fourth chain started from the user channel (`source: "user"`); and, for the
+  cap step, a session with more than 100 delegations. The transcript holds every
+  `Task` row after relaunch, and no new provider request is scripted.
+- **Steps**:
+  1. Close the app while one delegate is still working, relaunch, and open the
+     same session.
+  2. Ask the parent model for `TaskList` and read every line and
+     `details.delegations[]`.
+  3. Call `TaskWait` with the settled recovered id only, then with the
+     still-open recovered id, then with a recovered id plus an id the session
+     never had.
+  4. Send an ordinary parent turn and compare the transcript with a copy taken
+     before the relaunch.
+  5. Send a turn that passes the still-open recovered id as `Task.resume`.
+  6. Ask for `TaskList` after the resumed run settles, and inspect the
+     user-channel continuation row.
+  7. Repeat steps 1-2 on the session with more than 100 delegations.
+- **Expected**: After relaunch `TaskList` lists the delegations this session
+  really ran, one line per delegation, each carrying `recovered: true`; the
+  heartbeat wording states that nothing runs for it here, so no line claims a
+  live run, and the still-open entry reads `interrupted` rather than `running`.
+  `TaskWait` with an explicit recovered id returns that entry's full stored
+  report verbatim — the `TaskWait` batch text the parent received before the
+  restart, or the delegate's own final assistant row when it settled without a
+  wait — and `details.recoveredDelegationIds` names the ids answered from
+  history; nothing is executed, no provider request is made, and the unknown id
+  still answers as unknown. A mixed call answers both kinds in one result but
+  reports only the live batch. Step 4 leaves the transcript unchanged: recovered
+  entries are read-only, so no report is delivered again, no receipt is
+  consumed, and no delegation is marked delivered. Step 5 starts a new run on the
+  interrupted chain through the existing `Task(resume)` path — the only way it
+  resumes — and without that call nothing phantom ever runs for it. Step 6 lists
+  the resumed run as a normal live record with no `recovered` marker beside the
+  still-recovered history, and the user-channel continuation is absent from both
+  the parent's listing and its waits. Step 7 lists at most the 100 newest
+  delegations; older ones are simply not listed and no id answers differently
+  just because it fell outside that cap.
+- **Specs linked**: `03-runtime/02-agent-runtime.md` §5f,
+  `03-runtime/04-data-storage.md` §4.7a/§4.7b, ADR 0089, ADR 0279, ADR 0335
+- **Acceptance**: C (conversation), F (persistence), Quality
+- **Milestone**: M5
+- **Status**: Passed. Runtime coverage — 1722 agent-runtime tests, including 12
+  delegation-recovery cases in
+  `packages/agent-runtime/src/delegation-recovery.test.ts` plus the runtime-level
+  recovery assertions in `packages/agent-runtime/src/runtime.test.ts`. Real
+  host/rendered evidence — `node scripts/e2e-scoped-history-real-host.mjs` exits
+  0 with an empty defect list: `TaskWait` on the recovered id returned the stored
+  report matching the batch the parent received before the restart, the chain
+  read `completed` after relaunch, and no phantom run started.
+
 #### E2E-SUBAGENT-context-overflow-compacts-before-failing
 
 - **Preconditions**: An Agent session on a deterministic local transport whose
@@ -19138,14 +19369,22 @@ host-created files. The full app's file-preview viewer is covered separately.
 - Environment: isolated Desktop profile, real Main/sidecar/Host and a local
   streaming provider fixture; no real API account or user data.
 - Start two delegates, open A's transcript tab and stop A with the icon-only
-  Stop control on A's card. Verify B and the parent
-  remain active, A's partial output remains readable, and no model request was
-  needed. Then stop every running child from the composer subagent dock's
-  session-wide control; B stops and the parent remains active.
+  Stop control on A's card. Verify B and the parent remain active, A's partial
+  output remains readable, and no model request was needed. Then stop this
+  session's remaining running child through the session-level
+  `agentStopSubagents` IPC: B stops and the parent remains active. The subagent
+  dock has no group-header stop-all control, so the session-wide stop is an
+  IPC capability, not a dock button.
 - Terminal cards remove their Stop controls and persisted Task snapshots record
   `stopped`. An empty explicit ID list is rejected rather than stopping all.
-- Run `node scripts/e2e-subagent-stop.mjs`. Runtime tests additionally cover
-  cross-session isolation and uncooperative cancellation remaining pending;
+- **Status:** Passed — `node scripts/e2e-subagent-stop.mjs` passes against an
+  isolated profile with real Main/sidecar/Host and a local fixture provider:
+  card and detail stop, session stop-all, parent isolation, partial-output
+  persistence, and an invalid empty selection. The stale harness assertions
+  (8px card inset versus the actual 10px CSS value, and a nonexistent dock
+  stop-all click) were corrected to the shipped geometry and the session IPC;
+  no production code changed. Runtime tests additionally cover cross-session
+  isolation and uncooperative cancellation remaining pending;
   `e2e-subagent-parent-error.mjs` covers explicit cancellation/resume semantics.
 
 ## BOM-marked UTF-16 text tools

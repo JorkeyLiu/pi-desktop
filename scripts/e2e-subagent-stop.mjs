@@ -168,7 +168,13 @@ try {
     }))
   })`);
   assert.ok(layout.cards.length === 2 && layout.cards.every(c => c.title && c.role && c.state && !c.clipped), `each child card states its task title, role and outcome: ${JSON.stringify(layout.cards)}`);
-  assert.ok(layout.stops.length === 2 && layout.stops.every(b => b.label && b.opacity === "1" && Math.abs(b.rightGap - 8) < 1 && Math.abs(b.bottomGap - 8) < 1), `stop actions stay visible on the card without hovering: ${JSON.stringify(layout.stops)}`);
+  // The card pins its stop handle to the trailing corner at right/bottom 10px
+  // (`apps/desktop/src/styles/messages.css`, `.subagent-task > .subagent-stop-button`,
+  // inside the `position: relative` `.tool-row.subagent-task`). This assertion
+  // used to say 8, a figure from before that inset settled at 10; the geometry
+  // stays exact against the rule that actually ships.
+  const stopEdgeInsetPx = 10;
+  assert.ok(layout.stops.length === 2 && layout.stops.every(b => b.label && b.opacity === "1" && Math.abs(b.rightGap - stopEdgeInsetPx) < 1 && Math.abs(b.bottomGap - stopEdgeInsetPx) < 1), `stop actions stay visible on the card without hovering: ${JSON.stringify(layout.stops)}`);
   const before = requests.length;
   await page.evaluate(`document.querySelector('.subagent-transcript-composer-controls .stop-btn').click()`);
   await until(() => !workers.has("A") && workers.has("B"), "only worker A cancelled");
@@ -176,9 +182,13 @@ try {
   assert.equal(parents.size, 1, "coordinator stays running");
   assert.equal(requests.length, before, "stop sends no model request");
   await until(() => page.evaluate(`document.body.innerText.includes('Partial output from worker A')`), "partial delegate output survives");
-  // Stop-all lives on the subagent dock's header now: the transcript group no
-  // longer carries any subagent chrome of its own.
-  await page.evaluate(`document.querySelector('.subagent-dock-header .stop-btn').click()`);
+  // Session-wide stop-all is an API capability, not a rendered control: the UX
+  // spec states there is no group-level Stop all, and `SubagentDock` documents
+  // that stopping belongs to each child's own row. The request below is what a
+  // stop-all would issue — the IPC contract treats omitted `delegationIds` as
+  // this session's running delegates, while an empty array stays invalid.
+  const stopAll = await invoke("agentStopSubagents", { sessionId: setup.sessionId });
+  assert.equal(stopAll.ok, true, `stop-all request accepted: ${JSON.stringify(stopAll)}`);
   await until(() => workers.size === 0, "stop-all cancels remaining delegates");
   assert.equal(parents.size, 1, "stop-all preserves coordinator");
   await until(async () => (await buttons()).length === 0, "all terminal controls disappear");

@@ -11,12 +11,27 @@ import { dedupeSessionMessages } from "./session-transcript";
  * transcript that the sidebar's hover prefetch re-served on every later open,
  * and the session stayed blank until the app restarted. A read is only
  * trustworthy as "empty" when the session's own count agrees with it.
+ * A scoped read is the exception: it reports the records of its own scope, so
+ * a delegate with no rows or a conversation with no top-level record answers
+ * with an empty list on purpose. The physical `messageCount` then describes
+ * rows that belong to another scope, and comparing against it would turn a
+ * real empty state into a false "read failed" loop.
  */
 export function sessionReadLooksEmpty(
-  session: Pick<SessionDetail, "messages" | "messageCount"> | null | undefined,
+  session: Pick<SessionDetail, "messages" | "messageCount" | "historyScope"> | null | undefined,
 ): boolean {
   if (!session) return false;
-  return (session.messages ?? []).length === 0 && (session.messageCount ?? 0) > 0;
+  if ((session.messages ?? []).length > 0) return false;
+  // Only an unscoped physical read can be a racing, truncated answer.
+  if (session.historyScope !== undefined) return false;
+  return (session.messageCount ?? 0) > 0;
+}
+
+/** Whether this page was read with a scope instead of the physical transcript. */
+export function sessionReadIsScoped(
+  session: Pick<SessionDetail, "historyScope"> | null | undefined,
+): boolean {
+  return session?.historyScope !== undefined;
 }
 
 /**

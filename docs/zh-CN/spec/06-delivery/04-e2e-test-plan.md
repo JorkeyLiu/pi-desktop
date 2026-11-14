@@ -753,6 +753,114 @@ E2E 从工作检出运行，并使用其中已经准备好的宿主开发环境�
 - **里程碑**：M2
 - **状态**：涵盖源级回归；全视觉场景草稿
 
+#### E2E-207b：数千条委派行不会占满主转录的分页
+
+- **先决条件**：一个会话的转录中积累了一次或多次 `Task` 调用产生的数千条委派行
+  （每条都带 `parentToolCallId`），并与普通用户／助手回合交错；第二个只有普通回合的会话；
+  可记录宿主请求的构建。
+- **步骤**：1) 从侧边栏打开委派密集的会话，记录首个可见帧和它发出的 `session.get` 请求。
+  2) 滚动到顶部直到没有更早的分页。3) 打开普通会话并比较它的首次读取。4) 在隔离的 Host
+  夹具中，对同一委派密集会话发起一次无作用域的 `session.get`。
+- **预期**：主转录在其最新顶层页上打开，请求带 `{ kind: "main" }`。返回的每一页只含顶层记录，
+  因此没有一页会被委派行占满，也不需要 E2E-207a 描述的向后读取。向上分页在转录开头结束并
+  `hasMoreBefore` 为 false；`messageStart`/`messageEnd` 仍是物理位置，被跳过的子行会表现为
+  两者之间的空隙。普通会话仍只需一次受限读取。第 4 步仍返回完整物理尾部（包含委派行），
+  与该作用域存在之前一致。
+- **链接规格**：`04-ux/08-component-spec.md`（转录窗口）、`03-runtime/06-host-rpc-protocol.md`、
+  `03-runtime/01-ipc-protocol.md`、`03-runtime/04-data-storage.md`、ADR 0335
+- **接受**：C（打开与滚动会话）、F（持久性）、Quality
+- **里程碑**：M5
+- **状态**：通过。主机单元／契约覆盖 —— `cargo test -p host-core`（1014 通过、1 忽略），含主作用域
+  选择与物理分页用例（`crates/host-core/src/sessions/history_scope_tests.rs`）；渲染器单元测试在
+  `apps/desktop/test/history-scope-forward.test.mjs` 与
+  `apps/desktop/test/scoped-history-main-transcript.test.mjs`。真实渲染证据 ——
+  `node scripts/e2e-scoped-history-real-host.mjs` 在基准 `2d5f6f893` 的隔离 fixture 配置（无提供商）
+  上用真实构建的渲染器、Main 与 Host 以 exit 0 通过：从侧边栏打开该会话发出的读取为
+  `{ kind: "main" }`，返回 100 条顶层行且 0 条子代理行，向上分页到达转录开头；无作用域的对照读取
+  仍返回含委派行的完整物理尾部。本次变更的其它已报告证据：agent-runtime 1722 通过、
+  desktop 4496 通过／4 跳过、shared 1382、i18n 32、`pnpm lint` 与 desktop 类型检查通过。
+  （英文源的 E2E-207a 记录的是委派尾部落在主窗口内的旧契约，已由本条取代，仅作历史证据保留。）
+
+#### E2E-207c：主窗口变化不影响已打开的委派面板
+
+- **先决条件**：一个会话持有一条至少两个运行、数千条委派行的链；两个界面都已加载历史；
+  可记录宿主请求的构建。
+- **步骤**：1) 打开委派标签，记录标签身份、标题区数字以及首尾已加载行 id。2) 用确定性的方式改变主阅读
+  窗口：向上滚动直到取回更早的分页且已挂载窗口被替换，然后再滚回最新页让它重新增长。
+  3) 标签打开时重新加载会话。4) 把主转录滚到委派根 `Task` 之上很远的位置。
+- **预期**：每一步之后标签仍显示同一条链、仍可用，并保留它已加载的行和阅读位置；任何主窗口变化都
+  不会让标签换链、变为不可用或丢掉已显示的行；即使根 `Task` 不在主页内，标签仍显示任务简介。
+  只有面板自己的读取会刷新它：有活跃行之后的重新打开只读尾部，并把该页合并到已持有的行而不是重置；
+  更大的间隙会得到有界的最新窗口加上保留的聚焦岛、明确的省略标记，以及为 true 的 `hasMoreBefore`，
+  其“显示更早消息”会重读每一行被省略的行；读取失败时行仍留在屏幕上，内联说明失败并提供重试。
+  主窗口替换正是绝不能移除这些行的变化，而有界缓存（§9.9）的裁剪或淘汰会声明间隙，不会静默丢弃。
+  子行搜索命中会打开或复用所属链的标签，键是链的根 `delegationId` 而不是发起询问的调用 id，
+  并且让主阅读范围保持原样。这是对确定性窗口的断言，不要求复现快速闪烁。
+- **链接规格**：`04-ux/08-component-spec.md`（§5.7、§9.9）、`03-runtime/01-ipc-protocol.md`、ADR 0335
+- **接受**：C（打开会话与切换）、Quality
+- **里程碑**：M5
+- **状态**：通过。主机单元／契约覆盖 —— `cargo test -p host-core`（1014 通过、1 忽略），含
+  `crates/host-core/src/sessions/history_scope_tests.rs` 中独立读取的用例
+  （`open_main_then_read_delegation_then_paginate`），以及渲染器回归
+  `apps/desktop/test/subagent-tab-scoped-history.test.mjs`、
+  `apps/desktop/test/scoped-subagent-history.test.mjs` 与
+  `apps/desktop/test/subagent-search-focus-tab.test.mjs` —— 面板自有缓存不会因主窗口替换而丢失、
+  尾部同步以最新优先合并且不重置已保留的行、有界窗口会声明省略且“显示更早消息”仍可到达被省略的
+  行、`ready` 刷新是非破坏性的、读取失败会保留行并提供内联重试。渲染证据 —— Chromium fixture 旅程
+  `node scripts/e2e-scoped-subagent-history.mjs`
+  （`scripts/e2e/scoped-subagent-history.tsx`：生产 `SubagentTranscriptTab` 加按作用域后端作答的
+  stub preload）通过；真机运行 `node scripts/e2e-scoped-history-real-host.mjs` 以 exit 0 通过且
+  缺陷列表为空：打开面板并按页读取该链的 1009 条子代理行后，标签保持自己的规范身份，
+  主窗口替换、重新选择、别名打开与关闭／重开后额外子行读取为 0，回到该会话时只做一次尾部刷新。
+#### E2E-207d：一条链按运行 id、旧调用 id 与续跑解析
+
+- **先决条件**：一条至少三个运行已结算的链（`Task` 派发、一个 `Task(resume)` 续跑，以及再一次续跑），
+  根 `Task` 调用在最新页预算之外，且没有嵌套委派。
+- **步骤**：1) 用最新运行的 `delegationId` 打开委派。2) 用根 `Task` 工具调用 id 打开。3) 用中间运行的
+  `delegationId` 打开。4) 用一个已不存在的 `id` 请求委派分页。
+- **预期**：第 1–3 步显示同一段对话，按转录顺序，由该链跨全部运行的直接子行组成，标签名用链上原始描述。
+  三步回显的 `historyScope` 都是同一个规范身份 —— 根派发的 `delegationId` —— 且该链的每一条
+  `Task` / `Task(resume)` 消息都作为 `historyContext` 在页预算之外返回，因此每种情况下任务简介
+  都是第一行可读内容。第 4 步不返回会话（主机回答 `session: null`），面板显示不可用状态而不是空状态。
+- **链接规格**：`03-runtime/06-host-rpc-protocol.md`、`03-runtime/01-ipc-protocol.md`、
+  `04-ux/08-component-spec.md`（§5.7）、ADR 0279、ADR 0335
+- **接受**：C（打开会话）、F（持久性）、Quality
+- **里程碑**：M5
+- **状态**：通过。主机单元／契约覆盖 —— `cargo test -p host-core`（1014 通过、1 忽略）：
+  `delegation_resume_resolves_by_delegation_id_or_bare_call_id` 与
+  `crates/host-core/src/sessions/history_scope_tests.rs` 中的规范回显断言；渲染器回归在
+  `apps/desktop/test/subagent-tab-scoped-history.test.mjs` 与
+  `apps/desktop/test/subagent-search-focus-tab.test.mjs`。真实渲染证据 ——
+  `node scripts/e2e-scoped-history-real-host.mjs` 以 exit 0 通过且缺陷列表为空：用运行 id、旧
+  `Task` 调用 id 以及关闭／重开后打开该链，都落在同一个活动的 `subagent:delegation-1` 标签上，
+  回显为规范身份且没有额外子行读取。嵌套子行搜索（第 1–500 行）命中该子行，在标签视口内放入
+  一段高亮范围，且不改动调用方的主阅读范围；“显示最新消息”通过 6 次桥接读取把保留的目标并入最新
+  窗口（400 条唯一保留行），并在间隙处陈述省略标记。
+
+#### E2E-207e：已结算结果在关闭、重启与截断后仍可用，且不重写前缀
+
+- **先决条件**：隔离的 Host 配置中，一个会话的链已结算且最终报告很长，并已打开一次使委派标签渲染过该报告；
+  此时取得的转录文件字节副本；被测构建写在旁边的 `<sessionId>.snapshots.jsonl`。
+- **步骤**：1) 重新打开会话与委派标签，并把转录与副本比较。2) 关闭标签，重新打开会话，再打开标签。
+  3) 重启应用并重新打开会话与标签。4) 从链之后的某条消息截断转录，再打开会话。5) 追加一条更高
+  `schema` 的行、一条其他会话的行和一条撕裂尾行，重新打开并执行一次转录重写。6) 删除该会话。
+- **预期**：每次重开、重启与重复读取都让已记录的转录逐字节不变 —— 读取一条链只追加快照行，不重写历史根
+  `Task` 行 —— 最终报告按原文读回，写入方既不摘要也不截断。链在关闭／重开与重启后保持已结算，没有回合或
+  委派被重新启动，标签每次渲染相同的详情。结算只会覆盖仍为 `running` 的基础行，因此已结算的行不会重新
+  打开，较旧构建的原地结算也胜过过期行。截断只丢弃其行已离开转录的条目；重写丢弃的派发行对应的条目
+  保留给后续的修订恢复。第 5 步不会让会话失败：更高 schema、其他会话与撕裂的行在读取时跳过，并在重写时
+  逐字复制回去，也不会被当作已恢复的委派呈现。删除会话同时删除整个文件。
+- **链接规格**：`03-runtime/04-data-storage.md`（§4.6、§4.7a、§4.7b）、`04-ux/08-component-spec.md`（§5.7）、
+  ADR 0333、ADR 0335
+- **接受**：F（持久性）、Quality
+- **状态**：通过。主机单元／契约覆盖 —— `cargo test -p host-core`（1014 通过、1 忽略），含
+  `crates/host-core/src/transcripts_snapshots_tests.rs` 与
+  `crates/host-core/src/sessions/history_scope_tests.rs`；`cargo fmt` 干净；仍有一条既有的
+  `filter_next` clippy 告警未处理，因此不声明 clippy 全绿。真实渲染证据 ——
+  `node scripts/e2e-scoped-history-real-host.mjs` 以 exit 0 通过且缺陷列表为空：转录 JSONL 前缀
+  哈希保持不变，一条 `schema` 1 的旁侧文件行（检查点代次 1）保存了完整报告原文，链在重启后仍为
+  `completed`，且没有幽灵运行启动。该旁侧文件的截断与修订／分支协调仍由主机单元测试
+  （`transcripts_snapshots_tests.rs`）覆盖，而不是在本旅程中渲染验证。
 #### E2E-011a：新会话，而另一个会话仍在流式传输
 
 - **先决条件**：已配置提供商；会话 A 正在流式传输很长的时间
@@ -4836,6 +4944,41 @@ eleven-tool-round desktop paths are verified by
   `delegation-history.test.ts`、`runtime.test.ts`、
   `apps/desktop/test/assistant-turns.test.mjs`）；桌面旅程需要具备条件的环境。必需套件：
   `test:e2e`、`test:e2e:subagents`、`test:e2e:transcript`。
+
+#### E2E-SUBAGENT-recovered-history-after-restart
+
+- **先决条件**：一个使用确定性本地传输的会话：一个委派以 `completed` 结算、一个失败，还有一个在关闭应用时
+  仍在运行；另有一条由用户通道（`source: "user"`）启动的链；以及一个委派数超过 100 的会话用于上限步骤。
+  重启后转录仍保留全部 `Task` 行，且没有预设任何新的提供商请求。
+- **步骤**：
+  1. 在一个委派仍在工作时关闭应用，重启后打开同一会话。
+  2. 让父级模型调用 `TaskList`，逐行读取输出以及 `details.delegations[]`。
+  3. 只用已结算的恢复 id 调用 `TaskWait`，再用仍在运行的恢复 id 调用，最后用一个恢复 id 加一个
+     本会话从未有过的 id 调用。
+  4. 发送一轮普通父级对话，并把转录与重启前取得的副本比较。
+  5. 发送一轮，把仍在运行的恢复 id 作为 `Task.resume` 传入。
+  6. 恢复的运行结算后再调用 `TaskList`，并检查用户通道续跑的记录。
+  7. 在委派数超过 100 的会话上重复步骤 1 与 2。
+- **预期**：重启后 `TaskList` 列出本会话真正跑过的委派，每个委派一行，且都带 `recovered: true`；心跳措辞写明
+  这里没有为它运行任何执行，因此没有任何一行声称是实时运行，仍在运行的那条读作 `interrupted` 而不是
+  `running`。显式给出恢复 id 的 `TaskWait` 按原文返回该条目的完整已存报告 —— 重启前父级收到的
+  `TaskWait` 批次文本，或该运行未经等待就结算时委派自己的最终助手行 —— 并且
+  `details.recoveredDelegationIds` 指明哪些 id 来自历史；整个过程不执行任何东西、不发起任何提供商请求，
+  未知 id 仍按未知回答。混合调用在一次结果里回答两类 id，但只报告实时批次。步骤 4 让转录保持不变：
+  恢复条目是只读的，因此没有报告被再次交付、没有凭据被消费、也没有委派被标记为已交付。步骤 5 通过既有的
+  `Task(resume)` 路径在这条被中断的链上启动新运行 —— 这是它唯一的续跑方式 —— 没有这次调用，它永远不会
+  有任何幻影执行。步骤 6 把恢复后的运行作为普通实时记录（不带 `recovered` 标记）列在仍为恢复状态的历史
+  旁边，而用户通道续跑既不出现在父级列表里，也不进入等待。步骤 7 最多列出最新的 100 个委派；更早的只是
+  不被列出，也不会因为落到这个上限之外而改变任何 id 的回答。
+- **链接规格**：`03-runtime/02-agent-runtime.md` §5f、
+  `03-runtime/04-data-storage.md` §4.7a/§4.7b、ADR 0089、ADR 0279、ADR 0335
+- **验收**：C（对话）、F（持久性）、品质
+- **里程碑**：M5
+- **状态**：通过。运行时覆盖 —— 1722 个 agent-runtime 测试，含
+  `packages/agent-runtime/src/delegation-recovery.test.ts` 的 12 个委派恢复用例，以及
+  `packages/agent-runtime/src/runtime.test.ts` 的运行时级恢复断言。真实主机／渲染证据 ——
+  `node scripts/e2e-scoped-history-real-host.mjs` 以 exit 0 通过且缺陷列表为空：对恢复 id 的
+  `TaskWait` 返回存储报告，与重启前父级收到的批次一致；重开后该链为 `completed`，没有幽灵运行启动。
 
 #### E2E-SUBAGENT-context-overflow-compacts-before-failing
 

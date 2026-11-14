@@ -80,6 +80,7 @@ import {
 } from "../lib/session-title-utils";
 import { createInteractivePromptNotifier } from "./runtime/notification-runtime";
 import { createTranscriptReadingRuntime } from "./runtime/transcript-reading-runtime";
+import { createSubagentHistoryRuntime } from "./runtime/subagent-history-runtime";
 export type {
   AgentTurnResult,
   DraftSessionConfiguration,
@@ -153,7 +154,14 @@ const {
   materializeDraftSession: materializeDraftSessionInternal,
 } = sessionCoordination;
 
-const transcriptReading = createTranscriptReadingRuntime(runtimeStoreAccess, api.getSession);
+// The reads dispatch through the `api` object at call time, so a runtime never
+// holds a transport reference captured at module load.
+const transcriptReading = createTranscriptReadingRuntime(runtimeStoreAccess, (id, options) =>
+  api.getSession(id, options),
+);
+const subagentHistoryRuntime = createSubagentHistoryRuntime(runtimeStoreAccess, (id, options) =>
+  api.getSession(id, options),
+);
 
 /**
  * Which `bootstrap` attempt owns the state it publishes.
@@ -170,6 +178,7 @@ export const useAppStore = create<AppState>((set, get) => {
   return {
   ...createInitialState(),
   ...transcriptReading.actions,
+  ...subagentHistoryRuntime.actions,
 
   ...createSessionSlice({
     get,
@@ -509,6 +518,10 @@ export const useAppStore = create<AppState>((set, get) => {
 useAppStore.subscribe((state, previous) => {
   transcriptReading.reconcile(state, previous);
   sessionRuntime.syncTranscriptProjection(state, previous);
+  // Delegate panels own the live rows their chains produce: routing them at the
+  // publication boundary keeps a delegate's detail independent of the main
+  // transcript window, which may be replaced on the very next read.
+  subagentHistoryRuntime.ingest(state);
   // The durable right-panel preference follows every mutation that matters:
   // reveal/collapse, width commits, tab open/close/reorder/activate, a browser
   // tab's reported URL and title, session switches, and deletion pruning.

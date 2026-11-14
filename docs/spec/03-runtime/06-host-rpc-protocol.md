@@ -337,6 +337,40 @@ to later refresh and inference; the vendor picker does not collect them.
   contains the latest matching Task tool-call projection from the same canonical
   transcript. It is capped separately and does not widen the window or alter its
   cursors. Ordinary and uncapped reads omit this navigation-only field.
+
+  A renderer read may also name the surface it belongs to (ADR 0335):
+  `historyScope` is `{ kind: "main" }` or `{ kind: "delegation", id }`, with
+  `main` carrying no `id` and the delegation id a non-empty trimmed string;
+  any other shape is refused with `INVALID_PARAMS` (1002). Omitting
+  it keeps the contract above exactly: physical offsets, every message in the
+  page, and the full projection for sidecar and mutation callers. A `main`
+  page selects physical rows with no `parentToolCallId`, and its budget counts
+  those selected top-level records only — internal system and empty rows still
+  count, because which records a surface draws is the renderer's decision. A
+  `delegation` page accepts a chain's stable `delegationId` or its legacy
+  `Task` tool-call id and selects that chain's direct child rows across all of
+  its resume runs; a delegation the delegate itself started is a different
+  chain. An id that resolves to no chain returns `{ session: null }`, like a
+  missing `messageAround` target; a chain that resolves but has emitted no
+  child row yet answers with an empty page. The response echoes a canonical
+  `historyScope` — the earliest root dispatch's `delegationId`, falling back to
+  that root's `Task` tool-call id — not the id the caller sent, and may carry
+  `historyContext`: every `Task` and `Task(resume)` message of the chain
+  returned outside the page budget as display context, in the same class as
+  `navigationParent`. A `main` page centred on a nested target centres on the
+  owning top-level root's neighborhood and reports `navigationParent` (the
+  direct parent `Task` call), so a child search hit opens where the owning
+  dispatch lives and the renderer switches to that chain's `delegation` scope
+  for the child itself. `hasMoreBefore` / `hasMoreAfter` are computed over the
+  selected rows of that scope, `messageBefore` is a physical exclusive cursor
+  over that selection, and `messageStart` / `messageEnd` stay physical
+  positions. Additive; no protocol version bump.
+
+  The shared boundary normalizes the field before it crosses IPC: an
+  untrusted or malformed scope resolves to the unscoped read, never to a
+  silently filtered one. An unscoped reference client that keeps its legacy
+  behavior must not receive the field at all, so absence — not an empty echo
+  — is what marks a legacy answer.
 - `session.delete` — for an isolated session, also removes its worktree and
   branch (discarding unmerged work)
 - `session.getScratchPath` — the session's scratch directory (D114), created

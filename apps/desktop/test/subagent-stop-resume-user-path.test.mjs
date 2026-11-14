@@ -157,6 +157,9 @@ const seed = () => {
     retainedTranscripts: {},
     transcriptViews: {},
     sessionHistory: {},
+    // A probe starts a fresh conversation view: the delegate caches it
+    // collected from a previous probe belong to that probe, not this one.
+    subagentHistory: {},
     agentStatuses: {},
     runningSessions: {},
     isRunning: false,

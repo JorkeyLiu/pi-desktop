@@ -8,6 +8,7 @@ import type {
   SessionSummary,
   UiMessage,
 } from "@pi-desktop/shared";
+import { MAIN_HISTORY_SCOPE } from "@pi-desktop/shared";
 import {
   isActivePlanExecution,
   isPendingPlan,
@@ -375,6 +376,10 @@ export function createSessionSlice({
       await runtime.loadSessionDetail(id, {
         messageLimit: 100,
         contentLimit: 64 * 1024,
+        // Hover prefetch asks for the same page selection will: the main
+        // conversation's own rows. A backend without scoped history ignores
+        // the field and answers the legacy transcript unchanged.
+        historyScope: MAIN_HISTORY_SCOPE,
       });
     },
 
@@ -460,9 +465,13 @@ export function createSessionSlice({
       try {
         if (!runtime.navigationIntentIsCurrent(intent)) return;
         const summary = get().sessions.find((session) => session.id === id);
+        // Opening a conversation reads its own main scope: the session's
+        // top-level records only, so a long delegation chain cannot consume
+        // the page budget the reader is browsing.
         const detailPromise = runtime.loadSessionDetail(id, {
           messageLimit: 100,
           contentLimit: 64 * 1024,
+          historyScope: MAIN_HISTORY_SCOPE,
         });
         let detail: Awaited<typeof detailPromise> | undefined;
         const retainedMessages =
@@ -526,6 +535,7 @@ export function createSessionSlice({
           const reread = await runtime.loadSessionDetail(id, {
             messageLimit: 100,
             contentLimit: 64 * 1024,
+            historyScope: MAIN_HISTORY_SCOPE,
           });
           if (!runtime.navigationIntentIsCurrent(intent)) return;
           if (reread.session && sessionReadLooksEmpty(reread.session)) {
@@ -543,15 +553,20 @@ export function createSessionSlice({
           }
           detail = reread;
         }
-        const historyWindow = detail.session
+        // The window carries the scope its page was read with, so paging
+        // never mixes a scoped main page with the legacy physical transcript.
+        const historyWindow: SessionHistoryWindow = detail.session
           ? {
               messageStart: detail.session.messageStart ?? 0,
               hasMoreBefore: detail.session.hasMoreBefore === true,
               contentLimited: true,
+              ...(detail.session.historyScope
+                ? { scope: detail.session.historyScope }
+                : {}),
             }
           : { messageStart: 0, hasMoreBefore: false };
         const currentState = get();
-        const liveMessages =
+        const retainedLive =
           (runningAtSelection ||
             currentState.runningSessions[id] === true ||
             runtime.liveSessionTranscripts.has(id))
@@ -560,6 +575,12 @@ export function createSessionSlice({
               : runtime.sessionTranscriptCache.get(id) ??
                 currentState.retainedTranscripts[id]
             : undefined;
+        // A main-scoped answer keeps only the conversation's own rows: live
+        // delegate rows belong to the delegate pages that read them.
+        const liveMessages =
+          detail.session?.historyScope?.kind === "main"
+            ? retainedLive?.filter((message) => !message.parentToolCallId)
+            : retainedLive;
         const selectedMessages = detail.session
           ? liveMessages
             ? mergeLiveSessionMessages(detail.session.messages ?? [], liveMessages)

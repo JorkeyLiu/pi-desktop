@@ -31,6 +31,7 @@ import {
   refreshDelegationProgress,
   snapshotWaitRecord,
   STREAM_PROGRESS_EVALUATION_CHARS,
+  type DelegationView,
   type WaitResultSnapshot,
 } from "./subagent-progress.js";
 import type {
@@ -343,9 +344,11 @@ export function applyDelegationActivity(
  * followups, not the parent's delegates: the parent neither waits on them nor
  * resumes them implicitly, so they stay out of its listing (an explicit parent
  * `Task(resume)` reattaches the chain as a new parent-owned run, which lists
- * normally).
+ * normally). The list is a union of live records and entries recovered from
+ * persisted history; the caller resolves a duplicate id live-first, and a
+ * recovered entry says on its own line that nothing runs for it here.
  */
-export function listDelegationRecords(records: DelegationRecord[]): {
+export function listDelegationRecords(records: DelegationView[]): {
   content: [{ type: "text"; text: string }];
   details: { delegations: Array<Record<string, unknown>> };
 } {
@@ -627,7 +630,9 @@ export function buildWaitNote(input: WaitNoteInput): string | undefined {
   const base =
     runningNote ??
     wakeNote ??
-    (input.mode === "any"
+    // No live target means nothing converged: a read of settled history alone
+    // never claims a wait finished.
+    (input.mode === "any" && input.targetCount > 0
       ? `Converged after ${input.settledCount} of ${input.targetCount} finished.`
       : undefined);
   const note = input.interrupted
@@ -645,6 +650,11 @@ export function buildWaitNote(input: WaitNoteInput): string | undefined {
  * delivery by itself — the caller hands the batch to the acceptance boundary
  * (a `toolResult` message accepted into the parent transcript). Omitted
  * reports stay pending; running delegates keep their future report.
+ *
+ * `historicalSnapshots` are settled entries recovered from persisted history.
+ * They ride the same batch so one read can answer live and historical ids at
+ * once, but they are never part of `receipt.records`: history has no delivery
+ * boundary here, so reading it can neither mark nor re-deliver a report.
  */
 export function finalizeWaitResult(options: {
   targets: DelegationRecord[];
@@ -656,6 +666,10 @@ export function finalizeWaitResult(options: {
   wakeDelegationIds: string[];
   mode: "all" | "any";
   unknownIds: string[];
+  /** Settled snapshots recovered from persisted history: read, never waited. */
+  historicalSnapshots?: WaitResultSnapshot[];
+  /** Header explaining the historical snapshots above are not live runs. */
+  historicalNote?: string;
 }): {
   content: [{ type: "text"; text: string }];
   details: {
@@ -663,6 +677,8 @@ export function finalizeWaitResult(options: {
     wakeReason?: SubagentWakeReason;
     wakeDelegationIds?: string[];
     unknownIds?: string[];
+    /** Ids answered from persisted history rather than a live record. */
+    recoveredDelegationIds?: string[];
     delegations: Array<WaitResultSnapshot & { metrics: string }>;
   };
   /** The assembled report batch, waiting for acceptance into history. */
@@ -672,7 +688,7 @@ export function finalizeWaitResult(options: {
   const settledCount = options.snapshots.filter(
     (snapshot) => snapshot.status !== "running",
   ).length;
-  const note = buildWaitNote({
+  const liveNote = buildWaitNote({
     interrupted: options.interrupted,
     timedOut: options.timedOut,
     deadlineSeconds: options.deadlineSeconds,
@@ -686,12 +702,16 @@ export function finalizeWaitResult(options: {
       .filter((record) => record.status === "running")
       .map(formatDelegationHeartbeat),
   });
-  const assembled = assembleWaitResult(options.snapshots, note);
+  const historical = options.historicalSnapshots ?? [];
+  const note =
+    [liveNote, options.historicalNote].filter(Boolean).join("\n") || undefined;
+  const assembled = assembleWaitResult([...options.snapshots, ...historical], note);
   const status = subagentWaitStatus({
     interrupted: options.interrupted,
     timedOut: options.timedOut,
     ...(options.wakeReason ? { wakeReason: options.wakeReason } : {}),
   });
+  const recoveredIds = historical.map((snapshot) => snapshot.delegationId);
   return {
     content: [{ type: "text" as const, text: assembled.text }],
     details: {
@@ -701,6 +721,7 @@ export function finalizeWaitResult(options: {
         ? { wakeDelegationIds: options.wakeDelegationIds }
         : {}),
       ...(options.unknownIds.length ? { unknownIds: options.unknownIds } : {}),
+      ...(recoveredIds.length ? { recoveredDelegationIds: recoveredIds } : {}),
       delegations: assembled.delegations,
     },
     receipt: {

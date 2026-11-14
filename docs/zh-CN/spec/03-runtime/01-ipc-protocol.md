@@ -908,7 +908,15 @@ type SessionDetail = SessionSummary & {
  messages: UiMessage[];
   /** Authoritative metadata for SubmitPlan/SubmitGoal calls in this page. */
   planHistory?: Array<{ proposal: PlanProposal; superseded: boolean }>;
+  /** 本次分页所属界面的回显（ADR 0335）。 */
+  historyScope?: SessionHistoryScope;
+  /** 该链的每一条 Task / Task(resume) 消息，不计入页预算（仅 delegation 作用域）。 */
+  historyContext?: UiMessage[];
 };
+
+type SessionHistoryScope =
+  | { kind: "main" }                    // 仅顶层记录
+  | { kind: "delegation"; id: string }; // 稳定 delegationId 或旧的 Task toolCallId
 ```
 
 历史读取仅为当前会话返回页中的 SubmitPlan/SubmitGoal 调用附加 `planHistory`。
@@ -959,7 +967,27 @@ ID、或会话无法解析出默认目标时，得到 `supportsReasoning: false`
 - `session/create` — 可选的 `isolated: true` 配合 `projectPath` 会在专属 git worktree 中创建
   会话（ADR 0329）；拒绝时返回主机的 `WORKTREE_*` 代码
 - `session/fork({ sessionId, title?, throughMessageId? }) -> { session: SessionDetail }`
-- `session/get`
+- `session/get({ id, messageBefore?, messageAround?, messageLimit?, contentLimit?, historyScope? }) -> SessionDetail`
+  — 省略读取窗口参数时返回完整 UI 投影；带窗口时返回有界分页以及 `messageStart`、
+  `hasMoreBefore`（有界响应还带排他的 `messageEnd` 与 `hasMoreAfter`）。`messageBefore`、
+  `messageStart`、`messageEnd` 都是转录文件中的物理消息行位置，不是去重后的索引计数。
+  可选 `historyScope`（ADR 0335）声明分页所属界面：`main` 只选不带 `parentToolCallId` 的
+  物理记录，预算只计这些顶层记录；`delegation` 接受链上稳定的 `delegationId` 或旧的
+  `Task` toolCallId，返回该链跨全部续跑运行的直接子代理行，并把该链的每一条
+  `Task` / `Task(resume)` 消息放进 `historyContext`。解析不到任何链的 id 不返回会话（与
+  `messageAround` 目标缺失一样）；能解析但尚未产出任何子代理行的链返回空分页。回显的
+  `historyScope` 是规范身份 —— 最早根派发的 `delegationId`，未记录时用该根的 toolCallId ——
+  而不是调用方传入的 id。`main` 分页若以嵌套目标为中心，会以所属顶层根为中心并仍返回
+  `navigationParent`（直接父级 `Task` 调用），因此嵌套搜索命中会先打开主面板中该派发所在位置，
+  渲染器再切到 `navigationParent.toolCallId` 的 `delegation` 作用域展示子行本身。省略即上述
+  未过滤契约。因此主转录与委派面板各自读取、分页和恢复自己的历史：普通分页与搜索导航共用一套
+  主读取视图，而打开的委派标签在这次视图变化时保留自己已加载的行与身份。
+  `historyContext` 为空时不会出现在响应里：解析成功的 `delegation` 分页至少携带该链的
+  `Task` / `Task(resume)` 行，而 `main` 与无作用域读取都省略该字段。上下文为空说明 id 没有解析到
+  任何链，这种读取不返回会话，而不是返回空分页。`historyScope` 只通过
+  `normalizeSessionHistoryScope` 跨 IPC，未经信任或格式异常的取值会解析为 `undefined`，即上面的
+  未过滤读取，绝不会变成静默过滤读取。委派 id 会先裁剪并限制在 512 个字符内；空或其它无效 id
+  回落到旧式读取，而不是返回空委派分页。
 - `session/delete`
 - `session/rename`
 - `session/deriveTitle({ id, title }) -> { updated: boolean }` 应用确定性的首条提示兜底标题。

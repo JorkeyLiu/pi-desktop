@@ -5,7 +5,7 @@
   — per ADR 0279 §15)
 - Date: 2026-08-16
 - Deciders: PI-Desktop core
-- Related: D201, D202, ADR 0062, ADR 0063, ADR 0048, ADR 0100, ADR 0279, E2E-142
+- Related: D201, D202, ADR 0062, ADR 0063, ADR 0048, ADR 0100, ADR 0279, ADR 0335, E2E-142
 - Amendment (2026-10, subagent controls): the turn-end abort rule in §1 and the
   matching Consequences / Alternatives passages below are superseded by the
   parent-judged lifetime (D328 / ADR 0166, fatal-error path ADR 0189) and the
@@ -18,6 +18,13 @@
   disposal, or a terminal parent error ends them. The model carries no timing:
   `Task` / `TaskWait` / `TaskList` accept no `timeoutSeconds` or per-call wake override
   (legacy args ignored safely). Original wording is preserved and annotated in place.
+- Amendment (2026-11, restart read surface): a restarted runtime answers
+  `TaskList` / `TaskWait` from a read-only delegation catalog rebuilt from the
+  history it was launched with, so delegations this session already ran stay
+  listable and their stored reports readable after a restart (ADR 0335; details
+  in `03-runtime/02-agent-runtime.md` §5f). It amends only the read surface:
+  §1's registry still describes live runs, and the catalog restarts nothing,
+  delivers nothing, and persists nothing new.
 
 ## Context
 

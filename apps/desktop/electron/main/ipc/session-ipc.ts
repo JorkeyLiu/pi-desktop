@@ -29,6 +29,7 @@ import { readSessionCollaboration } from "../services/session-collaboration";
 import { searchSessionsAcrossSources } from "../services/session-search";
 import type { IpcRegistrar } from "./types";
 import { getActiveRemoteHostsBoot } from "../bootstrap/remote-hosts.js";
+import { historyScopeForwarding } from "./history-scope-forward";
 
 type RuntimeSession = {
   id?: string;
@@ -261,6 +262,8 @@ export function registerSessionIpc({
             messageAround?: string;
             messageLimit?: number;
             contentLimit?: number;
+            /** Which rows a read may select; validated below per backend. */
+            historyScope?: unknown;
           },
     ) => {
       if (!host) throw new Error("host unavailable");
@@ -269,7 +272,11 @@ export function registerSessionIpc({
       if (!id) throw new Error("session id required");
       if (id.startsWith("native-pi:")) {
         if (!sidecar) throw new Error("sidecar unavailable");
-        return sidecar.call("native.session.get", { id, ...request });
+        // Native Pi answers the legacy physical transcript: it has no scoped
+        // read, so the field is dropped here and the renderer keeps its legacy
+        // behavior on the missing echo instead of filtering the answer.
+        const { historyScope: _nativeScope, ...nativeRequest } = request;
+        return sidecar.call("native.session.get", { id, ...nativeRequest });
       }
       const [result, { providers, defaults }] = await Promise.all([
         host.call<{ session?: RuntimeSession | null }>("session.get", {
@@ -286,6 +293,7 @@ export function registerSessionIpc({
           ...(Number.isInteger(request.contentLimit) && request.contentLimit! > 0
             ? { contentLimit: request.contentLimit }
             : {}),
+          ...historyScopeForwarding(request.historyScope, "host"),
         }),
         sessionCapabilityContext(),
       ]);

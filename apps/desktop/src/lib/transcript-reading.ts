@@ -1,4 +1,4 @@
-import type { SessionDetail, UiMessage } from "@pi-desktop/shared";
+import type { SessionDetail, SessionHistoryScope, UiMessage } from "@pi-desktop/shared";
 import { dedupeSessionMessages, mergeLiveSessionMessages, upsertLiveSessionMessage } from "./session-transcript";
 import {
   getSessionMessageSnapshot,
@@ -32,6 +32,13 @@ export type TranscriptView = {
    */
   laterFailed?: boolean;
   loading: "target" | "before" | "after" | null;
+  /**
+   * The scope this range was read with. Absent is the legacy full physical
+   * transcript. A scope never changes while a range lives: paging, restore, and
+   * search keep reading the scope they opened with, so a main page and a
+   * physical search window are never merged into one another.
+   */
+  scope?: SessionHistoryScope;
 };
 
 export const EMPTY_TRANSCRIPT: UiMessage[] = [];
@@ -43,6 +50,9 @@ export function transcriptViewFromSession(
   session: SessionDetail,
   focus: TranscriptSearchTarget | null = null,
 ): TranscriptView {
+  // The echo is authoritative: a backend without scoped history omits it, and
+  // the range stays the legacy full physical transcript.
+  const scope = session.historyScope;
   return {
     messages: session.messages,
     messageStart: session.messageStart ?? 0,
@@ -52,6 +62,7 @@ export function transcriptViewFromSession(
     parentMessage: session.navigationParent,
     focus,
     loading: null,
+    ...(scope ? { scope } : {}),
   };
 }
 
@@ -117,7 +128,14 @@ export function transcriptViewMessages(live: UiMessage[], view?: TranscriptView)
   // the live transcript when it cannot contribute anything to this view.
   if (view.focus || view.restored) return withNavigationParent(view.messages, view.parentMessage);
 
-  const normalized = dedupeSessionMessages(live);
+  // A main-scoped range owns the session's top-level rows: the delegate child
+  // rows the live turn still produces belong to their own delegate pages, not
+  // to this conversation's page budget. A legacy range keeps every row it
+  // always merged, unchanged.
+  const normalized =
+    view.scope?.kind === "main"
+      ? dedupeSessionMessages(live.filter((message) => !message.parentToolCallId))
+      : dedupeSessionMessages(live);
   const source = getSessionMessageSnapshot(normalized);
   let projections = readingProjections.get(view);
   if (!projections) {

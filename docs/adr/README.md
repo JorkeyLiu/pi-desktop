@@ -154,7 +154,7 @@ Each ADR includes:
 | 0117 | Preserve the Windows taskbar entry for native minimize | Accepted |
 | 0118 | Keep queued prompts renderer-owned and stop runs at turn boundaries | Accepted |
 | 0119 | Event-Driven Subagent Timeouts | Accepted for implementation (killing policy amended by 0166; `maxTurns` clauses withdrawn by 0253) |
-| 0120 | Bounded Session History Windows | Accepted |
+| 0120 | Bounded Session History Windows | Accepted (window-selection amended by ADR 0335) |
 | 0121 | Keep Composer prompt enhancement one-shot and main-owned | Superseded by 0324 |
 | 0122 | Reserve native width while the work panel is visible | Superseded by 0151 |
 | 0123 | Use native taskbar minimize for Windows/Linux window controls | Accepted |
@@ -380,6 +380,7 @@ Each ADR includes:
 | 0332 | [Built-in First-Message Session Titles](0332-builtin-first-message-session-titles.md) | Accepted; supersedes ADR 0323 in part |
 | 0333 | [Durable installed handoff checkpoints for delegation chains](0333-durable-installed-delegation-handoff-checkpoint.md) | Accepted for implementation (extends ADR 0279 / ADR 0299) |
 | 0334 | [Explicit images always travel; capability metadata stays informational](0334-explicit-image-transport-metadata-informational.md) | Accepted (supersedes the transport and settings clauses of ADR 0101 / ADR 0218) |
+| 0335 | [Scoped session history reads](0335-scoped-session-history-reads.md) | Accepted for implementation (implemented and verified in the uncommitted feature branch; the scoped-read and restart-recovery E2E scenarios passed as host-unit plus real rendered evidence; supersedes the window-selection clauses of ADR 0120 and the E2E-207a selection contract) |
 | plugin-fetch-redirect-policy | [Host-enforced plugin fetch redirect policy](plugin-fetch-redirect-policy.md) | Accepted (implementation candidate for #1475) |
 
 | local-agent-remote-workspace-tools | [Local Agent and model requests for remote workspaces](local-agent-remote-workspace-tools.md) | Accepted for implementation |

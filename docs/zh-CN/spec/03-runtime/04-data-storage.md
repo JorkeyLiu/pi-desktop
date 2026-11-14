@@ -52,7 +52,9 @@ host-core 之前被解析为绝对路径。
  ├── pi.sqlite.v10.bak    # exact readable backup before v10→v15 destructive work
  ├── sessions/            # transcript file store (D119) — host-core only
  │    ├── <sessionId>.jsonl           # live transcript (header + messages)
+ │    ├── <sessionId>.jsonl.layout    # 可丢弃的版本化字节偏移缓存
  │    ├── <sessionId>.revisions.jsonl # regenerate branches, append-only
+ │    ├── <sessionId>.snapshots.jsonl # 仅追加的委派 Task 快照（ADR 0335，schema 1）
  │    └── <sessionId>.inflight.json   # streaming reply checkpoint (D299), transient
  ├── secrets/             # encrypted secret blobs + .machine-key (unchanged)
  ├── attachments/         # content-addressed blobs (sha256 name), refs from messages
@@ -788,6 +790,42 @@ meta.agentName?: string         // the definition name, e.g. "code-reviewer"
 保留和删除将它们视为普通行：已删除的会话将其
 用它委托行，并使用它们所属的分支重新生成存档
 到。
+
+### 4.7b 按界面划分的读取与委派快照旁侧文件（ADR 0335）
+
+转录文件仍是唯一的物理记录；作用域只是在其上的读取选择，因此任何界面请求读取都不会改变
+写入的形状。`session.get` 带 `{ kind: "main" }` 时只选不带 `parentToolCallId` 的物理消息行；
+带 `{ kind: "delegation", id }` 时选取该链的直接子代理行，链由链上 `Task` 调用 id 及其
+`Task(resume)` 续跑（ADR 0279）解析得到。两种形式都不重编号，布局索引及其版本化缓存仍指向相同
+偏移（ADR 0127），无作用域的读取返回与之前相同的投影。
+
+解析不到任何链的 id 完全不返回会话；能解析但尚未产出子代理行的链返回空分页，其显示上下文就是
+该链自己的 `Task` / `Task(resume)` 行。因此解析成功的链一定有这份上下文；上下文为空只说明该 id
+没有命名任何链，那种读取返回的是「无会话」而不是空分页。
+
+委派记录的运行状态（进度检查点与最终报告）从转录旁的追加式
+`<sessionId>.snapshots.jsonl` 旁侧文件读取。每次被接受的更新占一行，
+`{ type: "snapshot", schema: 1, sessionId, savedAt, callId, delegationId, message }`，
+读取时同一 `(callId, delegationId)` 对的最新被接受行生效，与 `revisions.jsonl` 已有的
+"最后记录优先"形状一致。只有当该行与它要替换的行携带相同的消息 id、`callId` 与
+`delegationId`，且被替换的基础行仍为 `running`，其携带的交接检查点代次也不会倒退时，这一行才被
+接受；与它将产生的行完全相同的行不会被写入，因此重复结算不会让旁侧文件反复变化。记录只追加、
+不原地重写，读取也不会替换记录派发的历史根 `Task` 行：已结算的行不会重新打开，最终报告按运行
+产出的原文保存（快照写入方既不做摘要也不做截断）。
+
+转录保留完整的派发行，因此基础状态已结算的行（由较旧的构建原地结算）胜过过期的旁侧条目，并按
+原样读取。只有仍为 `running` 的基础行才能被覆盖，这正是较旧构建的原地结算、会话复制与恢复的修订
+不会回退的原因。
+
+旁侧文件是派生状态，按它所描述的行对账，而不是按时间清理：`session.delete` 随会话删除该文件；
+转写重写（截断、修订切换、分叉或任何完整写入）会把其保留的每个 `Task` 行的被接受覆盖折进即将写入
+的行，在原子替换之前把这些有效行落定，之后才裁剪旁侧文件；裁剪失败只是警告，因为重写后的转录
+已是权威，残留的已结算覆盖无害。显式单行编辑已改过的行不会被其覆盖改写 —— 调用方的内容获胜，
+该条目随这次重写被丢弃 —— 而重写丢弃的派发行对应的条目会保留到修订恢复再次读到该行为止，
+或随会话删除。没有基于时间的清理。撕裂的尾行、其他会话的行、或本构建无法解释的 `schema`
+在读取时跳过，并在裁剪时逐字复制回去，使较新的构建仍能找到自己的数据；这类行绝不会被当作
+已恢复的委派呈现。从未有过旁侧文件的会话读取行为与之前完全相同。不涉及 SQLite 表，若引入表
+则需要迁移及其自身测试。
 
 ### 4.8 messages_fts — 全文搜索
 

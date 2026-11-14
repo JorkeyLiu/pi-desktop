@@ -1071,6 +1071,9 @@ pub fn list_messages(db: &Database, plugin_id: &str, params_value: &Value) -> Re
     }
     let offset = cursor_offset(params_value.get("cursor"))?;
     let mut records = transcripts::read_transcript(db.data_dir(), &session_id)?;
+    // A running delegation's newest Task snapshot lives in its sidecar, not in
+    // the transcript prefix; plugin reads are session reads and see it too.
+    transcripts::snapshots::overlay(db.data_dir(), &session_id, &mut records)?;
     if order == "desc" {
         records.reverse();
     }

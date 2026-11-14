@@ -241,7 +241,25 @@ type ToolBudgetHealth = {
   Whole-session, non-assistant, streaming/error, or live-turn anchors return
   `CONFLICT`, normalized by Electron to `AGENT_BUSY`. The source turn continues
   without sharing runtime state with the child.
-- `session.get`
+- `session.get` — 可选 `historyScope`（ADR 0335）声明本次读取所属的界面：
+  `{ kind: "main" }` 只选不带 `parentToolCallId` 的物理消息记录，页预算只计所选顶层记录
+  （内部 system 行与空行仍计入，因为哪条记录被绘制由渲染器决定）；`{ kind: "delegation", id }`
+  的 `id` 接受链上稳定的 `delegationId` 或旧的 `Task` 工具调用 id，页面选取该链跨全部续跑运行的
+  直接子代理行（子代理自己再发起的委派属于另一条链）。省略 `historyScope` 时完全保持既有契约：
+  同一物理偏移、同一未过滤投影，非渲染器调用者仍得到完整模型上下文。解析不到任何链的 id 返回
+  `{ session: null }`（与 `messageAround` 目标缺失一样）；能解析但尚未产出子代理行的链返回空分页。
+  响应回显规范 `historyScope` —— 最早根派发的 `delegationId`，未记录时回落到该根的 `Task` 工具调用
+  id —— 而不是调用方传入的 id，并可携带 `historyContext`（该链的每一条 `Task` / `Task(resume)`
+  消息，不占页预算的显示上下文，与 `navigationParent` 同类）。`main` 分页以嵌套目标为中心时，
+  以所属顶层根为中心并返回 `navigationParent`（直接父级 `Task` 调用），因此子行搜索命中会先打开
+  派发所在位置，渲染器再切到该链的 `delegation` 作用域展示子行本身。
+  `hasMoreBefore`/`hasMoreAfter` 按该作用域选中的行计算，`messageBefore` 是该选择上的物理排他游标，
+  `messageStart`/`messageEnd` 仍是物理位置。增量字段，不升协议版本。
+
+  `historyScope` 的形状也按上面的定义校验：`{ kind: "main" }` 或带裁剪后非空 `id` 的
+  `{ kind: "delegation", id }`，其他形状一律 `INVALID_PARAMS`（1002）。在跨 IPC 之前，共享边界会
+  先归一化该字段：未经信任或格式异常的取值解析为不作用域的读取，绝不会静默变成过滤读取；保留旧
+  行为、不识别该字段的调用方不应收到它，因此以“字段缺失”而非“空回显”标识旧式回答。
 - `session.delete` — 对隔离会话还会删除其 worktree 和分支（丢弃未合并的工作）
 - `session.getScratchPath` — 会话的 scratch 目录（D114），按需创建
 - `session.rename` — 在主机边界裁剪并校验标题，接受 1–80 个 Unicode 码点；成功后将标题来源

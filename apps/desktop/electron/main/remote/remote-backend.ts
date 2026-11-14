@@ -250,6 +250,10 @@ export function createRemoteBackend(options: RemoteBackendOptions): RemoteBacken
         // operation; the renderer already guards it behind a capability check.
         throw capabilityUnavailable("steering is not available on a remote host");
       case IPC.invoke.sessionGet: {
+        // Remote hosts implement no scoped history: `history.read` forwards
+        // only the physical cursors, so a requested scope is deliberately not
+        // sent. The answer carries no scope echo and the renderer keeps its
+        // legacy behavior on the transcript the remote host actually read.
         const remoteSessionId = remoteIdFor(args);
         const input = typeof args[0] === "object" ? args[0] as RemoteHistoryReadOptions : {};
         return { session: await history.read(remoteSessionId, hostIdFor(args), input) };

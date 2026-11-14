@@ -1,6 +1,7 @@
 import type {
   AgentEventEnvelope,
   SessionDetail,
+  SessionHistoryScope,
   SessionSummary,
   UiMessage,
 } from "@pi-desktop/shared";
@@ -25,6 +26,7 @@ import {
 import { getSessionMessageSnapshot, getSessionToolMessagePositions } from "../../lib/session-transcript-updates";
 import {
   mergeOlderTranscriptWindow,
+  sessionReadIsScoped,
   sessionReadLooksEmpty,
   sessionWindowHasRenderableRow,
 } from "../../lib/session-transcript-read";
@@ -90,6 +92,7 @@ export type SessionRuntime = {
       messageBefore?: number;
       messageLimit?: number;
       contentLimit?: number;
+      historyScope?: SessionHistoryScope;
     },
   ) => ReturnType<typeof api.getSession>;
   loadFullSessionMessages: (id: string, cache?: boolean) => Promise<UiMessage[] | null>;
@@ -135,11 +138,14 @@ type ToolStart = NonNullable<ReturnType<SessionRuntime["getToolStart"]>>;
 type SessionDetailRead = { session: SessionDetail | null };
 
 /**
- * A bounded window can open on nothing the transcript draws: a long delegation
- * chain fills the whole physical tail with rows that belong under a `Task` card
- * just before the window. The pane then has no row to render and no reader
- * affordance to ask for older history, so selection must widen the same bounded
- * pagination backwards until a row is renderable or the real head is reached.
+ * Legacy compatibility for unscoped physical windows.
+ *
+ * A bounded physical tail can open on nothing the transcript draws: a long
+ * delegation chain fills the whole tail with rows that belong under a `Task`
+ * card just before the window. That is the pre-scope read model, where delegate
+ * rows share the parent's physical offsets. A main-scoped page excludes them by
+ * definition, so it never needs this walk: its rows are top-level rows, and an
+ * empty scoped answer is a real empty history, not a hidden `Task`.
  *
  * The widened window is still one continuous physical range: the tail read
  * remains authoritative for `messageEnd`/`hasMoreAfter`, while `messageStart`
@@ -150,10 +156,10 @@ type SessionDetailRead = { session: SessionDetail | null };
 async function readWindowWithRenderableRow(
   id: string,
   detail: SessionDetailRead,
-  options: { messageLimit?: number; contentLimit?: number },
+  options: { messageLimit?: number; contentLimit?: number; historyScope?: SessionHistoryScope },
 ): Promise<SessionDetailRead> {
   let session = detail.session;
-  if (!session || sessionWindowHasRenderableRow(session)) return detail;
+  if (!session || sessionReadIsScoped(session) || sessionWindowHasRenderableRow(session)) return detail;
   const messageLimit = options.messageLimit ?? SESSION_TRANSCRIPT_PAGE_SIZE;
   while (session.hasMoreBefore === true && (session.messageStart ?? 0) > 0) {
     let older: SessionDetailRead;
@@ -214,6 +220,7 @@ export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime 
       messageBefore?: number;
       messageLimit?: number;
       contentLimit?: number;
+      historyScope?: SessionHistoryScope;
     },
   ) {
     const active = sessionDetailLoads.get(id);
@@ -224,8 +231,15 @@ export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime 
       }
       if (detail.session && options?.messageBefore === undefined) {
         const state = get();
-        const liveMessages =
+        const cachedLive =
           sessionTranscriptCache.get(id) ?? state.retainedTranscripts[id];
+        // A main-scoped window owns the session's top-level rows only. Live
+        // delegate rows belong to their delegate pages, so merging them here
+        // would grow the parent cache with every child row of a long turn.
+        const liveMessages =
+          detail.session.historyScope?.kind === "main"
+            ? cachedLive?.filter((message) => !message.parentToolCallId)
+            : cachedLive;
         const messages =
           (liveSessionTranscripts.has(id) || state.runningSessions[id]) &&
           liveMessages
@@ -239,6 +253,9 @@ export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime 
             messageStart: detail.session.messageStart ?? 0,
             hasMoreBefore: detail.session.hasMoreBefore === true,
             contentLimited: options?.contentLimit !== undefined,
+            ...(detail.session.historyScope
+              ? { scope: detail.session.historyScope }
+              : {}),
           });
         }
       }

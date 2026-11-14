@@ -37,8 +37,12 @@ test("session reads use a bounded tail and load older pages on demand", () => {
   assert.match(readingRuntime, /loadTranscriptPage: async/);
   assert.match(readingRuntime, /messageBefore:\s*direction === "before"\s*\? view\.messageStart/);
   assert.doesNotMatch(readingRuntime, /sessionTranscriptCache|liveSessionTranscripts/);
-  assert.match(api, /messageLimit\?: number/);
-  assert.match(api, /contentLimit\?: number/);
+  // The read-options shape (before/around/limit/contentLimit) is owned by the
+  // shared package; the renderer re-exports it instead of mirroring the fields,
+  // so IPC, remote validation, and the host keep one definition.
+  assert.doesNotMatch(api, /export type SessionHistoryReadOptions = \{/);
+  assert.match(api, /export type \{ SessionHistoryReadOptions \}/);
+  assert.match(api, /normalizeSessionHistoryReadOptions/);
   assert.match(main, /messageBefore\?: number/);
   assert.match(
     main,

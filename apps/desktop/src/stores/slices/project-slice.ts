@@ -192,6 +192,9 @@ function clearLocalSessionState(
     const planCheckpoints = withoutRecordKey(state.planCheckpoints, id);
     const sessionCompactions = withoutRecordKey(state.sessionCompactions, id);
     const sessionHistory = withoutRecordKey(state.sessionHistory, id);
+    // Delegate pages are keyed per session/chain; a removed session releases
+    // them with the rest of its renderer-local state.
+    const subagentHistory = withoutRecordKey(state.subagentHistory, id);
     const retainedNav = state.navStack.filter(
       (entry) => entry.sessionId !== id,
     );
@@ -220,6 +223,7 @@ function clearLocalSessionState(
       planCheckpoints,
       sessionCompactions,
       sessionHistory,
+      subagentHistory,
       navStack,
       navIndex: Math.min(state.navIndex, navStack.length - 1),
     };

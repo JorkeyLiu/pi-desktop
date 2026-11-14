@@ -26,12 +26,15 @@ import type {
   ProviderPublic,
   ReviewFileRollbackResult,
   ReviewRollbackResult,
+  SessionHistoryScope,
   SessionSummary,
   SessionThinkingLevel,
   SessionTodoSnapshot,
   UiMessage,
 } from "@pi-desktop/shared";
 import type { SettingsTabId } from "../lib/settings-search";
+import type { SubagentHistoryBuckets } from "../lib/subagent-history";
+import type { SubagentHistoryActions } from "./runtime/subagent-history-runtime";
 import type { TranscriptSearchTarget, TranscriptView } from "../lib/transcript-reading";
 import type { TranscriptReadingPosition } from "../lib/transcript-reading-position";
 import type {
@@ -87,6 +90,11 @@ export type PendingPlanRefreshResult = "pending" | "terminal" | "unavailable";
 export type SessionHistoryWindow = {
   messageStart: number;
   hasMoreBefore: boolean;
+  /**
+   * The scope this window was read with; absent keeps the legacy physical
+   * window. Paging the window keeps reading the same scope.
+   */
+  scope?: SessionHistoryScope;
   /** A display-capped tail is not canonical action input, even in a short chat. */
   contentLimited?: boolean;
 };
@@ -153,6 +161,8 @@ export type AppState = {
   sessionHistory: Record<string, SessionHistoryWindow>;
   /** Reading ranges are separate from the live/runtime transcript projection. */
   transcriptViews: Record<string, TranscriptView>;
+  /** Delegate detail pages read from their own scope, per session and chain. */
+  subagentHistory: SubagentHistoryBuckets;
   isRunning: boolean;
   /** Run state per session id — sessions run independent agents. */
   runningSessions: Record<string, boolean>;
@@ -211,6 +221,12 @@ export type AppState = {
   refreshSessions: (options?: RefreshSessionsOptions) => Promise<void>;
   prefetchSession: (id: string) => Promise<void>;
   navigateTranscript: (target: Omit<TranscriptSearchTarget, "requestId">) => Promise<void>;
+  /** Open (or reuse) a delegate's own scoped history; never the parent page. */
+  ensureSubagentHistory: SubagentHistoryActions["ensureSubagentHistory"];
+  loadOlderSubagentHistory: SubagentHistoryActions["loadOlderSubagentHistory"];
+  /** Read the chain's newest page and merge it over what the entry holds. */
+  loadLatestSubagentHistory: SubagentHistoryActions["loadLatestSubagentHistory"];
+  retrySubagentHistory: SubagentHistoryActions["retrySubagentHistory"];
   restoreTranscriptReading: (sessionId: string, position: TranscriptReadingPosition, signal: AbortSignal) => Promise<boolean>;
   loadTranscriptPage: (sessionId: string, direction: "before" | "after") => Promise<void>;
   returnToLatestTranscript: (sessionId: string) => void;

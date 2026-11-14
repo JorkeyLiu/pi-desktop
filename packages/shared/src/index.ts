@@ -12,6 +12,7 @@ export * from "./send-while-running.js";
 export * from "./inline-attachments.js";
 export * from "./auto-pasted-text.js";
 export * from "./session-link.js";
+export * from "./session-history.js";
 export * from "./fuzzy.js";
 export * from "./mcp-import.js";
 export * from "./mcp-catalog.js";

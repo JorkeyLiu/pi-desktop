@@ -559,6 +559,18 @@ body:has(> .context-menu) .work-panel-header {
   text-align: center;
 }
 
+/* A retained run that does not continue the rows above it: the omitted range
+   is stated in place, so the reader never reads two non-adjacent ranges as one
+   conversation. */
+.subagent-transcript-omitted {
+  padding: 6px 16px;
+  border-block: 1px dashed var(--ds-border-subtle);
+  margin: 6px 0;
+  color: var(--ds-text-muted);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
 /* The shared jump control centres itself on its containing block; here that is
    the transcript viewport, so it lands horizontally centred just above the
    composer whatever its height. */

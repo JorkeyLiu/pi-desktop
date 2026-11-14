@@ -1036,6 +1036,39 @@ core set rather than the on-demand catalog of §7.1:
   run identifiers stay encoded and bounded, and the resumed request itself stays
   bounded by the model-context seed truncation (ADR 0299 §7).
 
+**Restart recovery (`TaskList` / `TaskWait` read surface).** The live registry is
+process state — run handles, completion promises, and the accounting the parent
+owns — so a restart has none of it, and the delegation tools used to answer
+"no subagents" for work this session really ran even though the transcript still
+held every `Task` row. The runtime now builds a read-only catalog from the
+history it was launched with (the persisted transcript rows — the catalog itself
+adds no storage, table, or event; ADR 0335), one plain-data entry per
+parent-owned delegation,
+bounded to the 100 newest delegations to match the live registry's own retention
+cap. It is a catalog, not a registry: nothing in it can be started, resumed,
+waited on, or settled. `TaskList` answers the union of live records and recovered
+entries — a live record wins for the same id — and a recovered entry's heartbeat
+and `details.delegations[]` row carry `recovered: true` with wording that states
+no execution runs for it here. `TaskWait` with an explicit recovered id returns
+that entry's full stored report verbatim, from the strongest available evidence
+in this order: a persisted `TaskWait` result batch (the exact text the parent
+received), then the delegate's own persisted final assistant row
+(`parentToolCallId` equal to that `Task` call) for a run that settled without a
+wait. A run this same process already settled and still holds in its live
+settled cache answers from that cache without a new read — it is process
+memory, never persisted, and gone after a restart, so the two persisted sources
+are the only ones a relaunched session can use. The result's
+additive `recoveredDelegationIds` detail names the ids answered from history, and
+a mixed call answers live and recovered ids in one result while delivering only
+the live batch. Recovered entries never become wait targets, never join the
+delivery receipt, and never reach `markReportDelivered`: reading history can
+neither mark nor re-deliver a report. A persisted `Task` row still `running`
+after a restart reads as `interrupted` — resumable only through the existing
+`Task(resume)` chain, with no phantom execution started in its name. `source:
+"user"` rows are excluded from the parent's listing and from its waits exactly as
+`user`-owned live runs are, unknown ids answer unchanged, and delegations older
+than the 100 newest are simply not listed.
+
 **Program coordinator (one cadence, model resumes on program terms).** One persistent
 `AppSettings.subagentWakeup` selects a single program trigger:
 `{ kind: "time" | "tool-calls" | "context-tokens" | "off", value?: number }`
@@ -1212,23 +1245,31 @@ never double-charge. The two are reported separately and must not be confused.
 A running delegate's `Task` transcript row is re-snapshotted once per child
 turn with live metrics, without executing the tool again or adding usage to the
 parent turn.
-The host persists those progress snapshots on the same Task message id. A
-running snapshot replaces the stored delegation summary only while that stored
-row is still running and only when the stored call id and delegation id match,
-so the counters, occupancy, and spend a session switch restores are the latest
-child turn's, not the launch zeros, without waiting for another child event or
-a live-metrics channel. Settlement then replaces the same row, and a late
-running snapshot can never reopen or regress a settled delegation. The
-persistence outbox keeps one entry per message id in emission order, so the
-newest snapshot is the one that lands. No new event type or storage schema is
-required.
+The host persists those progress snapshots as append-only lines in the session's
+`snapshots.jsonl` sidecar instead of splicing the historical `Task` line
+(`04-data-storage.md` §4.7b, ADR 0335). A running snapshot is applied only while
+the row it names is still running and only when its message id, call id, and
+delegation id all match, so the counters, occupancy, and spend a session switch
+restores are the latest child turn's, not the launch zeros, without waiting for
+another child event or a live-metrics channel. Settlement appends the terminal
+snapshot for the same row, a late running snapshot can never reopen or regress a
+settled delegation, and an installed handoff checkpoint never moves to an older
+generation. The persistence outbox keeps one entry per message id in emission
+order, so the newest snapshot is the one that lands, and a snapshot identical to
+the row it would produce appends nothing. No new event type, storage schema, or
+transcript rewrite is required.
 
 **Explicit desktop cancellation.** A running delegate can be stopped from its
-card or detail panel. The subagent group header also offers session-wide stop-all.
-These controls call the same cancellation routine as `TaskStop` without a model
-round trip. Cancellation is cooperative: the UI shows a pending state until
-termination is confirmed, preserving partial output and existing parent Stop
-semantics. A completed delegate is not relabeled by a late stop request.
+card or detail panel. The session-level `agentStopSubagents` IPC can also stop
+this session's running delegates without naming an id — an explicit
+`delegationIds` list stops only those, and an empty list is refused rather than
+read as "all". There is no session-wide stop-all control in the subagent dock's
+group header; the UI stop surfaces are the card and detail buttons plus the
+parent's own Stop. These paths call the same cancellation routine as `TaskStop`
+without a model round trip. Cancellation is cooperative: the UI shows a pending
+state until termination is confirmed, preserving partial output and existing
+parent Stop semantics. A completed delegate is not relabeled by a late stop
+request.
 
 **Live settlement.** When a delegate settles, the runtime refreshes its original
 `Task` transcript row with the terminal delegation summary (`status`,
@@ -1239,9 +1280,11 @@ snapshot retains the Task call's identity, arguments, tool timing, and token
 usage; it does not execute the tool again or add usage to the parent turn.
 The initial Task result is emitted first even if the delegate settles before
 that result arrives. Electron persists the refreshed row through the normal
-message outbox so session switching and history reload preserve the outcome.
-An outbox write acknowledges only the snapshot sent to the host; a newer
-snapshot replacing the same message ID during that write remains queued.
+message outbox, and the host records it as the terminal snapshot line for that
+call, so session switching, history reload, and a restart read back the settled
+outcome while the transcript prefix stays byte-identical. An outbox write
+acknowledges only the snapshot sent to the host; a newer snapshot replacing the
+same message ID during that write remains queued.
 No new event type or storage schema is required.
 
 **Delegate loop.** A `SubagentRun` is a second pi `Agent` in the same sidecar

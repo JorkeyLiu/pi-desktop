@@ -2,6 +2,11 @@
 //!
 //! Layout offsets are disposable. They are reused only while the transcript's
 //! file identity still matches, and every cache failure falls back to a scan.
+//!
+//! The layout also carries the facts a scoped history read needs without
+//! decoding message bodies: which physical row owns which Task call, and the
+//! Task calls themselves with their delegation identity and resume argument.
+//! Those facts are rebuilt by the same append-only scan that produces offsets.
 
 use std::{
     collections::HashMap,
@@ -12,6 +17,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::{sniff_line_kind, swap_into_place, transcript_path};
@@ -19,7 +25,9 @@ use super::{sniff_line_kind, swap_into_place, transcript_path};
 const LAYOUT_CACHE_MIN_LEN: u64 = 2 * 1024 * 1024;
 const LAYOUT_CACHE_MAX_LAG: u64 = 4 * 1024 * 1024;
 const LAYOUT_CACHE_MAGIC: &str = "PI-DESKTOP-TRANSCRIPT-LAYOUT";
-const LAYOUT_CACHE_VERSION: &str = "2";
+const LAYOUT_CACHE_VERSION: &str = "3";
+/// Ownership token for a message whose `parentToolCallId` is absent.
+const TOP_LEVEL_OWNERSHIP: u32 = u32::MAX;
 
 /// A stable identity available on filesystems that expose one.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -34,7 +42,7 @@ pub enum FileIdentity {
 }
 
 impl FileIdentity {
-    fn is_available(&self) -> bool {
+    pub(crate) fn is_available(&self) -> bool {
         matches!(self, Self::Available { .. })
     }
 
@@ -71,6 +79,16 @@ impl FileIdentity {
     }
 }
 
+/// One Task tool row in physical order, with the identities a scoped read
+/// needs. `resume` is the raw `args.resume` value, not a resolved call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TaskCallIndex {
+    pub(crate) message_index: usize,
+    pub(crate) call_id: String,
+    pub(crate) delegation_id: Option<String>,
+    pub(crate) resume: Option<String>,
+}
+
 /// Physical layout of one transcript file: the byte offset of every message
 /// and compaction line, plus the file prefix those offsets describe.
 #[derive(Debug, Default, Clone)]
@@ -82,6 +100,15 @@ pub struct TranscriptLayout {
     /// Byte length of the file prefix this layout describes.
     pub file_len: u64,
     pub(crate) identity: FileIdentity,
+    /// For each message line, the pool index of its `meta.parentToolCallId`.
+    /// `None` is a top-level row.
+    pub(crate) message_parent: Vec<Option<u32>>,
+    /// Deduplicated parent tool-call ids referenced by `message_parent`.
+    pub(crate) parent_call_ids: Vec<String>,
+    /// Every Task tool row, in physical order.
+    pub(crate) task_calls: Vec<TaskCallIndex>,
+    /// Physical indexes of top-level messages, in file order.
+    pub(crate) top_level: Vec<usize>,
 }
 
 impl TranscriptLayout {
@@ -96,6 +123,56 @@ impl TranscriptLayout {
             identity,
             ..Self::default()
         }
+    }
+
+    /// Owning Task call for a physical row, if the row is nested.
+    pub(crate) fn parent_call_id(&self, index: usize) -> Option<&str> {
+        self.message_parent
+            .get(index)
+            .copied()
+            .flatten()
+            .and_then(|pool| self.parent_call_ids.get(pool as usize))
+            .map(String::as_str)
+    }
+
+    /// Physical indexes of messages that no Task call owns.
+    pub(crate) fn top_level_indices(&self) -> &[usize] {
+        &self.top_level
+    }
+
+    pub(crate) fn task_calls(&self) -> &[TaskCallIndex] {
+        &self.task_calls
+    }
+
+    /// Last physical Task row for `call_id`; duplicates are retries of one call.
+    pub(crate) fn last_task_for_call(&self, call_id: &str) -> Option<&TaskCallIndex> {
+        self.task_calls
+            .iter()
+            .rev()
+            .find(|task| task.call_id == call_id)
+    }
+
+    pub(crate) fn rebuild_top_level(&mut self) {
+        self.top_level = self
+            .message_parent
+            .iter()
+            .enumerate()
+            .filter_map(|(index, parent)| parent.is_none().then_some(index))
+            .collect();
+    }
+
+    fn extend_parent_call_id(&mut self, call_id: Option<&str>) -> Option<u32> {
+        let call_id = call_id?;
+        if let Some(index) = self
+            .parent_call_ids
+            .iter()
+            .position(|existing| existing == call_id)
+        {
+            return Some(index as u32);
+        }
+        let index = u32::try_from(self.parent_call_ids.len()).ok()?;
+        self.parent_call_ids.push(call_id.to_string());
+        Some(index)
     }
 }
 
@@ -277,7 +354,105 @@ fn scan_current_file(data_dir: &Path, session_id: &str) -> Result<TranscriptLayo
     scan_layout(&path, TranscriptLayout::empty(identity))
 }
 
-/// Scan from the known complete-line prefix to EOF, extending the offsets.
+/// What the append scan needs from one message line. Parent identity is found
+/// with a bounded byte scan; only Task rows are decoded.
+struct MessageProbe {
+    parent_call_id: Option<String>,
+    task: Option<ProbedTask>,
+}
+
+struct ProbedTask {
+    call_id: Option<String>,
+    delegation_id: Option<String>,
+    resume: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskLineProbe {
+    #[serde(default)]
+    tool_name: Option<String>,
+    #[serde(default)]
+    blocks: Vec<TaskBlockProbe>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskBlockProbe {
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
+    #[serde(default)]
+    call_id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    args: Option<Value>,
+    #[serde(default)]
+    result: Option<Value>,
+}
+
+/// Read the JSON string value that follows `marker` (`"role":` etc.) without
+/// decoding the rest of the line.
+fn probe_string(line: &str, marker: &str) -> Option<String> {
+    let bytes = line.as_bytes();
+    let mut index = line.find(marker)? + marker.len();
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    if index >= bytes.len() || bytes[index] != b'"' {
+        return None;
+    }
+    let (_, next) = super::scan_json_string(bytes, index)?;
+    serde_json::from_slice::<String>(&bytes[index..next]).ok()
+}
+
+fn probe_message(line: &str) -> MessageProbe {
+    let parent_call_id = probe_string(line, "\"parentToolCallId\":");
+    let task = line
+        .contains("\"toolName\":\"Task\"")
+        .then(|| {
+            serde_json::from_str::<TaskLineProbe>(line)
+                .ok()
+                .and_then(|probe| {
+                    if probe.tool_name.as_deref() != Some("Task") {
+                        return None;
+                    }
+                    let block = probe
+                        .blocks
+                        .iter()
+                        .find(|block| block.kind.as_deref() == Some("tool_call"))?;
+                    if block.name.as_deref() != Some("Task") {
+                        return None;
+                    }
+                    Some(ProbedTask {
+                        call_id: block.call_id.clone().filter(|id| !id.is_empty()),
+                        delegation_id: block
+                            .result
+                            .as_ref()
+                            .and_then(|result| result.get("details"))
+                            .and_then(|details| details.get("delegationId"))
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty())
+                            .map(str::to_owned),
+                        resume: block
+                            .args
+                            .as_ref()
+                            .and_then(|args| args.get("resume"))
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty())
+                            .map(str::to_owned),
+                    })
+                })
+        })
+        .flatten();
+    MessageProbe {
+        parent_call_id,
+        task,
+    }
+}
+
+/// Scan from the known complete-line prefix to EOF, extending the offsets and
+/// the ownership / Task index.
 fn scan_layout(path: &Path, mut layout: TranscriptLayout) -> Result<TranscriptLayout> {
     let mut file = match File::open(path) {
         Ok(file) => file,
@@ -303,8 +478,28 @@ fn scan_layout(path: &Path, mut layout: TranscriptLayout) -> Result<TranscriptLa
         if !line.ends_with('\n') {
             break;
         }
-        match sniff_line_kind(line.trim_end()) {
-            Some("message") => layout.message_offsets.push(offset),
+        let trimmed = line.trim_end();
+        match sniff_line_kind(trimmed) {
+            Some("message") => {
+                let message_index = layout.message_offsets.len();
+                let probe = probe_message(trimmed);
+                let ownership = layout.extend_parent_call_id(probe.parent_call_id.as_deref());
+                layout.message_offsets.push(offset);
+                layout.message_parent.push(ownership);
+                if let Some(task) = probe.task {
+                    if let Some(call_id) = task.call_id {
+                        layout.task_calls.push(TaskCallIndex {
+                            message_index,
+                            call_id,
+                            delegation_id: task.delegation_id,
+                            resume: task.resume,
+                        });
+                    }
+                }
+                if ownership.is_none() {
+                    layout.top_level.push(message_index);
+                }
+            }
             Some("compaction") => layout.compaction_offsets.push(offset),
             _ => {}
         }
@@ -314,7 +509,17 @@ fn scan_layout(path: &Path, mut layout: TranscriptLayout) -> Result<TranscriptLa
         }
     }
     layout.file_len = offset;
+    layout.rebuild_top_level();
     Ok(layout)
+}
+
+macro_rules! cache_next {
+    ($lines:expr) => {
+        match $lines.next() {
+            Some(line) => line,
+            None => return Ok(None),
+        }
+    };
 }
 
 fn load_layout_cache(
@@ -335,7 +540,8 @@ fn load_layout_cache(
             return Ok(None);
         }
     };
-    let mut tokens = raw.split_ascii_whitespace();
+    let mut lines = raw.lines();
+    let mut tokens = lines.next().unwrap_or_default().split_ascii_whitespace();
     if tokens.next() != Some(LAYOUT_CACHE_MAGIC) || tokens.next() != Some(LAYOUT_CACHE_VERSION) {
         return Ok(None);
     }
@@ -350,18 +556,16 @@ fn load_layout_cache(
     if &cached_identity != identity {
         return Ok(None);
     }
-    let Some(file_len) = tokens.next().and_then(|token| token.parse::<u64>().ok()) else {
+    let Some(file_len) = cache_next!(lines).trim().parse::<u64>().ok() else {
         return Ok(None);
     };
     if file_len < LAYOUT_CACHE_MIN_LEN || file_len > current_len {
         return Ok(None);
     }
-    let (Some(message_count), Some(compaction_count)) = (tokens.next(), tokens.next()) else {
-        return Ok(None);
-    };
+    let mut counts = cache_next!(lines).split_ascii_whitespace();
     let (Some(message_count), Some(compaction_count)) = (
-        message_count.parse::<usize>().ok(),
-        compaction_count.parse::<usize>().ok(),
+        counts.next().and_then(|token| token.parse::<usize>().ok()),
+        counts.next().and_then(|token| token.parse::<usize>().ok()),
     ) else {
         return Ok(None);
     };
@@ -373,40 +577,155 @@ fn load_layout_cache(
     };
     // A classified JSONL record needs at least `{"type":"message"}\n`;
     // reject impossible counts before reserving memory from cache input.
-    if offset_count > file_len_usize / 19 || offset_count > tokens.clone().count() {
+    if offset_count > file_len_usize / 19 {
         return Ok(None);
     }
-    let mut layout = TranscriptLayout {
-        message_offsets: Vec::with_capacity(message_count),
-        compaction_offsets: Vec::with_capacity(compaction_count),
-        file_len,
-        identity: cached_identity,
-    };
-    for index in 0..offset_count {
-        let Some(offset) = tokens.next().and_then(|token| token.parse::<u64>().ok()) else {
+    let mut offsets = Vec::with_capacity(offset_count);
+    while offsets.len() < offset_count {
+        for token in cache_next!(lines).split_ascii_whitespace() {
+            let Some(offset) = token.parse::<u64>().ok() else {
+                return Ok(None);
+            };
+            offsets.push(offset);
+        }
+        if offsets.len() > offset_count {
             return Ok(None);
-        };
-        if index < message_count {
-            layout.message_offsets.push(offset);
-        } else {
-            layout.compaction_offsets.push(offset);
         }
     }
-    let transcript = transcript_path(data_dir, session_id)?;
-    let (Some(checksum_label), Some(checksum)) = (tokens.next(), tokens.next()) else {
+    let mut ownership_head = cache_next!(lines).split_ascii_whitespace();
+    if ownership_head.next() != Some("ownership") {
+        return Ok(None);
+    }
+    let Some(declared_ownership) = ownership_head.next().and_then(|n| n.parse::<usize>().ok())
+    else {
         return Ok(None);
     };
-    if checksum_label != "checksum"
-        || checksum != layout_cache_digest(&layout)
-        || tokens.next().is_some()
-        || !offsets_are_valid(&layout)
-        || !prefix_ends_on_line_boundary(&transcript, file_len)?
+    if declared_ownership != message_count {
+        return Ok(None);
+    }
+    let mut ownership_tokens = Vec::with_capacity(message_count);
+    while ownership_tokens.len() < message_count {
+        for token in cache_next!(lines).split_ascii_whitespace() {
+            let Some(ownership) = token.parse::<u32>().ok() else {
+                return Ok(None);
+            };
+            ownership_tokens.push(ownership);
+        }
+        if ownership_tokens.len() > message_count {
+            return Ok(None);
+        }
+    }
+    let mut pool_head = cache_next!(lines).split_ascii_whitespace();
+    if pool_head.next() != Some("pool") {
+        return Ok(None);
+    }
+    let Some(pool_count) = pool_head.next().and_then(|n| n.parse::<usize>().ok()) else {
+        return Ok(None);
+    };
+    if pool_count > message_count {
+        return Ok(None);
+    }
+    let mut parent_call_ids = Vec::with_capacity(pool_count);
+    for _ in 0..pool_count {
+        let Some(bytes) = hex::decode(cache_next!(lines).trim()).ok() else {
+            return Ok(None);
+        };
+        let Some(call_id) = String::from_utf8(bytes).ok() else {
+            return Ok(None);
+        };
+        parent_call_ids.push(call_id);
+    }
+    let mut tasks_head = cache_next!(lines).split_ascii_whitespace();
+    if tasks_head.next() != Some("tasks") {
+        return Ok(None);
+    }
+    let Some(task_count) = tasks_head.next().and_then(|n| n.parse::<usize>().ok()) else {
+        return Ok(None);
+    };
+    if task_count > message_count {
+        return Ok(None);
+    }
+    let mut task_calls = Vec::with_capacity(task_count);
+    for _ in 0..task_count {
+        let Some(value) = serde_json::from_str::<Value>(cache_next!(lines)).ok() else {
+            return Ok(None);
+        };
+        let Some(message_index) = value
+            .get("messageIndex")
+            .and_then(Value::as_u64)
+            .and_then(|index| usize::try_from(index).ok())
+        else {
+            return Ok(None);
+        };
+        let Some(call_id) = value.get("callId").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+        if message_index >= message_count || call_id.is_empty() {
+            return Ok(None);
+        }
+        task_calls.push(TaskCallIndex {
+            message_index,
+            call_id: call_id.to_string(),
+            delegation_id: value
+                .get("delegationId")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            resume: value
+                .get("resume")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        });
+    }
+    let mut checksum = cache_next!(lines).split_ascii_whitespace();
+    if checksum.next() != Some("checksum") {
+        return Ok(None);
+    }
+    let Some(checksum) = checksum.next() else {
+        return Ok(None);
+    };
+    if lines.next().is_some() {
+        return Ok(None);
+    }
+    let mut message_offsets = Vec::with_capacity(message_count);
+    let mut compaction_offsets = Vec::with_capacity(compaction_count);
+    for (index, offset) in offsets.into_iter().enumerate() {
+        if index < message_count {
+            message_offsets.push(offset);
+        } else {
+            compaction_offsets.push(offset);
+        }
+    }
+    let message_parent = ownership_tokens
+        .into_iter()
+        .map(|token| (token != TOP_LEVEL_OWNERSHIP).then_some(token))
+        .collect();
+    let mut layout = TranscriptLayout {
+        message_offsets,
+        compaction_offsets,
+        file_len,
+        identity: cached_identity,
+        message_parent,
+        parent_call_ids,
+        task_calls,
+        top_level: Vec::new(),
+    };
+    if layout
+        .message_parent
+        .iter()
+        .flatten()
+        .any(|index| *index as usize >= layout.parent_call_ids.len())
     {
         return Ok(None);
     }
-    if !offsets_look_like_scan(&transcript, &layout)? {
+    let transcript = transcript_path(data_dir, session_id)?;
+    if checksum != layout_cache_digest(&layout)
+        || !offsets_are_valid(&layout)
+        || !prefix_ends_on_line_boundary(&transcript, file_len)?
+        || !offsets_look_like_scan(&transcript, &layout)?
+    {
         return Ok(None);
     }
+    layout.rebuild_top_level();
     Ok(Some(layout))
 }
 
@@ -419,6 +738,7 @@ fn offsets_are_valid(layout: &TranscriptLayout) -> bool {
             .compaction_offsets
             .windows(2)
             .any(|pair| pair[0] >= pair[1])
+        || layout.message_parent.len() != layout.message_offsets.len()
     {
         return false;
     }
@@ -494,6 +814,11 @@ fn offsets_look_like_scan(path: &Path, layout: &TranscriptLayout) -> Result<bool
     Ok(true)
 }
 
+fn hash_text(digest: &mut Sha256, text: &str) {
+    digest.update((text.len() as u64).to_le_bytes());
+    digest.update(text.as_bytes());
+}
+
 fn layout_cache_digest(layout: &TranscriptLayout) -> String {
     let mut digest = Sha256::new();
     digest.update(LAYOUT_CACHE_MAGIC.as_bytes());
@@ -519,6 +844,33 @@ fn layout_cache_digest(layout: &TranscriptLayout) -> String {
         .chain(&layout.compaction_offsets)
     {
         digest.update(offset.to_le_bytes());
+    }
+    digest.update((layout.message_parent.len() as u64).to_le_bytes());
+    for parent in &layout.message_parent {
+        digest.update(parent.map_or(u32::MAX, |index| index).to_le_bytes());
+    }
+    digest.update((layout.parent_call_ids.len() as u64).to_le_bytes());
+    for call_id in &layout.parent_call_ids {
+        hash_text(&mut digest, call_id);
+    }
+    digest.update((layout.task_calls.len() as u64).to_le_bytes());
+    for task in &layout.task_calls {
+        digest.update((task.message_index as u64).to_le_bytes());
+        hash_text(&mut digest, &task.call_id);
+        match &task.delegation_id {
+            Some(id) => {
+                digest.update([1u8]);
+                hash_text(&mut digest, id);
+            }
+            None => digest.update([0u8]),
+        }
+        match &task.resume {
+            Some(id) => {
+                digest.update([1u8]);
+                hash_text(&mut digest, id);
+            }
+            None => digest.update([0u8]),
+        }
     }
     hex::encode(digest.finalize())
 }
@@ -557,6 +909,34 @@ fn store_layout_cache(data_dir: &Path, session_id: &str, layout: &TranscriptLayo
                 writeln!(writer)?;
             }
         }
+        writeln!(writer, "ownership {}", layout.message_parent.len())?;
+        for (index, parent) in layout.message_parent.iter().enumerate() {
+            if index % 16 == 15 {
+                writeln!(writer, "{}", parent.map_or(u32::MAX, |index| index))?;
+            } else {
+                write!(writer, "{} ", parent.map_or(u32::MAX, |index| index))?;
+            }
+        }
+        if !layout.message_parent.is_empty() && !layout.message_parent.len().is_multiple_of(16) {
+            writeln!(writer)?;
+        }
+        writeln!(writer, "pool {}", layout.parent_call_ids.len())?;
+        for call_id in &layout.parent_call_ids {
+            writeln!(writer, "{}", hex::encode(call_id.as_bytes()))?;
+        }
+        writeln!(writer, "tasks {}", layout.task_calls.len())?;
+        for task in &layout.task_calls {
+            writeln!(
+                writer,
+                "{}",
+                serde_json::json!({
+                    "messageIndex": task.message_index,
+                    "callId": task.call_id,
+                    "delegationId": task.delegation_id,
+                    "resume": task.resume,
+                })
+            )?;
+        }
         writeln!(writer, "checksum {}", layout_cache_digest(layout))?;
         writer.flush()?;
         writer.get_ref().sync_data()?;
@@ -565,7 +945,7 @@ fn store_layout_cache(data_dir: &Path, session_id: &str, layout: &TranscriptLayo
 }
 
 #[cfg(unix)]
-fn file_identity(_path: &Path, metadata: &fs::Metadata) -> FileIdentity {
+pub(crate) fn file_identity(_path: &Path, metadata: &fs::Metadata) -> FileIdentity {
     use std::os::unix::fs::MetadataExt;
     let mut file_id = [0u8; 16];
     file_id[..8].copy_from_slice(&metadata.ino().to_be_bytes());
@@ -577,7 +957,7 @@ fn file_identity(_path: &Path, metadata: &fs::Metadata) -> FileIdentity {
 }
 
 #[cfg(windows)]
-fn file_identity(path: &Path, _metadata: &fs::Metadata) -> FileIdentity {
+pub(crate) fn file_identity(path: &Path, _metadata: &fs::Metadata) -> FileIdentity {
     use std::{mem::size_of, os::windows::io::AsRawHandle};
     use windows_sys::Win32::{
         Foundation::HANDLE,
@@ -607,7 +987,7 @@ fn file_identity(path: &Path, _metadata: &fs::Metadata) -> FileIdentity {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn file_identity(_path: &Path, _metadata: &fs::Metadata) -> FileIdentity {
+pub(crate) fn file_identity(_path: &Path, _metadata: &fs::Metadata) -> FileIdentity {
     FileIdentity::Unavailable
 }
 

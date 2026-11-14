@@ -29,7 +29,7 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/app-store";
 import { useChatSessionCapability } from "../../hooks/use-chat-session-capability";
 import { useFollowScroll } from "../../hooks/use-follow-scroll";
-import { useTranscriptView } from "../../hooks/use-transcript-view";
+import { useSubagentHistory } from "../../hooks/use-subagent-history";
 import { useTranscriptSearchFocus } from "../../hooks/use-transcript-search-focus";
 import { IconArrowDown, IconBot, IconImage } from "../icons";
 import { TooltipButton } from "../ui";
@@ -153,10 +153,11 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
   const { t, i18n } = useTranslation();
   const language = i18n.language || "en";
   const activeSessionId = useAppStore((state) => state.activeSessionId);
-  // A tab only renders inside a presented panel, which always has a session;
-  // the empty key keeps the hook's contract while nothing is active.
-  const transcript = useTranscriptView(activeSessionId ?? "");
-  const { messages } = transcript;
+  // The delegate detail is its own source: the chain's scoped page plus the
+  // root `Task` records that identify it. It never reads the main conversation's
+  // window, so the parent browsing around cannot empty this panel.
+  const history = useSubagentHistory(activeSessionId ?? "", delegationId);
+  const messages = history.messages;
   const session = useAppStore((state) =>
     state.sessions.find((item) => item.id === state.activeSessionId),
   );
@@ -415,10 +416,9 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     const liveTurnId = capturedSessionId
       ? useAppStore.getState().agentStatuses[capturedSessionId]?.currentTurnId
       : undefined;
-    const capturedRunTurn = subagentChainExecutionTurnId(
-      useAppStore.getState().messages,
-      capturedDelegationId,
-    );
+    // The run's own `Task` row lives in this tab's evidence (its scoped page
+    // plus the chain context), not in the parent's bounded main page.
+    const capturedRunTurn = subagentChainExecutionTurnId(messages, capturedDelegationId);
     const capturedOwnerTurn = resolveSteerOwnerTurn({
       keptTurnId: ownerTurnRef.current.get(capturedDelegationId),
       runTurnId: capturedRunTurn,
@@ -591,13 +591,14 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
   // is claimed only by the tab whose own conversation contains the message;
   // the other tabs stay where the reader left them.
   const searchTarget = useMemo(() => {
-    const focus = transcript.focus;
+    const focus = history.focus;
     if (!focus) return null;
-    const claimed = transcriptResult?.turns.some((turn) =>
-      turn.rows.some((row) => row.message.id === focus.messageId),
-    );
-    return claimed ? focus : null;
-  }, [transcript.focus, transcriptResult]);
+    // A search hit is claimed once the row is really here: an entry opened for
+    // the target reads the page that contains it, so the highlight never lands
+    // on a row this tab does not own.
+    const present = messages.some((message) => message.id === focus.messageId);
+    return present ? { ...focus, sessionId: activeSessionId ?? "" } : null;
+  }, [activeSessionId, history.focus, messages]);
 
   useTranscriptSearchFocus({
     target: searchTarget,
@@ -785,6 +786,37 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
             tabIndex={0}
           >
             <div ref={contentRef} className="subagent-transcript-list">
+              {history.hasMoreBefore ? (
+                <div className="subagent-transcript-earlier">
+                  <button
+                    type="button"
+                    className="link-btn"
+                    disabled={history.refreshing || history.status === "loading"}
+                    onClick={history.loadOlder}
+                  >
+                    {t("chat.showEarlierMessages")}
+                  </button>
+                </div>
+              ) : null}
+              {history.status === "loading" && !transcriptResult ? (
+                <div className="subagent-transcript-loading" role="status" data-testid="subagent-history-loading">
+                  {t("chat.loadingSession")}
+                </div>
+              ) : null}
+              {history.error ? (
+                <div className="subagent-transcript-error" role="alert" data-testid="subagent-history-error">
+                  <span>{t("chat.subagentHistoryFailed")}</span>
+                  <TooltipButton
+                    type="button"
+                    className="link-btn"
+                    tooltip={t("chat.subagentHistoryRetry")}
+                    ariaLabel={t("chat.subagentHistoryRetry")}
+                    onClick={history.retry}
+                  >
+                    {t("chat.subagentHistoryRetry")}
+                  </TooltipButton>
+                </div>
+              ) : null}
               {transcriptResult ? (
                 transcriptResult.turns.map((turn, turnIndex) => (
                   <Fragment key={`turn-${turnIndex}`}>
@@ -800,8 +832,9 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                         </div>
                       </div>
                     </div>
-                    {turn.rows.map((row) =>
-                      row.kind === "tool" ? (
+                    {turn.rows.map((row) => (
+                      <Fragment key={`row-${row.message.id}`}>
+                        {row.kind === "tool" ? (
                         // An accepted self-handoff is a context checkpoint, not
                         // an ordinary tool invocation: it renders as the
                         // transcript's own divider row. A pending, running, or
@@ -860,15 +893,41 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                             </div>
                           </div>
                         </div>
-                      ),
-                    )}
+                        )}
+                        {history.omittedAfterId === row.message.id ? (
+                          <div
+                            className="subagent-transcript-omitted"
+                            role="status"
+                            data-testid="subagent-history-omitted"
+                          >
+                            {t("chat.omittedEarlierMessages")}
+                          </div>
+                        ) : null}
+                      </Fragment>
+                    ))}
                   </Fragment>
                 ))
-              ) : (
+              ) : history.status === "empty" ? (
+                <div className="subagent-transcript-empty" role="status" data-testid="subagent-history-empty">
+                  {t("panel.subagentHistoryEmpty")}
+                </div>
+              ) : history.status === "loading" || history.status === "error" ? null : (
                 <div className="subagent-transcript-empty" role="status">
                   {t("panel.subagentEmpty")}
                 </div>
               )}
+              {history.hasMoreAfter ? (
+                <div className="subagent-transcript-earlier" data-testid="subagent-show-latest">
+                  <button
+                    type="button"
+                    className="link-btn"
+                    disabled={history.refreshing || history.status === "loading"}
+                    onClick={history.loadLatest}
+                  >
+                    {t("chat.showLatestMessages")}
+                  </button>
+                </div>
+              ) : null}
               {showWorking ? <WorkingIndicator /> : null}
             </div>
           </div>

@@ -2,6 +2,7 @@ import type { UiMessage } from "@pi-desktop/shared";
 import { api } from "../../lib/api";
 import { isRemoteSession } from "../../lib/remote-session-safety";
 import { EMPTY_TRANSCRIPT, transcriptViewMessages } from "../../lib/transcript-reading";
+import { subagentHistoryMessages } from "../../lib/subagent-history";
 import {
   subagentChainSameDelegateIn,
   type SubagentChainEvidence,
@@ -78,6 +79,14 @@ function subagentChainEvidence(
   const displayed = transcriptViewMessages(live, view);
   if (displayed.length) evidence.push(displayed);
   if (live.length && (view?.focus || view?.restored)) evidence.push(live);
+  // A delegate page read under its own scope holds the `Task` rows that identify
+  // its chain; the main window may no longer carry them. Keeping that page as
+  // evidence lets the panel resolve a chain identity without loading every
+  // delegate's children into the parent conversation.
+  for (const entry of Object.values(state.subagentHistory[sessionId] ?? {})) {
+    const rows = subagentHistoryMessages(entry, EMPTY_TRANSCRIPT);
+    if (rows.length) evidence.push(rows);
+  }
   return evidence;
 }
 

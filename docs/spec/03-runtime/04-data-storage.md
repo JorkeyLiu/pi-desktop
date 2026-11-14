@@ -135,7 +135,8 @@ to an absolute path before it reaches host-core as a child-process variable.
 │    ├── <sessionId>.jsonl           # live transcript (header + messages)
 │    ├── <sessionId>.jsonl.layout    # disposable, versioned byte-offset cache
 │    ├── <sessionId>.revisions.jsonl # regenerate branches, append-only
- │    └── <sessionId>.inflight.json   # streaming reply checkpoint (D299), transient
+│    ├── <sessionId>.snapshots.jsonl # append-only delegation Task snapshots (ADR 0335, schema 1)
+│    └── <sessionId>.inflight.json   # streaming reply checkpoint (D299), transient
  ├── secrets/             # encrypted secret blobs + .machine-key (unchanged)
  ├── config-sync/         # encrypted sync base/pending bundles — host-core only
  ├── attachments/         # content-addressed blobs (sha256 name), refs from messages
@@ -1024,6 +1025,62 @@ Retention and deletion treat them as ordinary rows: a deleted session takes its
 delegate rows with it, and regenerate archives them with the branch they belong
 to.
 
+### 4.7b Scoped reads and the delegation overlay (ADR 0335)
+
+The transcript file stays the single physical record; scoping is a read
+selection over it, so no write changes shape when a surface asks for one.
+`session.get` with `{ kind: "main" }` selects physical message lines without
+`parentToolCallId`; with `{ kind: "delegation", id }` it selects that chain's
+direct child rows, resolved from the chain's `Task` call ids and their
+`Task(resume)` continuations (ADR 0279). Neither form renumbers lines, so the
+layout index and its versioned cache keep addressing the same offsets
+(ADR 0127), and an unscoped read returns the projection it returned before.
+
+An id that resolves to no chain yields no session at all, while a chain that
+resolves but has emitted no child row yet answers with an empty page whose
+display context is that chain's own `Task` / `Task(resume)` rows. A resolved
+chain therefore always has that context; an empty context means the id named no
+chain, so that read returned no session instead of an empty page.
+
+A delegation's recorded state — its progress checkpoints and the final report —
+is read from the append-only `<sessionId>.snapshots.jsonl` sidecar beside the
+transcript. Each accepted update is one line,
+`{ type: "snapshot", schema: 1, sessionId, savedAt, callId, delegationId,
+message }`, and the newest accepted line for a `(callId, delegationId)` pair
+wins on read — the same last-record-wins shape `revisions.jsonl` already uses.
+A line is accepted only when it names the same message id, the same `callId`,
+and the same `delegationId` as the row it would replace, when that base row is
+still `running`, and when the installed handoff checkpoint generation it carries
+does not move backwards; a line identical to the row it would produce is not
+written, so a repeated settle does not churn the sidecar. Lines are appended,
+never rewritten in place, and no read replaces the historical root `Task` line,
+which keeps the snapshot its dispatch wrote: a settled row is never reopened and
+the final report is stored as the run produced it (never summarized or
+truncated by the snapshot writer).
+
+The transcript keeps its full launch row, so a row whose base status is already
+settled — settled in place by an older build — wins over a stale sidecar entry
+and is read unchanged. Only a still-`running` base row can be overlaid, which is
+what keeps an older build's in-place settlement, a session copy, and a revived
+revision from regressing.
+
+The sidecar is derived state, reconciled against the rows it describes rather
+than swept by age. `session.delete` removes the file with the session. A
+transcript rewrite (truncation, revision switch, fork, or any full write) folds
+the accepted overlay of every `Task` row it keeps into the rows it is about to
+write, materializes those effective rows before the atomic swap, and prunes the
+sidecar only afterwards; a failed prune is a warning, because the rewritten
+transcript is already the authority and a harmless settled overlay remains. A
+row an explicit single-line edit already changed is not overridden by its
+overlay — the caller's content wins and the entry is dropped with that rewrite —
+while entries whose launch row the rewrite drops survive for a later revision
+restore until the row is seen again or the session is deleted. There is no
+time-based sweep. A torn tail, another session's line, or a `schema` this build
+cannot interpret is skipped on read and copied back verbatim by that prune, so a
+newer build still finds its data; such a line is never presented as a recovered
+delegation. Sessions that never had a sidecar read exactly as before. No SQLite
+table is involved, and introducing one would need a migration and its own tests.
+
 ### 4.8 messages_fts — full-text search
 
 The legacy `search.query` message search uses a trigram tokenizer for CJK and
@@ -1436,6 +1493,13 @@ cached read is proportional to the requested page. Consequences:
   prefix before reuse. Missing, old, unknown, corrupt, or mismatched caches are
   ignored and rebuilt from the JSONL source. Cache read/write failures are
   diagnostic only and do not make the session unreadable.
+- The current cache format version also carries each row's owning
+  `parentToolCallId` (a deduplicated call-id pool plus one index per message
+  line), the physical indexes of top-level rows, and every `Task` tool row with
+  its `callId`, `delegationId`, and raw `Task(resume)` argument. A scoped read
+  therefore resolves the main selection and a delegation chain without parsing
+  message bodies, and a cache written by the previous version is ignored and
+  rebuilt rather than trusted under a new set of fields.
 - A matching identity and complete prefix permits append-only incremental
   scanning. A transcript rewrite invalidates both in-memory and disk layouts
   only after its atomic replacement succeeds; delete also removes both. Cache

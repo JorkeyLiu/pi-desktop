@@ -876,6 +876,25 @@ window.piDesktop = { platform: "linux", on() { return () => {}; },
     if (channel === "pi-desktop/agent/stop-subagents") {
       return { ok: true, data: { pending: req.delegationIds ?? ["d1"] } };
     }
+    if (channel === "pi-desktop/session/get") {
+      const scope = req && req.historyScope;
+      const rows = useAppStore.getState().messages || [];
+      if (!scope || scope.kind !== "delegation") {
+        return { ok: true, data: { session: { id: "s1", source: "local", title: "fixture", messages: [] } } };
+      }
+      // The panel's own scope: root Task records identify the chain, the child
+      // rows hang off the chain's call ids, and the page echoes the identity.
+      const tasks = rows.filter((row) => row.role === "tool" && row.toolName === "Task"
+        && row.toolResult && row.toolResult.details
+        && row.toolResult.details.delegationId === scope.id);
+      const chain = new Set();
+      for (const row of tasks) if (row.toolCallId) chain.add(row.toolCallId);
+      const childRows = rows.filter((row) => row.parentToolCallId && chain.has(row.parentToolCallId));
+      return { ok: true, data: { session: { id: "s1", source: "local", title: "fixture",
+        messages: childRows, historyContext: tasks, messageStart: 0, messageEnd: childRows.length,
+        messageCount: rows.length, hasMoreBefore: false,
+        historyScope: { kind: "delegation", id: scope.id } } } };
+    }
     throw new Error("Unexpected channel " + channel);
   } };
 const base = { id: "s1", source: "local", title: "fixture" };

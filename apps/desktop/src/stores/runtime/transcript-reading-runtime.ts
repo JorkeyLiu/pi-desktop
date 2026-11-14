@@ -38,6 +38,9 @@ export function createTranscriptReadingRuntime({ get, set }: StoreAccess, read: 
             ? state.messages
             : (state.retainedTranscripts[sessionId] ?? EMPTY_TRANSCRIPT),
         messageStart: state.sessionHistory[sessionId]?.messageStart ?? 0,
+        ...(state.sessionHistory[sessionId]?.scope
+          ? { scope: state.sessionHistory[sessionId]?.scope }
+          : {}),
         hasMoreBefore: state.sessionHistory[sessionId]?.hasMoreBefore === true,
         hasMoreAfter: false,
         focus: null,
@@ -108,6 +111,7 @@ export function createTranscriptReadingRuntime({ get, set }: StoreAccess, read: 
         messageAround: position.messageId,
         messageLimit: TRANSCRIPT_SEARCH_PAGE_SIZE,
         contentLimit: TRANSCRIPT_CONTENT_LIMIT,
+        ...(range.scope ? { historyScope: range.scope } : {}),
       });
       if (signal.aborted || get().transcriptViews[sessionId] !== pending) return false;
       if (get().activeSessionId !== sessionId) {
@@ -168,6 +172,22 @@ export function createTranscriptReadingRuntime({ get, set }: StoreAccess, read: 
     });
   }
 
+  /**
+   * The panel identity an open request actually landed in for this session.
+   *
+   * The open is synchronous and this branch only runs in the conversation the
+   * reader is in, so the landing tab is the active tab of that conversation's
+   * retained panel context. Its resource is the key its surface reads its
+   * delegate history under; the identity that asked is only the fallback for
+   * a request the panel did not turn into a subagent tab.
+   */
+  function landedSubagentTabKey(sessionId: string, requested: string): string {
+    const context = get().workPanelContexts[sessionId];
+    const active = context?.tabs.find((tab) => tab.id === context.activeTabId);
+    const resource = active?.kind === "subagent" ? active.resource?.trim() : undefined;
+    return resource || requested.trim();
+  }
+
   const actions: ReadingActions = {
     returnToLatestTranscript,
     restoreTranscriptReading: async (sessionId, position, signal) => {
@@ -190,9 +210,14 @@ export function createTranscriptReadingRuntime({ get, set }: StoreAccess, read: 
       const { sessionId } = input;
       if (get().activeSessionId !== sessionId) return;
       const focus: TranscriptSearchTarget = { ...input, requestId: ++nextRequestId };
+      const stored = get().transcriptViews[sessionId];
       const previous: TranscriptView = { ...currentView(sessionId), loading: null };
       const pending: TranscriptView = { ...previous, loading: "target" };
       publish(sessionId, pending);
+      // Search stays a physical read: the target may be any record, including
+      // a delegate's child row, and only the physical answer can resolve it
+      // with `navigationParent`. Running a scope here would drop exactly the
+      // rows the search was looking for.
       try {
         const { session } = await read(sessionId, {
           messageAround: focus.messageId,
@@ -208,6 +233,33 @@ export function createTranscriptReadingRuntime({ get, set }: StoreAccess, read: 
         if (!session || !message) throw new Error("Message no longer exists in this conversation.");
         if (message.parentToolCallId && !session.navigationParent)
           throw new Error("The task for this message no longer exists in this conversation.");
+        // A scoped conversation reads delegate rows in the delegate's own view.
+        // The physical answer supplied the target's chain identity; the main
+        // range stays where the reader left it and the delegate tab opens
+        // focused on the hit. A backend without scoped history keeps the inline
+        // legacy navigation above.
+        if (message.parentToolCallId && get().sessionHistory[sessionId]?.scope) {
+          // Undo the pending target marker: the main range was never replaced,
+          // so a reader without a range stays without one.
+          if (stored) publish(sessionId, stored);
+          else returnToLatestTranscript(sessionId);
+          get().openSubagentTab(message.parentToolCallId);
+          // A chain reaches the strip under several identities, and an open
+          // request for any of them lands in the tab the chain already has.
+          // The mounted surface reads its history under that tab's own
+          // resource, so the focus has to follow the tab the request landed
+          // in: writing it under the identity that asked would leave the page
+          // in an entry no open tab ever reads.
+          const tabKey = landedSubagentTabKey(sessionId, message.parentToolCallId);
+          void get().ensureSubagentHistory({
+            sessionId,
+            tabKey,
+            messageId: message.id,
+            query: focus.query,
+            requestId: focus.requestId,
+          });
+          return;
+        }
         set((state) => ({
           transcriptViews: {
             ...state.transcriptViews,
@@ -242,11 +294,16 @@ export function createTranscriptReadingRuntime({ get, set }: StoreAccess, read: 
         const { session } = await read(
           sessionId,
           resyncTail
-            ? { messageLimit: limit, contentLimit: TRANSCRIPT_CONTENT_LIMIT }
+            ? {
+                messageLimit: limit,
+                contentLimit: TRANSCRIPT_CONTENT_LIMIT,
+                ...(view.scope ? { historyScope: view.scope } : {}),
+              }
             : {
                 messageBefore: direction === "before" ? view.messageStart : (view.messageEnd ?? 0) + limit,
                 messageLimit: limit,
                 contentLimit: TRANSCRIPT_CONTENT_LIMIT,
+                ...(view.scope ? { historyScope: view.scope } : {}),
               },
         );
         if (get().transcriptViews[sessionId] !== pending) return;

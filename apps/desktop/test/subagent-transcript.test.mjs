@@ -305,12 +305,13 @@ test("the delegate's effective thinking level still reaches the tab", () => {
   // keeps its effective level after polling replaces the Task row.
   assert.match(
     progressSource,
-    /export function delegationSummary\(record: DelegationRecord\)/,
+    // The summary reads either a live record or the recovered plain-data view,
+    // so the pair is asserted on the field access rather than the parameter
+    // type's name.
+    /export function delegationSummary\(record: Delegation(?:Record|View)\)/,
   );
-  assert.match(
-    progressSource,
-    /modelId: record\.modelId,\s*\n\s*thinkingLevel: record\.thinkingLevel,/,
-  );
+  assert.match(progressSource, /modelId: record\.modelId/);
+  assert.match(progressSource, /thinkingLevel: record\.thinkingLevel/);
   assert.match(
     progressSource,
     /export function snapshotWaitRecord\(record: DelegationRecord\)/,

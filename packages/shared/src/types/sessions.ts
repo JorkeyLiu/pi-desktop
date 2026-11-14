@@ -6,6 +6,36 @@ import type { PermissionMode } from "./permissions.js";
 import type { UiMessage } from "./messages.js";
 import type { PlanHistoryEntry, PlanningState } from "./plans.js";
 import type { SessionWorktreeSummary } from "./worktree.js";
+/**
+ * Which part of a session transcript one bounded read selects.
+ *
+ * - `main`: the session's own top-level records. Delegate child rows stay out
+ *   of the page budget, so a long delegation chain cannot displace the
+ *   conversation the reader is browsing.
+ * - `delegation`: the child records of every connected `Task` call of one
+ *   chain, addressed by a `delegationId` or by one of its older call ids, plus
+ *   an `id` that names the canonical chain when the backend can resolve it.
+ *
+ * A read without a scope keeps the legacy meaning: the whole physical
+ * transcript, delegate rows included.
+ */
+export type SessionHistoryScope =
+  | { kind: "main" }
+  | { kind: "delegation"; id: string };
+
+/** Bounded history read request, shared by every transport. */
+export type SessionHistoryReadOptions = {
+  /** Center a bounded read on this stable ID and retain its original text. */
+  messageAround?: string;
+  /** Return the newest page ending before this zero-based message offset. */
+  messageBefore?: number;
+  /** Maximum number of records in the returned page. */
+  messageLimit?: number;
+  /** Maximum characters per displayed message/value field. */
+  contentLimit?: number;
+  /** Absent leaves the legacy full/physical read unchanged. */
+  historyScope?: SessionHistoryScope;
+};
 
 /**
  * Which authority owns a session's transcript.
@@ -84,6 +114,18 @@ export type SessionDetail = SessionSummary & {
   planHistory?: PlanHistoryEntry[];
   /** Owning Task for a nested search target; context only, outside page cursors. */
   navigationParent?: UiMessage;
+  /**
+   * The scope this page was read with, echoed back by a backend that
+   * implements scoped history. Absent means the backend served the legacy
+   * full/physical transcript, and the reader must keep its legacy behavior.
+   */
+  historyScope?: SessionHistoryScope;
+  /**
+   * Root `Task` records that identify a delegation chain but lie outside the
+   * scoped page budget. Context only: never part of the page cursors and never
+   * a transcript row of its own.
+   */
+  historyContext?: UiMessage[];
   /** Zero-based offset of the first message returned by a bounded history read. */
   messageStart?: number;
   /** Exclusive physical end of a bounded read; not the deduplicated length. */

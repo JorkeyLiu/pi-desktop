@@ -1114,7 +1114,16 @@ type SessionDetail = SessionSummary & {
   messageStart?: number;
   /** True when an older page can be requested with session.get. */
   hasMoreBefore?: boolean;
+  /** Echo of the scope this page answered, when the caller named one (ADR 0335). */
+  historyScope?: SessionHistoryScope;
+  /** Every Task / Task(resume) message of the chain, outside the page budget
+   *  (delegation scope only). */
+  historyContext?: UiMessage[];
 };
+
+type SessionHistoryScope =
+  | { kind: "main" }                    // top-level records only
+  | { kind: "delegation"; id: string }; // stable delegationId or legacy Task toolCallId
 ```
 
 Historical contract reads attach `planHistory` only for submission call IDs in
@@ -1185,7 +1194,7 @@ Minimal interface:
   through the reviewed desktop-control path; it does not create or mutate the
   session
 - `session/fork({ sessionId, title?, throughMessageId? }) -> { session: SessionDetail }`
-- `session/get({ id, messageBefore?, messageAround?, messageLimit?, contentLimit? })` — without
+- `session/get({ id, messageBefore?, messageAround?, messageLimit?, contentLimit?, historyScope? }) -> SessionDetail` — without
   read-window options returns the complete UI projection; with them returns a
   bounded newest/older page plus `messageStart` and `hasMoreBefore`. The
   content limit applies only to display values and never changes the lossless
@@ -1197,9 +1206,37 @@ Minimal interface:
   Bounded responses also include exclusive `messageEnd` and `hasMoreAfter` for
   forward paging; reading windows never replace the live transcript cache.
   A nested target may also return `navigationParent`, the latest capped owning
-  Task `UiMessage`. It is display context outside the physical page, not an
-  extra history line. The renderer shares one reading view between ordinary
-  paging, search navigation, and subagent details.
+  Task `UiMessage`, so search can show a target before any child history exists.
+  It is display context outside the physical page, not an extra history line.
+  Optional `historyScope` (ADR 0335) names the surface the page is for: `main`
+  selects physical rows without `parentToolCallId` and budgets those selected
+  top-level records; a `delegation` page accepts a chain's stable `delegationId`
+  or its legacy `Task` toolCallId and returns that chain's direct child rows
+  across all resume runs, with every `Task` / `Task(resume)` message of that
+  chain in `historyContext`. An id that resolves to no chain returns no session,
+  like a missing `messageAround` target; a chain that resolves but has produced
+  no child row yet returns an empty page instead. The echoed `historyScope` is
+  canonical — the earliest root dispatch's `delegationId`, or that root's
+  toolCallId when none was recorded — not the id the caller sent. A `main` page
+  that centres on a nested target centres on the owning top-level root's
+  neighborhood and still reports `navigationParent` (the direct parent `Task`
+  call), so a nested search hit opens the main pane where the owning dispatch
+  lives and the renderer switches to the `delegation` scope of
+  `navigationParent.toolCallId` to show the child itself. Omitting `historyScope`
+  is the unfiltered contract above. The main transcript and a delegation panel
+  therefore read, page, and restore their own history: ordinary paging and
+  search navigation share one main reading view, and an open subagent tab keeps
+  its own loaded rows and identity when that view changes.
+  `historyContext` is omitted when empty: a resolved `delegation` page always
+  carries at least the chain's `Task` / `Task(resume)` rows, while `main` and
+  unscoped reads omit the field. An empty context is an id that resolved to no
+  chain, and that read returns no session instead of an empty page.
+  `historyScope` crosses IPC only through
+  `normalizeSessionHistoryScope`, which resolves an untrusted or malformed
+  value to `undefined` — the unfiltered read above, never a silently filtered
+  one. A delegation id is trimmed and limited to 512 characters; an empty or
+  otherwise invalid id falls back to the legacy read instead of an empty
+  delegation page.
 - `session/search({ query, offset? }) -> SessionSearchPage` forwards to
   `search.sessions`; host-core owns discovery, counts, filtering, and pagination.
 - `session/searchContext(SessionSearchContextRequest) -> SessionSearchContext`

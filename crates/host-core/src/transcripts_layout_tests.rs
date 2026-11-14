@@ -405,3 +405,54 @@ fn remove_session_files_cleans_up_layout_cache_and_tmp() {
     assert!(!layout_tmp.exists());
     assert!(!legacy_tmp.exists());
 }
+
+#[test]
+fn an_older_layout_cache_version_is_ignored_and_rebuilt() {
+    let dir = tempdir().unwrap();
+    let messages = vec![
+        message("m1", &"x".repeat(LAYOUT_CACHE_MIN_LEN as usize)),
+        task_message("completed", "done"),
+        MessageRecord {
+            id: "m-child".into(),
+            role: "assistant".into(),
+            tool_name: None,
+            is_error: false,
+            blocks: json!([{ "type": "text", "text": "child" }]),
+            meta: Some(json!({ "parentToolCallId": "task-150" })),
+            created_at: CREATED_AT.into(),
+        },
+    ];
+    seed_cache(dir.path(), &messages);
+    let cache = layout_cache_path(dir.path(), "layout-regression").unwrap();
+    if !cache.exists() {
+        // Filesystems without a stable identity never persist a layout cache.
+        return;
+    }
+    let raw = fs::read_to_string(&cache).unwrap();
+    let mut lines: Vec<&str> = raw.lines().collect();
+    let stale = lines[0].replace(&format!(" {LAYOUT_CACHE_VERSION}"), " 2");
+    lines[0] = &stale;
+    fs::write(&cache, format!("{}\n", lines.join("\n"))).unwrap();
+
+    let layout = refresh_layout(dir.path(), "layout-regression", TranscriptLayout::default())
+        .expect("a stale cache version is a miss, not an error");
+    assert_eq!(layout.task_calls().len(), 1);
+    assert_eq!(
+        layout.task_calls()[0].delegation_id.as_deref(),
+        Some("delegate-150")
+    );
+    assert_eq!(layout.parent_call_id(2), Some("task-150"));
+    assert_eq!(layout.top_level_indices(), &[0, 1]);
+    assert_messages(&cold_read(dir.path()), &messages);
+
+    // The rebuild persists the current version again.
+    let rebuilt = fs::read_to_string(&cache).unwrap();
+    assert!(
+        rebuilt
+            .lines()
+            .next()
+            .unwrap()
+            .ends_with(&format!(" {LAYOUT_CACHE_VERSION}")),
+        "a rebuilt cache must be written at the current version"
+    );
+}

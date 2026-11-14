@@ -63,6 +63,7 @@ export function createInitialState(): AppStateData {
     retainedTranscripts: {},
     transcriptViews: {},
     sessionHistory: {},
+    subagentHistory: {},
     draftConfiguration: null,
     isRunning: false,
     runningSessions: {},

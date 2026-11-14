@@ -190,7 +190,7 @@ ADR 记录那些不应被静默改变的架构选择。中文入口与英文索�
 | 0117 | [原生最小化时保留 Windows 任务栏条目](/adr/0117-windows-taskbar-native-minimize) | 已接受 |
 | 0118 | [队列中的提示由渲染器拥有，并在回合边界停止运行](/adr/0118-renderer-owned-queued-prompts) | 已接受 |
 | 0119 | [事件驱动的子智能体超时](/adr/0119-event-driven-subagent-timeouts) | 已接受待实现 |
-| 0120 | [有界的会话历史窗口](/adr/0120-bounded-session-history-windows) | 已接受 |
+| 0120 | [有界的会话历史窗口](/adr/0120-bounded-session-history-windows) | 已接受（窗口选择条款由 ADR 0335 修订） |
 | 0121 | [输入框提示增强保持一次性且由主进程拥有](/adr/0121-one-shot-composer-prompt-enhancement) | 已由 ADR 0324 取代 |
 | 0122 | [工作面板可见时预留原生宽度](/adr/0122-reserve-native-width-while-work-panel-visible) | 已被 ADR 0151 取代 |
 | 0123 | [Windows/Linux 窗口控制使用原生任务栏最小化](/adr/0123-native-taskbar-minimize-controls) | 已接受 |
@@ -314,6 +314,7 @@ ADR 记录那些不应被静默改变的架构选择。中文入口与英文索�
 | 0310 | [保持本地权限批准一直待解决](/adr/0310-local-permission-approvals-without-deadline) | 已接受实施 |
 | 0311 | [在 Host 受理时重新核验 Live Work 工作空间身份](/adr/0311-live-work-workspace-admission-guard) | 已实现候选 |
 | 0312 | [会话级 Todo 清单](/adr/0312-session-scoped-todo-checklist) | 已接受实施 |
+| 0335 | [按读取表面划定会话历史](/adr/0335-scoped-session-history-reads) | 已接受待实现（本分支未提交的工作区已实现并验证：主机读取契约、Rust 主机、agent-runtime 与桌面渲染器；按界面划分读取与重启恢复的 E2E 场景以主机单元加真实渲染证据通过；取代 ADR 0120 的窗口选择条款与 E2E-207a 的选择契约） |
 | registry-header-variable-spelling | [Remote header variables accept the registry's `{name}` spelling](/adr/registry-header-variable-spelling) | Proposed |
 
 ## 什么时候看 ADR

@@ -32,6 +32,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod layout;
+pub mod scope;
+pub mod snapshots;
 #[cfg(test)]
 use layout::refresh_layout;
 pub use layout::TranscriptLayout;
@@ -913,6 +915,66 @@ pub fn read_transcript_window_with_layout(
     Ok(out)
 }
 
+/// Read an explicit set of physical message lines plus selected compaction
+/// lines using a precomputed layout. Used by scoped reads, where the selected
+/// rows are not one physical interval.
+pub fn read_transcript_indices_with_layout(
+    data_dir: &Path,
+    session_id: &str,
+    layout: &TranscriptLayout,
+    message_indices: &[usize],
+    compaction_offsets: &[u64],
+) -> Result<TranscriptRead> {
+    let mut out = TranscriptRead::default();
+    let mut wanted: Vec<(u64, bool)> =
+        Vec::with_capacity(message_indices.len() + compaction_offsets.len());
+    for index in message_indices {
+        let Some(offset) = layout.message_offsets.get(*index) else {
+            return Err(layout::invalid_boundary());
+        };
+        wanted.push((*offset, true));
+    }
+    for offset in compaction_offsets {
+        if *offset >= layout.file_len {
+            return Err(layout::invalid_boundary());
+        }
+        wanted.push((*offset, false));
+    }
+    if wanted.is_empty() {
+        return Ok(out);
+    }
+    wanted.sort_unstable_by_key(|(offset, _)| *offset);
+    let path = transcript_path(data_dir, session_id)?;
+    let file = match File::open(&path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+    };
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    for (offset, is_message) in wanted {
+        let kind = if is_message { "message" } else { "compaction" };
+        read_layout_line(&mut reader, offset, kind, &mut line)
+            .with_context(|| format!("read indexed transcript line in {}", path.display()))?;
+        let trimmed = line.trim();
+        if is_message {
+            out.messages.push(
+                serde_json::from_str::<MessageRecord>(trimmed)
+                    .context("decode indexed transcript message")?,
+            );
+        } else {
+            out.compactions.push(
+                serde_json::from_str::<CompactionRecord>(trimmed)
+                    .context("decode indexed transcript compaction")?,
+            );
+        }
+        if line.capacity() > 1024 * 1024 {
+            line = String::new();
+        }
+    }
+    Ok(out)
+}
+
 /// Read a message window without materializing the whole JSONL file. Message
 /// positions are zero-based and count message lines in file order. A `None`
 /// limit reads through the end, which is the full-history path used by the
@@ -1014,6 +1076,14 @@ pub fn write_transcript_with_compactions(
     records: &[MessageRecord],
     compactions: &[CompactionRecord],
 ) -> Result<()> {
+    // Fold every accepted Task snapshot into the rows about to become the
+    // transcript, before anything is replaced. The sidecar is derived state and
+    // may be pruned afterwards, so the rewritten file has to carry the settled
+    // report itself: a rewrite that dropped it would lose the only authoritative
+    // copy, which is exactly what an append-only sidecar must never allow.
+    // Planning reads the launch rows of the old transcript; a failure here
+    // aborts the rewrite before anything is written.
+    let overlays = snapshots::plan_rewrite(data_dir, session_id, records)?;
     let path = transcript_path(data_dir, session_id)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -1024,8 +1094,14 @@ pub fn write_transcript_with_compactions(
         let mut writer = BufWriter::new(file);
         writer.write_all(header_line(session_id, session_created_at)?.as_bytes())?;
         writer.write_all(b"\n")?;
-        for record in records {
-            writer.write_all(tagged("message", record)?.as_bytes())?;
+        for (index, record) in records.iter().enumerate() {
+            match overlays
+                .as_ref()
+                .and_then(|overlays| overlays.replacements.get(&index))
+            {
+                Some(effective) => writer.write_all(tagged("message", effective)?.as_bytes())?,
+                None => writer.write_all(tagged("message", record)?.as_bytes())?,
+            }
             writer.write_all(b"\n")?;
         }
         for record in compactions {
@@ -1037,6 +1113,17 @@ pub fn write_transcript_with_compactions(
     }
     swap_into_place(&tmp, &path)?;
     layout::invalidate(data_dir, session_id);
+    // The rewritten rows now hold every accepted overlay, so their sidecar
+    // entries are obsolete. Pruning only after the swap keeps the ordering
+    // safe: if the swap failed, the old transcript and its sidecar are both
+    // still intact, and if this cleanup fails the file above is already
+    // authoritative, so a stale entry can no longer apply (its base row is no
+    // longer `running`).
+    if let Some(overlays) = overlays {
+        if let Err(error) = snapshots::prune_after_rewrite(data_dir, session_id, &overlays.retain) {
+            tracing::warn!(%error, "failed to prune delegation snapshot sidecar after rewrite");
+        }
+    }
     Ok(())
 }
 
@@ -1092,6 +1179,9 @@ pub fn update_message(data_dir: &Path, session_id: &str, record: &MessageRecord)
     if let Some(last) = read_last_line(&path)? {
         if last != replacement && line_carries(&last, &record.id) {
             append_line(&path, None, replacement)?;
+            // This row is the caller's explicit content for its Task call, so
+            // any accepted overlay for the same call is now stale.
+            snapshots::forget(data_dir, session_id, record)?;
             return Ok(true);
         }
     }
@@ -1138,6 +1228,9 @@ pub fn update_message(data_dir: &Path, session_id: &str, record: &MessageRecord)
     }
     swap_into_place(&tmp, &path)?;
     layout::invalidate(data_dir, session_id);
+    // Same rule as the append fast path: the row just written is the authority
+    // for its Task call, so its accepted overlay is discarded.
+    snapshots::forget(data_dir, session_id, record)?;
     Ok(true)
 }
 
@@ -1420,6 +1513,9 @@ pub fn remove_session_files(data_dir: &Path, session_id: &str) {
     let Ok(inflight) = inflight_path(data_dir, session_id) else {
         return;
     };
+    if let Err(error) = snapshots::discard(data_dir, session_id) {
+        tracing::warn!(%error, "snapshot cleanup failed");
+    }
     for path in [
         transcript.with_extension("jsonl.tmp"),
         transcript.with_extension("jsonl.layout"),

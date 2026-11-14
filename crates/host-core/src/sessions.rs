@@ -314,6 +314,14 @@ pub struct SessionDetail {
     /// row per compaction.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub compactions: Vec<CompactionRecord>,
+    /// Canonical scope echo for a scoped read. Omitted for the legacy physical
+    /// read, whose wire shape is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_scope: Option<transcripts::scope::HistoryScope>,
+    /// Root Task records that identify the selected chain, outside the
+    /// message page budget.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub history_context: Vec<UiMessage>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1193,6 +1201,7 @@ pub fn restore_orphaned_session(db: &Database, session_id: &str) -> Result<bool>
     }
     let read = transcripts::read_transcript_with_compactions(db.data_dir(), session_id)?;
     let mut records = dedupe_records(read.messages);
+    transcripts::snapshots::overlay(db.data_dir(), session_id, &mut records)?;
     let mut remapped = false;
     for record in &mut records {
         if let Some(owner) = message_owner(db, &record.id)? {
@@ -1581,8 +1590,10 @@ pub fn get_session_with_options(
                     start,
                     Some(before.saturating_sub(start)),
                 )?;
+                let mut records = dedupe_records(read.messages);
+                transcripts::snapshots::overlay(db.data_dir(), id, &mut records)?;
                 Ok(Some((
-                    dedupe_records(read.messages),
+                    records,
                     read.compactions,
                     Some(start as i64),
                     Some(start > 0),
@@ -1600,14 +1611,9 @@ pub fn get_session_with_options(
             Some(None) => return Ok(None),
             None => {
                 let read = transcripts::read_transcript_with_compactions(db.data_dir(), id)?;
-                (
-                    dedupe_records(read.messages),
-                    read.compactions,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
+                let mut records = dedupe_records(read.messages);
+                transcripts::snapshots::overlay(db.data_dir(), id, &mut records)?;
+                (records, read.compactions, None, None, None, None)
             }
         };
     // Content comes from the transcript file; SQLite only indexes it. A
@@ -1671,6 +1677,260 @@ pub fn get_session_with_options(
         messages,
         compaction: compactions.last().cloned(),
         compactions,
+        history_scope: None,
+        history_context: Vec::new(),
+    }))
+}
+
+/// Convert persisted records for a renderer read, applying the presentation
+/// cap and keeping the focused message's original text when one was named.
+fn records_to_messages(
+    records: Vec<MessageRecord>,
+    options: &SessionReadOptions,
+) -> Vec<UiMessage> {
+    match options.content_limit {
+        Some(limit) => records
+            .into_iter()
+            .map(|record| {
+                let focused = options.message_around.as_deref() == Some(record.id.as_str())
+                    && matches!(record.role.as_str(), "user" | "assistant");
+                let content = focused.then(|| record_index_text(&record)).flatten();
+                let mut message = record_to_ui_for_display(record, limit);
+                if let Some(content) = content {
+                    message.content = content;
+                }
+                message
+            })
+            .collect(),
+        None => records.into_iter().map(record_to_ui).collect(),
+    }
+}
+
+struct ScopedReadParts {
+    records: Vec<MessageRecord>,
+    context: Vec<MessageRecord>,
+    compactions: Vec<CompactionRecord>,
+    message_start: Option<i64>,
+    message_end: Option<i64>,
+    has_more_before: Option<bool>,
+    has_more_after: Option<bool>,
+    navigation_call: Option<String>,
+    canonical: transcripts::scope::HistoryScope,
+}
+
+/// The compaction divider in force at the page plus every divider inside it.
+/// Mirrors the physical window rule so a scoped page carries the same context.
+fn compaction_window_offsets(
+    layout: &transcripts::TranscriptLayout,
+    start: usize,
+    end: usize,
+) -> Vec<u64> {
+    let Some(start_offset) = layout.message_offsets.get(start).copied() else {
+        return Vec::new();
+    };
+    let end_offset = layout
+        .message_offsets
+        .get(end.saturating_sub(1))
+        .copied()
+        .unwrap_or(start_offset);
+    let mut picked = Vec::new();
+    if let Some(active) = layout
+        .compaction_offsets
+        .iter()
+        .copied()
+        .rfind(|offset| *offset < start_offset)
+    {
+        picked.push(active);
+    }
+    picked.extend(
+        layout
+            .compaction_offsets
+            .iter()
+            .copied()
+            .filter(|offset| *offset >= start_offset && *offset <= end_offset),
+    );
+    picked
+}
+
+fn scoped_read_parts(
+    db: &Database,
+    id: &str,
+    layout: &transcripts::TranscriptLayout,
+    options: &SessionReadOptions,
+    scope: &transcripts::scope::HistoryScope,
+) -> Result<Option<ScopedReadParts>> {
+    use transcripts::scope::{self, HistoryScope};
+
+    let selection = scope::select(layout, scope);
+
+    // A delegation scope names a chain that exists. An id no Task call answers
+    // to is an unavailable chain — `session: null` — which is different from a
+    // valid chain whose Task rows exist but have produced no child records
+    // yet: that one is an empty page with those Task rows as context.
+    if matches!(scope, HistoryScope::Delegation { .. }) && selection.context.is_empty() {
+        return Ok(None);
+    }
+    let mut navigation_call = None;
+    let mut around = None;
+    if let Some(target_id) = options.message_around.as_deref() {
+        let Some(position) =
+            transcripts::find_message_position(db.data_dir(), id, layout, target_id)?
+        else {
+            // A named search target that is not in the transcript is an
+            // explicit miss; never silently fall back to the physical tail.
+            return Ok(None);
+        };
+        navigation_call = layout.parent_call_id(position).map(str::to_owned);
+        around = Some(match scope {
+            HistoryScope::Main => {
+                let Some(root) = scope::owning_top_level(layout, position) else {
+                    return Ok(None);
+                };
+                root
+            }
+            HistoryScope::Delegation { .. } => position,
+        });
+    }
+    let limit = options
+        .message_limit
+        .filter(|limit| *limit > 0)
+        .map(|limit| limit.min(1_000) as usize);
+    let page = limit.map(|limit| {
+        scope::page(
+            &selection.selected,
+            options.message_before,
+            Some(limit),
+            around,
+        )
+    });
+    let (message_start, message_end, has_more_before, has_more_after, selected) = match &page {
+        Some(page) => (
+            Some(page.start as i64),
+            Some(page.end as i64),
+            Some(page.has_more_before),
+            Some(page.has_more_after),
+            selection.selected[page.from..page.to].to_vec(),
+        ),
+        None => (None, None, None, None, selection.selected.clone()),
+    };
+    let compaction_offsets = match &page {
+        Some(page) => compaction_window_offsets(layout, page.start, page.end),
+        None => layout.compaction_offsets.clone(),
+    };
+    let mut read = transcripts::read_transcript_indices_with_layout(
+        db.data_dir(),
+        id,
+        layout,
+        &selected,
+        &compaction_offsets,
+    )?;
+    transcripts::snapshots::overlay(db.data_dir(), id, &mut read.messages)?;
+    let mut context = if selection.context.is_empty() {
+        Vec::new()
+    } else {
+        transcripts::read_transcript_indices_with_layout(
+            db.data_dir(),
+            id,
+            layout,
+            &selection.context,
+            &[],
+        )?
+        .messages
+    };
+    transcripts::snapshots::overlay(db.data_dir(), id, &mut context)?;
+    Ok(Some(ScopedReadParts {
+        records: dedupe_records(read.messages),
+        context,
+        compactions: read.compactions,
+        message_start,
+        message_end,
+        has_more_before,
+        has_more_after,
+        navigation_call,
+        canonical: selection.canonical.clone().unwrap_or_else(|| scope.clone()),
+    }))
+}
+
+/// Load a session through a renderer history scope. The legacy
+/// `get_session_with_options` wire shape is untouched; this is only called
+/// when the request actually names `historyScope`.
+pub fn get_session_scoped(
+    db: &Database,
+    id: &str,
+    options: SessionReadOptions,
+    scope: transcripts::scope::HistoryScope,
+) -> Result<Option<SessionDetail>> {
+    let Some(summary) = session_summary(db, id)? else {
+        return Ok(None);
+    };
+    let Some(parts) = transcripts::layout::with_layout_recovery(db.data_dir(), id, |layout| {
+        scoped_read_parts(db, id, layout, &options, &scope)
+    })?
+    else {
+        return Ok(None);
+    };
+    let messages = records_to_messages(parts.records, &options);
+    let history_context = records_to_messages(parts.context, &options);
+    let plan_calls: Vec<&str> = messages
+        .iter()
+        .filter(|message| {
+            matches!(
+                message.tool_name.as_deref(),
+                Some("SubmitPlan" | "SubmitGoal")
+            )
+        })
+        .filter_map(|message| message.tool_call_id.as_deref())
+        .collect();
+    let plan_history = crate::plans::history_for_tool_calls(db, id, &plan_calls)?;
+    let navigation_parent = match parts.navigation_call {
+        Some(call_id) => {
+            let record = transcripts::layout::with_layout_recovery(db.data_dir(), id, |layout| {
+                let Some(task) = layout.last_task_for_call(&call_id) else {
+                    return Ok(None);
+                };
+                Ok(transcripts::read_transcript_indices_with_layout(
+                    db.data_dir(),
+                    id,
+                    layout,
+                    &[task.message_index],
+                    &[],
+                )?
+                .messages
+                .into_iter()
+                .next())
+            })?;
+            match record {
+                Some(mut record) => {
+                    transcripts::snapshots::overlay(
+                        db.data_dir(),
+                        id,
+                        std::slice::from_mut(&mut record),
+                    )?;
+                    Some(
+                        records_to_messages(vec![record], &options)
+                            .into_iter()
+                            .next()
+                            .expect("one record yields one message"),
+                    )
+                }
+                None => None,
+            }
+        }
+        None => None,
+    };
+    Ok(Some(SessionDetail {
+        summary,
+        messages,
+        plan_history,
+        navigation_parent,
+        message_start: parts.message_start,
+        message_end: parts.message_end,
+        has_more_after: parts.has_more_after,
+        has_more_before: parts.has_more_before,
+        compaction: parts.compactions.last().cloned(),
+        compactions: parts.compactions,
+        history_scope: Some(parts.canonical),
+        history_context,
     }))
 }
 
@@ -1722,6 +1982,7 @@ pub fn fork_session_through(
     }
     let mut source_records =
         dedupe_records(transcripts::read_transcript(db.data_dir(), source_id)?);
+    transcripts::snapshots::overlay(db.data_dir(), source_id, &mut source_records)?;
     if let Some(message_id) = anchor {
         let Some(position) = source_records
             .iter()
@@ -1860,6 +2121,8 @@ pub fn fork_session_through(
         messages,
         compaction: compactions.last().cloned(),
         compactions,
+        history_scope: None,
+        history_context: Vec::new(),
     })))
 }
 
@@ -2338,6 +2601,9 @@ fn rebuild_session_message_index(
     session_id: &str,
     records: &[MessageRecord],
 ) -> Result<()> {
+    let mut overlaid = records.to_vec();
+    transcripts::snapshots::overlay(db.data_dir(), session_id, &mut overlaid)?;
+    let records = overlaid.as_slice();
     let existing_turns: std::collections::HashMap<String, String> = {
         let mut stmt = db.conn().prepare_cached(
             "SELECT m.id, m.turn_id, t.session_id
@@ -2443,12 +2709,17 @@ fn indexed_message_record(
                 start,
                 Some(end - start),
             )?;
-            if let Some(record) = window
+            if let Some(mut record) = window
                 .messages
                 .into_iter()
                 .rev()
                 .find(|record| record.id == message_id)
             {
+                transcripts::snapshots::overlay(
+                    db.data_dir(),
+                    session_id,
+                    std::slice::from_mut(&mut record),
+                )?;
                 return Ok(Some(record));
             }
             end = start;
@@ -2457,31 +2728,17 @@ fn indexed_message_record(
     })
 }
 
-/// Generation of an installed handoff checkpoint, when the value records one.
-///
-/// An absent, malformed, or non-object value is "no checkpoint": the caller
-/// treats it as replaceable rather than inventing a boundary.
-fn checkpoint_generation(checkpoint: &serde_json::Value) -> Option<i64> {
-    if !checkpoint.is_object() {
-        return None;
-    }
-    checkpoint["generation"]
-        .as_i64()
-        .filter(|generation| *generation >= 1)
-}
-
 /// Task is already a completed tool call while its delegated work is running.
 /// Its durable row carries the latest delegation summary: the runtime
 /// re-snapshots it once per child turn, and settlement sends the terminal one.
-/// Either may replace the stored summary, but only while that stored row still
-/// runs, only for this call and delegation, and never backwards — replay must
-/// neither reopen a settled delegate nor overwrite another call's metadata. The
-/// persistence outbox keeps one entry per message id in emission order, so the
-/// last snapshot to arrive is also the newest.
 ///
-/// The installed handoff checkpoint (ADR 0333) is the exception that is never
-/// the loser of that ordering: it is monotonic per row, so a stale queued
-/// snapshot cannot erase a boundary the runtime already wrote and acknowledged.
+/// The accepted snapshot is appended to the session's snapshot sidecar. The
+/// transcript line itself is immutable: replacing it in place rewrote the
+/// whole JSONL file and invalidated every physical window coordinate derived
+/// from it. Readers overlay the newest accepted snapshot, so the visible and
+/// model-facing answer is unchanged. Ordering, call/delegation matching, the
+/// still-running guard, and the monotonic handoff checkpoint are enforced by
+/// [`transcripts::snapshots::accept`].
 fn update_delegation_snapshot(
     db: &Database,
     session_id: &str,
@@ -2490,73 +2747,16 @@ fn update_delegation_snapshot(
     if incoming.role != "tool" || incoming.tool_name.as_deref() != Some("Task") {
         return Ok(());
     }
-    let Some(next) = incoming
-        .blocks
-        .as_array()
-        .and_then(|blocks| blocks.iter().find(|block| block["type"] == "tool_call"))
-    else {
+    let Some(existing) = indexed_message_record(db, session_id, &incoming.id)? else {
         return Ok(());
     };
-    let details = &next["result"]["details"];
-    // `running` is the per-child-turn progress snapshot; the stored row must
-    // still be running, which is what stops a late progress write from
-    // reopening a settled delegation.
-    if !matches!(
-        details["status"].as_str(),
-        Some("running" | "completed" | "stopped" | "aborted" | "failed" | "timed_out")
-    ) {
-        return Ok(());
-    }
-    let Some(id) = details["delegationId"].as_str().filter(|id| !id.is_empty()) else {
-        return Ok(());
-    };
-    let Some(mut existing) = indexed_message_record(db, session_id, &incoming.id)? else {
-        return Ok(());
-    };
-    if existing.role != "tool" || existing.tool_name.as_deref() != Some("Task") {
-        return Ok(());
-    }
-    let Some(block) = existing
-        .blocks
-        .as_array_mut()
-        .and_then(|blocks| blocks.iter_mut().find(|block| block["type"] == "tool_call"))
-    else {
-        return Ok(());
-    };
-    if block["callId"] != next["callId"]
-        || block["result"]["details"]["delegationId"].as_str() != Some(id)
-        || block["result"]["details"]["status"] != "running"
-    {
-        return Ok(());
-    }
-    // An installed handoff checkpoint is monotonic. The runtime appends it
-    // directly once the delegate's context was replaced, while progress snapshots
-    // travel through the renderer's ordered outbox: a snapshot queued before
-    // that write can still arrive after it, including across a window close
-    // that drains the outbox on the next boot. Replacing the whole result then
-    // would erase a boundary the runtime already acknowledged. Carry the
-    // stored checkpoint into the incoming snapshot unless the incoming one is
-    // a newer generation.
-    let stored_checkpoint = block["result"]["details"]["handoffCheckpoint"].clone();
-    let stored_generation = checkpoint_generation(&stored_checkpoint);
-    let incoming_generation =
-        checkpoint_generation(&next["result"]["details"]["handoffCheckpoint"]);
-    let keep_stored = match stored_generation {
-        Some(stored) => !matches!(incoming_generation, Some(incoming) if incoming > stored),
-        None => false,
-    };
-    let mut result = next["result"].clone();
-    if keep_stored {
-        result["details"]["handoffCheckpoint"] = stored_checkpoint;
-    }
-    block["result"] = result;
-    block["text"] = next["text"].clone();
-    if !transcripts::update_message(db.data_dir(), session_id, &existing)? {
-        return Err(anyhow!(
-            "delegation snapshot is missing from its transcript"
-        ));
-    }
-    Ok(())
+    transcripts::snapshots::accept(
+        db.data_dir(),
+        session_id,
+        &existing,
+        incoming,
+        &ms_to_ts(now_ms()),
+    )
 }
 
 /// Append one canonical record: transcript line first, then the index row.
@@ -4326,6 +4526,8 @@ pub fn get_token_usage_history(
         }
     }))
 }
+#[cfg(test)]
+mod history_scope_tests;
 
 #[cfg(test)]
 mod tests {

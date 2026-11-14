@@ -200,6 +200,7 @@ const { default: ts } = await import("typescript");
 const sharedForIpc = await import("@pi-desktop/shared");
 const { readFileSync } = await import("node:fs");
 const nodePath = await import("node:path");
+const historyScopeForward = await import("../electron/main/ipc/history-scope-forward.ts");
 
 /**
  * Load main-process TypeScript with injected CommonJS dependencies, matching
@@ -232,6 +233,7 @@ function forkHarness({ host, sidecar, activeTurns = new Map() }) {
     "node:path": nodePath,
     "node:fs": { mkdirSync() {} },
     "@pi-desktop/shared": sharedForIpc,
+    "./history-scope-forward": historyScopeForward,
     "../importers": { convertSession() {}, scanAllSources() {}, scanModelConfigs() {} },
     "../services/session-collaboration": { readSessionCollaboration() {} },
     "../services/session-search": { searchSessionsAcrossSources },

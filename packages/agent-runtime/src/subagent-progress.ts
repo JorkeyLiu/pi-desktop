@@ -13,6 +13,7 @@ import {
   formatSubagentProgressMetrics,
   type AgentActivity,
   type AgentActivityAgent,
+  type DelegationHandoffCheckpoint,
   type AgentEventEnvelope,
   type MessageUsage,
   type SubagentThinkingLevel,
@@ -70,16 +71,63 @@ export function waitingSubagentsActivity(
   };
 }
 
-export function delegationSummary(record: DelegationRecord): Record<string, unknown> {
+/**
+ * Everything a read-only delegation listing or snapshot reads.
+ *
+ * Structural on purpose: a live `DelegationRecord` satisfies it, and so does a
+ * plain-data entry recovered from persisted history, which holds no run handle,
+ * no completion promise, and no abort path. `recovered` marks the latter so a
+ * listing can say the run is not active in this process.
+ */
+export type DelegationView = {
+  delegationId: string;
+  agentName: string;
+  modelId?: string;
+  thinkingLevel?: SubagentThinkingLevel;
+  status: string;
+  startedAt: number;
+  /** End of the observed run, for settled and interrupted entries alike. */
+  completedAt?: number;
+  /** Last observed activity: the elapsed bound of a recovered entry. */
+  lastActivityAt?: number;
+  turns?: number;
+  toolCalls?: number;
+  usage?: MessageUsage;
+  contextTokens?: number;
+  lastToolName?: string;
+  executionTurnId?: string;
+  resumedFrom?: string;
+  modelChangedFrom?: string;
+  delivery?: "parent" | "user";
+  handoffCheckpoint?: DelegationHandoffCheckpoint;
+  handoffCheckpointError?: SubagentHandoffPersistenceError;
+  /** Settled live result, when the record holds one. */
+  result?: {
+    turns?: number;
+    toolCalls?: number;
+    usage?: MessageUsage;
+    error?: { code: string; message: string };
+    report?: string;
+    modelFailures?: readonly unknown[];
+    contextCompactions?: number;
+    contextDegraded?: boolean;
+    scratchReportPath?: string;
+    handoffCheckpointError?: SubagentHandoffPersistenceError;
+  };
+  /** True for an entry rebuilt from history: nothing runs for it here. */
+  recovered?: true;
+};
+
+export function delegationSummary(record: DelegationView): Record<string, unknown> {
   return {
     delegationId: record.delegationId,
     agent: record.agentName,
-    modelId: record.modelId,
-    thinkingLevel: record.thinkingLevel,
+    ...(record.modelId ? { modelId: record.modelId } : {}),
+    ...(record.thinkingLevel ? { thinkingLevel: record.thinkingLevel } : {}),
     status: record.status,
     startedAt: record.startedAt,
-    turns: record.result?.turns ?? record.turns,
-    toolCalls: record.result?.toolCalls ?? record.toolCalls,
+    turns: record.result?.turns ?? record.turns ?? 0,
+    toolCalls: record.result?.toolCalls ?? record.toolCalls ?? 0,
     ...(record.usage ?? record.result?.usage
       ? { usage: record.usage ?? record.result?.usage }
       : {}),
@@ -128,17 +176,30 @@ export function delegationSummary(record: DelegationRecord): Record<string, unkn
     // User-owned runs carry their delivery explicitly; parent-owned records
     // omit it (backward-compatible `parent` default).
     ...((record.delivery ?? "parent") === "user" ? { delivery: "user" as const } : {}),
+    // A recovered entry is history: no run of it is active in this process.
+    ...(record.recovered ? { recovered: true as const } : {}),
   };
 }
 
-export function formatDelegationHeartbeat(record: DelegationRecord): string {
+export function formatDelegationHeartbeat(record: DelegationView): string {
   const parts = [
     `${record.agentName} (${record.delegationId})`,
     record.status,
-    `${elapsedSeconds(record)}s`,
+    `${elapsedSeconds(
+      {
+        startedAt: record.startedAt,
+        // A recovered run has no clock of its own: it stopped when it was last
+        // observed, so elapsed history never keeps growing after a restart.
+        ...(record.completedAt !== undefined
+          ? { completedAt: record.completedAt }
+          : record.recovered && record.lastActivityAt !== undefined
+            ? { completedAt: record.lastActivityAt }
+            : {}),
+      },
+    )}s`,
   ];
-  const turns = record.result?.turns ?? record.turns;
-  const toolCalls = record.result?.toolCalls ?? record.toolCalls;
+  const turns = record.result?.turns ?? record.turns ?? 0;
+  const toolCalls = record.result?.toolCalls ?? record.toolCalls ?? 0;
   if (turns > 0) parts.push(`${turns} turns`);
   if (toolCalls > 0 || record.status === "running") {
     parts.push(
@@ -154,6 +215,9 @@ export function formatDelegationHeartbeat(record: DelegationRecord): string {
     );
   }
   if (record.lastToolName) parts.push(`last tool ${record.lastToolName}`);
+  if (record.recovered) {
+    parts.push("recovered from history; not running in this process");
+  }
   return parts.join(", ");
 }
 
@@ -175,6 +239,8 @@ export type WaitResultSnapshot = {
   usage?: MessageUsage;
   contextTokens?: number;
   report: string;
+  /** True when the snapshot was rebuilt from persisted history, not a live run. */
+  recovered?: true;
 };
 
 /** Read one record as a wait-result snapshot (heartbeat for runners). */

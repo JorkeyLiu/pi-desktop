@@ -108,7 +108,35 @@ window.piDesktop = { platform: "darwin", channels: IPC,
     } else if (channel === IPC.invoke.sessionList) {
       data = { sessions: [{ id: "s1", title: "fixture", projectPath: "/tmp/fixture", createdAt: "2026-05-01T09:00:00.000Z", updatedAt: "2026-05-01T10:00:00.000Z", source: "local" }] };
     } else if (channel === IPC.invoke.sessionGet) {
-      data = { session: { id: "s1", title: "fixture", projectPath: "/tmp/fixture", source: "local", messages: [] } };
+      const scope = input && input.historyScope;
+      const rows = useAppStore.getState().messages || [];
+      if (!scope || scope.kind !== "delegation") {
+        data = { session: { id: "s1", title: "fixture", projectPath: "/tmp/fixture", source: "local", messages: [] } };
+      } else {
+        // The panel's own scope: root Task records identify the chain — including
+        // continuations that resume it — the child rows hang off those calls'
+        // ids, and the page echoes the canonical identity.
+        const taskRows = rows.filter((row) => row.role === "tool" && row.toolName === "Task"
+          && row.toolResult && row.toolResult.details);
+        const connected = new Set([scope.id]);
+        let grew = true;
+        while (grew) {
+          grew = false;
+          for (const row of taskRows) {
+            const details = row.toolResult.details;
+            if (details.delegationId && details.resumedFrom && connected.has(details.resumedFrom)
+                && !connected.has(details.delegationId)) { connected.add(details.delegationId); grew = true; }
+          }
+        }
+        const tasks = taskRows.filter((row) => connected.has(row.toolResult.details.delegationId));
+        const chain = new Set();
+        for (const row of tasks) if (row.toolCallId) chain.add(row.toolCallId);
+        const childRows = rows.filter((row) => row.parentToolCallId && chain.has(row.parentToolCallId));
+        data = { session: { id: "s1", title: "fixture", projectPath: "/tmp/fixture", source: "local",
+          messages: childRows, historyContext: tasks, messageStart: 0, messageEnd: childRows.length,
+          messageCount: rows.length, hasMoreBefore: false,
+          historyScope: { kind: "delegation", id: scope.id } } };
+      }
     } else if (channel === IPC.invoke.agentGetQueuedPrompts) {
       data = { entries: [] };
     } else if (channel === IPC.invoke.agentGetStatus) {
@@ -145,6 +173,9 @@ function seed(messages, running, activeSessionId = "s1") {
   store.setState({ activeSessionId, sessions: baseSessions,
     agentStatuses: running ? { s1: { currentTurnId: "turn-parent" } } : {},
     runningSessions: running ? { s1: true } : {},
+    // Each probe starts a fresh conversation view: delegate pages a previous
+    // probe collected belong to that probe, not this one.
+    subagentHistory: {},
     retainedTranscripts: {}, transcriptViews: {}, sessionHistory: {},
     settings: { enterToSend: true }, showToast() {}, page: "chat",
     workspace: { path: "/tmp/fixture" } });
@@ -221,6 +252,9 @@ window.subagentImageStageProbe = async () => {
   seed(runningMessages, true);
   mount("d1");
   await until(() => editor(), "tab did not mount");
+  // The panel's page arrives on its own scoped read; the toolbar that offers
+  // the picker appears once that page settles.
+  await until(() => footer()?.querySelector(".composer-toolbar button"), "composer controls missing");
   check(tiles().length === 0, "a fresh tab staged an image");
 
   // Picker: the host stages the picked photo and the panel shows the image.

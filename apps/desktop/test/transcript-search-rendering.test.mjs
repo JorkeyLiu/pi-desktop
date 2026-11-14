@@ -165,6 +165,9 @@ test("rendered Markdown and file chips map source-only hits to their visible own
     };
     // Zustand's server snapshot is its initial state. Seed that snapshot only
     // inside this isolated rendering test; production state stays immutable.
+    // The delegate panel reads its own scoped page — the main transcript view
+    // is seeded too, so the assertion proves the panel does not take the child
+    // row's identity from the parent's window.
     Object.assign(useAppStore.getInitialState(), {
       activeSessionId: "s",
       retainedSessionIds: ["s"],
@@ -181,6 +184,27 @@ test("rendered Markdown and file chips map source-only hits to their visible own
           loading: null,
         },
       },
+      subagentHistory: {
+        s: {
+          task: {
+            sessionId: "s",
+            tabKey: "task",
+            canonicalId: "task",
+            aliases: ["task"],
+            status: "ready",
+            messages: [child],
+            context: [parent],
+            messageStart: 20,
+            hasMoreBefore: false,
+            focus: null,
+            scoped: true,
+            touched: 1,
+          },
+        },
+      },
+      settings: { enterToSend: true },
+      agentStatuses: {},
+      runningSessions: {},
     });
     const panel = render(SubagentTranscriptTab, {
       delegationId: "task",

@@ -2843,6 +2843,43 @@ async fn handle_request(
                 .and_then(|v| v.as_str())
                 .map(str::to_owned);
             let message_limit = params.get("messageLimit").and_then(|v| v.as_i64());
+            let history_scope = match params.get("historyScope") {
+                None | Some(Value::Null) => None,
+                Some(Value::Object(fields)) => match fields.get("kind").and_then(Value::as_str) {
+                    Some("main") if !fields.contains_key("id") => {
+                        Some(transcripts::scope::HistoryScope::Main)
+                    }
+                    Some("delegation") => {
+                        let id = fields
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|id| !id.is_empty())
+                            .ok_or_else(|| {
+                                rpc_err(
+                                    1002,
+                                    "historyScope delegation id must be a non-empty string",
+                                    "INVALID_PARAMS",
+                                )
+                            })?;
+                        Some(transcripts::scope::HistoryScope::Delegation { id: id.to_string() })
+                    }
+                    _ => {
+                        return Err(rpc_err(
+                            1002,
+                            "historyScope must be {kind:'main'} or {kind:'delegation', id}",
+                            "INVALID_PARAMS",
+                        ))
+                    }
+                },
+                Some(_) => {
+                    return Err(rpc_err(
+                        1002,
+                        "historyScope must be an object",
+                        "INVALID_PARAMS",
+                    ))
+                }
+            };
             if message_before.is_some_and(|value| value < 0)
                 || message_limit.is_some_and(|value| value <= 0)
                 || (message_around.is_some()
@@ -2870,16 +2907,16 @@ async fn handle_request(
                 ));
             }
             let st = state.lock().await;
-            let session = sessions::get_session_with_options(
-                &st.db,
-                id,
-                sessions::SessionReadOptions {
-                    message_around,
-                    message_before,
-                    message_limit,
-                    content_limit,
-                },
-            )
+            let read_options = sessions::SessionReadOptions {
+                message_around,
+                message_before,
+                message_limit,
+                content_limit,
+            };
+            let session = match history_scope {
+                Some(scope) => sessions::get_session_scoped(&st.db, id, read_options, scope),
+                None => sessions::get_session_with_options(&st.db, id, read_options),
+            }
             .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
             let session = remote_tools::decorate_session(
                 &st.db,
@@ -9904,6 +9941,212 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(missing.data.unwrap()["errorCode"], "NOT_FOUND");
+    }
+
+    /// The fixed `session.get` scope contract: absent means the exact legacy
+    /// physical read, `main` returns top-level rows, `delegation` returns the
+    /// selected chain's children plus the root Task context, and a malformed
+    /// scope is rejected instead of silently read as legacy.
+    #[tokio::test]
+    async fn session_get_history_scope_round_trips_the_wire_contract() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let session = sessions::create_session(
+            &app_state.db,
+            Some("Scoped".into()),
+            Some("agent".into()),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let ui = |value: Value| -> sessions::UiMessage { serde_json::from_value(value).unwrap() };
+        let root = ui(json!({
+            "id": "root-user", "role": "user", "content": "root",
+            "createdAt": "2026-10-11T00:00:00.000Z"
+        }));
+        let task = ui(json!({
+            "id": "task-msg", "role": "tool", "content": "",
+            "createdAt": "2026-10-11T00:00:01.000Z",
+            "toolName": "Task", "toolCallId": "call-1",
+            "toolResult": {"details": {"delegationId": "delegation-1", "status": "completed"}}
+        }));
+        let child = ui(json!({
+            "id": "child-msg", "role": "assistant", "content": "child",
+            "createdAt": "2026-10-11T00:00:02.000Z",
+            "parentToolCallId": "call-1"
+        }));
+        let tail = ui(json!({
+            "id": "tail-user", "role": "user", "content": "tail",
+            "createdAt": "2026-10-11T00:00:03.000Z"
+        }));
+        for message in [&root, &task, &child, &tail] {
+            sessions::append_message(&app_state.db, &session.id, message, None).unwrap();
+        }
+        let state = Arc::new(Mutex::new(app_state));
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        let legacy = handle_request(
+            state.clone(),
+            "session.get",
+            json!({ "id": session.id, "messageLimit": 10 }),
+            tx.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(legacy["session"]["messages"].as_array().unwrap().len(), 4);
+        assert!(legacy["session"].get("historyScope").is_none());
+        assert!(legacy["session"].get("historyContext").is_none());
+
+        let main = handle_request(
+            state.clone(),
+            "session.get",
+            json!({
+                "id": session.id,
+                "messageLimit": 10,
+                "historyScope": {"kind": "main"}
+            }),
+            tx.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(main["session"]["historyScope"], json!({"kind": "main"}));
+        let main_ids: Vec<&str> = main["session"]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|message| message["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(main_ids, vec!["root-user", "task-msg", "tail-user"]);
+        assert!(main["session"].get("historyContext").is_none());
+
+        let delegation = handle_request(
+            state.clone(),
+            "session.get",
+            json!({
+                "id": session.id,
+                "messageLimit": 10,
+                "historyScope": {"kind": "delegation", "id": "call-1"}
+            }),
+            tx.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            delegation["session"]["historyScope"],
+            json!({"kind": "delegation", "id": "delegation-1"})
+        );
+        assert_eq!(
+            delegation["session"]["messages"][0]["id"],
+            json!("child-msg")
+        );
+        assert_eq!(
+            delegation["session"]["historyContext"][0]["id"],
+            json!("task-msg")
+        );
+
+        for (scope, message) in [
+            (
+                json!({"kind": "main", "id": "call-1"}),
+                "historyScope must be {kind:'main'} or {kind:'delegation', id}",
+            ),
+            (
+                json!({"kind": "delegation", "id": "  "}),
+                "historyScope delegation id must be a non-empty string",
+            ),
+            (json!("main"), "historyScope must be an object"),
+        ] {
+            let rejected = handle_request(
+                state.clone(),
+                "session.get",
+                json!({ "id": session.id, "messageLimit": 10, "historyScope": scope }),
+                tx.clone(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(rejected.data.unwrap()["errorCode"], "INVALID_PARAMS");
+            assert_eq!(rejected.message, message);
+        }
+    }
+
+    #[tokio::test]
+    async fn session_get_reports_an_unknown_delegation_chain_as_null() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let session = sessions::create_session(
+            &app_state.db,
+            Some("Scoped".into()),
+            Some("agent".into()),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let ui = |value: Value| -> sessions::UiMessage { serde_json::from_value(value).unwrap() };
+        let root = ui(json!({
+            "id": "root-user", "role": "user", "content": "root",
+            "createdAt": "2026-10-11T00:00:00.000Z"
+        }));
+        let task = ui(json!({
+            "id": "task-msg", "role": "tool", "content": "",
+            "createdAt": "2026-10-11T00:00:01.000Z",
+            "toolName": "Task", "toolCallId": "call-1",
+            "toolResult": {"details": {"delegationId": "delegation-1", "status": "running"}}
+        }));
+        for message in [&root, &task] {
+            sessions::append_message(&app_state.db, &session.id, message, None).unwrap();
+        }
+        let state = Arc::new(Mutex::new(app_state));
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        // The Task row exists and simply has no child records yet: a valid
+        // scope with an empty page and the root Task as context.
+        let known = handle_request(
+            state.clone(),
+            "session.get",
+            json!({
+                "id": session.id,
+                "messageLimit": 10,
+                "historyScope": {"kind": "delegation", "id": "delegation-1"}
+            }),
+            tx.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(known["session"].is_object());
+        assert!(known["session"]["messages"].as_array().unwrap().is_empty());
+        assert_eq!(
+            known["session"]["historyContext"][0]["id"],
+            json!("task-msg")
+        );
+        assert_eq!(
+            known["session"]["historyScope"],
+            json!({"kind": "delegation", "id": "delegation-1"})
+        );
+
+        // An id that resolves to no Task chain is an unavailable session:
+        // `session: null`, never an empty page indistinguishable from a
+        // delegation that has not produced output yet.
+        for unknown in ["no-such-delegation", "call-9"] {
+            let missing = handle_request(
+                state.clone(),
+                "session.get",
+                json!({
+                    "id": session.id,
+                    "messageLimit": 10,
+                    "historyScope": {"kind": "delegation", "id": unknown}
+                }),
+                tx.clone(),
+            )
+            .await
+            .unwrap();
+            assert!(
+                missing["session"].is_null(),
+                "{unknown} must report an unavailable session"
+            );
+        }
     }
 
     #[tokio::test]

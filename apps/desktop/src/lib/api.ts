@@ -88,6 +88,8 @@ import type {
   ProviderUpdateInput,
   Result,
   SessionDetail,
+  SessionHistoryReadOptions,
+  SessionHistoryScope,
   SessionSearchPage,
   SessionSearchContext,
   SessionSearchContextRequest,
@@ -161,6 +163,7 @@ import {
   normalizeMode,
   normalizeNetworkProxy,
   normalizeNetworkPolicy,
+  normalizeSessionHistoryScope,
   resolveFontScale,
   normalizeChatContentMaxWidth,
   validateNetworkPolicy,
@@ -377,26 +380,38 @@ function normalizeSession(session: SessionSummary): SessionSummary {
   };
 }
 
+function normalizeSessionDetailScope(
+  detail: Pick<SessionDetail, "historyScope">,
+): Pick<SessionDetail, "historyScope"> {
+  const scope = normalizeSessionHistoryScope(detail.historyScope);
+  return scope ? { historyScope: scope } : {};
+}
+
 function normalizeSessionDetail(detail: SessionDetail | null): SessionDetail | null {
   return detail
     ? {
         ...safeSessionSummary(detail),
         messages: projectPlanHistory(detail.messages, detail.planHistory ?? [], detail.id),
         mode: normalizeMode((detail as { mode?: unknown }).mode),
+        // The echo is authoritative: an absent/invalid scope means the
+        // transport served the legacy physical transcript, and the reader must
+        // keep its legacy behavior rather than filter it locally.
+        ...normalizeSessionDetailScope(detail),
       }
     : null;
 }
 
-export type SessionHistoryReadOptions = {
-  /** Center a bounded read on this stable ID and retain its original text. */
-  messageAround?: string;
-  /** Return the newest page ending before this zero-based message offset. */
-  messageBefore?: number;
-  /** Maximum number of messages in the returned page. */
-  messageLimit?: number;
-  /** Maximum characters per displayed message/value field. */
-  contentLimit?: number;
-};
+// One definition, owned by the shared package (renderer, IPC, and remote
+// routing validate the same shape); re-exported so renderer imports keep
+// working unchanged.
+export type { SessionHistoryReadOptions };
+export function normalizeSessionHistoryReadOptions(
+  options: SessionHistoryReadOptions,
+): SessionHistoryReadOptions {
+  const scope = normalizeSessionHistoryScope(options.historyScope);
+  const { historyScope: _rawScope, ...rest } = options;
+  return scope ? { ...rest, historyScope: scope } : rest;
+}
 
 export function normalizeSettings(settings: AppSettings): AppSettings {
   return {
@@ -690,7 +705,7 @@ export const api = {
   getSession: (id: string, options?: SessionHistoryReadOptions) =>
     invoke<{ session: SessionDetail | null }>(IPC.invoke.sessionGet, {
       id,
-      ...(options ?? {}),
+      ...(options ? normalizeSessionHistoryReadOptions(options) : {}),
     }).then((result) => ({
       ...result,
       session: normalizeSessionDetail(result.session),

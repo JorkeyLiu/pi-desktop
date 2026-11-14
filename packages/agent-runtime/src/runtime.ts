@@ -258,6 +258,13 @@ import {
   validateSubagentSteer,
 } from "./subagent-control.js";
 import {
+  mergeDelegationViews,
+  recoveredWaitNote,
+  RecoveredDelegationCatalog,
+  snapshotRecoveredDelegation,
+  type RecoveredDelegation,
+} from "./delegation-recovery.js";
+import {
   noHistoryResumeErrorMessage,
   resolveResumeChain,
   resumedChainProvider,
@@ -1818,6 +1825,11 @@ export class DesktopAgentRuntime {
    */
   private delegations = new Map<string, DelegationRecord>();
   /**
+   * Delegations rebuilt from persisted history. Read-only: they have no run
+   * handle, timer, or completion promise, and only answer `TaskList`/`TaskWait`.
+   */
+  private readonly recoveredDelegations = new RecoveredDelegationCatalog();
+  /**
    * Report batches waiting for the acceptance boundary: a `TaskWait` result or
    * the idle resume prompt counts as delivered only once pi accepts the
    * complete message into the parent transcript.
@@ -2139,6 +2151,7 @@ export class DesktopAgentRuntime {
     this.delegationChains.hydrate(
       rebuildChainsFromTranscript(this.transcriptHistory),
     );
+    this.recoveredDelegations.hydrate(this.transcriptHistory);
     // Parts: [0] is the product persona; [1:] are operational rules a custom
     // SYSTEM.md must not remove (tool guidance, delegation, scratch, skills).
     const defaultSystemPromptParts = [
@@ -5178,6 +5191,46 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       prune: () => this.pruneFinishedDelegations(),
       notifyWaiters: () => this.wakeWaiters.notify(),
     });
+    // Hold the settled run as plain data, so the live retention cap cannot
+    // make a delegation this session already listed unreadable. User-owned
+    // delegations stay out of the parent catalog entirely.
+    if (!userOwned) {
+      this.recoveredDelegations.noteSettled({
+        delegationId: record.delegationId,
+        parentToolCallId: record.parentToolCallId,
+        agentName: record.agentName,
+        modelId: record.modelId,
+        thinkingLevel: record.thinkingLevel,
+        status: record.status,
+        startedAt: record.startedAt,
+        ...(record.completedAt !== undefined
+          ? { completedAt: record.completedAt }
+          : {}),
+        lastActivityAt: record.lastActivityAt,
+        turns: record.result?.turns ?? record.turns,
+        toolCalls: record.result?.toolCalls ?? record.toolCalls,
+        ...(record.usage ? { usage: record.usage } : {}),
+        ...(record.contextTokens !== undefined
+          ? { contextTokens: record.contextTokens }
+          : {}),
+        ...(record.lastToolName ? { lastToolName: record.lastToolName } : {}),
+        ...(record.executionTurnId
+          ? { executionTurnId: record.executionTurnId }
+          : {}),
+        ...(record.resumedFrom ? { resumedFrom: record.resumedFrom } : {}),
+        ...(record.modelChangedFrom
+          ? { modelChangedFrom: record.modelChangedFrom }
+          : {}),
+        ...(record.handoffCheckpoint
+          ? { handoffCheckpoint: record.handoffCheckpoint }
+          : {}),
+        ...(record.handoffCheckpointError
+          ? { handoffCheckpointError: record.handoffCheckpointError }
+          : {}),
+        ...(record.result?.error ? { error: record.result.error } : {}),
+        ...(record.result?.report ? { report: record.result.report } : {}),
+      });
+    }
     // Close the detached run's own execution turn (child-only: durable row
     // finalizes, no parent conclusion fans out).
     if (userOwned && wasRunning && !this.disposed) {
@@ -5615,6 +5668,15 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           (entry.delivery ?? "parent") === "parent";
         let targets: DelegationRecord[];
         let unknownIds: string[] = [];
+        /**
+         * Recovered history answers report reads only: it carries no run
+         * handle, so it is never a wait target and never reaches the
+         * coordinator or the delivery receipts.
+         */
+        let historicalSnapshots: ReturnType<
+          typeof snapshotRecoveredDelegation
+        >[] = [];
+        let historicalNote: string | undefined;
         if (ids.length) {
           const named = ids
             .map((id) => this.delegations.get(id))
@@ -5622,11 +5684,24 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
               (entry): entry is DelegationRecord =>
                 entry !== undefined && parentOwned(entry),
             );
+          // Historical ids answer from the recovered catalog: the stored
+          // report is readable, and nothing here is waiting or runnable. A
+          // live record always wins over its recovered copy.
+          const recovered: RecoveredDelegation[] = [];
+          const seenRecovered = new Set<string>();
+          for (const id of ids) {
+            if (this.delegations.has(id)) continue;
+            const entry = this.recoveredDelegations.lookup(id);
+            if (!entry || seenRecovered.has(id)) continue;
+            seenRecovered.add(id);
+            recovered.push(entry);
+          }
           unknownIds = ids.filter((id) => {
             const entry = this.delegations.get(id);
-            return entry === undefined || !parentOwned(entry);
+            if (entry) return !parentOwned(entry);
+            return !seenRecovered.has(id);
           });
-          if (named.length === 0) {
+          if (named.length === 0 && recovered.length === 0) {
             return {
               content: [{ type: "text", text: "None of the requested delegation ids exist in this session. Call TaskList to see them." }],
               details: { delegations: [], ...(unknownIds.length ? { unknownIds } : {}) },
@@ -5636,6 +5711,8 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           // turn) stay a cheap read through the current view; the coordinator
           // waits only on the pending subset below.
           targets = named;
+          historicalSnapshots = recovered.map(snapshotRecoveredDelegation);
+          historicalNote = recoveredWaitNote(recovered);
         } else {
           targets = this.programCoordinator().selectProgramTargets({
             mode,
@@ -5651,12 +5728,15 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         const hasRunning = targets.some(
           (entry) => entry.status === "running" && parentOwned(entry),
         );
-        this.beginDelegationWait(targets);
+        // A recovered-only read tracks no wait: nothing here can complete, so
+        // no wait state is opened and no interruption is reported.
+        const tracksWait = targets.length > 0;
+        if (tracksWait) this.beginDelegationWait(targets);
         const waitAbort = new AbortController();
         this.steeringWaitAbort = waitAbort;
         let wakeOutcome: WakeWaitOutcome = { timedOut: false, deadlineKind: null, wakeDelegationIds: [] };
         try {
-          if (!this.pendingSteering.size && hasRunning) {
+          if (tracksWait && !this.pendingSteering.size && hasRunning) {
             wakeOutcome = await this.programCoordinator().waitForProgramTargets(query, {
               registerWakeWaiter: (listener) => this.wakeWaiters.register(listener),
               signal: signal ? AbortSignal.any([signal, waitAbort.signal]) : waitAbort.signal,
@@ -5664,9 +5744,9 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           }
         } finally {
           if (this.steeringWaitAbort === waitAbort) this.steeringWaitAbort = undefined;
-          this.endDelegationWait();
+          if (tracksWait) this.endDelegationWait();
         }
-        const interrupted = this.pendingSteering.size > 0 && !signal?.aborted &&
+        const interrupted = tracksWait && this.pendingSteering.size > 0 && !signal?.aborted &&
           !this.runCancelled && !this.disposed && !this.turnHadError;
         const plan = this.programCoordinator().planProgramWait(query);
         const effectiveKind = wakeOutcome.deadlineKind ?? plan.deadlineKind;
@@ -5687,11 +5767,18 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           wakeDelegationIds: wakeOutcome.wakeDelegationIds,
           mode,
           unknownIds,
+          ...(historicalSnapshots.length ? { historicalSnapshots } : {}),
+          ...(historicalNote ? { historicalNote } : {}),
         });
         // The result is not delivery yet: pi may replace or drop it before it
         // reaches history, so the batch is consumed by the accepted
         // `toolResult` message that echoes this exact text.
-        if (finalized.receipt.includedDelegationIds.size > 0) {
+        // Only a batch carrying live records can mark delivery; a read of
+        // recovered history registers no receipt and marks nothing.
+        if (
+          finalized.receipt.records.length > 0 &&
+          finalized.receipt.includedDelegationIds.size > 0
+        ) {
           this.deliveryReceipts.expectWaitResult(toolCallId, finalized.receipt);
         }
         return { content: finalized.content, details: finalized.details };
@@ -5714,7 +5801,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         "List the subagents started by Task in this session with their status and live progress. Returns the current snapshot immediately, even while subagents run, and never waits; call TaskWait to converge on their reports. Use it to check progress, or before TaskStop to choose what to stop.",
       parameters: Type.Object({}),
       executionMode: "sequential",
-      execute: async () => listDelegationRecords([...this.delegations.values()]),
+      execute: async () =>
+        listDelegationRecords(
+          mergeDelegationViews(
+            [...this.delegations.values()],
+            this.recoveredDelegations.list(),
+          ),
+        ),
     };
   }
 
