@@ -636,10 +636,9 @@ test("F5 chain-latest owns status and every tab of the chain continues it", asyn
     assert.equal(actions.shouldShowSubagentContinue({
       outcome: "completed", hasInstance: false, canPromptParent: true, readOnlySession: false,
     }), false);
-    // Disabled matrix: permission, remote, settled, and a missing owner turn
-    // all block. The parent session's generic running flag is not consulted:
-    // a running child may outlive parent UI idleness, and a detached run
-    // steers through its own execution turn, which the backend validates.
+    // Disabled matrix: permission, remote, and a settled child block. Turn
+    // identity never does — steering targets the live child itself — and the
+    // parent session's generic running flag is not consulted either.
     assert.equal(actions.subagentSteerBlockedReason({
       readOnlySession: true, canSteerParent: true, running: true, expectedTurnId: "t",
     }), "read-only");
@@ -650,10 +649,10 @@ test("F5 chain-latest owns status and every tab of the chain continues it", asyn
       readOnlySession: false, canSteerParent: true, running: false, expectedTurnId: "t",
     }), "unavailable");
     assert.equal(actions.subagentSteerBlockedReason({
-      readOnlySession: false, canSteerParent: true, running: true, expectedTurnId: undefined,
-    }), "unavailable");
+      readOnlySession: false, canSteerParent: true, running: true,
+    }), null);
     assert.equal(actions.subagentSteerBlockedReason({
-      readOnlySession: false, canSteerParent: true, running: true, expectedTurnId: "t",
+      readOnlySession: false, canSteerParent: true, running: true, expectedTurnId: undefined,
     }), null);
   } finally { await vite.close(); }
 });
@@ -667,7 +666,8 @@ test("F6 steer rejection preserves draft and captures identity", async () => {
   });
   try {
     const actions = await vite.ssrLoadModule("/src/lib/subagent-actions.ts");
-    // Captured identity: session and turn are pinned before the await.
+    // Captured identity: the session is pinned before the await; the turn id
+    // travels only when known, and a missing one never blocks the steer.
     const captured = actions.captureSteerIdentity({
       sessionId: "s1", turnId: "turn-parent", source: "local",
       sessionStartsWithRemote: false, sessionStartsWithNative: false, canSteer: true,
@@ -680,7 +680,7 @@ test("F6 steer rejection preserves draft and captures identity", async () => {
     assert.deepEqual(actions.captureSteerIdentity({
       sessionId: "s1", turnId: undefined, source: "local",
       sessionStartsWithRemote: false, sessionStartsWithNative: false, canSteer: true,
-    }), { ok: false, reason: "unavailable" });
+    }), { ok: true, sessionId: "s1" });
     // Rejection preserves the draft: clear happens only on success.
     let draft = "hello child";
     let steerError = null;

@@ -35,8 +35,6 @@ export type AgentIpcDependencies = {
   activeTurns: Map<string, string>;
   /** Whether the named turn can still start or steer host work. */
   isTurnDispatchable: (sessionId: string, turnId: string | null | undefined) => boolean;
-  /** Child-only execution turns for detached user continuations (no parent conclusion). */
-  childExecutionTurns: Set<string>;
   activeTurnUsages: Map<string, MessageUsage>;
   approvedExecutionIdsBySession: Map<string, string>;
   claimedExecutionSessions: Map<string, string>;
@@ -97,7 +95,6 @@ export function registerAgentIpc({
   dataDir,
   activeTurns,
   isTurnDispatchable,
-  childExecutionTurns,
   activeTurnUsages,
   approvedExecutionIdsBySession,
   claimedExecutionSessions,
@@ -228,10 +225,10 @@ export function registerAgentIpc({
     const requested = Array.isArray(req?.attachments) ? req.attachments : [];
     if (
       !req?.sessionId || typeof req.delegationId !== "string" || !req.delegationId.trim() ||
-      !req.expectedTurnId || typeof req.content !== "string" ||
+      typeof req.content !== "string" ||
       (!req.content.trim() && requested.length === 0)
     ) {
-      throw Object.assign(new Error("delegationId, expectedTurnId and content required"), {
+      throw Object.assign(new Error("delegationId and content required"), {
         errorCode: ErrorCodes.INVALID_ARGUMENT,
       });
     }
@@ -243,15 +240,13 @@ export function registerAgentIpc({
         errorCode: ErrorCodes.INVALID_ARGUMENT,
       });
     }
-    // Steering belongs to the parent turn it names: refused once that turn
-    // was cancelled, started finalizing, or no longer owns the session. The
-    // sidecar runtime revalidates after dispatch, so a stale target fails
-    // there rather than steering the wrong child.
-    if (!isTurnDispatchable(req.sessionId, req.expectedTurnId)) {
-      throw Object.assign(new Error("The target turn has ended"), {
-        errorCode: ErrorCodes.TURN_NOT_FOUND,
-      });
-    }
+    const expectedTurnId =
+      typeof req.expectedTurnId === "string" && req.expectedTurnId.trim()
+        ? req.expectedTurnId.trim()
+        : undefined;
+    // The child's own liveness is the gate, revalidated by the sidecar after
+    // dispatch. `expectedTurnId` is informational: an ended parent turn must
+    // not block communicating with a child that is still working.
     // Resolve the child's own images against the session roots. This host does
     // not ask what the child model's capability metadata claims: every image is
     // inlined for the child endpoint, and a refusal is a provider error rather
@@ -263,19 +258,14 @@ export function registerAgentIpc({
       requested,
       req.content,
     );
-    // The file IO above awaited: a turn that ended meanwhile must not receive
-    // this steer, so ownership is checked again on the far side.
-    if (!isTurnDispatchable(req.sessionId, req.expectedTurnId)) {
-      throw Object.assign(new Error("The target turn has ended"), {
-        errorCode: ErrorCodes.TURN_NOT_FOUND,
-      });
-    }
+    // The file IO above awaited: the sidecar still revalidates the live child
+    // before steering, so a run that settled meanwhile is refused there.
     // The echo row keeps refs only; the base64 travels in `images` for this
     // dispatch and never reaches the transcript or a log line.
     return sidecar.call<AgentSteerSubagentResponse>("agent.steerSubagent", {
       sessionId: req.sessionId,
       delegationId: req.delegationId.trim(),
-      expectedTurnId: req.expectedTurnId,
+      ...(expectedTurnId ? { expectedTurnId } : {}),
       content: req.content,
       ...(prepared.length
         ? {
@@ -329,40 +319,30 @@ export function registerAgentIpc({
           attachments: prepared.map((attachment) => attachment.message),
         }
       : {};
-    // Serial admission with prompts: a parent prompt racing a detached
-    // execution meets the one-turn busy guard instead of aborting it.
+    // Serial admission with prompts, but no durable turn is opened: between
+    // parent turns the child is an ordinary independent run, so the user's
+    // followup never makes the next main prompt busy.
     const releaseSessionOperation = await acquireSessionOperation(req.sessionId);
     try {
       const active = activeTurns.get(req.sessionId);
       if (active) {
-        // A live turn owns the session: only its own id attaches, and the
-        // sidecar runtime still decides attached vs busy from the source
-        // record — a detached source never joins an unrelated live turn.
-        if (!expectedTurnId || expectedTurnId !== active) {
-          throw Object.assign(
-            new Error(expectedTurnId ? "The target turn has ended" : "Session already has an active turn"),
-            { errorCode: expectedTurnId ? ErrorCodes.TURN_NOT_FOUND : ErrorCodes.AGENT_BUSY },
-          );
-        }
+        // A live parent turn: the sidecar decides from the child's own spawn
+        // whether the run reports back to it. `expectedTurnId` is
+        // informational — a stale one never rejects the user's intervention.
         return sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
           sessionId: req.sessionId,
           delegationId,
-          expectedTurnId,
+          ...(expectedTurnId ? { expectedTurnId } : {}),
           content,
           ...childImages,
           ...(messageId ? { messageId } : {}),
         });
       }
-      if (expectedTurnId) {
-        // Idle sessions own no turn: naming one is stale, not an adoption.
-        throw Object.assign(new Error("The target turn has ended"), {
-          errorCode: ErrorCodes.TURN_NOT_FOUND,
-        });
-      }
       if (!host) throw new Error("host unavailable");
-      // Idle path: open a child-only execution turn for accounting. No parent
-      // prompt runs for this turn, no main user row is persisted, and the
-      // renderer stays idle: the turn only owns the child's events and usage.
+      // Idle path: carry the normal launch preparation so a restarted sidecar
+      // can hydrate an idle runtime from the persisted transcript/chain. No
+      // parent prompt and no parent turn run here; the payload only binds the
+      // same model, permissions and workspace the next prompt would use.
       const settings = await host.call<any>("settings.get");
       const detail = await host.call<{ session?: any }>("session.get", {
         id: req.sessionId,
@@ -379,43 +359,15 @@ export function registerAgentIpc({
         settings,
       );
       sidecar.setProjectInstructionRoot(req.sessionId, launch.workspaceRoot ?? launch.projectPath);
-      const turn = await host.call<{ turnId?: string }>("session.beginTurn", {
+      return sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
+        ...launch.sidecarParams,
         sessionId: req.sessionId,
-        providerId: launch.providerId,
-        modelId: launch.modelId,
+        delegationId,
+        ...(expectedTurnId ? { expectedTurnId } : {}),
+        content,
+        ...childImages,
+        ...(messageId ? { messageId } : {}),
       });
-      const durableTurnId = String(turn?.turnId ?? "").trim();
-      if (!durableTurnId) {
-        throw new Error("session.beginTurn returned no turn");
-      }
-      activeTurns.set(req.sessionId, durableTurnId);
-      activeTurnUsages.delete(req.sessionId);
-      const turnKey = `${req.sessionId}:${durableTurnId}`;
-      childExecutionTurns.add(turnKey);
-      try {
-        // The sidecar may have no live runtime after a restart: carry the
-        // normal launch preparation so it can hydrate an idle runtime from
-        // the persisted transcript/chain. No parent prompt runs for this
-        // turn; the payload only binds the same model, permissions and
-        // workspace the next prompt would use.
-        return await sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
-          ...launch.sidecarParams,
-          sessionId: req.sessionId,
-          delegationId,
-          expectedTurnId: durableTurnId,
-          content,
-          ...childImages,
-          ...(messageId ? { messageId } : {}),
-        });
-      } catch (error) {
-        // A rejected continuation owns no execution: close the accounting
-        // turn so the session does not leak busy, then surface the error.
-        childExecutionTurns.delete(turnKey);
-        await finishTurn(req.sessionId, "error", (error as { errorCode?: string })?.errorCode, {
-          turnId: durableTurnId,
-        });
-        throw error;
-      }
     } finally {
       releaseSessionOperation();
     }

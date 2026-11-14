@@ -270,35 +270,54 @@ A resumed delegation's card shows the whole chain's rows as consecutive turns
 (task → reply → task → reply) with no special "resumed" badge. The new run's
 counters start at zero; `details.resumedFrom` keeps the link auditable.
 
-### 14. Direct user continuation carries explicit delivery ownership
+### 14. ~~Direct user continuation carries explicit delivery ownership~~ — superseded: a child is never owned by whoever last typed
 
-A user may continue a settled chain without the parent model emitting
-`Task(resume)`. The new run records `delivery: "parent" | "user"` (parent
-default): `parent` only while the parent still expects this chain
-(startedEpoch == turnEpoch, undelivered, not stopped/aborted, owning turn
-alive); otherwise `user`, which never auto-delivers, never enters parent
-context or parent accounting, and executes under a child-only
-execution-accounting turn opened with the existing durable-turn owner. Only an
-explicit parent `Task(resume)` reattaches the chain. No new session, schema,
-or event type; the user-origin marker is a `Task` row the parent rebuild
-skips.
+**Superseded 2026-10 by the independent child lifecycle.** The original
+decision made a direct continuation record
+`delivery: "parent" | "user"` and, on the `user` side, isolate the run behind
+its own child-only execution-accounting turn with no parent accounting or
+delivery. That split was wrong as product semantics: the user can talk to a
+child and nothing else. Which human supplied the text is input provenance, not
+ownership of the task, the report, the accounting, or the child's place in the
+session.
 
-> Clarification 2026-10 (original wording above preserved): steering a running
-> delegate keeps it attached — a program wake, `any` threshold, or
-> progress checkpoint never detaches unfinished delegates (no model timeout exists).
-> A detached source against
-> an unrelated live parent fails with `AGENT_BUSY` with the draft preserved;
-> the session holds a single active turn, the detached run steers through its
-> execution owner, `expectedTurnId` stays a stale guard with `messageId`
-> idempotency, post-restart hydration rebuilds from history, and the detached
-> terminal silently closes only its own row.
+Decision now in force:
 
-> Amendment 2026-10 (chain continuability, §15): because stop/disposal and a
-> terminal parent error cancel the parent's expectation of a chain, a direct
-> user continuation of a `stopped` or `aborted` source is always `user`-owned —
-> isolated, with no parent provider request, parent context, parent accounting,
-> or parent wake, and it cannot resurrect the original parent's waiting or
-> delivery. Only an explicit parent `Task(resume)` starts a new parent-owned run.
+- **No delivery owner.** `delivery` and the child execution turn are retired.
+  A steered or continued child is an ordinary child: it appears in status,
+  `TaskList`, `TaskWait` by id, and delegation history like any other run, and
+  the sender of the text changes none of that.
+- **Live parent, unchanged coordination.** While the parent turn is still open
+  and still expects the chain (undelivered, not stopped/aborted, owning turn
+  alive) the run's report reaches it through the existing turn-local delivery
+  and wake loop. Parent-originated `Task(resume)` / `TaskWait` /
+  progress-wake behavior is untouched.
+- **Ended parent, no wake.** A child intervened in after the parent turn ended
+  keeps running independently: no parent provider request, no parent context,
+  no parent accounting, and explicitly no automatic wake of the ended parent
+  (the user rejected that). The next main execution reads the child's latest
+  status, report and usage through the ordinary subagent interfaces, with no
+  provider request fired to make that possible.
+- **No turn reservation.** A child run never opens, adopts, or reserves a
+  durable turn row, so it neither causes nor receives `AGENT_BUSY`: a main
+  prompt is admitted while the child runs, neither turn cancels or corrupts the
+  other, and a parent epoch change does not abort a legitimate running
+  intervened child.
+- **Accounting stays truthful.** The child's own usage remains on its
+  delegation/task history; a closed parent turn is never charged retroactively
+  and never charged twice.
+- **Duplicate guard, stop, errors, permissions.** A second concurrent run of
+  the same chain is still refused (`CHAIN_BUSY`); stop/cancel/dispose/restart
+  and permission boundaries keep their existing behavior; a stale
+  `expectedTurnId` is informational (the target is the live child) and a
+  caller `messageId` still dedups retries.
+- **Provenance marker, legacy data readable.** A user-sent continuation keeps
+  `toolArgs.source: "user"` with `toolArgs.resume` on its `Task` marker so
+  history reconstruction can attribute it; that marker never enters parent
+  model context. Persisted `details.delivery` /
+  `details.executionTurnId` rows from older builds stay readable and map to
+  these ordinary-child semantics — no migration, rewrite, or reset, and no new
+  schema or event type.
 
 ### 15. Chain continuability is not a function of the last outcome
 
@@ -343,15 +362,13 @@ and read-budget exclusions in §5, §7, and §8.
   Read metadata (up to `MAX_RESUMABLE_LISTED_FILES` files per chain) still shows
   in the listing and lifecycle details; the seed truncation is what keeps the
   resumed request safe.
-- **Delivery ownership follows the source record.** A *direct* continuation
-  (`agent.continueSubagent`) is `parent`-owned only while the parent still
-  expects that chain (source parent-owned, current parent epoch, undelivered,
-  owning turn alive). A source that settled `stopped` / `aborted`, or whose
-  owning turn ended, yields a `user`-owned run: no parent provider request, parent
-  context, parent accounting, or parent wake, and it cannot revive the original
-  parent's waiting or delivery. An explicit parent `Task(resume)` is different:
-  the parent is asking, so it always produces a new `parent`-owned run whose
-  report is delivered back to the parent.
+- **A direct continuation is an ordinary child run (§14).** A live parent that
+  still expects the chain keeps its normal turn-local delivery; a continuation
+  after the parent turn ended runs independently — no parent provider request,
+  parent context, parent accounting, or parent wake, so it cannot revive the
+  original parent's waiting or delivery. Either way `TaskList`, `TaskWait`,
+  status and history expose the run, and only a second concurrent run of the
+  same chain is refused.
 - **Busy guard, identity, auth, and prerequisites are unchanged.** One live
   record per chain, the same-session restriction, `Task.agent` matching, the
   model-binding reauthorization rules, and the no-`model`-with-`resume` rule all

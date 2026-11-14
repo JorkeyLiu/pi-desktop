@@ -1001,36 +1001,39 @@ core set rather than the on-demand catalog of §7.1:
 - `TaskStop(delegationIds?)` — cancels obsolete work (defaults to all running);
   waits for each abort to settle, then persists `status: "stopped"` with
   `completedAt` on `details.stopped[]`. Stopped delegations read as `stopped`.
-- Direct user continuation (`agent.continueSubagent`, no parent `Task(resume)`
-  needed) — resumes a settled chain through the same `Task(resume)` spawn.
-  The parent receives a run's report only while it still expects THAT chain:
-  the source run is parent-owned, started in the current parent epoch,
-  undelivered, not stopped/aborted, and its owning turn is still alive.
-  Steering a running delegate keeps it attached; a program wake, `any`
-  threshold, or progress checkpoint never detaches unfinished delegates. Once the
-  source report was delivered or its owning turn ended, the continuation is
-  `user`-owned: no parent model prompt, no parent context, no parent wake,
-  and no charge to the old parent turn. Parent-facing accounting (`TaskList`,
-  `TaskWait` targets/unknownIds, pending, `isRunning`) excludes `user`-owned
-  runs; a detached source never attaches to an unrelated live parent — the
-  request fails with `AGENT_BUSY` and the draft is preserved. Detached runs
-  execute under their own child-only execution-accounting turn opened with the
-  existing `session.beginTurn` (no new schema, no child session): no parent
-  prompt runs, no main user row is written, the renderer stays idle, usage is
-  carried by the child's own events, and the run's own terminal silently closes
-  only that row (no task notification, no parent prompt or context). The
-  session holds a single active turn, so a parent send stays `AGENT_BUSY`
-  until the detached run settles or stops. A running user-owned run steers
-  through its execution owner, never through the parent's generic running
-  flag. That owner is published on the run's own `Task` result — launch, every
-  progress snapshot, the user-origin marker row, and the terminal snapshot
-  carry `details.executionTurnId` — so a surface that outlives the process (a
-  reopened delegation tab, a rebuilt renderer) names the exact turn this
-  contract validates instead of inferring one from the parent's current turn.
-  `expectedTurnId` is only a stale guard (the source record decides ownership);
-  a caller `messageId` dedups retries and post-restart hydration rebuilds
-  history from the transcript with no parent provider call. Only an
-  explicit parent `Task(resume)` reattaches the chain as a new parent-owned run.
+- Direct user intervention — the user can communicate with a child and nothing
+  else. A running child is steered (`agent.steerSubagent`) and a settled chain
+  is continued (`agent.continueSubagent`, no parent `Task(resume)` needed)
+  through the same `Task(resume)` spawn. There is no delivery ownership: no
+  child is ever parent-owned or user-owned, and who sent the text never
+  changes the task nature, the parent-child relation, `TaskList` / `TaskWait`
+  access, result visibility, or accounting. A child is an ordinary child of
+  its session for the whole of its life.
+  A live parent that still expects a chain keeps its normal turn-local
+  report delivery, so parent-originated coordination (`Task(resume)`, wake
+  reports, `TaskWait` convergence) is unchanged. A child that is steered or
+  continued after the parent's turn ended keeps running on its own: it wakes,
+  restarts, or re-prompts no parent, and the next main execution reads its
+  latest status, report and usage through the ordinary subagent interfaces
+  (status, `TaskList`, `TaskWait` by id, delegation history) without a provider
+  request being fired for it.
+  The child run opens no parent turn and reserves no durable turn row: it
+  neither blocks nor is blocked by a main prompt, so a user message to main is
+  accepted concurrently with a running child and neither turn cancels or
+  corrupts the other; `AGENT_BUSY` stays reserved for a genuinely running
+  main turn. The one exception is a launch whose stored configuration changed
+  while a child still runs: replacing the runtime would dispose the child, so
+  that launch is refused with `AGENT_BUSY` instead of aborting it quietly. A stale `expectedTurnId` is informational and never selects an
+  owner; only a second concurrent run of the SAME chain is refused as busy. A
+  caller `messageId` dedups retries, and post-restart hydration rebuilds
+  history from the transcript with no parent provider call. The child's own
+  usage stays on its authoritative delegation/task history; a closed parent
+  turn is never charged retroactively.
+  Input provenance is data, not an ownership grant: a continuation the user
+  sent carries `source: "user"` with a `resume` target on its marker row so
+  history reconstruction can attribute it. Legacy persisted `details.delivery`
+  / `details.executionTurnId` fields from older builds remain readable and map
+  to the same ordinary-child semantics; no user data is rewritten or reset.
   The continuation text is the user's own input: only empty text without images
   is refused, so any length reaches the resumed run whole; the chain, turn, and
   run identifiers stay encoded and bounded, and the resumed request itself stays
@@ -1057,9 +1060,9 @@ the model early and never bypass the gate. The model carries no timing: `Task` /
 persisted in older provider tool calls are ignored safely without reintroducing an override.
 The user-configured `time` value (max 18000, i.e. 300 minutes) cannot be shortened or restarted by the model;
 there is no global child-run timeout derived from it. Internal cancellation and provider
-timeouts stay program-owned and never surface as a model timeout. An attached child's
+timeouts stay program-owned and never surface as a model timeout. A live parent's
 result / completion delivery always resumes the parent and cannot be configured off; a
-`user`-owned run never resumes, delivers, or bills the parent. The persisted normalizer still
+child running after the parent's turn ended never resumes or bills that ended turn. The persisted normalizer still
 accepts the legacy stored shape and clamps out-of-range values on read; a legacy stored
 `onCompletion: false` is ignored so mandatory attached-completion delivery is restored. The
 session base is normalized at launch by Electron main (`session-launch`) and the headless
@@ -1175,11 +1178,11 @@ including across a window close). Only a higher generation replaces it. There is
 no schema change, migration, or new event type, and the parent's model context
 never contains the record.
 
-**State ownership.** Execution (`running`), result (`pending` vs `delivered`), and turn
+**State.** Execution (`running`), result (`pending` vs `delivered`), and turn
 liveness are distinct: a delegate can be settled-pending while the parent turn stays open;
 parent `waiting` means the model is active inside a durable open turn, not blocked on a
-harness timer; user-owned delivery runs under its own distinct execution turn (see direct
-continuation below).
+harness timer; a child running after the parent turn ended owns no parent turn at all
+(see direct continuation above).
 
 **Wait outcome.** A `TaskWait` result carries `status` (`completed`, `wakeup`, or
 `interrupted`), plus `wakeReason` (`time`, `completion`, `tool-calls`, or `context-tokens`)
@@ -1189,11 +1192,13 @@ return. There is no model-timeout status: a time heartbeat is a `wakeup` with
 calls, estimated occupancy, billed spend). Result delivery is one path: attached settled
 reports are consumed exactly once by the wait or the idle resume, `off` only silences
 progress resumption — it never withholds an attached result, and bounded-output omission
-leaves reports `pending`, never dropped. `user`-owned runs never auto-deliver to the parent.
-Completion priority is attached-only: the parent receives a run's report only while it still
-expects THAT chain (source parent-owned, started in the current parent epoch, undelivered,
-not stopped/aborted, owning turn alive). A program wake or `wait-any` threshold never
-detaches unfinished delegates.
+leaves reports `pending`, never dropped. A child running after the parent turn ended never
+auto-delivers to that ended turn: its report stays readable on its own history and the next
+main execution reads it through the normal interfaces. A live parent receives a run's report
+through its ordinary turn-local delivery while it still expects THAT chain (the run is
+undelivered and not stopped/aborted and the parent turn is alive); the sender of the text
+never decides this. A program wake or `wait-any` threshold never detaches unfinished
+delegates.
 
 **Live metrics.** `Task` launch results, `TaskList` / `TaskWait` delegation
 entries, settlement details, and the idle-resume prompt each report the shared
@@ -1421,14 +1426,14 @@ attributed user echo (`parentToolCallId` / `agentName`, `steering: true`) into
 the child transcript: the parent's model-context rebuild skips tagged rows, so
 the text never enters the parent context, while chain replay selects those rows
 for a later `Task(resume)`, which sees exactly what the steered run saw. The
-request names the turn that owns it: the live parent turn for an attached run,
-the delegate's own execution-accounting turn for a detached user-owned run
-(kept from the accepted steer/continue response, never the parent's generic
-running flag). It is refused once that owner ended; a delegate that settled
-first continues via `agent.continueSubagent` instead. A settled delegate
+request may carry the live parent turn as an informational guard (a stale
+value never refuses a legitimate steer: the target is the live child, not the
+turn that happened to be current when the user typed); it is refused only when
+the delegate is not running any more, and a delegate that settled first
+continues via `agent.continueSubagent` instead. A settled delegate
 continues directly, seeded from whatever child rows remain or its original task
-brief — no parent prompt. Only an explicit
-parent-model `Task(resume)` reattaches a chain as a new parent-owned run. A
+brief — no parent prompt and no parent turn reservation. Only an explicit
+parent-model `Task(resume)` reattaches a chain as a new run of the same chain. A
 steered direction in a live run is also part of what a self-handoff rollover
 must preserve: it is replayed verbatim, in order, exactly once, ahead of the
 new handoff summary.
@@ -1438,7 +1443,7 @@ refuse only empty text without an image, so a direction of any length reaches
 the running child or the resumed run whole; the delegation, turn, and chain
 identifiers stay encoded and bounded at 128 characters.
 The renderer exposes one Send composer: while running it steers via
-`agent.steerSubagent` with the owning turn identity; while settled and
+`agent.steerSubagent`; while settled and
 continuable it continues via `agent.continueSubagent`; there is no second
 parent-resume strategy and the model line is plain display. The Subagents
 settings destination carries the persistent wake defaults.
@@ -1465,7 +1470,8 @@ the delegate's rows are hydrated from the host blob store through the same
 session roots before seeding, an image-only chain seeds from its first image
 row without a synthesized text brief, and a chain with neither text nor a
 readable image remains the only no-history case. Steering or continuing across
-a turn/ownership change stays refused before any image is claimed.
+a steer that no longer targets a live child, or a continuation of a chain that
+is already running, stays refused before any image is claimed.
 
 **Model pins.** `model: <provider>/<model>` in the frontmatter is resolved once
 per launch in Electron main, where credentials and the Pi catalog snapshot live, against
@@ -1570,12 +1576,14 @@ row with `parentToolCallId`: the parent only ever saw reports through
 rows would both contradict that and reintroduce the context cost delegation
 exists to avoid.
 
-**Turn ownership.** A delegate's lifecycle never reaches Electron main's turn
-handling. The parent may keep working or talk to the user after `Task`. If it
-stops calling tools while delegates still run, the runtime keeps the durable
-turn open and delivers the reports when they finish. User Stop, `TaskStop`,
-runtime dispose, or a parent fatal error (D352) abort a still-running
-delegate.
+**Turn independence.** A delegate's lifecycle never reaches Electron main's turn
+handling and never occupies a turn row of its own. The parent may keep working
+or talk to the user after `Task`. If it stops calling tools while delegates
+still run, the runtime keeps the durable turn open and delivers the reports
+when they finish. A child intervened in after the parent turn ended keeps
+running with no parent turn and no parent wake, and a new main prompt is
+admitted concurrently. User Stop, `TaskStop`, runtime dispose, or a parent
+fatal error (D352) abort a still-running delegate.
 
 **Isolated worktrees (ADR 0329).** In an isolated session, a delegate whose
 tools include `Write` or `Edit` gets its own worktree before its first turn

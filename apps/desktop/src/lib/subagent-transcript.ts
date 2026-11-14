@@ -1,8 +1,7 @@
 import type { MessageAttachment, UiMessage } from "@pi-desktop/shared";
 import { messageThinking, type SubagentRunItem } from "./assistant-turns";
-import { subagentDeliveryOwner } from "./subagent-actions";
+import { isUserOriginTaskMarker } from "./subagent-actions";
 import { isDelegationStartTool } from "./tool-display";
-import { toolResultPayload } from "./tool-presentation";
 import { subagentChainCallIds } from "./subagent-chain";
 
 /**
@@ -95,9 +94,7 @@ export function buildSubagentTranscript(
     const task = delegateTaskDescription(call);
     // A user continuation's `Task` marker is the parent ledger row for a run
     // the user started; its follow-up enters the child as a user row.
-    const userOrigin =
-      subagentDeliveryOwner({ details: toolResultPayload(call), toolArgs: call.toolArgs }) ===
-      "user";
+    const userOrigin = isUserOriginTaskMarker({ toolArgs: call.toolArgs });
     let seedRendered = false;
     let turnAttachments: MessageAttachment[] | undefined;
     const rows: SubagentRunItem[] = [];

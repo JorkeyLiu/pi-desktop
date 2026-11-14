@@ -7810,12 +7810,12 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
      the production component) with no parent turn id in store state: the
      header still reads the live run, the input stays enabled, Stop stays
      available, and a steer typed after the reopen reaches the same delegation
-     with the run's own execution turn as `expectedTurnId`.
+     with no owner turn to name (the tab targets the live child).
   5. Open a tab on a `Task` call that is still being created (no result yet),
      then deliver its result: the same tab keeps its prompt, adopts the run's
      identity without being rebuilt, and stays stoppable and continuable.
-  6. Click Stop, then deliver the settled `Task` snapshot and the execution
-     turn's own terminal event; then send a second follow-up from the same tab.
+  6. Click Stop, then deliver the settled `Task` snapshot and the child's own
+     terminal event; then send a second follow-up from the same tab.
   7. With a draft typed and an image staged in the panel's composer, let the
      parent model resume the stopped delegation itself (a `Task(resume …)` call
      whose own handle is a new delegation id), then click that new card and
@@ -7826,12 +7826,13 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   the `Task` marker's task argument plus the child echo). The tab keeps
   following the chain-latest run through the same tab element — no rebuild, no
   state flip between running and settled, no identity change, no lost draft.
-  The live continued run reads `Running`, states the user-owned report owner,
-  keeps its input usable, and offers Stop when the draft is empty; Stop names
-  the current run's delegation id. After the settle the composer returns to
-  continue mode, the session carries no running flag or execution turn, and the
-  same tab continues the chain again with no new card. A run that completes on
-  its own is reported `Completed` by the same path.
+  The live continued run reads `Running` and states no ownership label, keeps
+  its input usable, and offers Stop when the draft is empty; Stop names the
+  current run's delegation id. The main session was never busy with the child:
+  it carries no running flag or turn identity of the child, and a main prompt
+  is admitted meanwhile. After the settle the composer returns to continue
+  mode and the same tab continues the chain again with no new card. A run that
+  completes on its own is reported `Completed` by the same path.
 - **Automation**: `apps/desktop/test/subagent-stop-resume-user-path.test.mjs`
   (`node --test`) with the production tab, store, i18n catalogs and stylesheet;
   `apps/desktop/test/subagent-panel-chain-identity.test.mjs` drives the same
@@ -7839,8 +7840,8 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   card's reopen, asserting one focused tab for the child and the resumed run
   rendered in it;
   `pnpm test:e2e:subagent-lifecycle` asserts the same identity end to end (phase
-  3 reads the persisted user marker's `details.executionTurnId`, phase 5 covers
-  stop, then direct continuation as a `user`-owned run).
+  3 reads the persisted user-origin marker's `source: "user"` plus `resume`,
+  phase 5 covers stop, then direct continuation as an ordinary child run).
 - **Specs linked**: `04-ux/08-component-spec.md` (delegation tab),
   `04-ux/09-interaction-patterns.md` (work panel tabs),
   `03-runtime/02-agent-runtime.md` §5f (direct continuation).
@@ -12989,7 +12990,7 @@ This test plan spec is accepted when:
   stopped-child continuation (step 10a) is automated by
   `pnpm test:e2e:subagent-lifecycle` over the real host-core / sidecar / Main
   path: it stops a running child, continues it explicitly, and confirms the new
-  run's provider request and delivery ownership. Long-report retention and the
+  run's provider request and its ordinary-child report routing. Long-report retention and the
   batch delivery rule (step 13) are automated in
   `packages/agent-runtime/src/subagent.test.ts` and
   `packages/agent-runtime/src/runtime.test.ts`: `Task` -> settlement ->
@@ -13302,9 +13303,10 @@ This test plan spec is accepted when:
     `interrupted` after relaunch) each start a new run on their chain, seeded
     from retained history — the outcome never makes a chain permanently
     uncontinuable. Because each is an explicit parent `Task(resume)`, every new
-    run is parent-owned and its report is delivered back to the parent. (A
-    *direct* user continue of a `stopped`/`aborted` source is instead `user`-owned
-    and isolated — see the subagent-lifecycle E2E and E2E-155 step 3c.)
+    run reports back to the parent that asked for it. (A *direct* user continue
+    of a `stopped`/`aborted` source is the same ordinary child run started from
+    the tab instead — it opens no parent turn and wakes no ended parent: see the
+    subagent-lifecycle E2E and E2E-155 step 3c.)
    - Step 6 resumes the failed chain like a completed one: the reads it already
      made seed the new run, and its failed assistant row is not replayed.
    - Step 7 is refused as a tool error: a resumed run keeps the chain's model, and
@@ -13584,13 +13586,13 @@ This test plan spec is accepted when:
    "context-tokens"` on an upward crossing with rearm only after occupancy
    drops back below the threshold; attached completion still resumes the parent in every
    selection, and `off` only silences progress resumption. Omitted bounded reports stay
-   pending and deliver once via the idle resume. A detached continuation
-   against an unrelated live parent fails with `AGENT_BUSY` with the draft
-   preserved, and its terminal silently closes only its own execution turn.
-   In step 3c a `stopped` / `aborted` delegate's chain is still continuable —
-   Stop retires only that run's waiting and delivery, never the chain — the
-   parent resume delivers its report once, and the direct user continue runs
-   detached without waking the parent.
+   pending and deliver once via the idle resume. A continuation after the
+   parent turn ended is accepted rather than refused: it opens no session turn,
+   so a main prompt is admitted concurrently and no `AGENT_BUSY` is raised for
+   the child. In step 3c a `stopped` / `aborted` delegate's chain is still
+   continuable — Stop retires only that run's waiting and delivery, never the
+   chain — the parent resume delivers its report once, and the direct user
+   continue runs on its own without waking the parent.
    Delegation entries and result headers separate estimated context
    occupancy from cumulative billed spend. No turn count ends a
    delegate, and no status reports one. Explorer's catalog includes
@@ -13616,12 +13618,12 @@ This test plan spec is accepted when:
   `TaskWait { timeoutSeconds: 1, subagentWakeup: { time: 1 } }` must not wake the
   parent, proven by a 2.5s quiet window on the provider request count, with the
   report still delivered exactly once; phase 2 attaches a user steer that only
-  the child adopts before its single report; phase 3 continues a settled chain as
-  `user` detached with zero parent provider requests and its own execution turn;
-  phase 4 reattaches via an explicit parent `Task(resume)`; phase 5 stops a
-  running child and continues the stopped chain during the same parent turn, and
-  phase 6 stops the parent's execution, continues the resulting `aborted`
-  source as an isolated `user` run with no old-parent request or wake, then
+  the child adopts before its single report; phase 3 continues a settled chain
+  as an ordinary child with zero parent provider requests and no session turn
+  opened; phase 4 reattaches via an explicit parent `Task(resume)`; phase 5
+  stops a running child and continues the stopped chain during the same parent
+  turn, and phase 6 stops the parent's execution, continues the resulting
+  `aborted` source from its tab with no old-parent request or wake, then
   reattaches via a parent `Task(resume)` whose report depends only on the new
   run. The exact 900s cadence
   and the stop / parent-error / restart paths are covered separately by
@@ -19029,10 +19031,10 @@ registry-only installation and credential isolation.
 - **Expected**: Parent failure returns the session to idle; both delegates settle
   failed with SUBAGENT_PARENT_FAILED. Explicit Stop/TaskStop produce aborted/stopped.
   Cancelling a run retires its waiting and delivery, so it is never replayed on its
-  own. A later explicit parent `Task(resume)` is a new parent-owned run whatever the
-  last outcome, so each id starts a fresh delegate seeded from its own original task
-  and prior Read context and delivers back to the parent once, while the cancelled
-  run keeps its historical status and is not resurrected. No automatic restart occurs.
+  own. A later explicit parent `Task(resume)` starts a fresh run whatever the last
+  outcome, so each id starts a delegate seeded from its own original task and prior
+  Read context and delivers back to the parent once, while the cancelled run keeps
+  its historical status and is not resurrected. No automatic restart occurs.
 - **Specs linked**: 03-runtime/02-agent-runtime.md §5f; ADR 0279.
 - **Acceptance**: C, E, Quality. **Milestone**: Maintenance.
 - **Status**: Automated headless runtime/provider integration via

@@ -8,15 +8,15 @@
  *   `subagentWakeup`) have no parameter here and are structurally ignored:
  *   a query carries only `{ids, mode, minCompleted}`.
  * - One global time checkpoint anchors monotonic cadence from the first
- *   active expected delegation. Every new query reuses it (never restarts or
- *   shortens); a granted `time` wake advances it by one period; no expected
- *   running delegates disarms it.
+ *   active running delegation. Every new query reuses it (never restarts or
+ *   shortens); a granted `time` wake advances it by one period; no running
+ *   delegates disarms it.
  * - Threshold watermarks stay on the record-owned `wake` objects (same
  *   references), so consecutive waits never spin on one progress twice.
  * - Completion always wins (via `evaluateSubagentWake` /
  *   `waitForWakeTargets`). A snapshot read never consumes delivery;
  *   only `markProgramDelivery` with an explicit included set marks, and only
- *   the included settled parent-owned records.
+ *   the included settled records.
  * - Event-driven only: waits delegate to `waitForWakeTargets` (settlement
  *   promises + waiter-registry re-evaluation). No second loop. Actual timers
  *   live only inside the active `waitForWakeTargets` and cancel on wait
@@ -47,8 +47,6 @@ export type CoordinatorRecord = {
   status: string;
   toolCalls: number;
   contextTokens?: number;
-  /** `user`-owned runs are never expected, waited on, or marked. */
-  delivery?: "parent" | "user";
   reportDelivered?: boolean;
   wake: SubagentWakeState;
   /**
@@ -77,13 +75,6 @@ export type ProgramWaitDeps = {
   registerWakeWaiter: (listener: () => void) => () => void;
   signal?: AbortSignal;
 };
-
-/** Parent-expected: parent-owned (default) records only; user-owned excluded. */
-export function isExpectedCoordinatorRecord(
-  record: Pick<CoordinatorRecord, "delivery">,
-): boolean {
-  return (record.delivery ?? "parent") === "parent";
-}
 
 function toWakeTarget(record: CoordinatorRecord): SubagentWakeTarget {
   return {
@@ -117,17 +108,15 @@ function clampMinCompleted(value: unknown, fallback: number): number {
 export type ProgramDeliveryRecord = {
   delegationId: string;
   status: string;
-  delivery?: "parent" | "user";
   reportDelivered?: boolean;
 };
 
 /**
  * The single authoritative exactly-once delivery marker for program waits.
- * Marks only the explicitly included settled parent-owned records; omitted
- * settled reports stay pending (`reportDelivered` untouched), running and
- * user-owned records are never marked even when named. Returns the newly
- * marked ids. The init-failure premarked path stays outside this helper
- * (already delivered at spawn).
+ * Marks only the explicitly included settled records; omitted settled reports
+ * stay pending (`reportDelivered` untouched), running records are never marked
+ * even when named. Returns the newly marked ids. The init-failure premarked
+ * path stays outside this helper (already delivered at spawn).
  */
 export function markProgramDelivery(
   records: readonly ProgramDeliveryRecord[],
@@ -135,7 +124,6 @@ export function markProgramDelivery(
 ): string[] {
   const marked: string[] = [];
   for (const record of records) {
-    if ((record.delivery ?? "parent") !== "parent") continue;
     if (record.status === "running") continue;
     if (!includedDelegationIds.has(record.delegationId)) continue;
     if (record.reportDelivered) continue;
@@ -176,12 +164,7 @@ export function createDelegationCoordinator(options: {
   };
 
   const expectedRunning = (): CoordinatorRecord[] =>
-    options
-      .getRecords()
-      .filter(
-        (record) =>
-          isExpectedCoordinatorRecord(record) && record.status === "running",
-      );
+    options.getRecords().filter((record) => record.status === "running");
 
   const rebaseForWake = (
     now: number,
@@ -198,7 +181,7 @@ export function createDelegationCoordinator(options: {
   const selectProgramTargets = (
     query: ProgramWaitQuery = {},
   ): CoordinatorRecord[] => {
-    const records = options.getRecords().filter(isExpectedCoordinatorRecord);
+    const records = [...options.getRecords()];
     if (!query.ids || query.ids.length === 0) return [...records];
     const wanted = new Set(query.ids.map(String));
     return records.filter((record) => wanted.has(record.delegationId));

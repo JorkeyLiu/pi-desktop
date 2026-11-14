@@ -75,7 +75,6 @@ function harness() {
     dataDir: join(here, "..", "..", "..", "packages", "agent-runtime", "tmp-unused"),
     activeTurns: new Map(),
     isTurnDispatchable: () => true,
-    childExecutionTurns: new Set(),
     activeTurnUsages: new Map(),
     approvedExecutionIdsBySession: new Map(),
     claimedExecutionSessions: new Map(),

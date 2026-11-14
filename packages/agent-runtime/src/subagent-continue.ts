@@ -1,7 +1,7 @@
 /**
- * Direct child continuation: validation, delivery ownership, and transcript
- * rows for a user-origin `agentContinueSubagent` that resumes a settled chain
- * without asking the parent model to emit `Task(resume)` first.
+ * Direct child continuation: validation and transcript rows for a user-origin
+ * `agentContinueSubagent` that resumes a settled chain without asking the
+ * parent model to emit `Task(resume)` first.
  *
  * Kept out of `runtime.ts` so the hotspot owns only thin call sites. Spawning
  * reuses the `Task(resume)` tool implementation; everything else here is pure
@@ -9,14 +9,13 @@
  * the sidecar and Electron main surface them to the UI without reinterpreting
  * the text.
  *
- * Delivery rule (definitive): the parent receives a run's report only while it
- * expects THIS chain — the source run started in the current parent epoch,
- * its report was never delivered, it was not stopped/aborted, and its owning
- * turn is still alive. A settled source that still meets all four keeps the
- * `parent` delivery; anything else (delivered report, ended parent, detached
- * chain) continues as `user`-owned: no parent wake, no parent model context,
- * no billing of an unrelated turn. `expectedTurnId` is only a stale guard;
- * the source record decides the relationship.
+ * A continuation spawns an ordinary child run. Whether it has a live parent
+ * turn to report back to is decided once, at spawn (`parentTurnId`): the
+ * current turn when the parent turn is live, absent when it already ended. An
+ * ended parent is never woken, restarted, or billed by the child; a live one
+ * keeps its normal `TaskWait` / idle-resume coordination. `expectedTurnId` is
+ * informational only — a stale or ended turn never blocks communicating with
+ * a child, because the user's intervention is not report ownership.
  */
 
 import { randomUUID } from "node:crypto";
@@ -24,7 +23,6 @@ import {
   isUuid,
   type AgentEventEnvelope,
   type MessageAttachment,
-  type SubagentDeliveryOwner,
   type UiMessage,
 } from "@pi-desktop/shared";
 
@@ -57,20 +55,6 @@ export type ContinueChainState = {
   latestStatus?: string;
 };
 
-export type ContinueOwnership = {
-  expectedParentTurnId?: unknown;
-  currentTurnId?: string;
-  /** True when the parent turn is live and dispatchable. */
-  turnAlive: boolean;
-  /** True when the runtime currently owns a live parent turn. */
-  runtimeRunning: boolean;
-  /**
-   * Allow a named-but-unknown turn as a fresh execution owner when idle.
-   * The host begins it (accounting only); the runtime adopts it after this
-   * validation. Never applies while a parent turn is live.
-   */
-  allowFreshExecutionTurn?: boolean;
-};
 
 export type ContinueInput = {
   delegationId: unknown;
@@ -104,19 +88,16 @@ export type ValidatedSubagentContinue =
  * Decide one settled-chain continuation without touching any loop.
  *
  * Guards, in order: identity, chain liveness (a still-running chain names its
- * live run — steer it instead of forking a second run), then the stale guard.
+ * live run — steer it instead of forking a second run), then input validity.
  * A settled chain continues regardless of how its last run ended: the outcome
- * is history, not a barrier. An
- * explicit `expectedParentTurnId` must name the live parent turn; an absent
- * one is allowed only when the runtime holds no live turn (the idle path,
- * where the host opens a new durable execution turn first). A repeated
- * caller message id returns `already-applied` with the first new run's id,
- * so retries execute the continuation exactly once.
+ * is history, not a barrier, and neither is the state of the parent turn the
+ * caller last saw — intervening is communicating with a child, not claiming
+ * its report. A repeated caller message id returns `already-applied` with the
+ * first new run's id, so retries execute the continuation exactly once.
  */
 export function validateSubagentContinue(
   chain: DelegationChain | undefined,
   request: ContinueInput,
-  ownership: ContinueOwnership,
   runningDelegationIds: ReadonlySet<string>,
   seenContinuations?: Map<string, string>,
 ): ValidatedSubagentContinue {
@@ -158,27 +139,6 @@ export function validateSubagentContinue(
       "CHAIN_BUSY",
     );
   }
-  const expected =
-    typeof ownership.expectedParentTurnId === "string"
-      ? ownership.expectedParentTurnId.trim()
-      : "";
-  if (expected) {
-    if (expected.length > 128) {
-      throw codedError("expectedTurnId is invalid", "INVALID_ARGUMENT");
-    }
-    // An idle runtime adopts a host-begun execution turn after validation;
-    // the delivery decision still separates attached from detached sources.
-    if (ownership.allowFreshExecutionTurn && !ownership.runtimeRunning) {
-      // Accepted as a fresh execution owner; adopted by the caller.
-    } else if (expected !== ownership.currentTurnId || !ownership.turnAlive) {
-      throw codedError("The target turn has ended", "TURN_NOT_FOUND");
-    }
-  } else if (ownership.runtimeRunning) {
-    throw codedError(
-      "Session has an active turn; pass its expectedTurnId to attach this continuation",
-      "AGENT_BUSY",
-    );
-  }
   const { taskMessage, childMessage, toolCallId } = buildContinueSyntheticMessages({
     chain,
     delegationId,
@@ -198,44 +158,6 @@ export function validateSubagentContinue(
     taskMessage,
     childMessage,
   };
-}
-
-/** The source-run fields the delivery decision reads. */
-export type ContinueSourceState = {
-  delegationId: string;
-  /** `user`-owned sources never reattach on their own. */
-  delivery?: SubagentDeliveryOwner;
-  startedEpoch: number;
-  reportDelivered: boolean;
-  status: string;
-};
-
-/**
- * Decide who receives the new run's report. Attached (`parent`) only when the
- * source is parent-owned, started in the current parent epoch, undelivered,
- * not stopped/aborted, and its owning turn is still alive. Everything else is
- * detached (`user`): the source already reported, the parent moved on, or the
- * chain was never the parent's. A busy runtime with a detached source stays
- * busy — it must not attach to an unrelated live parent.
- */
-export function decideContinueDelivery(
-  source: ContinueSourceState | undefined,
-  currentEpoch: number,
-  turnAlive: boolean,
-  runtimeRunning: boolean,
-): { delivery: SubagentDeliveryOwner } | { rejected: "AGENT_BUSY" } {
-  const attached =
-    source !== undefined &&
-    (source.delivery ?? "parent") === "parent" &&
-    source.startedEpoch === currentEpoch &&
-    !source.reportDelivered &&
-    source.status !== "stopped" &&
-    source.status !== "aborted" &&
-    turnAlive;
-  if (attached) return { delivery: "parent" };
-  // Detached continuations never bill or wake an unrelated live parent turn.
-  if (runtimeRunning) return { rejected: "AGENT_BUSY" };
-  return { delivery: "user" };
 }
 
 /**
@@ -386,14 +308,15 @@ export function continueEmissions(options: {
  *
  * The transport form is re-checked here because a hand-written or corrupted
  * payload can reach the sidecar without passing the main-process handler. Only
- * structure is validated: the identifiers that address the run, and the rule
+ * structure is validated: the identifier that addresses the run, and the rule
  * that a steer carries something — text, or images when the user sent a
- * picture and no words. The text itself is the user's own input and has no
- * length bound, so it crosses unchanged.
+ * picture and no words. `expectedTurnId` is informational (the turn the caller
+ * last saw), never a requirement. The text itself is the user's own input and
+ * has no length bound, so it crosses unchanged.
  */
 export function parseSteerSubagentParams(params: unknown): {
   delegationId: string;
-  expectedTurnId: string;
+  expectedTurnId?: string;
   content: string;
   images?: ImageContent[];
   attachments?: MessageAttachment[];
@@ -401,7 +324,10 @@ export function parseSteerSubagentParams(params: unknown): {
 } {
   const source = (params ?? {}) as Record<string, unknown>;
   const delegationId = String(source.delegationId ?? "");
-  const expectedTurnId = String(source.expectedTurnId ?? "");
+  const expectedTurnId =
+    typeof source.expectedTurnId === "string" && source.expectedTurnId.trim()
+      ? source.expectedTurnId.trim()
+      : undefined;
   const content = String(source.content ?? "");
   const images = parseChildInputImages(source.images);
   const attachments = parseChildInputAttachments(source.attachments);
@@ -410,15 +336,15 @@ export function parseSteerSubagentParams(params: unknown): {
       ? source.messageId.trim()
       : undefined;
   // An image-only steer is a real input; requiring text would drop it.
-  if (!delegationId.trim() || !expectedTurnId.trim() || (!content.trim() && images.length === 0)) {
-    throw codedError("delegationId, expectedTurnId and content required", "INVALID_ARGUMENT");
+  if (!delegationId.trim() || (!content.trim() && images.length === 0)) {
+    throw codedError("delegationId and content required", "INVALID_ARGUMENT");
   }
-  if (delegationId.length > 128 || expectedTurnId.length > 128) {
+  if (delegationId.length > 128 || (expectedTurnId && expectedTurnId.length > 128)) {
     throw codedError("steerSubagent payload out of bounds", "INVALID_ARGUMENT");
   }
   return {
     delegationId,
-    expectedTurnId,
+    ...(expectedTurnId ? { expectedTurnId } : {}),
     content,
     ...(images.length ? { images } : {}),
     ...(attachments.length ? { attachments } : {}),
@@ -428,9 +354,8 @@ export function parseSteerSubagentParams(params: unknown): {
 
 /**
  * Parse a sidecar `agent.continueSubagent` call. The runtime revalidates the
- * chain, decides delivery, and adopts the execution turn after this dispatch,
- * so a stale or busy target fails there with its coded error rather than
- * continuing the wrong chain here.
+ * chain after this dispatch, so a stale or still-running target fails there
+ * with its coded error rather than continuing the wrong chain here.
  */
 export function parseContinueSidecarParams(params: unknown): {
   sessionId: string;
@@ -553,21 +478,16 @@ export function continueHydrationSource(params: unknown): Record<string, unknown
 
 /** Host state the continuation preparation reads; the runtime binds it. */
 export type ContinueHostState = {
+  /** Live parent turn id; absent between turns. */
   turnId?: string;
-  turnEpoch: number;
   disposed: boolean;
   runCancelled: boolean;
   turnHadError: boolean;
-  /** Parent-scoped liveness: detached user runs never count as running. */
+  /** Parent-scoped liveness: a child running alone is not a parent turn. */
   isRunning: boolean;
   lookupChain: (delegationId: string) => DelegationChain | undefined;
-  lookupRecord:
-    | ((delegationId: string) => ContinueSourceState | undefined)
-    | undefined;
   runningDelegationIds: ReadonlySet<string>;
   seenContinuations?: Map<string, string>;
-  adoptExecutionTurn: (turnId: string) => void;
-  mintTurnId: () => string;
 };
 
 export type PreparedSubagentContinue =
@@ -575,14 +495,18 @@ export type PreparedSubagentContinue =
   | {
       outcome: "ready";
       validated: Extract<ValidatedSubagentContinue, { outcome: "continue" }>;
-      delivery: SubagentDeliveryOwner;
-      executionTurnId: string;
+      /** Live parent turn the run reports back to; absent when independent. */
+      parentTurnId?: string;
     };
 
 /**
- * Validate, decide delivery, and adopt the execution owner without spawning.
- * Throws the same coded errors as the spawn path, before any state changes
- * except the idle execution-turn adoption (which touches no live parent).
+ * Validate one settled-chain continuation without spawning or touching any
+ * turn.
+ *
+ * The new run reports back to the parent only when the parent turn is live
+ * right now; between turns it is an ordinary independent child, and no parent
+ * turn is begun, adopted, or woken for it. `expectedParentTurnId` is
+ * informational, so a stale or ended turn never rejects an intervention.
  */
 export function prepareSubagentContinue(
   request: {
@@ -598,8 +522,6 @@ export function prepareSubagentContinue(
   const delegationId =
     typeof request.delegationId === "string" ? request.delegationId.trim() : "";
   const chain = delegationId ? state.lookupChain(delegationId) : undefined;
-  const turnAlive =
-    !state.disposed && !state.runCancelled && !state.turnHadError && state.isRunning;
   const validated = validateSubagentContinue(
     chain,
     {
@@ -609,49 +531,19 @@ export function prepareSubagentContinue(
       ...(request.attachments?.length ? { attachments: request.attachments } : {}),
       ...(request.images?.length ? { images: request.images } : {}),
     },
-    {
-      expectedParentTurnId: request.expectedParentTurnId,
-      currentTurnId: state.turnId,
-      turnAlive,
-      runtimeRunning: state.isRunning,
-      allowFreshExecutionTurn: true,
-    },
     state.runningDelegationIds,
     state.seenContinuations,
   );
   if (validated.outcome === "already-applied") {
     return { outcome: "already-applied", newDelegationId: validated.newDelegationId };
   }
-  const source =
-    (delegationId ? state.lookupRecord?.(delegationId) : undefined) ??
-    (chain?.latestDelegationId
-      ? state.lookupRecord?.(chain.latestDelegationId)
-      : undefined);
-  const decision = decideContinueDelivery(
-    source ?? undefined,
-    state.turnEpoch,
-    turnAlive,
-    state.isRunning,
-  );
-  if ("rejected" in decision) {
-    throw codedError(
-      "Session has an active turn unrelated to this delegation; stop it or wait for it to settle before continuing here",
-      "AGENT_BUSY",
-    );
-  }
-  if (decision.delivery === "parent") {
-    if (!state.turnId) throw codedError("The target turn has ended", "TURN_NOT_FOUND");
-    return { outcome: "ready", validated, delivery: "parent", executionTurnId: state.turnId };
-  }
-  const expected =
-    typeof request.expectedParentTurnId === "string"
-      ? request.expectedParentTurnId.trim()
-      : "";
-  // Detached runs execute under their own accounting turn: the host-begun id
-  // when provided, a minted local owner otherwise. No parent prompt runs.
-  const executionTurnId = expected || state.mintTurnId();
-  if (executionTurnId !== state.turnId) state.adoptExecutionTurn(executionTurnId);
-  return { outcome: "ready", validated, delivery: "user", executionTurnId };
+  const parentTurnLive =
+    !state.disposed && !state.runCancelled && !state.turnHadError && state.isRunning;
+  return {
+    outcome: "ready",
+    validated,
+    ...(parentTurnLive && state.turnId ? { parentTurnId: state.turnId } : {}),
+  };
 }
 
 /** Spawn-target lookup for a prepared continuation; throws coded errors. */
@@ -681,9 +573,16 @@ export function resolveContinueSpawnTarget<Definition, TaskTool>(options: {
  * The marker keeps the real invocation id and the user-origin tag; the
  * followup links through that id. Neither enters the parent model context.
  */
+/**
+ * Repoint the marker at the spawned run and build every emission for it.
+ * The marker keeps the real invocation id and the user-origin tag; the
+ * followup links through that id. Neither enters the parent model context.
+ * Rows are attributed to the turn the caller is writing into (the live parent
+ * turn, or the synthetic turn an idle runtime holds for its own transcript).
+ */
 export function buildContinueSpawnEmissions(options: {
   sessionId: string;
-  executionTurnId: string;
+  turnId: string;
   agentName: string;
   validated: Extract<ValidatedSubagentContinue, { outcome: "continue" }>;
   newDelegationId: string;
@@ -697,15 +596,11 @@ export function buildContinueSpawnEmissions(options: {
   followupEnd: AgentEventEnvelope;
 } {
   const { validated, newDelegationId } = options;
-  // The marker is the run's parent ledger row, so it names the run's own
-  // execution turn: a tab reopened later reads it back from the persisted row
-  // instead of guessing which turn owns the continuation's steering.
   const details = {
     delegationId: newDelegationId,
     agent: options.agentName,
     status: "running",
     resumedFrom: validated.delegationId,
-    executionTurnId: options.executionTurnId,
   };
   const taskMessage: UiMessage = {
     ...validated.taskMessage,
@@ -720,7 +615,7 @@ export function buildContinueSpawnEmissions(options: {
   };
   const emissions = continueEmissions({
     sessionId: options.sessionId,
-    turnId: options.executionTurnId,
+    turnId: options.turnId,
     agentName: options.agentName,
     toolCallId: validated.toolCallId,
     taskMessage,
@@ -728,7 +623,7 @@ export function buildContinueSpawnEmissions(options: {
     ...(options.now !== undefined ? { now: options.now } : {}),
   });
   const ts = options.now ?? Date.now();
-  const base = { sessionId: options.sessionId, turnId: options.executionTurnId, ts };
+  const base = { sessionId: options.sessionId, turnId: options.turnId, ts };
   return {
     taskMessage,
     appendEnvelope: {

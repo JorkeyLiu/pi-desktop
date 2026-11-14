@@ -16,25 +16,26 @@
 //  2. An attached user steer enters only the child ledger; the child adopts it
 //     in a later provider request and its report reaches the parent exactly
 //     once, with no parent provider request while the child runs.
-//  3. A delivered chain's direct user continuation runs detached: ZERO parent
-//     provider requests, its own execution-turn accounting, and no detached
+//  3. A delivered chain's direct user continuation runs as an ordinary child:
+//     ZERO parent provider requests, no parent turn opened or reserved, and no
 //     report in any parent context.
 //  4. An explicit parent `Task(resume)` on the settled chain reattaches: the
 //     resumed run's report is delivered back to the parent exactly once.
 //  5. A stopped child settles `stopped` and delivers no report, yet its chain is
 //     still continuable: an explicit direct continue starts a new run seeded
-//     with the original task brief plus the new input (zero child rows), stays
-//     `user`-owned with ZERO parent requests, and refuses a concurrent second
-//     continue while the new run is still working.
+//     with the original task brief plus the new input (zero child rows), issues
+//     ZERO parent requests, and refuses a concurrent second continue while the
+//     new run is still working.
 //  6. A parent abort aborts its leftover child (`aborted`); a direct continue of
 //     that aborted chain runs independently with no old-parent request or wake,
-//     and a later explicit parent `Task(resume)` reattaches the chain as a new
-//     parent-owned run whose report depends only on the new dependency.
+//     and a later explicit parent `Task(resume)` starts the chain's next run
+//     whose report depends only on the new dependency.
 //  7. An image-only steer of a live child and an image-only direct
 //     continuation both travel Main handler -> real sidecar -> child provider
 //     even though the child model's metadata declares text-only input; the
 //     transcript keeps content-addressed refs, never the bytes, and a
-//     continuation naming an ended turn is refused before any provider work.
+//     continuation naming an ended turn is still accepted (the guard is
+//     informational), opening no parent turn.
 //
 // Requires a freshly built agent-runtime/sidecar dist that carries the program
 // coordinator. A stale dist is detected from the emitted TaskWait tool schema
@@ -494,11 +495,10 @@ try {
   });
 
   const sidecar = { call: rpc, setProjectInstructionRoot() {}, clearProjectInstructionRoot() {}, clearVendorAuthBindings() {} };
-  const childExecutionTurns = new Set();
   registerAgentIpc({
     registrar: { handle: (channel, handler) => handlers.set(channel, handler) },
     getHost: () => host, getSidecar: () => sidecar, getAgentHostBridge: () => bridge,
-    logger: { app() {} }, dataDir, activeTurns, childExecutionTurns, activeTurnUsages: new Map(),
+    logger: { app() {} }, dataDir, activeTurns, activeTurnUsages: new Map(),
     vendorOAuth: { async resolveAuth() { throw new Error("Fixture does not use OAuth"); } },
     agentExtensions: { cancelPrompts() {} }, cancelSessionTools() {}, persistenceOutbox: { async flush() {} },
     approvedExecutionIdsBySession: new Map(), claimedExecutionSessions: new Map(),
@@ -593,40 +593,42 @@ try {
   stepped.phase2ParentRequests = parentRequests.length;
   await until(() => !activeTurns.has(sessionId), "phase 2 parent turn did not settle");
 
-  // ---- Phase 3: delivered chain, detached user continuation ---------------
+  // ---- Phase 3: delivered chain, independent user continuation ------------
   const parentBeforeContinue = parentRequests.length;
   const continued = await invoke(IPC.invoke.agentContinueSubagent, [{ sessionId, delegationId: delegationA, content: CONTINUE_PROMPT }]);
-  assert.equal(continued.delivery, "user", "a delivered chain must continue detached");
-  assert.ok(continued.turnId, "the detached continuation must own an execution turn");
-  assert.notEqual(continued.turnId, turnIdA, "detached execution turn must not reuse the parent turn");
-  assert.notEqual(continued.turnId, turnIdB, "detached execution turn must not reuse another parent turn");
-  await until(() => childRequests.some((request) => allUserText(request).includes("CONTINUE_FIXTURE")), "detached continuation did not start a child run");
-  await until(() => !activeTurns.has(sessionId), "detached execution turn did not settle");
+  // A child run is no one's property and opens no turn: the reply carries no
+  // delivery owner and no new session turn appears.
+  assert.equal(continued.delivery, undefined, "a continuation must state no delivery owner");
+  await until(() => childRequests.some((request) => allUserText(request).includes("CONTINUE_FIXTURE")), "the continuation did not start a child run");
+  const settled = () => events.some((envelope) => envelope.parentToolCallId && envelope.event.type === "message_end" && textOf(envelope.event.message.content).includes(DETACHED_REPORT));
+  await until(settled, "the continuation did not settle");
   await eventWork;
-  assert.equal(parentRequests.length, parentBeforeContinue, "a detached continuation must issue ZERO parent provider requests");
-  assert.ok(finishedTurns.some((turn) => turn.turnId === continued.turnId), "the detached execution turn must be opened and closed under its own id");
-  assert.ok(finishedTurns.some((turn) => turn.turnId === turnIdA) && finishedTurns.some((turn) => turn.turnId === turnIdB), "parent turns must settle under their own ids, separate from the detached turn");
-  assert.equal(parentRequests.some((request) => JSON.stringify(request.messages).includes(DETACHED_REPORT)), false, "the detached report must never enter the parent context");
+  assert.equal(activeTurns.has(sessionId), false, "a child continuation must not occupy a session turn");
+  assert.equal(parentRequests.length, parentBeforeContinue, "a continuation after the parent turn ended must issue ZERO parent provider requests");
+  assert.equal(finishedTurns.some((turn) => turn.turnId === continued.turnId) && continued.turnId !== undefined, false,
+    "a child continuation must not open a durable turn row");
+  assert.ok(finishedTurns.some((turn) => turn.turnId === turnIdA) && finishedTurns.some((turn) => turn.turnId === turnIdB), "parent turns must settle under their own ids");
+  assert.equal(parentRequests.some((request) => JSON.stringify(request.messages).includes(DETACHED_REPORT)), false, "the child report must never enter the parent context");
   const detachedReport = events.find((envelope) => envelope.parentToolCallId && envelope.event.type === "message_end" && textOf(envelope.event.message.content).includes(DETACHED_REPORT));
-  assert.ok(detachedReport, "the detached child report must be emitted on its own execution turn");
-  assert.equal(detachedReport.turnId, continued.turnId, "the detached report must carry its own execution turn id");
-  const detachedTerminal = events.find((envelope) => envelope.event.type === "agent_end" && envelope.turnId === continued.turnId);
-  assert.ok(detachedTerminal, "the detached execution turn must end with its own terminal event");
+  assert.ok(detachedReport, "the child report must be emitted on its own run");
   const marker = events.find((envelope) => envelope.event.type === "message_end" && envelope.event.message.role === "tool" && envelope.event.message.toolName === "Task" && envelope.event.message.toolArgs?.source === "user");
   assert.ok(marker, "the user continuation must persist a user-origin Task marker row");
   assert.equal(marker.event.message.toolArgs.resume, delegationA, "the user marker must resume the delivered chain");
-  // The marker also names the run's OWN execution turn, which is the only
-  // identity a reopened tab or a rebuilt renderer still has: the parent turn
-  // ended before this continuation started.
+  // Input provenance only: the marker names no execution turn and no owner.
   assert.equal(
     marker.event.message.toolResult?.details?.executionTurnId,
-    continued.turnId,
-    "the user marker must publish the detached run's execution turn",
+    undefined,
+    "the user marker must not publish an execution turn",
+  );
+  assert.equal(
+    marker.event.message.toolResult?.details?.delivery,
+    undefined,
+    "the user marker must not state a delivery owner",
   );
   assert.equal(
     marker.event.message.toolArgs.source,
     "user",
-    "the user marker must state its delivery owner",
+    "the user marker must record its input provenance",
   );
 
   // ---- Phase 4: explicit parent Task(resume) reattaches the report --------
@@ -658,9 +660,7 @@ try {
   // though the stopped-before-first-message run left zero child rows.
   const parentBeforeContinue5 = parentRequests.length;
   continuedStopped = await invoke(IPC.invoke.agentContinueSubagent, [{ sessionId, delegationId: delegationS, content: STOP_CONTINUE_PROMPT }]);
-  assert.equal(continuedStopped.delivery, "user", "a stopped source must continue user-owned");
-  assert.ok(continuedStopped.turnId, "the stopped-chain continuation must own an execution turn");
-  assert.notEqual(continuedStopped.turnId, turnIdS, "the continuation must not reuse the stopped parent turn");
+  assert.equal(continuedStopped.delivery, undefined, "a continuation must state no delivery owner");
   await until(() => held.has("S2"), "the stopped-chain continuation child run did not start");
   // No concurrent chain: a second continue while the new run works is refused
   // and never reaches a provider request.
@@ -670,14 +670,15 @@ try {
   const busyText = `${busyRejection?.errorCode ?? ""} ${busyRejection?.message ?? busyRejection}`;
   assert.match(busyText, /BUSY|active turn/i, "the refusal must name the busy chain or session");
   held.get("S2").stream.finish({ role: "assistant", content: STOP_CONTINUE_REPORT }, "stop");
-  await until(() => !activeTurns.has(sessionId), "the stopped-chain continuation did not settle");
+  await until(() => events.some((envelope) => envelope.parentToolCallId && envelope.event.type === "message_end" && textOf(envelope.event.message.content).includes(STOP_CONTINUE_REPORT)), "the stopped-chain continuation did not settle");
+  assert.equal(activeTurns.has(sessionId), false, "the stopped-chain continuation must not occupy a session turn");
   await eventWork;
   const stoppedContinueRequest = childRequests.find((request) => lastUserText(request).includes("CONTINUE_STOPPED"));
   assert.ok(stoppedContinueRequest, "the stopped-chain continuation must reach the fixture");
   assert.equal(allUserText(stoppedContinueRequest).includes(STOP_TASK), true, "the continuation must seed the original task brief despite zero child rows");
   assert.equal(childRequests.some((request) => allUserText(request).includes("CONTINUE_STOPPED_BUSY")), false, "a refused continue must not start a child run");
   assert.equal(parentRequests.length, parentBeforeContinue5, "continuing a stopped chain must issue ZERO parent provider requests");
-  assert.equal(parentRequests.some((request) => JSON.stringify(request.messages).includes(STOP_CONTINUE_REPORT)), false, "a user-owned stopped-chain report must never enter the parent context");
+  assert.equal(parentRequests.some((request) => JSON.stringify(request.messages).includes(STOP_CONTINUE_REPORT)), false, "a stopped-chain continuation report must never enter the parent context");
 
   // ---- Phase 6: parent abort -> independent continue, no parent wake ------
   await invoke(IPC.invoke.agentPrompt, [{ sessionId, content: PHASE6_PROMPT }]);
@@ -696,17 +697,16 @@ try {
   // The aborted chain is still continuable: a direct continue runs isolated
   // with no old-parent request or wake.
   continuedParentStop = await invoke(IPC.invoke.agentContinueSubagent, [{ sessionId, delegationId: delegationP, content: PARENT_STOP_CONTINUE_PROMPT }]);
-  assert.equal(continuedParentStop.delivery, "user", "an aborted source must continue user-owned");
-  assert.ok(continuedParentStop.turnId, "the independent continuation must own an execution turn");
-  assert.notEqual(continuedParentStop.turnId, turnIdP, "the independent continuation must not reuse the aborted parent turn");
+  assert.equal(continuedParentStop.delivery, undefined, "a continuation must state no delivery owner");
   await until(() => childRequests.some((request) => allUserText(request).includes("CONTINUE_PARENT_STOP")), "the independent continuation did not start a child run");
-  await until(() => !activeTurns.has(sessionId), "the independent continuation did not settle");
+  await until(() => events.some((envelope) => envelope.parentToolCallId && envelope.event.type === "message_end" && textOf(envelope.event.message.content).includes(PARENT_STOP_REPORT)), "the independent continuation did not settle");
+  assert.equal(activeTurns.has(sessionId), false, "the independent continuation must not occupy a session turn");
   await eventWork;
   assert.equal(parentRequests.length, parentBeforeStop6, "the aborted parent must not be woken by the stop or the independent continuation");
-  assert.equal(parentRequests.some((request) => JSON.stringify(request.messages).includes(PARENT_STOP_REPORT)), false, "an aborted chain's user-owned report must never enter the parent context");
+  assert.equal(parentRequests.some((request) => JSON.stringify(request.messages).includes(PARENT_STOP_REPORT)), false, "an independent continuation's report must never enter the parent context");
 
-  // An explicit parent Task(resume) reattaches the chain as a new parent-owned
-  // run whose report depends only on the new dependency.
+  // An explicit parent Task(resume) starts the chain's next run from the
+  // parent's side, and its report depends only on the new dependency.
   await invoke(IPC.invoke.agentPrompt, [{ sessionId, content: PHASE6R_PROMPT }]);
   await until(() => childRequests.some((request) => allUserText(request).includes(REATTACH_STOP_TASK)), "phase 6R parent Task(resume) did not start a resumed child run");
   await until(() => parentRequests.some((request) => textOf(request.messages.at(-1)?.content).includes(REATTACH_STOP_REPORT)), "phase 6R parent did not receive the reattached report");
@@ -716,7 +716,7 @@ try {
   const reattachStopRequest = childRequests.find((request) => lastUserText(request).includes(REATTACH_STOP_TASK));
   assert.ok(reattachStopRequest, "the reattached run must reach the fixture");
   assert.equal(allUserText(reattachStopRequest).includes("CONTINUE_PARENT_STOP"), true, "the parent resume must reattach the independently continued chain");
-  assert.equal(parentRequests.some((request) => JSON.stringify(request.messages).includes(PARENT_STOP_REPORT)), false, "the earlier user-owned report must never reach the parent after reattaching");
+  assert.equal(parentRequests.some((request) => JSON.stringify(request.messages).includes(PARENT_STOP_REPORT)), false, "the earlier independent report must never reach the parent after reattaching");
   await until(() => !activeTurns.has(sessionId), "phase 6R parent turn did not settle");
   // ---- Phase 7: Main handler -> sidecar -> child provider, images ----------
   // The launch fixture's child model declares text-only input metadata, the way
@@ -746,34 +746,27 @@ try {
   assert.equal(JSON.stringify(steeredImageRequest).includes(`data:image/png;base64,${PNG_BASE64}`), true, "the child provider request must carry the prepared image bytes");
   await until(() => !activeTurns.has(sessionId), "phase 7 parent turn did not settle");
 
-  // A continuation naming a turn the session no longer owns is refused before
-  // any provider work: ownership drift never becomes a silent new prompt.
-  const requestsBeforeStaleContinue = requests.length;
-  const staleContinue = await invoke(IPC.invoke.agentContinueSubagent, [{
-    sessionId, delegationId: delegationS, content: "", expectedTurnId: turnIdS,
-    attachments: [CHILD_IMAGE_ATTACHMENT],
-  }]).then(() => null, (error) => error);
-  assert.ok(staleContinue, "a continuation naming an ended turn must be refused");
-  assert.equal(staleContinue.errorCode, "TURN_NOT_FOUND", `the refusal must name the ended turn: ${staleContinue.message}`);
-  assert.equal(requests.length, requestsBeforeStaleContinue, "a refused continuation must not reach any provider");
-
-  // Image-only direct continuation of the settled chain: the same full path,
-  // detached, on a chain that no longer has a live parent turn.
+  // A continuation naming a turn the session no longer holds is still
+  // accepted: the guard is informational and the target is the live chain, so
+  // an ended parent turn never blocks communicating with a child.
   const parentBeforeImageContinue = parentRequests.length;
   continuedImage = await invoke(IPC.invoke.agentContinueSubagent, [{
-    sessionId, delegationId: delegationS, content: "", attachments: [CHILD_IMAGE_ATTACHMENT],
+    sessionId, delegationId: delegationS, content: "", expectedTurnId: turnIdS,
+    attachments: [CHILD_IMAGE_ATTACHMENT],
   }]);
-  assert.equal(continuedImage.delivery, "user", "an image-only continuation of a settled chain must run user-owned");
-  assert.ok(continuedImage.turnId, "the image continuation must own an execution turn");
-  assert.equal([turnIdA, turnIdB, turnIdS, turnIdP].includes(continuedImage.turnId), false, "the image continuation must not reuse a parent turn");
+  assert.equal(continuedImage.accepted, true, "a continuation naming an ended turn must still be accepted");
+  assert.equal(continuedImage.delivery, undefined, "a continuation must state no delivery owner");
+  assert.equal(continuedImage.turnId === undefined || ![turnIdA, turnIdB, turnIdS, turnIdP].includes(continuedImage.turnId), true,
+    "a continuation must not adopt a parent turn");
   await until(() => childImages().length >= 2, "the image continuation did not reach the child provider");
-  await until(() => !activeTurns.has(sessionId), "the image continuation did not settle");
+  await until(() => events.some((envelope) => envelope.parentToolCallId && envelope.event.type === "message_end" && textOf(envelope.event.message.content).includes(IMAGE_CONTINUE_REPORT)), "the image continuation did not settle");
   await eventWork;
   const continuedImageRequest = childImages()[1];
   assert.equal(JSON.stringify(continuedImageRequest).includes(`data:image/png;base64,${PNG_BASE64}`), true, "the continuation request must carry the prepared image bytes");
   assert.equal(textOf(continuedImageRequest.messages.at(-1).content).trim(), "", "the image-only continuation must reach the provider with no synthesized text");
   assert.equal(parentRequests.length, parentBeforeImageContinue, "an image-only continuation must issue ZERO parent provider requests");
-  assert.ok(finishedTurns.some((turn) => turn.turnId === continuedImage.turnId), "the image continuation must open and close its own execution turn");
+  assert.equal(finishedTurns.some((turn) => turn.turnId === continuedImage.turnId) && continuedImage.turnId !== undefined, false,
+    "the image continuation must not open a durable turn row");
   // The transcript keeps a content-addressed ref, never the bytes: both the
   // child row the handler echoes and the row the runtime persisted carry `ref`.
   const childImageRows = events.filter((envelope) =>
@@ -804,11 +797,11 @@ try {
     globalWakeup: "time:900",
     phase1: { parentRequests: stepped.phase1ParentRequests, quietWindowMs: QUIET_WINDOW_MS, quietWindowParentRequests: stepped.quietWindowParentRequests, ignoredControls: ["timeoutSeconds:1", "subagentWakeup:time:1"], reportDeliveries: phase1ReportCount },
     phase2: { parentRequests: stepped.phase2ParentRequests, reportDeliveries: phase2ReportCount, steerParentRequests: 0, childAdopted: stepped.childAdoptedSteer },
-    phase3: { delivery: continued.delivery, parentRequests: 0, executionTurnOwned: true },
+    phase3: { parentRequests: 0, parentTurnOpened: false },
     phase4: { parentReceivedReattach: stepped.phase4Parent === "PARENT_RECEIVED_REATTACH_REPORT", reportDeliveries: countReportDeliveries(REATTACH_REPORT) },
-    phase5: { parentSawStopped: stepped.phase5Parent === "PARENT_SAW_STOPPED", continueDelivery: continuedStopped.delivery, seededOriginalTask: true, concurrentRefused: true, parentRequests: 0 },
-    phase6: { continueDelivery: continuedParentStop.delivery, parentRequestsThroughStopAndContinue: 0, reattachedReportDeliveries: countReportDeliveries(REATTACH_STOP_REPORT) },
-    phase7: { imageSteerChildRequestBytes: true, imageContinueDelivery: continuedImage.delivery, imageContinueParentRequests: 0, persistedRefsOnly: true },
+    phase5: { parentSawStopped: stepped.phase5Parent === "PARENT_SAW_STOPPED", continueDeliveryOwner: continuedStopped.delivery, seededOriginalTask: true, concurrentRefused: true, parentRequests: 0 },
+    phase6: { continueDeliveryOwner: continuedParentStop.delivery, parentRequestsThroughStopAndContinue: 0, reattachedReportDeliveries: countReportDeliveries(REATTACH_STOP_REPORT) },
+    phase7: { imageSteerChildRequestBytes: true, staleGuardAccepted: continuedImage.accepted, imageContinueDeliveryOwner: continuedImage.delivery, imageContinueParentRequests: 0, persistedRefsOnly: true },
     requestCounts: { provider: requests.length, parent: parentRequests.length, child: childRequests.length },
     finishedTurns: finishedTurns.map((turn) => turn.turnId),
   })}`);

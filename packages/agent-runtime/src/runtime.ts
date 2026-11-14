@@ -125,7 +125,6 @@ import {
   type ProposalKind,
   type ResolvedSubagentSelfHandoffSettings,
   type ResolvedSubagentWakeupSettings,
-  type SubagentDeliveryOwner,
   type SubagentPermission,
   type SubagentSelfHandoffSettings,
   type SubagentWakeReason,
@@ -244,7 +243,6 @@ import {
   settlementSnapshotEvent,
   snapshotWaitRecord,
   toolRowFromEnvelope,
-  userOwnedTerminalEvent,
   type DelegationRowHost,
   type DelegationWaitHost,
 } from "./subagent-progress.js";
@@ -632,10 +630,15 @@ export type DelegationRecord = {
   handoffDirectiveRecords?: DelegationHandoffDirective[];
   /** Accepted child-steer message ids: a retried id is already applied. */
   steeredMessageIds?: Set<string>;
-  /** Report owner: `parent` delivers via TaskWait/idle; `user` never auto-delivers. */
-  delivery: SubagentDeliveryOwner;
-  /** Lifecycle owner: live parent turn when attached, child execution turn when detached. */
-  executionTurnId?: string;
+  /**
+   * Live parent turn that receives this run's report, captured once at spawn.
+   * Absent when the run is independent — started or continued while the parent
+   * turn was between turns — and therefore never wakes, joins, or bills a
+   * parent turn. The user's intervention does not change this relation.
+   */
+  parentTurnId?: string;
+  /** True when the user asked for this run directly (`source: "user"`). */
+  userOrigin?: boolean;
 };
 
 
@@ -1833,10 +1836,14 @@ export class DesktopAgentRuntime {
   private readonly appendedDelegationRowIds = new Set<string>();
   /** User-origin continuation idempotency: caller messageId -> new run id. */
   private readonly continuedSubagentIds = new Map<string, string>();
-  /** Delivery claimed by `continueSubagent`, keyed by its `Task(resume)` call. */
-  private readonly continueDeliveryByToolCall = new Map<
+  /** Origin claimed by `continueSubagent`, keyed by its `Task(resume)` call.
+   * Presence marks a direct user continuation; `parentTurnId` names the live
+   * parent turn it reports back to (absent between turns), and `rowTurnId` is
+   * the transcript attribution the run's rows carry — minted locally when no
+   * turn is open, never a durable parent turn reservation. */
+  private readonly continueOriginByToolCall = new Map<
     string,
-    { delivery: SubagentDeliveryOwner; executionTurnId: string }
+    { parentTurnId?: string; rowTurnId: string }
   >();
   /**
    * Image blocks claimed by `continueSubagent`, keyed by its `Task(resume)`
@@ -4766,7 +4773,16 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
               this.resumeModelContext(),
             )
           : undefined;
-        if (this.disposed || this.runCancelled || this.turnHadError || resumeEpoch !== this.turnEpoch) {
+        // A direct continuation (`continueSubagent`) starts the chain's next run
+        // from outside the parent turn: it claims its origin before spawning, so
+        // an ended, cancelled, or errored parent turn is history for it, never a
+        // refusal. A parent-issued `Task(resume)` still needs its live turn.
+        const independentContinuation = this.continueOriginByToolCall.has(toolCallId);
+        if (
+          this.disposed ||
+          (!independentContinuation &&
+            (this.runCancelled || this.turnHadError || resumeEpoch !== this.turnEpoch))
+        ) {
           return this.subagentToolError(toolCallId, "The parent turn ended before delegation could resume.");
         }
         // Authorization may yield while a parallel Task starts this chain.
@@ -4891,10 +4907,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           ...(providerKey ? { latestModelKey: providerKey } : {}),
           resumedFrom: resumedChain,
         });
-        // A direct user continuation claims delivery before spawning, so the
+        // A direct user continuation claims its origin before spawning, so the
         // record is tagged at creation — a fast settle cannot beat the claim.
-        const claimed = this.continueDeliveryByToolCall.get(toolCallId);
-        if (claimed) this.continueDeliveryByToolCall.delete(toolCallId);
+        const claimed = this.continueOriginByToolCall.get(toolCallId);
+        if (claimed) this.continueOriginByToolCall.delete(toolCallId);
+        // Rows this run writes are attributed to its claimed transcript turn,
+        // or the live parent turn that issued this `Task` call.
+        const rowTurnId = claimed?.rowTurnId ?? this.turnId;
         // Same claim discipline for the continuation's own images: read once per
         // spawn, so a stale entry can never attach to a later run.
         const claimedImages = this.continueImagesByToolCall.get(toolCallId);
@@ -4902,7 +4921,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         const record: DelegationRecord = {
           delegationId,
           parentToolCallId: toolCallId,
-          taskTurnId: this.turnId,
+          taskTurnId: rowTurnId,
           agentName: definition.name,
           modelId: provider.modelId,
           thinkingLevel,
@@ -4919,8 +4938,12 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           lastPhase: "waiting-model",
           startedEpoch: this.turnEpoch,
           reportDelivered: false,
-          delivery: (claimed?.delivery ?? "parent") as SubagentDeliveryOwner,
-          executionTurnId: claimed?.executionTurnId ?? this.turnId,
+          // A parent `Task` reports to the turn running it; a direct user
+          // continuation reports to the turn the user intervened in only when
+          // that turn is still live. Between turns the run is independent and
+          // never wakes a parent.
+          parentTurnId: claimed ? claimed.parentTurnId : this.turnId,
+          ...(claimed ? { userOrigin: true } : {}),
           delegateSessionId: chain.delegateSessionId,
           ...(worktreeKey ? { worktreeKey } : {}),
           ...(resumedChain ? { resumedFrom: resume } : {}),
@@ -4959,7 +4982,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           subagentRun = new SubagentRun({
             definition,
             sessionId: this.sessionId,
-            turnId: this.turnId,
+            turnId: rowTurnId,
             parentToolCallId: toolCallId,
             delegationId: record.delegationId,
             scratchDir: this.scratchDir,
@@ -5085,11 +5108,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             thinkingLevel,
             toolCalls: 0,
             turns: 0,
-            // The turn that owns this run's steering: the parent turn while
-            // attached, the child-only execution turn when the user continued
-            // the chain themselves. Published so a surface that outlives this
-            // process can name it without inferring from parent state.
-            executionTurnId: record.executionTurnId ?? this.turnId,
             ...(resumedChain ? { resumedFrom: resume } : {}),
           },
         };
@@ -5151,14 +5169,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     record: DelegationRecord,
     result: SubagentRunResult,
   ): void {
-    const userOwned = (record.delivery ?? "parent") === "user";
-    const wasRunning = record.status === "running";
     settleDelegationRecord(record, result, {
       sessionId: this.sessionId,
       addTurnUsage: (usage) => {
-        // A detached run's spend belongs to its own execution turn, carried
-        // by its own events — never folded into an unrelated parent turn.
-        if (!userOwned) {
+        // Only a live parent turn is billed by its child's spend. An
+        // independent run's spend stays on its own Task history and never
+        // charges a closed or unrelated turn.
+        if (record.parentTurnId !== undefined && record.parentTurnId === this.turnId) {
           this.turnSubagentUsage = addUsage(this.turnSubagentUsage, usage);
         }
       },
@@ -5178,12 +5195,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       prune: () => this.pruneFinishedDelegations(),
       notifyWaiters: () => this.wakeWaiters.notify(),
     });
-    // Close the detached run's own execution turn (child-only: durable row
-    // finalizes, no parent conclusion fans out).
-    if (userOwned && wasRunning && !this.disposed) {
-      const terminal = userOwnedTerminalEvent(record);
-      if (terminal) this.emit(terminal.event, terminal.turnId);
-    }
   }
 
   private publishDelegationSettlement(record: DelegationRecord): void {
@@ -5264,45 +5275,50 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     );
   }
 
-  /** Parent-owned running delegates: the only ones parent accounting sees. */
-  private runningParentDelegations(): DelegationRecord[] {
-    return this.runningDelegations().filter(
-      (record) => (record.delivery ?? "parent") === "parent",
-    );
-  }
-
-  /** Any live delegate, regardless of delivery (dispose/factory guards). */
+  /** Any live delegate (dispose/factory guards, user Stop). */
   hasRunningDelegations(): boolean {
     return this.runningDelegations().length > 0;
   }
 
-  /** Abort every running delegation (user Stop, dispose, parent fatal error). */
-  private abortRunningDelegations(parentErrorInterrupted = false): void {
+  /**
+   * Abort running delegations. `onlyCurrentTurn` limits it to the children
+   * attached to the live parent turn, so a parent failure cannot cancel a
+   * run the user intervened in independently; user Stop and dispose pass no
+   * filter because they mean every child.
+   */
+  private abortRunningDelegations(
+    parentErrorInterrupted = false,
+    onlyCurrentTurn = false,
+  ): void {
     for (const record of this.runningDelegations()) {
+      if (onlyCurrentTurn && record.parentTurnId !== this.turnId) continue;
       record.parentErrorInterrupted = parentErrorInterrupted;
       record.abort();
     }
   }
 
+  /** Running delegates attached to the live parent turn. */
   private currentTurnDelegations(): DelegationRecord[] {
-    return this.runningParentDelegations().filter(
-      (record) => record.startedEpoch === this.turnEpoch,
+    return this.runningDelegations().filter(
+      (record) =>
+        record.parentTurnId === this.turnId &&
+        record.startedEpoch === this.turnEpoch,
     );
   }
 
   /**
-   * Current-turn parent delegates whose report the parent has not seen yet:
-   * still running, or settled before the parent idled and never read through
+   * Current-turn children whose report the parent has not seen yet: still
+   * running, or settled before the parent idled and never read through
    * `TaskWait`. A delegate that finished in a few hundred milliseconds is
    * "done and unpublished", not "unfinished"; keying the idle resume on
-   * running delegates alone dropped such reports (#226). Stopped and
-   * aborted runs are not auto-delivered. User-owned runs never pend here:
-   * their reports belong to the user's followup, not the parent's context.
+   * running delegates alone dropped such reports (#226). Stopped and aborted
+   * runs are not auto-delivered. Independent runs never pend here: their
+   * reports belong to their own history, not the parent's context.
    */
   private pendingCurrentTurnDelegations(): DelegationRecord[] {
     return [...this.delegations.values()].filter(
       (record) =>
-        (record.delivery ?? "parent") === "parent" &&
+        record.parentTurnId === this.turnId &&
         record.startedEpoch === this.turnEpoch &&
         !record.reportDelivered &&
         record.status !== "stopped" &&
@@ -5312,23 +5328,24 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
 
   private abortDelegationsFromPreviousTurns(): void {
     for (const record of this.runningDelegations()) {
-      // A detached user-owned run survives a new parent turn: starting parent
-      // work must never silently abort the user's own followup.
-      if ((record.delivery ?? "parent") !== "parent") continue;
-      if (record.startedEpoch !== this.turnEpoch) record.abort();
+      // A run with no live parent turn is independent: new parent work must
+      // never silently abort the user's own followup.
+      if (record.parentTurnId === undefined) continue;
+      if (record.parentTurnId !== this.turnId) record.abort();
     }
   }
 
   /**
-   * Parent fatal error: abort leftover delegates so the session can go idle
-   * and Continue is not rejected as `AGENT_BUSY` (D352).
+   * Parent fatal error: abort the children attached to this turn so the
+   * session can go idle and Continue is not rejected as `AGENT_BUSY` (D352).
+   * Independent runs survive — a parent failure is not their failure.
    */
   private terminateParentTurn(): void {
     this.turnHadError = true;
     this.acceptingSteering = false;
     this.steeringWaitAbort?.abort();
     this.retainPendingSteering();
-    this.abortRunningDelegations(!this.runCancelled && !this.disposed);
+    this.abortRunningDelegations(!this.runCancelled && !this.disposed, true);
     this.delegationWaitTargets = undefined;
     this.clearAgentActivity();
   }
@@ -5336,7 +5353,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
   /** D328 keeps the turn open on parent idle, not on a fatal parent error. */
   private keepTurnOpenForDelegates(): boolean {
     return (
-      (this.runningParentDelegations().length > 0 ||
+      (this.currentTurnDelegations().length > 0 ||
         this.pendingCurrentTurnDelegations().length > 0) &&
       !this.runCancelled &&
       !this.turnHadError
@@ -5609,23 +5626,15 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           ? { ids, mode, minCompleted }
           : { mode, minCompleted };
 
-        // The parent waits only on its own delegates; user-owned runs are
-        // never targets and naming one does not consume it.
-        const parentOwned = (entry: DelegationRecord): boolean =>
-          (entry.delivery ?? "parent") === "parent";
+        // Every delegation in this session is a normal wait target, whichever
+        // input started it; a settled report stays cheap to re-read by id.
         let targets: DelegationRecord[];
         let unknownIds: string[] = [];
         if (ids.length) {
           const named = ids
             .map((id) => this.delegations.get(id))
-            .filter(
-              (entry): entry is DelegationRecord =>
-                entry !== undefined && parentOwned(entry),
-            );
-          unknownIds = ids.filter((id) => {
-            const entry = this.delegations.get(id);
-            return entry === undefined || !parentOwned(entry);
-          });
+            .filter((entry): entry is DelegationRecord => entry !== undefined);
+          unknownIds = ids.filter((id) => this.delegations.get(id) === undefined);
           if (named.length === 0) {
             return {
               content: [{ type: "text", text: "None of the requested delegation ids exist in this session. Call TaskList to see them." }],
@@ -5648,9 +5657,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             };
           }
         }
-        const hasRunning = targets.some(
-          (entry) => entry.status === "running" && parentOwned(entry),
-        );
+        const hasRunning = targets.some((entry) => entry.status === "running");
         this.beginDelegationWait(targets);
         const waitAbort = new AbortController();
         this.steeringWaitAbort = waitAbort;
@@ -5724,31 +5731,31 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
   }
 
   /**
-   * Steer one live delegate with user text. Attached runs steer through the
-   * live parent turn; detached user runs through their own execution turn.
-   * The input enters only the child's conversation, never parent context.
-   * Images reach the child's endpoint as blocks; no capability label gates
-   * them, and a refusal surfaces as a provider error rather than a text-only
-   * turn the user did not ask for.
+   * Steer one live delegate with user text — a direct intervention in the
+   * child's own conversation, independent of the parent turn the caller last
+   * saw. `expectedParentTurnId` is informational, never a gate: the input
+   * enters only the child's context, never the parent's, and never changes who
+   * the run reports to. Images reach the child's endpoint as blocks; no
+   * capability label gates them, and a refusal surfaces as a provider error
+   * rather than a text-only turn the user did not ask for.
    */
   steerSubagent(request: {
     delegationId: string;
-    expectedParentTurnId: string;
+    /** The turn the caller saw; informational only. */
+    expectedParentTurnId?: string;
     text: string;
     /** Image blocks for the child's own endpoint; this call carries no refs. */
     images?: ImageContent[];
     /** Durable refs the echoed child row keeps (the renderer's transcript). */
     attachments?: MessageAttachment[];
     messageId?: string;
-  }): { accepted: true; delegationId: string; turnId: string } {
+  }): { accepted: true; delegationId: string; turnId?: string } {
     const delegationId =
       typeof request.delegationId === "string" ? request.delegationId.trim() : "";
     const record = delegationId ? this.delegations.get(delegationId) : undefined;
-    const delivery = (record?.delivery ?? "parent") as SubagentDeliveryOwner;
-    const ownerTurnId =
-      delivery === "user"
-        ? (record?.executionTurnId ?? record?.taskTurnId)
-        : this.turnId;
+    // The echo belongs to the run's own transcript turn: the live parent turn
+    // it reports to, or the turn it was started in when independent.
+    const ownerTurnId = record?.parentTurnId ?? record?.taskTurnId;
     const validated = validateSubagentSteer(
       record
         ? {
@@ -5759,10 +5766,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             stopRequested: record.stopRequested,
             settled: record.run?.isSettled?.() === true,
             hasLiveLoop: typeof record.run?.steer === "function",
-            delivery,
-            ...(record.executionTurnId ?? record.taskTurnId
-              ? { executionTurnId: (record.executionTurnId ?? record.taskTurnId) as string }
-              : {}),
           }
         : undefined,
       {
@@ -5772,29 +5775,20 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         ...(request.images?.length ? { images: request.images } : {}),
         ...(request.attachments?.length ? { attachments: request.attachments } : {}),
       },
-      {
-        expectedParentTurnId: request.expectedParentTurnId,
-        currentTurnId: this.turnId,
-        turnAlive:
-          !this.disposed &&
-          !this.runCancelled &&
-          !this.turnHadError &&
-          this.getStatus().isRunning,
-      },
       record ? (record.steeredMessageIds ??= new Set()) : undefined,
     );
     if (validated.outcome === "already-applied") {
       return {
         accepted: true as const,
         delegationId: validated.delegationId,
-        turnId: ownerTurnId!,
+        ...(ownerTurnId ? { turnId: ownerTurnId } : {}),
       };
     }
     // The echo is emitted only on the accepted path, exactly once per id.
     const target = record!;
     applyValidatedSteer(validated, {
       sessionId: this.sessionId,
-      ownerTurnId: ownerTurnId!,
+      ...(ownerTurnId ? { ownerTurnId } : {}),
       parentToolCallId: target.parentToolCallId,
       agentName: target.agentName,
       steerLoop: (text, images, rowId) => target.run!.steer(text, images, rowId),
@@ -5807,18 +5801,20 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     return {
       accepted: true as const,
       delegationId: validated.delegationId,
-      turnId: ownerTurnId!,
+      ...(ownerTurnId ? { turnId: ownerTurnId } : {}),
     };
   }
 
   /**
    * Continue one settled delegate as a new run of the same chain, authorized
-   * directly by the user. Delivery follows the source record (`parent` while
-   * the parent expects this chain, `user` otherwise); spawning reuses the
-   * `Task(resume)` tool implementation.
+   * directly by the user. The run is an ordinary child of the session:
+   * `Task(resume)` spawning is reused, and only its report destination differs
+   * — the live parent turn if one is open, otherwise none, so an ended parent
+   * is never woken, restarted, or billed. No durable turn is begun here.
    */
   async continueSubagent(request: {
     delegationId: string;
+    /** The turn the caller saw; informational only. */
     expectedParentTurnId?: string;
     text: string;
     /**
@@ -5832,8 +5828,8 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
   }): Promise<{
     accepted: true;
     delegationId: string;
+    /** Transcript turn the new run's rows carry; informational attribution. */
     turnId?: string;
-    delivery: SubagentDeliveryOwner;
   }> {
     const prepared = prepareSubagentContinue(
       {
@@ -5846,40 +5842,41 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       },
       {
         turnId: this.turnId,
-        turnEpoch: this.turnEpoch,
         disposed: this.disposed,
         runCancelled: this.runCancelled,
         turnHadError: this.turnHadError,
         isRunning: this.getStatus().isRunning,
         lookupChain: (id) => this.delegationChains.lookup(id),
-        lookupRecord: (id) => this.delegations.get(id),
         runningDelegationIds: this.runningDelegationIds(),
         seenContinuations: this.continuedSubagentIds,
-        adoptExecutionTurn: (turnId) => this.adoptExecutionTurn(turnId),
-        mintTurnId: () => randomUUID(),
       },
     );
     if (prepared.outcome === "already-applied") {
       const prior = this.delegations.get(prepared.newDelegationId);
-      const delivery = (prior?.delivery ?? "user") as SubagentDeliveryOwner;
-      const turnId = prior?.executionTurnId ?? prior?.taskTurnId ?? this.turnId;
+      const turnId = prior?.taskTurnId ?? this.turnId;
       return {
         accepted: true as const,
         delegationId: prepared.newDelegationId,
         ...(turnId ? { turnId } : {}),
-        delivery,
       };
     }
-    const { validated, delivery, executionTurnId } = prepared;
+    const { validated, parentTurnId } = prepared;
     const { definition, taskTool } = resolveContinueSpawnTarget({
       definitions: this.subagents,
       nameOf: (candidate) => candidate.name,
       agentName: validated.chain.agentName,
       taskTool: this.toolCatalog.get(SUBAGENT_TOOL_NAME),
     });
-    // Claim delivery before spawning: the spawn reads and consumes the claim
+    // The run's rows are attributed to the live parent turn when it reports
+    // there, else to a locally minted transcript turn. Neither reserves a
+    // durable turn nor changes the session's parent turn state.
+    const rowTurnId = parentTurnId ?? randomUUID();
+    // Claim origin before spawning: the spawn reads and consumes the claim
     // when it creates the record, so a fast settle is tagged in time.
-    this.continueDeliveryByToolCall.set(validated.toolCallId, { delivery, executionTurnId });
+    this.continueOriginByToolCall.set(validated.toolCallId, {
+      ...(parentTurnId ? { parentTurnId } : {}),
+      rowTurnId,
+    });
     // The continuation's images ride the same claim: the spawn reads them by
     // tool call id, so no byte enters tool arguments or the tool result.
     if (validated.images.length) {
@@ -5893,7 +5890,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         resume: validated.delegationId,
       });
     } catch (error) {
-      this.continueDeliveryByToolCall.delete(validated.toolCallId);
+      this.continueOriginByToolCall.delete(validated.toolCallId);
       this.continueImagesByToolCall.delete(validated.toolCallId);
       throw error;
     }
@@ -5903,7 +5900,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         ? (details.delegationId as string)
         : "";
     if (!newDelegationId) {
-      this.continueDeliveryByToolCall.delete(validated.toolCallId);
+      this.continueOriginByToolCall.delete(validated.toolCallId);
       this.continueImagesByToolCall.delete(validated.toolCallId);
       const toolError =
         details && typeof (details as { error?: unknown }).error === "string"
@@ -5914,14 +5911,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     const record = this.delegations.get(newDelegationId);
     const spawned = buildContinueSpawnEmissions({
       sessionId: this.sessionId,
-      executionTurnId,
+      turnId: rowTurnId,
       agentName: definition.name,
       validated,
       newDelegationId,
     });
     if (record) {
-      record.delivery = delivery;
-      record.executionTurnId = executionTurnId;
+      record.userOrigin = true;
       record.taskMessage = spawned.taskMessage;
     }
     if (validated.idempotencyKey) {
@@ -5940,22 +5936,8 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     return {
       accepted: true as const,
       delegationId: newDelegationId,
-      turnId: executionTurnId,
-      delivery,
+      turnId: rowTurnId,
     };
-  }
-
-  /** Adopt a host-begun execution turn for a detached run (accounting only). */
-  private adoptExecutionTurn(turnId: string): void {
-    this.turnId = turnId;
-    this.turnEpoch += 1;
-    this.runCancelled = false;
-    this.turnHadError = false;
-    this.acceptingSteering = true;
-    this.gracefulStopRequested = false;
-    this.turnSubagentUsage = undefined;
-    this.delegationWaitTargets = undefined;
-    this.abortDelegationsFromPreviousTurns();
   }
 
   /** `TaskStop`: stop running delegations (ADR 0089). */
@@ -8777,14 +8759,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
               });
               // A user-origin marker stays a marker: the snapshot rebuilds
               // from the live tool call, which never carried `source: "user"`.
-              record.taskMessage =
-                (record.delivery ?? "parent") === "user"
-                  ? {
-                      ...snapshot,
-                      toolArgs: { ...(snapshot.toolArgs as Record<string, unknown> | undefined), source: "user" },
-                      steering: true,
-                    }
-                  : snapshot;
+              record.taskMessage = record.userOrigin
+                ? {
+                    ...snapshot,
+                    toolArgs: { ...(snapshot.toolArgs as Record<string, unknown> | undefined), source: "user" },
+                    steering: true,
+                  }
+                : snapshot;
               // A fast delegate may settle before its Task tool_end arrives.
               this.publishDelegationSettlement(record);
             }
@@ -9439,8 +9420,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       isRunning:
         this.agent.state.isStreaming ||
         this.compactionInProgress ||
-        this.agentActivity !== undefined ||
-        (!this.turnHadError && !this.runCancelled && this.runningParentDelegations().length > 0),
+        this.agentActivity !== undefined,
       currentTurnId: this.turnId,
       modelId: this.provider.modelId,
       pendingToolConfirmations: 0,
