@@ -1,4 +1,6 @@
 import type { SessionDetail } from "@pi-desktop/shared";
+import { isTranscriptRow } from "./assistant-turns";
+import { dedupeSessionMessages } from "./session-transcript";
 
 /**
  * Whether a durable window read is suspiciously empty (issue #795).
@@ -15,4 +17,47 @@ export function sessionReadLooksEmpty(
 ): boolean {
   if (!session) return false;
   return (session.messages ?? []).length === 0 && (session.messageCount ?? 0) > 0;
+}
+
+/**
+ * Whether this durable window contains a row the turn stream would draw.
+ *
+ * The window can be entirely delegate rows: they hang under a `Task` card that
+ * lies just before the window, so a pane opened on such a page has nothing to
+ * render and nothing to page from.
+ */
+export function sessionWindowHasRenderableRow(
+  session: Pick<SessionDetail, "messages"> | null | undefined,
+): boolean {
+  return (session?.messages ?? []).some(isTranscriptRow);
+}
+
+/**
+ * Merge one older bounded page into the current window, or return null when it
+ * cannot move the backward edge.
+ *
+ * The tail read stays authoritative for the forward edge: `messageEnd`,
+ * `hasMoreAfter` and the session summary fields are carried through untouched
+ * while `messageStart` and `hasMoreBefore` describe the widened window. A page
+ * whose cursor does not decrease offers no progress, so callers end the walk
+ * instead of re-requesting the same offset forever.
+ */
+export function mergeOlderTranscriptWindow(
+  current: SessionDetail,
+  older: SessionDetail | null | undefined,
+): SessionDetail | null {
+  if (!older) return null;
+  const start = older.messageStart;
+  if (typeof start !== "number" || start >= (current.messageStart ?? 0)) {
+    return null;
+  }
+  return {
+    ...current,
+    messages: dedupeSessionMessages([
+      ...(older.messages ?? []),
+      ...(current.messages ?? []),
+    ]),
+    messageStart: start,
+    hasMoreBefore: older.hasMoreBefore === true,
+  };
 }

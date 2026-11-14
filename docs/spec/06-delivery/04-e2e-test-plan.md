@@ -2221,6 +2221,38 @@ validation still needed.
 - **Status**: Source-level and isolated Host RPC cache regressions covered;
   full large-fixture Electron journey Draft
 
+#### E2E-207a: A bounded tail inside one delegation chain opens on visible history
+
+- **Preconditions**: A session whose last 100+ physical rows are all delegate
+  rows (`parentToolCallId` set), with the user turn and the parent `Task` call
+  just before that tail; a second, ordinary session with a renderable tail.
+- **Steps**: 1) Open the delegation topic from the sidebar. 2) Inspect the
+  renderer's session window and the host read cursor sequence. 3) Open the
+  ordinary topic and count its session reads. 4) Collapse the delegate's own
+  transcript tab and reopen the topic.
+- **Expected**: The delegation topic opens on its top-level turn instead of a
+  blank pane: opening keeps reading the same bounded backward pagination until
+  a renderable row is in the window or the session head is reached, and the
+  delegate rows stay in the window under their `Task` card (they do not become
+  standalone transcript rows and their own transcript still shows them). The
+  window keeps the original tail's `messageEnd`/`hasMoreAfter` and reports the
+  oldest page's `messageStart`/`hasMoreBefore`, so older history remains
+  reachable; a page that does not move the cursor ends the read. The ordinary
+  topic still costs one bounded read.
+- **Specs linked**: `04-ux/08-component-spec.md` (transcript window),
+  `03-runtime/06-host-rpc-protocol.md`, `03-runtime/01-ipc-protocol.md`
+- **Acceptance**: C (session open), F (persistence), Quality
+- **Milestone**: M5
+- **Status**: Unit-covered (`session-visible-history-bootstrap.test.mjs`
+  selection path, cursor loop, single-read and window-metadata cases). The
+  rendered journey was exercised manually on a build with the fix: a real
+  delegation session opens on its nearest top-level turn (7 rendered rows,
+  300-message window from three bounded reads), a normal wheel scroll reaches
+  the `Task` card one page earlier (15 rows, 400 messages) with the delegate
+  rows still linked under it, the child transcript tab shows 165 rows,
+  collapse and reopen are clean, no console errors, and an ordinary topic
+  still opens with one bounded read.
+
 #### E2E-011a: New session while another session is still streaming
 
 - **Preconditions**: Provider configured; session A is streaming a long

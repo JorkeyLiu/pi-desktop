@@ -2559,6 +2559,16 @@ Renderer: `apps/desktop/src/components/Markdown.tsx` + `apps/desktop/src/lib/shi
   reading viewport, measured and applied while the veil still covers the
   scroller. A reader's own scroll gesture is a position on its own and continues
   history immediately.
+- **A bounded window with nothing to draw opens backwards**: a tail window can
+  land entirely inside one delegation chain, so every row belongs under a
+  `Task` call that lies just before the window. With no renderable row the pane
+  has nothing to draw and no continuation control to trigger from, so opening
+  the session keeps reading the same bounded backward pagination until a
+  top-level row is inside the window or the real head is reached. The delegate
+  rows stay in the window for their own transcript, the tail's `messageEnd` and
+  `hasMoreAfter` stay authoritative, and `messageStart`/`hasMoreBefore` follow
+  the oldest page read. A page that does not move the cursor ends the walk, and
+  an already renderable tail still costs one bounded read.
 - **Minimap hover cost**: dash magnification is applied by writing a custom
   property per dash, and dash centers are measured in a separate read-only pass.
   Reading a dash's geometry inside the same loop that writes to it forces one
