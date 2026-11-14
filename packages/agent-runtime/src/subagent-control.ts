@@ -55,20 +55,6 @@ export type SteerTargetState = {
   settled: boolean;
   /** Whether a live loop handle exists to receive the steer. */
   hasLiveLoop: boolean;
-  /**
-   * Delivery of the target run. A `user`-owned run steers through its own
-   * execution-accounting turn, independent of any parent turn.
-   */
-  delivery?: "parent" | "user";
-  /** Execution-accounting turn owning a detached run. */
-  executionTurnId?: string;
-};
-
-export type SteerOwnership = {
-  expectedParentTurnId: unknown;
-  currentTurnId?: string;
-  /** False once the parent turn was cancelled, failed, or disposed. */
-  turnAlive: boolean;
 };
 
 export type SteerInput = {
@@ -94,20 +80,18 @@ export type ValidatedSubagentSteer =
 /**
  * Decide one child steer without touching any loop.
  *
- * Guards, in order: identity, liveness (a settled delegate names its
- * `Task(resume)` even after the turn ended), then the owning turn. An
- * attached run steers through the live parent turn it names; a detached
- * user-owned run steers through its own execution-accounting turn,
- * independent of any parent turn. The echo id keeps a caller-provided UUID
- * and otherwise mints runtime identity (D288-style); a repeated id for the
- * same delegation reports `already-applied` so the child executes the steer
- * exactly once and the echo is emitted exactly once. Throws coded rejections
- * otherwise.
+ * Guards, in order: identity, then the child's own liveness (a settled
+ * delegate names its `Task(resume)` even after the parent turn ended). The
+ * user's intervention is authorized by itself and validated against the live
+ * run — never against a parent turn, which may have ended long before the
+ * child did. The echo id keeps a caller-provided UUID and otherwise mints
+ * runtime identity (D288-style); a repeated id for the same delegation reports
+ * `already-applied` so the child executes the steer exactly once and the echo
+ * is emitted exactly once. Throws coded rejections otherwise.
  */
 export function validateSubagentSteer(
   record: SteerTargetState | undefined,
   request: SteerInput,
-  ownership: SteerOwnership,
   seenMessageIds?: Set<string>,
 ): ValidatedSubagentSteer {
   const delegationId =
@@ -140,22 +124,6 @@ export function validateSubagentSteer(
         : `Delegation "${delegationId}" already settled; continue it with Task(resume: "${delegationId}").`,
       "DELEGATION_NOT_RUNNING",
     );
-  }
-  if ((record.delivery ?? "parent") === "user") {
-    // Detached runs answer to their execution owner, never to a parent turn.
-    const expected =
-      typeof ownership.expectedParentTurnId === "string"
-        ? ownership.expectedParentTurnId.trim()
-        : "";
-    if (!expected || expected !== (record.executionTurnId ?? "").trim()) {
-      throw codedError("The target turn has ended", "TURN_NOT_FOUND");
-    }
-  } else if (
-    !ownership.expectedParentTurnId ||
-    ownership.expectedParentTurnId !== ownership.currentTurnId ||
-    !ownership.turnAlive
-  ) {
-    throw codedError("The target turn has ended", "TURN_NOT_FOUND");
   }
   const candidateId =
     typeof request.messageId === "string" ? request.messageId.trim() : "";
@@ -251,7 +219,8 @@ export function applyValidatedSteer(
   validated: Extract<ValidatedSubagentSteer, { outcome: "steer" }>,
   deps: {
     sessionId: string;
-    ownerTurnId: string;
+    /** Turn the echo is attributed to; absent leaves it to the emitter. */
+    ownerTurnId?: string;
     parentToolCallId: string;
     agentName: string;
     /** Hands the input to the child loop: text plus any image blocks. */
@@ -268,7 +237,7 @@ export function applyValidatedSteer(
 ): void {
   const envelope = (event: AgentEventEnvelope["event"]): AgentEventEnvelope => ({
     sessionId: deps.sessionId,
-    turnId: deps.ownerTurnId,
+    ...(deps.ownerTurnId ? { turnId: deps.ownerTurnId } : {}),
     ts: Date.now(),
     event,
     parentToolCallId: deps.parentToolCallId,
@@ -340,21 +309,18 @@ export function applyDelegationActivity(
 
 /**
  * Read-only delegation listing for the parent model's `TaskList`: the current
- * snapshot, answered without waiting. User-owned runs are the user's own
- * followups, not the parent's delegates: the parent neither waits on them nor
- * resumes them implicitly, so they stay out of its listing (an explicit parent
- * `Task(resume)` reattaches the chain as a new parent-owned run, which lists
- * normally). The list is a union of live records and entries recovered from
- * persisted history; the caller resolves a duplicate id live-first, and a
- * recovered entry says on its own line that nothing runs for it here.
+ * snapshot, answered without waiting. Every delegation in the session is a
+ * normal child in this listing — whether the parent model started it or the
+ * user asked for it directly — so a later parent turn reads the same list.
+ * The list is a union of live records and entries recovered from persisted
+ * history; the caller resolves a duplicate id live-first, and a recovered
+ * entry says on its own line that nothing runs for it here.
  */
 export function listDelegationRecords(records: DelegationView[]): {
   content: [{ type: "text"; text: string }];
   details: { delegations: Array<Record<string, unknown>> };
 } {
-  const sorted = [...records]
-    .filter((record) => (record.delivery ?? "parent") === "parent")
-    .sort((left, right) => left.startedAt - right.startedAt);
+  const sorted = [...records].sort((left, right) => left.startedAt - right.startedAt);
   const text =
     sorted.length === 0
       ? "No subagents have been started in this session."

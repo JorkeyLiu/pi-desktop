@@ -28,8 +28,6 @@ export type EventPersistenceDependencies = {
    * returning early does not stop this function from running.
    */
   isStaleTerminalEvent: (envelope: AgentEventEnvelope) => boolean;
-  /** Child-only execution turns finalize silently (no parent conclusion). */
-  isChildExecutionTurn?: (sessionId: string, turnId: string | null | undefined) => boolean;
   finishApprovedExecution: (...args: any[]) => Promise<void>;
   emitAgentEvent: (envelope: AgentEventEnvelope) => void;
 };
@@ -51,7 +49,6 @@ export function createEventPersistence({
   logger,
   finishTurn,
   isStaleTerminalEvent,
-  isChildExecutionTurn = () => false,
   finishApprovedExecution,
   emitAgentEvent,
 }: EventPersistenceDependencies): {
@@ -213,13 +210,6 @@ function persistAgentEvent(envelope: AgentEventEnvelope): UiMessage | undefined 
           data: String(error),
         });
       }));
-    // A child-only execution turn closes its own durable row only: no
-    // regenerate branch archive, which belongs to the parent's conversation.
-    if (
-      isChildExecutionTurn(envelope.sessionId, envelope.turnId ?? turnId)
-    ) {
-      return;
-    }
     // Persist the completed branch as the active regenerate revision when the
     // latest user turn carries revision metadata (ChatGPT-style history).
     trackWrite((async () => {

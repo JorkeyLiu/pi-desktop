@@ -135,10 +135,6 @@ export function delegationSummary(record: DelegationView): Record<string, unknow
       ? { contextTokens: record.contextTokens }
       : {}),
     ...(record.lastToolName ? { lastToolName: record.lastToolName } : {}),
-    // The run's own execution turn, published so a surface that outlives this
-    // process (a reopened tab, a rebuilt renderer) can name the turn that
-    // owns a continuation's steering instead of guessing from parent state.
-    ...(record.executionTurnId ? { executionTurnId: record.executionTurnId } : {}),
     ...(record.completedAt ? { completedAt: record.completedAt } : {}),
     ...(record.result?.modelFailures ? { modelFailures: record.result.modelFailures } : {}),
     ...(record.result?.error ? { error: record.result.error } : {}),
@@ -173,9 +169,6 @@ export function delegationSummary(record: DelegationView): Record<string, unknow
             record.result!.handoffCheckpointError,
         }
       : {}),
-    // User-owned runs carry their delivery explicitly; parent-owned records
-    // omit it (backward-compatible `parent` default).
-    ...((record.delivery ?? "parent") === "user" ? { delivery: "user" as const } : {}),
     // A recovered entry is history: no run of it is active in this process.
     ...(record.recovered ? { recovered: true as const } : {}),
   };
@@ -526,33 +519,6 @@ export function settlementSnapshotEvent(
     },
     turnId: record.taskTurnId,
   };
-}
-
-/**
- * Terminal for a settled detached run's own execution turn. Attached runs
- * need none — the owning parent turn closes through its own model
- * lifecycle. A stopped/aborted run ends its turn the same truthful way a
- * parent abort does, so the turn never leaks as busy.
- */
-export function userOwnedTerminalEvent(
-  record: Pick<DelegationRecord, "delegationId" | "status" | "executionTurnId" | "taskTurnId">,
-): SnapshotEmission | undefined {
-  const turnId = record.executionTurnId ?? record.taskTurnId;
-  if (!turnId) return undefined;
-  if (record.status === "stopped" || record.status === "aborted") {
-    return {
-      event: {
-        type: "error",
-        error: {
-          code: "TURN_ABORTED",
-          message: `Delegation "${record.delegationId}" ended as ${record.status}.`,
-          retriable: false,
-        },
-      },
-      turnId,
-    };
-  }
-  return { event: { type: "agent_end", messageIds: [] }, turnId };
 }
 
 /**

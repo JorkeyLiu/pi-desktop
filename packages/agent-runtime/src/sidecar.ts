@@ -258,9 +258,9 @@ async function runtimeFor(
     ? existing
     : undefined;
   if (existing && !reusable) {
-    // A config change must never silently dispose the user's running
-    // detached followup: refuse the launch and keep the child observable
-    // instead of aborting it behind the caller's back.
+    // A config change must never silently dispose children that are still
+    // running: refuse the launch and keep them observable instead of aborting
+    // them behind the caller's back.
     if (existing.hasRunningDelegations()) {
       throw Object.assign(new Error("session already has an active turn"), {
         rpcCode: -32000,
@@ -591,8 +591,8 @@ async function handle(method: string, params: any): Promise<unknown> {
         throw Object.assign(new Error("No active runtime for this session"), { errorCode: "TURN_NOT_FOUND" });
       }
       const parsed = parseSteerSubagentParams(params);
-      // The runtime revalidates turn ownership after this dispatch, so a
-      // stale target fails there rather than steering the wrong turn.
+      // The runtime revalidates the live child after this dispatch, so a stale
+      // target fails there rather than steering the wrong child.
       return runtime.steerSubagent({
         delegationId: parsed.delegationId,
         expectedParentTurnId: parsed.expectedTurnId,
@@ -618,9 +618,10 @@ async function handle(method: string, params: any): Promise<unknown> {
         }
         runtime = await runtimeFor(hydration as RuntimeParams);
       }
-      // The runtime validates the chain, decides parent vs user delivery
-      // from the source record, and adopts a host-begun execution turn when
-      // detached. A stale or busy target fails there with a coded error.
+      // The runtime validates the chain, starts the next run independently of
+      // any parent turn (no parent turn is opened or reserved), and refuses a
+      // second concurrent run of the same chain. A stale or busy target fails
+      // there with a coded error.
       return runtime.continueSubagent({
         delegationId: parsed.delegationId,
         ...(parsed.expectedTurnId ? { expectedParentTurnId: parsed.expectedTurnId } : {}),

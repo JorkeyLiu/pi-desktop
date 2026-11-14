@@ -1479,8 +1479,9 @@ not a working claim, is what the reader sees.
   tab body opens with that same brief as its first user row, followed by the
   delegate's thinking, tool rows, and answer fragments, which reuse the same
   components and styling as the main conversation. The tab header carries the
-  outcome, the delivery owner, and one localized metrics group (occupancy, spend,
-  turns/calls, and average output throughput); the child's model and reasoning
+  outcome and one localized metrics group (occupancy, spend,
+  turns/calls, and average output throughput); no ownership label exists, and
+  the header states the child's own state, never the main turn's; the child's model and reasoning
   level are stated once, in the tab
   composer's static model chip. Every figure in that group is stated only as the
   chain reported it: an unreported counter leaves the turns/calls figure out
@@ -1540,24 +1541,23 @@ not a working claim, is what the reader sees.
   it, and the seeded child row that repeats the same text is that message, so
   it never renders a second time. Later steering echoes in the same run are
   separate user rows.
-- A run the user continued after the parent stopped it is live, not aborted. It
-  owns its own execution-accounting turn, so the parent turn's idleness never
-  reconstructs it as `aborted`; the header states `Running` with the
-  `User-owned` report owner while the delegate's own `Task` snapshot says
-  `running`. Settling — completed, stopped, or failed — replaces that snapshot
-  and returns the composer to continue mode with its input enabled, without
-  waiting for a new card. The composer's single action slot stays icon-only
-  Stop for as long as the run is live and its steer path cannot act (no owner
-  turn known yet, a read-only session), so a running delegate is always
+- A run the user steered or continued after the parent stopped it is live, not
+  aborted. It is an ordinary child: it occupies no parent turn, so the main
+  session's turn state never reconstructs it as `aborted` and the child's own
+  `Task` snapshot is what the header follows. Settling — completed, stopped, or
+  failed — replaces that snapshot and returns the composer to continue mode with
+  its input enabled, without waiting for a new card. The composer's single
+  action slot stays icon-only Stop for as long as the run is live and its steer
+  path cannot act (a read-only session), so a running delegate is always
   cancellable instead of showing a disabled Send.
-- Steering a live run names that run's own execution turn, taken from its
-  persisted `Task` row (`details.executionTurnId`) — the identity that survives
-  a closed and reopened tab or a rebuilt renderer. The parent session's current
-  turn is only a fallback for an attached run, never the owner of a user-owned
-  one, so a reopened tab keeps its input enabled, its Stop, and its ability to
-  steer the run the chain is actually executing. A tab opened while its `Task`
-  call is still being created follows that same call once the run's identity
-  lands, instead of going blank and requiring a second card.
+- Steering a live run needs no turn identity: it targets the live child itself,
+  and the parent's current turn travels only as an informational guard when the
+  parent is live. A reopened tab — or a rebuilt renderer, or a parent turn that
+  ended while the child kept working — therefore keeps its input enabled, its
+  Stop, and its ability to steer the run the chain is actually executing. A tab
+  opened while its `Task` call is still being created follows that same call
+  once the run's identity lands, instead of going blank and requiring a second
+  card.
 - The composer's own text is the draft, and its fate follows the send alone: an
   accepted steer or continuation clears it because the text is now a row in the
   transcript, a rejected one keeps it for retry with the failure stated in
@@ -3106,9 +3106,9 @@ coexist as independent tabs. The tab renders the delegation as a conversation:
   switching style as the main composer: running with an empty draft shows
   icon-only Stop; a draft shows the icon Send button; settled shows Send
   (disabled while the draft is empty). While running the composer steers
-  text-only via `pi-desktop/agent/steerSubagent` with the owning turn identity
-  (live parent turn when attached, the delegate's execution-accounting turn
-  when user-owned; the attributed child echo stays in the child context),
+  via `pi-desktop/agent/steerSubagent` without needing a turn identity (the
+  live parent turn rides along only as an informational guard, and the
+  attributed child echo stays in the child context),
   while settled and continuable it continues directly via
   `pi-desktop/agent/continueSubagent`, whose next run is seeded from whatever
   child rows remain or, when none do, from the chain's original task brief

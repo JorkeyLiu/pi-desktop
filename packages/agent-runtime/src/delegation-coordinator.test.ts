@@ -23,7 +23,6 @@ function record(
     delegationId: id,
     status: "running",
     toolCalls: 0,
-    delivery: "parent",
     wake: createSubagentWakeState(0),
     ...overrides,
   };
@@ -305,10 +304,10 @@ describe("delegation coordinator completion and delivery marking", () => {
     expect(markProgramDelivery(records, new Set(["a", "b"]))).toEqual([]);
   });
 
-  it("user-owned runs are never expected, waited on, or marked", () => {
+  it("every record is a normal target regardless of who started it", () => {
     const selected = normalizeSubagentWakeupSettings({ kind: "time", value: 60 });
     const records = [
-      record("mine", { delivery: "user", status: "completed" }),
+      record("user-started", { status: "completed" }),
       record("parent", { status: "completed" }),
     ];
     const coordinator = createDelegationCoordinator({
@@ -317,13 +316,15 @@ describe("delegation coordinator completion and delivery marking", () => {
     });
     expect(
       coordinator.selectProgramTargets({}).map((entry) => entry.delegationId),
-    ).toEqual(["parent"]);
+    ).toEqual(["user-started", "parent"]);
     expect(
-      coordinator.selectProgramTargets({ ids: ["mine"] }),
-    ).toEqual([]);
-    const marked = markProgramDelivery(records, new Set(["mine", "parent"]));
-    expect(marked).toEqual(["parent"]);
-    expect(records[0].reportDelivered).toBeUndefined();
+      coordinator.selectProgramTargets({ ids: ["user-started"] }).map(
+        (entry) => entry.delegationId,
+      ),
+    ).toEqual(["user-started"]);
+    // An undelivered settled report is marked for both, exactly once.
+    const marked = markProgramDelivery(records, new Set(["user-started", "parent"]));
+    expect(marked).toEqual(["user-started", "parent"]);
   });
 });
 

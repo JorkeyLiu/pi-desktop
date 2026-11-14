@@ -338,23 +338,31 @@ type AgentSteerSubagentRequest = {
   sessionId: string;
   /** `delegationId` returned by `Task` for the running delegate. */
   delegationId: string;
-  /** Durable parent turn that owns this steering; refused once it ends. */
-  expectedTurnId: string;
-  /** The user's text for the child. Attachments ride the parent turn. */
+  /**
+   * The turn the caller saw. Informational only: the live child is the target,
+   * so a stale or ended parent turn never blocks communicating with a child
+   * that is still working.
+   */
+  expectedTurnId?: string;
+  /** The user's text for the child, with optional images. */
   content: string;
+  attachments?: AgentPromptAttachment[];
   messageId?: string;
 };
 ```
 
-It returns `{ accepted: true, delegationId, turnId }`. Main refuses a missing,
-ended, or non-dispatchable parent turn with `TURN_NOT_FOUND` before reaching
-the sidecar, and the sidecar runtime revalidates turn ownership after dispatch,
-so a stale target fails there rather than steering the wrong child. Empty
-content fails with `INVALID_ARGUMENT`; payloads are bounded (`delegationId`
-128 chars, text 20,000 chars). A caller-provided UUID `messageId` dedups
-retries: a repeated id for the same delegation reports `already-applied`, so
-the child executes the steer exactly once and the echo is emitted exactly
-once; anything else mints runtime identity. Text only: attachments ride the parent turn.
+It returns `{ accepted: true, delegationId, turnId? }`. Main no longer gates
+the channel on a parent turn: the request reaches the sidecar whenever the
+session has a live runtime, and the runtime revalidates the target delegation
+after dispatch, so a child that already settled fails there with
+`DELEGATION_NOT_RUNNING` rather than steering the wrong child. This is input,
+not ownership: the child stays an ordinary child (status, `TaskList`,
+`TaskWait`, result history, accounting unchanged). Empty
+content (without an image) fails with `INVALID_ARGUMENT`; payloads are bounded
+(`delegationId` 128 chars, text 20,000 chars). A caller-provided UUID
+`messageId` dedups retries: a repeated id for the same delegation reports
+`already-applied`, so the child executes the steer exactly once and the echo is
+emitted exactly once; anything else mints runtime identity.
 
 The text enters only the named child's conversation through its retained loop
 handle, under the child's existing tools and permission scope. The runtime
@@ -384,43 +392,40 @@ type AgentContinueSubagentRequest = {
 };
 ```
 
-It returns `{ accepted: true, delegationId, turnId?, delivery: "parent" |
-"user" }`. `expectedTurnId` is only a stale guard, never an ownership chooser:
-the server decides delivery from the source record. Attached (`parent`) only
-while the parent still expects THAT chain (source parent-owned, started in the
-current parent epoch, undelivered, and its owning turn alive — a source that
-settled `stopped` / `aborted` was already retired by Stop, so it never
-attaches); detached (`user`) otherwise, which includes every continuation of a
-`stopped` or `aborted` source. Steering a running delegate keeps it attached; a
-program wake, `any` threshold, or progress checkpoint never detaches unfinished
-delegates. A `TaskWait` wait carries no model timeout (`timeoutSeconds`) and no
-per-call wake override, and the model-facing `TaskList` is a snapshot read that
-never waits at all — legacy timing args in older provider tool calls are
-ignored. After the source report was delivered or its owning turn ended, the
-continuation is `user`-owned with no parent model prompt, context, wake, or
-charge to the old parent turn; a `user`-owned continuation never resurrects the
-original parent's waiting or delivery. A detached source never attaches to an unrelated
-live parent turn — the request fails with `AGENT_BUSY` and the draft is
-preserved. The spawn reuses the `Task(resume)` tool path (same model,
-tools, permissions, worktree, chain budgets, idempotent UUID); a still-running
-chain is `CHAIN_BUSY`, and only a chain whose own `Task` rows are gone and cannot
-be rebuilt is `NOT_RESUMABLE` — `completed`, `failed`, `timed_out`,
-`interrupted`, `stopped`, and `aborted` chains are all continuable (ADR 0279
-§15). A caller `messageId` dedups retries (`already-applied`);
+It returns `{ accepted: true, delegationId, turnId? }`. `expectedTurnId` is
+informational: a live parent passes its current turn as a stale guard, an idle
+parent omits it, and either way the server starts the chain's next run rather
+than choosing a report owner. The continued run is an ordinary child of the
+session: status, `TaskList` / `TaskWait`, result visibility and accounting are
+unchanged by who sent the text. A live parent that still expects THAT
+chain (the run is undelivered, not stopped/aborted, and its turn is alive)
+keeps its normal turn-local report delivery; a continuation after the parent
+turn ended runs independently and wakes, restarts, or re-prompts no parent —
+the next main execution reads its status/report through the ordinary subagent
+interfaces. A program wake, `any` threshold, or progress checkpoint never
+detaches unfinished delegates. A `TaskWait` wait carries no model timeout
+(`timeoutSeconds`) and no per-call wake override, and the model-facing
+`TaskList` is a snapshot read that never waits at all — legacy timing args in
+older provider tool calls are ignored. The continuation opens no parent turn
+and reserves no durable turn row, so a main prompt is admitted concurrently
+and neither turn cancels or corrupts the other; `AGENT_BUSY` stays reserved for
+a genuinely running main turn. The spawn reuses the `Task(resume)` tool path
+(same model, tools, permissions, worktree, chain budgets, idempotent UUID);
+a still-running chain is `CHAIN_BUSY`, and only a chain whose own `Task` rows
+are gone and cannot be rebuilt is `NOT_RESUMABLE` — `completed`, `failed`,
+`timed_out`, `interrupted`, `stopped`, and `aborted` chains are all continuable
+(ADR 0279 §15). A caller `messageId` dedups retries (`already-applied`);
 post-restart hydration rebuilds history from the transcript with no parent
-provider call. The persisted `Task` marker keeps the real invocation id
-with `toolArgs.resume` plus `toolArgs.source: "user"` and never enters the
-parent model context; the followup persists as an attributed child row. A
-detached run executes under its own child-only execution-accounting turn opened
-with the existing `session.beginTurn` (no new schema, no child session): no
-parent prompt runs, no main user row is written, the renderer stays idle, and
-the run's own terminal silently closes only that row (no task notification, no
-parent prompt or context). The session holds a single active turn, so a parent
-send stays `AGENT_BUSY` until the detached run settles or stops; a running
-user-owned run steers through its execution owner. Only an explicit parent
-`Task(resume)` reattaches the chain as a new parent-owned run. This is an
-additive desktop channel; it does not change RACP, the host RPC version, or
-the storage schema.
+provider call. The persisted `Task` marker keeps the real invocation id with
+`toolArgs.resume` plus `toolArgs.source: "user"` and never enters the parent
+model context; the followup persists as an attributed child row. The child's
+own usage stays on its authoritative delegation/task history and a closed
+parent turn is never charged retroactively. Legacy persisted
+`details.delivery` / `details.executionTurnId` fields stay readable and map to
+these same ordinary-child semantics; nothing is rewritten or reset. Only an
+explicit parent `Task(resume)` starts the chain's next run from the parent's
+side. This is an additive desktop channel; it does not change RACP, the host
+RPC version, or the storage schema.
 
 ### 5.3 abort
 

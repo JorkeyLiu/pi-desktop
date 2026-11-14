@@ -90,7 +90,10 @@ turn that has ended.
 
 ## 3. Transition rules
 
-1. Only one active turn per session
+1. Only one active turn per session. That turn is the main agent turn: a
+   subagent run never opens, adopts, or reserves one, so an intervened child
+   that outlives its parent turn leaves the session idle and admits the next
+   main prompt
 2. A direct host prompt is rejected with `AGENT_BUSY` while
    running/waiting_permission. The renderer's Send-while-running path pushes
    the next prompt into the Host-owned turn queue (schema v15, D375 / D386 /

@@ -1075,9 +1075,10 @@ export const api = {
    *
    * Backend contract (host-owned): `{ sessionId, delegationId, content,
    * messageId?, expectedTurnId? }` -> `{ accepted: true, delegationId: new,
-   * turnId?, delivery }`. `expectedTurnId` is only a stale guard — the
-   * server decides `parent` vs `user` delivery from its source record. The
-   * channel resolves from the shared IPC table, which owns the literal.
+   * turnId? }`. The continued run is an ordinary child of the session: the
+   * caller's text reaches the child either way, and report routing never
+   * depends on who sent it. `expectedTurnId` is informational. The channel
+   * resolves from the shared IPC table, which owns the literal.
    */
   continueSubagent: (req: AgentContinueSubagentRequest) =>
     invoke<AgentContinueSubagentResponse>(IPC.invoke.agentContinueSubagent, req),

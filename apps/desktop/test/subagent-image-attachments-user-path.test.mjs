@@ -304,7 +304,8 @@ window.subagentImageOnlySteerProbe = async () => {
   const steer = steerCalls()[0];
   check(steer.input.content === "", "an image-only steer invented text: " + JSON.stringify(steer.input.content));
   check(steer.input.delegationId === "d1", "the steer named the wrong delegation: " + JSON.stringify(steer.input.delegationId));
-  check(steer.input.expectedTurnId === "turn-exec-t1", "the steer named the wrong owner turn: " + JSON.stringify(steer.input.expectedTurnId));
+  check(steer.input.expectedTurnId === "turn-parent",
+    "the steer did not carry the live parent turn as its informational guard: " + JSON.stringify(steer.input.expectedTurnId));
   check(Array.isArray(steer.input.attachments) && steer.input.attachments.length === 1,
     "the steer carried no structured attachment: " + JSON.stringify(steer.input.attachments));
   check(JSON.stringify(steer.input.attachments[0]) === JSON.stringify(

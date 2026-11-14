@@ -6513,7 +6513,7 @@ describe("DesktopAgentRuntime per-turn context protection", () => {
 
   it("keeps parent message usage provider-only and reports subagent usage on turn_end", async () => {
     const onEvent = vi.fn();
-    const runtime = createRuntime({ onEvent });
+    const runtime = createRuntime({ onEvent, turnId: "turn-parent" });
     const handleAgentEvent = (runtime as any).handleAgentEvent.bind(runtime);
     const settleDelegation = (runtime as any).settleDelegation.bind(runtime);
 
@@ -6521,6 +6521,7 @@ describe("DesktopAgentRuntime per-turn context protection", () => {
       {
         delegationId: "del-1",
         toolCallId: "tool-1",
+        parentTurnId: "turn-parent",
         agentName: "explorer",
         prompt: "sub-prompt",
         startedAt: Date.now(),
@@ -8164,10 +8165,10 @@ describe("DesktopAgentRuntime subagents", () => {
     );
   }
 
-  it("publishes the owning execution turn on every Task result", async () => {
-    // The Task row is the only carrier a reopened tab keeps, so it names the
-    // turn that owns the run: the parent turn while attached, and (for a user
-    // continuation) the child-only execution turn the record adopted.
+  it("publishes no turn ownership on the Task result", async () => {
+    // A delegate is an ordinary child of its session: the Task row names the
+    // run and its chain, while turn attribution stays on the live record and
+    // never becomes part of the persisted contract.
     const runtime = createRuntime({ subagents: [explorer], turnId: "turn-parent" });
     subagentRuns.calls.length = 0;
     subagentRuns.instances.length = 0;
@@ -8178,18 +8179,13 @@ describe("DesktopAgentRuntime subagents", () => {
         agent: "explorer",
         task: "Find it.",
       });
-      expect((started.details as any).executionTurnId).toBe("turn-parent");
       const delegationId = (started.details as any).delegationId as string;
-      expect((runtime as any).delegations.get(delegationId).executionTurnId).toBe(
-        "turn-parent",
-      );
-      // The refreshed snapshot republishes the same identity, so the field
-      // survives the row's own progress updates.
+      expect((started.details as any).executionTurnId).toBeUndefined();
       const record = (runtime as any).delegations.get(delegationId);
-      expect(delegationSummary(record)).toMatchObject({
-        delegationId,
-        executionTurnId: "turn-parent",
-      });
+      expect(record.parentTurnId).toBe("turn-parent");
+      expect(record.taskTurnId).toBe("turn-parent");
+      expect(delegationSummary(record)).toMatchObject({ delegationId });
+      expect(delegationSummary(record)).not.toHaveProperty("executionTurnId");
       subagentRuns.resolveRun!({
         agentName: "explorer",
         status: "completed",
@@ -13090,20 +13086,15 @@ describe("DesktopAgentRuntime subagent wakeup, progress and child steer", () => 
       });
       // The steering never wakes the parent model: no prompt carried it.
       expect(prompts.join("\n")).not.toContain("Focus on auth.");
-      // A stale parent turn is refused, not steered.
-      try {
+      // A stale caller turn is informational: the live run accepts it.
+      expect(
         runtime.steerSubagent({
           delegationId,
           expectedParentTurnId: "other-turn",
           text: "late",
-        });
-        expect.unreachable();
-      } catch (error: unknown) {
-        expect((error as { errorCode?: string }).errorCode).toBe(
-          "TURN_NOT_FOUND",
-        );
-      }
-      expect(subagentRuns.steered).toEqual(["Focus on auth."]);
+        }).accepted,
+      ).toBe(true);
+      expect(subagentRuns.steered).toEqual(["Focus on auth.", "late"]);
     } finally {
       subagentRuns.deferred = false;
       await runtime.dispose();
@@ -13589,24 +13580,16 @@ describe("DesktopAgentRuntime subagent wakeup, progress and child steer", () => 
       );
       expect(names).not.toContain("Task");
       expect(names).not.toContain("asktool");
-      // Stale parent turn, unknown id, and empty text are rejections.
-      expect(() =>
+      // A stale caller turn is informational — steering targets the live
+      // child — while unknown ids and non-running targets stay rejections.
+      expect(
         runtime.steerSubagent({
           delegationId,
           expectedParentTurnId: "other-turn",
           text: "late",
-        }),
-      ).toThrow("target turn has ended");
-      try {
-        runtime.steerSubagent({
-          delegationId,
-          expectedParentTurnId: "other-turn",
-          text: "late",
-        });
-        expect.unreachable();
-      } catch (error: any) {
-        expect(error.errorCode).toBe("TURN_NOT_FOUND");
-      }
+        }).accepted,
+      ).toBe(true);
+      expect(subagentRuns.steered).toEqual(["Focus on auth.", "late"]);
       try {
         runtime.steerSubagent({
           delegationId: "missing",

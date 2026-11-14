@@ -542,35 +542,36 @@ test("the header states an estimated occupancy as a plain context figure", async
   }
 });
 
-test("header states the owner only for a user-owned live run, settled stays bare", async () => {
+test("header states the outcome only, never a report owner", async () => {
   const { vite, render, useAppStore } = await setup();
   try {
-    // Attached running run: parent still expects the report, and that default
-    // carries no owner label.
+    // A running child is an ordinary child: no owner chip in any state.
     seed(useAppStore, {
       messages: [taskMessage("t1", "call-1", "d1", "running")],
       running: true,
     });
     const attached = render("d1");
+    assert.match(attached, /Running/);
     assert.doesNotMatch(attached, /subagent-delivery-owner/);
     assert.doesNotMatch(attached, /Parent-owned/);
     assert.doesNotMatch(attached, /User-owned/);
-    // Detached running run: a recorded `delivery: "user"` summary (or a
-    // user-origin marker's `toolArgs.source`) names the user owner even
-    // though the delegate is live.
+    // A row written by the retired ownership model renders identically: the
+    // persisted field is history, not a live surface.
     seed(useAppStore, {
       messages: [taskMessage("t1", "call-1", "d2", "running", { delivery: "user" })],
       running: true,
     });
-    const detached = render("d2");
-    assert.match(detached, /User-owned/);
-    assert.doesNotMatch(detached, /Parent-owned/);
-    // Settled runs omit the owner chip: the report already landed.
+    const historical = render("d2");
+    assert.match(historical, /Running/);
+    assert.doesNotMatch(historical, /subagent-delivery-owner/);
+    assert.doesNotMatch(historical, /User-owned/);
+    // A settled run states its outcome and stays bare as well.
     seed(useAppStore, {
       messages: [taskMessage("t1", "call-1", "d3", "completed")],
       running: false,
     });
     const settled = render("d3");
+    assert.match(settled, /Completed/);
     assert.doesNotMatch(settled, /subagent-delivery-owner/);
   } finally { await vite.close(); }
 });
@@ -688,7 +689,7 @@ test("continue identity omits the turn guard when idle and blocks read-only", as
   } finally { await vite.close(); }
 });
 
-test("delivery owner reads backend fields and steer prefers the kept execution turn", async () => {
+test("user origin is provenance only and steering needs no turn identity", async () => {
   const vite = await createServer({
     root, configFile: false,
     server: { middlewareMode: true, hmr: false, ws: false },
@@ -698,37 +699,36 @@ test("delivery owner reads backend fields and steer prefers the kept execution t
   try {
     const actions = await vite.ssrLoadModule("/src/lib/subagent-actions.ts");
     const chain = await vite.ssrLoadModule("/src/lib/subagent-chain.ts");
-    // Recorded summary marking wins; user-origin marker args count;
-    // anything else defaults to the parent (backward compatible).
-    assert.equal(actions.subagentDeliveryOwner({ details: { delivery: "user" } }), "user");
+    // Provenance, not ownership: only the user-origin Task marker counts,
+    // and the retired persisted field is ignored.
     assert.equal(
-      actions.subagentDeliveryOwner({ toolArgs: { source: "user", resume: "d1" } }),
-      "user",
-    );
-    assert.equal(actions.subagentDeliveryOwner({ details: { delivery: "parent" } }), "parent");
-    assert.equal(actions.subagentDeliveryOwner({}), "parent");
-    // Owner turn, one priority order: a kept execution turn covers the
-    // status-lag window right after a detached continue; the run's own
-    // execution turn read back from its Task row is the authority that
-    // survives a reopened tab (and outranks parent status); parent status is
-    // the last resort for an attached run.
-    assert.equal(
-      actions.resolveSteerOwnerTurn({ keptTurnId: "exec-1", runTurnId: "exec-2", currentTurnId: "turn-parent" }),
-      "exec-1",
+      actions.isUserOriginTaskMarker({ toolArgs: { source: "user", resume: "d1" } }),
+      true,
     );
     assert.equal(
-      actions.resolveSteerOwnerTurn({ runTurnId: "exec-2", currentTurnId: "turn-parent" }),
-      "exec-2",
+      actions.isUserOriginTaskMarker({ toolArgs: { source: "parent", resume: "d1" } }),
+      false,
     );
-    assert.equal(
-      actions.resolveSteerOwnerTurn({ currentTurnId: "turn-parent" }),
-      "turn-parent",
+    assert.equal(actions.isUserOriginTaskMarker({ toolArgs: { source: "user" } }), false);
+    assert.equal(actions.isUserOriginTaskMarker({}), false);
+    // A steer pins the session, and the turn id travels only when known:
+    // steering targets the live child, so a missing turn never blocks it.
+    assert.deepEqual(
+      actions.captureSteerIdentity({
+        sessionId: "s1", turnId: "turn-parent", source: "local",
+        sessionStartsWithRemote: false, sessionStartsWithNative: false, canSteer: true,
+      }),
+      { ok: true, sessionId: "s1", turnId: "turn-parent" },
     );
-    assert.equal(actions.resolveSteerOwnerTurn({}), undefined);
-    // Chain level: the latest segment decides, so a user continuation of a
-    // parent chain is user-owned from that segment on.
+    assert.deepEqual(
+      actions.captureSteerIdentity({
+        sessionId: "s1", source: "local",
+        sessionStartsWithRemote: false, sessionStartsWithNative: false, canSteer: true,
+      }),
+      { ok: true, sessionId: "s1" },
+    );
+    // The chain still resolves from either entry point of the same chain.
     const first = taskMessage("t1", "call-1", "d1", "completed");
-    assert.equal(chain.subagentChainDeliveryOwner([first], "d1"), "parent");
     const marker = message("t2", "tool", "", {
       toolName: "Task", toolCallId: "call-2", toolStatus: "success",
       toolArgs: { agent: "explorer", task: "Continue", resume: "d1", source: "user" },
@@ -736,28 +736,8 @@ test("delivery owner reads backend fields and steer prefers the kept execution t
         details: { delegationId: "d2", status: "completed", toolCalls: 1, turns: 1 },
       },
     });
-    assert.equal(chain.subagentChainDeliveryOwner([first, marker], "d1"), "user");
-    assert.equal(chain.subagentChainDeliveryOwner([first, marker], "d2"), "user");
-    // The run's own execution turn travels on its Task row, and the chain's
-    // LATEST segment decides it — an older segment's turn never leaks forward.
-    const ownedFirst = taskMessage("t1", "call-1", "d1", "completed", { executionTurnId: "turn-parent" });
-    const ownedMarker = message("t2", "tool", "", {
-      toolName: "Task", toolCallId: "call-2", toolStatus: "success",
-      toolArgs: { agent: "explorer", task: "Continue", resume: "d1", source: "user" },
-      toolResult: {
-        details: { delegationId: "d2", status: "running", resumedFrom: "d1", executionTurnId: "turn-exec" },
-      },
-    });
-    assert.equal(
-      chain.subagentChainExecutionTurnId([ownedFirst, ownedMarker], "d1"),
-      "turn-exec",
-    );
-    assert.equal(
-      chain.subagentChainExecutionTurnId([ownedFirst, ownedMarker], "d2"),
-      "turn-exec",
-    );
-    assert.equal(chain.subagentChainExecutionTurnId([ownedFirst], "d1"), "turn-parent");
-    assert.equal(chain.subagentChainExecutionTurnId([first], "d1"), undefined);
+    assert.equal(chain.subagentChainLatestDelegationId([first, marker], "d1"), "d2");
+    assert.equal(chain.subagentChainLatestDelegationId([first, marker], "d2"), "d2");
     // A tab opened while its Task call is still being created is keyed by the
     // bare call id and must stay on that call's chain once the run's identity
     // lands, instead of going blank and needing a new card.

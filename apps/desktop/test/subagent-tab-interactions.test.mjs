@@ -246,10 +246,10 @@ test("every tab of a continued chain continues it while remote tabs stay read-on
   } finally { await vite.close(); }
 });
 
-test("owner chip and blocked composers name their own capability reason", async () => {
+test("historical user-delivery rows render normally and blocked composers name their own capability reason", async () => {
   const { vite, render, useAppStore } = await setup();
   try {
-    // Attached live run: parent-owned is the default and states no owner label.
+    // A live run states no owner label at all: children have no owner split.
     seed(useAppStore, {
       messages: [taskMessage("t1", "call-1", "d1", "running")],
       running: true,
@@ -257,14 +257,16 @@ test("owner chip and blocked composers name their own capability reason", async 
     const attached = render("d1");
     assert.doesNotMatch(attached, /subagent-delivery-owner/);
     assert.doesNotMatch(attached, /Parent-owned/);
-    // Detached live run: user-owned, report stays local.
+    // A historical user-origin continuation row keeps its normal child surface.
     seed(useAppStore, {
       messages: [taskMessage("t1", "call-1", "d2", "running", { delivery: "user" })],
       running: true,
     });
     const detached = render("d2");
-    assert.match(detached, /User-owned/);
-    assert.match(detached, /Taken over by you/);
+    // A persisted user-origin marker is ordinary history: it states no owner.
+    assert.doesNotMatch(detached, /subagent-delivery-owner/);
+    assert.doesNotMatch(detached, /User-owned/);
+    assert.doesNotMatch(detached, /Taken over/);
     // An older tab follows the same chain and keeps its continue surface.
     const first = taskMessage("t1", "call-1", "d1", "failed");
     const resume = resumeCall("t2", "call-2", "d1", "d2", "completed");

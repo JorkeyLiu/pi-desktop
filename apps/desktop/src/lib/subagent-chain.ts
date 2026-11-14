@@ -3,7 +3,6 @@ import { delegationChainMaps } from "./assistant-turns";
 import { isDelegationStartTool } from "./tool-display";
 import { delegationIdForMessage } from "./subagent-panel";
 import { toolResultPayload } from "./tool-presentation";
-import { subagentDeliveryOwner } from "./subagent-actions";
 
 /**
  * Shared resume-chain resolution for the subagent transcript tab and its
@@ -247,43 +246,4 @@ export function subagentChainInstantiated(
     const id = (payload as { delegationId?: unknown }).delegationId;
     return typeof id === "string" && id.length > 0;
   });
-}
-
-/**
- * Who receives the chain-latest run's report, from the latest `Task` call's
- * own backend-owned fields (`details.delivery` or the user-origin marker's
- * `toolArgs.source`). Earlier segments never override the latest run:
- * a user continuation of a parent chain is user-owned from that segment on.
- */
-export function subagentChainDeliveryOwner(
-  messages: readonly UiMessage[],
-  delegationId: string,
-): "parent" | "user" {
-  const last = subagentChainLatestCall(messages, delegationId);
-  if (!last) return "parent";
-  return subagentDeliveryOwner({
-    details: toolResultPayload(last),
-    toolArgs: last.toolArgs,
-  });
-}
-
-/**
- * The chain-latest run's own execution turn, as the runtime published it on the
- * `Task` result (`details.executionTurnId`).
- *
- * A continuation opened while the parent was idle runs under a child-only
- * execution-accounting turn, and that turn — never the parent's current turn —
- * is what owns its steering. Publishing it on the persisted `Task` row means a
- * reopened tab or a rebuilt renderer still names the authoritative turn
- * instead of depending on in-memory state that did not survive.
- */
-export function subagentChainExecutionTurnId(
-  messages: readonly UiMessage[],
-  delegationId: string,
-): string | undefined {
-  const last = subagentChainLatestCall(messages, delegationId);
-  const payload = last ? toolResultPayload(last) : undefined;
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
-  const turnId = (payload as { executionTurnId?: unknown }).executionTurnId;
-  return typeof turnId === "string" && turnId.trim() ? turnId.trim() : undefined;
 }

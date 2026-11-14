@@ -339,7 +339,7 @@ describe("program delegation routing", () => {
     }
   });
 
-  it("omitted settled report stays pending; detached user run never lists or delivers", async () => {
+  it("omitted settled report stays pending and stays readable through TaskList and TaskWait", async () => {
     const runtime = createRuntime({ subagentWakeup: { kind: "off" } });
     subagentRuns.deferred = true;
     try {
@@ -357,15 +357,16 @@ describe("program delegation routing", () => {
       expect(waited.details.status).toBe("completed");
       expect((runtime as any).delegations.get(firstId).reportDelivered).toBe(true);
       expect((runtime as any).delegations.get(secondId).reportDelivered).toBe(false);
-      // Detach the second run: the parent listing and wait surface exclude
-      // user-owned runs entirely.
-      (runtime as any).delegations.get(secondId).delivery = "user";
+      // The omitted settled report is visible through the ordinary interfaces
+      // whichever input started the run: TaskList lists it and TaskWait reads
+      // it by id without waking the parent.
       const listed = await listTool(runtime).execute("list-1", {});
       expect(
         (listed.details.delegations as any[]).map((entry) => entry.delegationId),
-      ).not.toContain(secondId);
-      const unknown = await waitTool(runtime).execute("wait-2", { delegationIds: [secondId] });
-      expect((unknown.content[0] as { text: string }).text).toContain("None of the requested");
+      ).toContain(secondId);
+      const named = await waitTool(runtime).execute("wait-2", { delegationIds: [secondId] });
+      expect((named.content[0] as { text: string }).text).toContain("second report");
+      expect((named.details as { unknownIds?: string[] }).unknownIds).toBeUndefined();
       expect((runtime as any).delegations.get(secondId).reportDelivered).toBe(false);
     } finally {
       subagentRuns.deferred = false;

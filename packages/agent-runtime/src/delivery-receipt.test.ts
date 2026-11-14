@@ -15,7 +15,6 @@ function settlingRecord(
   return {
     delegationId,
     status: "completed",
-    delivery: "parent",
     ...overrides,
   };
 }
@@ -56,14 +55,13 @@ describe("acceptanceText", () => {
 });
 
 describe("idle resume receipts", () => {
-  it("marks only the settled parent-owned records the accepted prompt included", () => {
+  it("marks only the settled records the accepted prompt included", () => {
     const receipts = new DeliveryReceipts();
     const inBatch = settlingRecord("in-batch");
     const omitted = settlingRecord("omitted");
     const running = settlingRecord("running", { status: "running" });
-    const userOwned = settlingRecord("user-owned", { delivery: "user" });
     receipts.expectAutoResume(
-      batch("report", [inBatch, omitted, running, userOwned], ["in-batch", "running", "user-owned"]),
+      batch("report", [inBatch, omitted, running], ["in-batch", "running"]),
     );
 
     const marked = receipts.accept({
@@ -75,7 +73,6 @@ describe("idle resume receipts", () => {
     expect(inBatch.reportDelivered).toBe(true);
     expect(omitted.reportDelivered).toBeUndefined();
     expect(running.reportDelivered).toBeUndefined();
-    expect(userOwned.reportDelivered).toBeUndefined();
     expect(receipts.pendingCount).toBe(0);
   });
 

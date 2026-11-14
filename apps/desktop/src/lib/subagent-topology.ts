@@ -7,7 +7,7 @@ import {
   type DelegationLifecycleKind,
 } from "./tool-display";
 import { toolResultPayload } from "./tool-presentation";
-import { subagentDeliveryOwner } from "./subagent-actions";
+import { isUserOriginTaskMarker } from "./subagent-actions";
 
 export type DelegationActivityItem = Extract<
   AssistantActivityItem,
@@ -188,14 +188,14 @@ export function delegationTimingBounds(
  * are what tells a delegation card how its subagent actually finished.
  *
  * When `turnLive` is false the parent turn has ended, so any leftover
- * parent-owned `running` node with no terminal snapshot is reconstructed as
- * `aborted` (the runtime aborts them at run end). A user-owned (`delivery:
- * "user"`) run is never reconstructed: it owns its own execution turn and
- * outlives the parent turn by design, so its Task row is the only truthful
- * liveness source until the runtime refreshes it with a terminal status. A
- * persisted `interrupted` snapshot (app exit with retained history) is
- * recoverable and never rewritten here; only a still-`running`/missing status
- * becomes `aborted`. A `TaskStop` snapshot that still says `running` is
+ * `running` node with no terminal snapshot is reconstructed as `aborted`
+ * (the runtime aborts attached children at run end). A run the user started
+ * directly (`Task` marker `toolArgs.source:"user"`) is never reconstructed:
+ * it keeps running independently of the parent turn, so its Task row is the
+ * only truthful liveness source until the runtime refreshes it with a terminal
+ * status. A persisted `interrupted` snapshot (app exit with retained history)
+ * is recoverable and never rewritten here; only a still-`running`/missing
+ * status becomes `aborted`. A `TaskStop` snapshot that still says `running` is
  * `stopped`.
  */
 export function collectDelegationStatuses(
@@ -232,10 +232,10 @@ export function collectDelegationStatuses(
       const payload = asRecord(toolResultPayload(item.message));
       const id = payload?.delegationId;
       if (typeof id !== "string" || !id) continue;
-      // A detached user continuation survives the parent turn: the runtime
-      // keeps it running, so its own snapshot stays authoritative.
-      const owner = subagentDeliveryOwner({ details: payload, toolArgs: item.message.toolArgs });
-      if (owner === "user") continue;
+      // A child the user started directly continues independently of the
+      // parent turn: the runtime keeps it running, so its own snapshot stays
+      // authoritative. Provenance only — the run itself is an ordinary child.
+      if (isUserOriginTaskMarker({ toolArgs: item.message.toolArgs })) continue;
       const current = statuses.get(id);
       if (!current || current === "running") statuses.set(id, "aborted");
     }

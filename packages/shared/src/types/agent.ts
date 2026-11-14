@@ -386,11 +386,12 @@ export type AgentSteerSubagentRequest = {
   /** `delegationId` returned by `Task` for the running delegate. */
   delegationId: string;
   /**
-   * Turn owning this steering: the live parent turn for an attached delegate,
-   * the delegate's execution-accounting turn for a detached user-owned run.
-   * Refused once that owner ends.
+   * The turn the caller saw when it decided to intervene. Informational only:
+   * child input is authorized by the user's intervention and validated against
+   * the live run itself, so a stale or ended parent turn never blocks
+   * communicating with a child that is still working.
    */
-  expectedTurnId: string;
+  expectedTurnId?: string;
   /**
    * The user's text for the child. Empty is allowed when `attachments` carries
    * at least one image: an image-only steer still reaches the child model.
@@ -410,22 +411,9 @@ export type AgentSteerSubagentRequest = {
 export type AgentSteerSubagentResponse = {
   accepted: true;
   delegationId: string;
-  turnId: string;
+  /** Turn the echoed child row was attributed to; absent when unknown. */
+  turnId?: string;
 };
-
-/**
- * Who receives a delegation run's report.
- *
- * - `parent`: the run was spawned by the parent model (`Task`/`Task(resume)`)
- *   or by an attached user continuation the parent still expects. Its report
- *   delivers through `TaskWait`/idle resume exactly once.
- * - `user`: the run was continued directly by the user after the parent
- *   stopped expecting this chain (report delivered, parent turn ended, or
- *   detached). Its report never auto-delivers to the parent model; only an
- *   explicit parent `Task(resume)` reattaches the chain. Absent means
- *   `parent` (backward-compatible default).
- */
-export type SubagentDeliveryOwner = "parent" | "user";
 
 /**
  * User text continuing one settled delegate as a new run of the SAME chain
@@ -439,13 +427,12 @@ export type SubagentDeliveryOwner = "parent" | "user";
  * stop) or `interrupted` (app closed mid-run). A child stopped before its
  * first transcript event has no retained rows and still continues, seeded from
  * the chain's original brief. The runtime spawns the new run with the chain's
- * model/tools/permissions through the same spawn path as `Task(resume)`,
+ * model/tools/permissions through the same spawn path as `Task(resume)` and
  * persists a user-origin `Task` marker row (`toolArgs.resume`,
  * `toolArgs.source: "user"`) for ledger and replay without entering the parent
- * model context, and attributes the followup text to the child. `expectedTurnId`
- * is only a stale guard: the server decides `parent` vs `user` delivery from
- * the source record (attached while the parent expects this chain, detached
- * otherwise).
+ * model context. The new run is an ordinary child of its session: it never
+ * changes the parent-child relation, the chain's continuability, or where its
+ * status and report are readable from.
  */
 export type AgentContinueSubagentRequest = {
   sessionId: string;
@@ -466,23 +453,22 @@ export type AgentContinueSubagentRequest = {
   /** Renderer-chosen id for idempotent retries (D288-style dedup). */
   messageId?: string;
   /**
-   * Stale guard naming the turn the caller saw. Attached continuations name
-   * the live parent turn; detached continuations name the execution-accounting
-   * turn the host opened (or omit it when the host owns no turn yet).
+   * The turn the caller saw when it decided to continue. Informational only:
+   * a settled chain continues whether or not that turn is still live, and the
+   * runtime decides from the child's own lifecycle whether the run has a live
+   * parent turn to report back to.
    */
   expectedTurnId?: string;
 };
 
+/** One accepted direct continuation; identity and history attribution only. */
 export type AgentContinueSubagentResponse = {
   accepted: true;
   /** The new run's `delegationId` (same chain, new run). */
   delegationId: string;
   /**
-   * Turn owning the continuation: the live parent turn when attached, the
-   * child execution-accounting turn when detached. Omitted only when the
-   * runtime minted a local execution owner the host did not begin.
+   * Turn the new run's transcript rows are attributed to. Present whenever the
+   * runtime has one; it is history attribution, never an ownership grant.
    */
   turnId?: string;
-  /** Who receives this run's report. */
-  delivery: SubagentDeliveryOwner;
 };
