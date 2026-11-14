@@ -5,7 +5,6 @@ import {
 } from "@pi-desktop/shared";
 import {
   HANDOFF_REARM_TOOL_CALLS,
-  MAX_SUBAGENT_HANDOFF_CHARS,
   MAX_SUBAGENT_HANDOFF_FAILURES,
   MAX_SUBAGENT_HANDOFF_NO_PROGRESS,
   MAX_SUBAGENT_HANDOFF_UNANSWERED,
@@ -236,8 +235,9 @@ describe("renderSubagentHandoffRequest", () => {
       settings: settings("tool-calls", 10),
       snapshot: { segmentElapsedMs: 0, toolCalls: 10, turns: 4 },
     });
-    // Any organization and any length within the bound is accepted.
-    expect(text).toContain(`up to ${MAX_SUBAGENT_HANDOFF_CHARS} characters`);
+    // Any organization and any length are accepted: no numeric bound is stated.
+    expect(text).toContain("Any length in any structure");
+    expect(text).not.toMatch(/\d+ characters/);
     expect(text).toContain("any structure");
     expect(text).toContain("There is no required outline");
     // Continuation facts are examples, not mandatory fields.
@@ -301,23 +301,30 @@ describe("normalizeHandoffPayload", () => {
     expect(normalizeHandoffPayload({ handoff: 42 }).ok).toBe(false);
   });
 
-  it("bounds the text and rejects rather than truncating it", () => {
-    const atLimit = normalizeHandoffPayload({
-      handoff: "x".repeat(MAX_SUBAGENT_HANDOFF_CHARS),
-    });
-    expect(atLimit.ok).toBe(true);
+  /**
+   * A handoff is as long as the task needs. The runtime imposes no character
+   * count and never truncates the text: an arbitrary cut would remove exactly
+   * the detail the next segment has to read.
+   */
+  it("accepts any length of handoff text and never truncates it", () => {
+    const authored = [
+      "HANDOFF-HEAD: resume the permission dialog investigation.",
+      "detail line with a path and a check outcome. ".repeat(1_000),
+      "HANDOFF-MIDDLE: the decision that binds the remaining work.",
+      "astral marker \u{1F642} and a CJK marker \u{4EA4}\u{63A5} ".repeat(500),
+      "HANDOFF-TAIL: what is left to do.",
+    ].join("\n");
+    // Comfortably past the retired 12000-character bound.
+    expect(authored.length).toBeGreaterThan(60_000);
 
-    const over = normalizeHandoffPayload({
-      handoff: "x".repeat(MAX_SUBAGENT_HANDOFF_CHARS + 1),
-    });
-    expect(over.ok).toBe(false);
-    if (over.ok) return;
-    // The reason the delegate gets back names the limit, so it can shorten the
-    // handoff instead of losing the detail a cut would have removed.
-    expect(over.error).toContain(`${MAX_SUBAGENT_HANDOFF_CHARS}`);
-    expect(over.error).toContain("resubmit");
-    // The bound leaves room for genuine technical continuation.
-    expect(MAX_SUBAGENT_HANDOFF_CHARS).toBeGreaterThanOrEqual(8_000);
+    const result = normalizeHandoffPayload({ handoff: `\n  ${authored}  \n` });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Outer whitespace is trimmed; every authored character stays in place.
+    expect(result.payload.text).toBe(authored);
+    expect(result.payload.text.startsWith("HANDOFF-HEAD")).toBe(true);
+    expect(result.payload.text).toContain("HANDOFF-TAIL: what is left to do.");
+    expect(result.payload.text).toContain("HANDOFF-MIDDLE");
   });
 });
 
@@ -394,20 +401,27 @@ describe("createSubagentHandoffTool", () => {
     expect(tool.description).toContain("write everything you would need to finish");
   });
 
-  it("declares one required, bounded string parameter", () => {
+  it("declares one required, free-form string parameter with no length cap", () => {
     const tool = createSubagentHandoffTool({ onSubmit: () => ({ ok: true as const }) });
     const parameters = tool.parameters as {
       type: string;
       required?: string[];
-      properties: Record<string, { type: string; maxLength?: number; minLength?: number }>;
+      properties: Record<
+        string,
+        { type: string; description?: string; maxLength?: number; minLength?: number }
+      >;
     };
     expect(Object.keys(parameters.properties)).toEqual(["handoff"]);
     expect(parameters.required).toEqual(["handoff"]);
     expect(parameters.properties.handoff).toMatchObject({
       type: "string",
       minLength: 1,
-      maxLength: MAX_SUBAGENT_HANDOFF_CHARS,
     });
+    // No arbitrary upper bound reaches the model-facing schema, and no
+    // description claims one.
+    expect(parameters.properties.handoff.maxLength).toBeUndefined();
+    expect(parameters.properties.handoff.description ?? "").not.toMatch(/\d+ characters/);
+    expect(tool.description).not.toMatch(/\d+ characters/);
   });
 });
 

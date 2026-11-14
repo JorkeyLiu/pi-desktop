@@ -29,6 +29,9 @@ export const esEntries: ChangelogEntry[] = [
       "Un texto largo pegado llega ahora al modelo como el texto que pegaste, en el punto donde lo pegaste, en lugar de una ruta de archivo que debía abrir. El borrador y el historial conservan el chip compacto, y cada vía de envío —reintentar, un mensaje en cola o una conversación reabierta— lleva el mismo texto.",
       "Consultar los subagentes en ejecución responde al instante: la lista de tareas muestra el estado actual en lugar de esperar a que uno termine, y esperar sigue siendo un paso aparte.",
       "El informe de un subagente llega ahora completo al agente principal, por largo que sea: ningún límite de longitud lo recorta, ninguna ruta de archivo lo sustituye y, cuando una espera agrupa varios informes, el primero se entrega íntegro antes de aplazar el resto.",
+      "El informe de un subagente solo cuenta como entregado cuando llega realmente a la conversación del agente principal: si la entrega se rechaza o se sustituye antes, el informe sigue esperando, llega en la siguiente espera o reanudación y nunca se envía dos veces.",
+      "El traspaso de contexto de un subagente y el seguimiento que le envías aceptan ahora texto de cualquier longitud: las continuaciones largas llegan íntegras al delegado en lugar de rechazarse por un límite fijo de caracteres.",
+      "La salida stdio de plugins y servidores MCP ahora se mide trama a trama en los bytes UTF-8 que cada trama transporta realmente: una trama con texto multibyte cuenta los bytes que de verdad tiene, y varias tramas pequeñas que llegan en una sola lectura se miden por separado en lugar de sumar sus tamaños.",
     ],
   },
   {

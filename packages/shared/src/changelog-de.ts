@@ -29,6 +29,9 @@ export const deEntries: ChangelogEntry[] = [
       "Ein langer eingefügter Text erreicht das Modell jetzt an der eingefügten Stelle als der eingefügte Text statt als Dateipfad, den es erst öffnen müsste. Entwurf und Verlauf behalten den kompakten Chip, und jeder Sendeweg – Wiederholen, eine eingereihte Nachricht oder eine erneut geöffnete Unterhaltung – trägt denselben Text.",
       "Der Blick auf laufende Subagenten antwortet jetzt sofort: Die Aufgabenliste zeigt den aktuellen Stand, statt auf das Ende eines Agenten zu warten; das Warten bleibt ein eigener Schritt.",
       "Der Bericht eines Subagenten erreicht den Hauptagenten jetzt vollständig, egal wie lang er ist: keine Längenbegrenzung kürzt ihn, kein Dateipfad tritt an seine Stelle, und ein Warten, das mehrere Berichte bündelt, liefert den ersten trotzdem vollständig, bevor es den Rest zurückstellt.",
+      "Ein Bericht eines Subagenten gilt erst als zugestellt, wenn er tatsächlich im Gespräch des Hauptagenten ankommt: Wird die Übergabe vorher abgelehnt oder ersetzt, wartet der Bericht weiter, kommt bei der nächsten Wartezeit oder Fortsetzung an und wird nie zweimal gesendet.",
+      "Der eigene Kontext-Handoff eines Subagenten und ein Nachtrag, den Sie ihm senden, nehmen jetzt Text beliebiger Länge an: lange Fortsetzungen erreichen den Delegierten vollständig, statt an einer festen Zeichenzahl abgelehnt zu werden.",
+      "Die stdio-Ausgabe von Plugin- und MCP-Servern wird jetzt Rahmen für Rahmen in den tatsächlich übertragenen UTF-8-Bytes gemessen: Ein Rahmen mit mehrbytigem Text zählt die Bytes, die er wirklich hat, und mehrere kleine Rahmen, die in einem Lesevorgang ankommen, werden einzeln gemessen, statt ihre Größen zu addieren.",
     ],
   },
   {

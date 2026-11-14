@@ -20,8 +20,8 @@ import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { SubagentDefinition } from "@pi-desktop/shared";
 import { SubagentRun, type SubagentRunOptions } from "./subagent.js";
 import {
-  MAX_SUBAGENT_HANDOFF_CHARS,
   MAX_SUBAGENT_HANDOFF_FAILURES,
+  MAX_SUBAGENT_HANDOFF_UNANSWERED,
   SUBAGENT_HANDOFF_TOOL_NAME,
 } from "./subagent-handoff.js";
 import type { RuntimeProviderConfig } from "./provider-binding.js";
@@ -150,6 +150,7 @@ const SUBMITTABLE = {
 
 type ScriptedReply =
   | { kind: "tools"; calls: ToolCall[] }
+  | { kind: "truncated"; calls: ToolCall[] }
   | { kind: "text"; text: string }
   | { kind: "failure"; errorMessage: string }
   | { kind: "abort"; abort: () => void };
@@ -199,12 +200,15 @@ function scriptedProvider(
     const message =
       reply.kind === "tools"
         ? assistantMessage(reply.calls, "toolUse")
-        : assistantMessage([{ type: "text", text: reply.text }], "stop");
+        : reply.kind === "truncated"
+          ? assistantMessage(reply.calls, "length")
+          : assistantMessage([{ type: "text", text: reply.text }], "stop");
     queueMicrotask(() => {
       stream.push({ type: "start", partial: message });
       stream.push({
         type: "done",
-        reason: reply.kind === "tools" ? "toolUse" : "stop",
+        reason:
+          reply.kind === "tools" ? "toolUse" : reply.kind === "truncated" ? "length" : "stop",
         message,
       });
       stream.end(message);
@@ -217,6 +221,8 @@ function createRun(
   selfHandoff: SubagentRunOptions["selfHandoff"],
   tools: AgentTool[],
   signal?: AbortSignal,
+  /** Overrides the dispatch text, as a continuation's own input does. */
+  task?: string,
 ): {
   run: SubagentRun;
   agent: { state: { messages: AgentMessage[] }; streamFunction: unknown };
@@ -228,7 +234,7 @@ function createRun(
     sessionId: "session-loop",
     turnId: "turn-loop",
     parentToolCallId: "task-loop",
-    task: TASK,
+    task: task ?? TASK,
     provider,
     thinkingLevel: "off",
     systemPrompt: "You are the explorer subagent.",
@@ -633,10 +639,8 @@ describe("SubagentRun self-handoff with schema-rejected submissions", () => {
     ).toContain("contents of read-1");
   });
 
-  it("stops asking after submissions over the character bound", async () => {
-    const { requests, result, run } = await drive({
-      handoff: "x".repeat(MAX_SUBAGENT_HANDOFF_CHARS + 1),
-    });
+  it("stops asking after submissions of the wrong type", async () => {
+    const { requests, result, run } = await drive({ handoff: { text: "x" } });
 
     expect(askCount(requests)).toBe(MAX_SUBAGENT_HANDOFF_FAILURES);
     expect(stateOf(run).failures).toBe(6);
@@ -723,4 +727,293 @@ describe("SubagentRun self-handoff with schema-rejected submissions", () => {
     expect(result.handoffs).toBe(2);
   });
 });
+});
+
+/**
+ * Steering text is freeform child input: the child's own context window is the
+ * only real limit. This walks the real loop with a direction far past the
+ * retired 20000-character transport bound and asserts the delegate's provider
+ * request carries it whole — both in the turn that received it and after the
+ * rollover that rebuilds the delegate's context.
+ */
+describe("SubagentRun live steering text", () => {
+  it("carries a steer past the retired text bound through the loop whole", async () => {
+    const STEER = [
+      "STEER-HEAD: also verify the escape handler before reporting.",
+      "steer detail line with a path and a line number. ".repeat(1_200),
+      "STEER-MIDDLE: keep the dialog props unchanged.",
+      "astral marker \u{1F642} and CJK marker \u{4EA4}\u{63A5} ".repeat(400),
+      "STEER-TAIL: report the exact line in the final answer.",
+    ].join("\n");
+    expect(STEER.length).toBeGreaterThan(60_000);
+    const requests: LlmMessage[][] = [];
+    const script: ScriptedReply[] = [
+      { kind: "tools", calls: [readCall("read-1")] },
+      { kind: "tools", calls: [handoffCall("handoff-1")] },
+      { kind: "text", text: "Final report: done." },
+    ];
+    const { run, agent } = createRun({ kind: "tool-calls", value: 1 }, [
+      readTool([]),
+    ]);
+    agent.streamFunction = scriptedProvider(script, requests, (round) => {
+      // Sent while the first turn runs: queued on the child loop and delivered
+      // at the next turn boundary, exactly like a live user steer.
+      if (round === 0) run.steer(STEER);
+    });
+
+    const result = await run.run();
+
+    expect(requests).toHaveLength(3);
+    const delivered = requestText(requests[1]!);
+    expect(countOf(delivered, "STEER-HEAD")).toBe(1);
+    expect(delivered).toContain("STEER-MIDDLE: keep the dialog props unchanged.");
+    expect(countOf(delivered, "STEER-TAIL")).toBe(1);
+    expect(delivered).toContain(STEER);
+    // The whole direction survives the rollover, once, not summarized.
+    const afterRollover = requestText(requests[2]!);
+    expect(countOf(afterRollover, "STEER-HEAD")).toBe(1);
+    expect(afterRollover).toContain("STEER-MIDDLE: keep the dialog props unchanged.");
+    expect(countOf(afterRollover, "STEER-TAIL")).toBe(1);
+    expect(afterRollover).toContain(STEER);
+    expect(afterRollover).toContain("[Delegated-task handoff 1]");
+    expect(result.status).toBe("completed");
+    expect(result.handoffs).toBe(1);
+  });
+});
+
+/**
+ * The layers a delegate can be refused at, and what each costs.
+ *
+ * `SubagentHandoff` is a normal agent tool: the loop validates its arguments
+ * against the declared schema before `execute`, and a message the output token
+ * limit cut never executes any of its calls at all. None of these layers
+ * replaces the delegate's history or its checkpoint, and a refusal is charged
+ * to the one consecutive-failure budget whichever layer produced it.
+ */
+describe("SubagentRun self-handoff submission layers", () => {
+  type HandoffView = {
+    failures: number;
+    unanswered: number;
+    requested: boolean;
+  };
+
+  /** The run's own bookkeeping, as a secondary witness next to the requests. */
+  function stateOf(run: SubagentRun): HandoffView {
+    return (run as unknown as { handoffState: HandoffView }).handoffState;
+  }
+
+  /** The submission the run parked for the next boundary, if any. */
+  function pendingOf(run: SubagentRun): unknown {
+    return (run as unknown as { pendingHandoff: unknown }).pendingHandoff;
+  }
+
+  /**
+   * A handoff several times the retired 12000-character bound, with markers at
+   * the beginning, middle and end plus non-BMP characters, so a clip anywhere
+   * is visible in the request the delegate sends next.
+   */
+  function oversizedHandoff(): string {
+    return [
+      "HANDOFF-HEAD: the dialog lives in PermissionDialog.tsx.",
+      "checked line and its outcome. ".repeat(900),
+      "HANDOFF-MIDDLE: the dialog's public props stay unchanged.",
+      "astral marker \u{1F642} and CJK marker \u{4EA4}\u{63A5} ".repeat(900),
+      "HANDOFF-TAIL: add the focus-trap test next.",
+    ].join("\n");
+  }
+
+  it("accepts an over-long handoff in one call and installs it whole", async () => {
+    const authored = oversizedHandoff();
+    expect(authored.length).toBeGreaterThan(12_000);
+    const requests: LlmMessage[][] = [];
+    const script: ScriptedReply[] = [
+      { kind: "tools", calls: [readCall("read-1")] },
+      { kind: "tools", calls: [handoffCall("handoff-long", { handoff: authored })] },
+      { kind: "text", text: "Final report: continued after one rollover." },
+    ];
+    const harness = createRun({ kind: "tool-calls", value: 1 }, [readTool([])]);
+    harness.agent.streamFunction = scriptedProvider(script, requests);
+
+    const result = await harness.run.run();
+
+    // One submission answered one request: no refusal, no retry, no charge.
+    expect(requests).toHaveLength(3);
+    expect(result.status).toBe("completed");
+    expect(result.handoffs).toBe(1);
+    expect(stateOf(harness.run).failures).toBe(0);
+    expect(stateOf(harness.run).unanswered).toBe(0);
+    expect(pendingOf(harness.run)).toBeUndefined();
+
+    // The delegate never read a validation error back.
+    expect(requestText(requests[2]!)).not.toContain("Validation failed for tool");
+    // The installed context carries the authored text character for character.
+    const installed = requestText(requests[2]!);
+    expect(installed).toContain("[Delegated-task handoff 1]");
+    expect(installed).toContain(authored);
+    expect(countOf(installed, "HANDOFF-HEAD")).toBe(1);
+    expect(countOf(installed, "HANDOFF-MIDDLE")).toBe(1);
+    expect(countOf(installed, "HANDOFF-TAIL")).toBe(1);
+    expect(countOf(installed, "\u{1F642}")).toBe(900);
+    // Only the absorbed segment is gone; the task and the report stay.
+    expect(installed).not.toContain("contents of read-1");
+    expect(
+      countOf(
+        requestText(harness.agent.state.messages as unknown as LlmMessage[]),
+        authored,
+      ),
+    ).toBe(1);
+  });
+
+  it("keeps the segment and the checkpoint when the arguments fail the schema", async () => {
+    const requests: LlmMessage[][] = [];
+    const script: ScriptedReply[] = [
+      { kind: "tools", calls: [readCall("read-1")] },
+      { kind: "tools", calls: [handoffCall("handoff-shape", {})] },
+      { kind: "text", text: "Final report: never handed off." },
+    ];
+    const harness = createRun({ kind: "tool-calls", value: 1 }, [readTool([])]);
+    harness.agent.streamFunction = scriptedProvider(script, requests);
+
+    const result = await harness.run.run();
+
+    // The loop refused the call before `execute`: its own reason reached the
+    // delegate, nothing was parked, and no history row was replaced.
+    expect(requestText(requests[2]!)).toContain(
+      'Validation failed for tool "SubagentHandoff"',
+    );
+    expect(pendingOf(harness.run)).toBeUndefined();
+    expect(result.handoffs).toBeUndefined();
+    const history = requestText(harness.agent.state.messages as unknown as LlmMessage[]);
+    expect(history).toContain("contents of read-1");
+    expect(history).not.toContain("[Delegated-task handoff");
+    // The schema refusal is one invalid submission in the same budget an
+    // `execute` refusal would spend, and it retires the parked request, so a
+    // correction is not answered against text the delegate already replaced.
+    expect(stateOf(harness.run).failures).toBe(1);
+    // The failure reset the unanswered streak and spent the parked request; the
+    // next boundary asks again under the same request, so the streak reads 1.
+    expect(stateOf(harness.run).unanswered).toBe(1);
+    expect(stateOf(harness.run).requested).toBe(true);
+  });
+
+  it("bounds repeated schema rejections and keeps the segment intact", async () => {
+    const requests: LlmMessage[][] = [];
+    const script: ScriptedReply[] = [
+      { kind: "tools", calls: [readCall("read-1")] },
+      ...Array.from({ length: 6 }, (_, index) => ({
+        kind: "tools" as const,
+        calls: [handoffCall(`handoff-shape-${index}`, {})],
+      })),
+      { kind: "text", text: "Final report: stopped asking." },
+    ];
+    const harness = createRun({ kind: "tool-calls", value: 1 }, [readTool([])]);
+    harness.agent.streamFunction = scriptedProvider(script, requests);
+
+    const result = await harness.run.run();
+
+    // The same malformed submission is answered deterministically every time,
+    // each one costs a failure, and the asks stop at the bound instead of
+    // repeating for the segment.
+    expect(askCount(requests)).toBe(MAX_SUBAGENT_HANDOFF_FAILURES);
+    expect(stateOf(harness.run).failures).toBe(6);
+    expect(result.status).toBe("completed");
+    expect(result.handoffs).toBeUndefined();
+    const history = requestText(harness.agent.state.messages as unknown as LlmMessage[]);
+    expect(history).toContain("contents of read-1");
+    expect(history).not.toContain("[Delegated-task handoff");
+  });
+
+  it("fails a truncated handoff call without installing it", async () => {
+    const requests: LlmMessage[][] = [];
+    const script: ScriptedReply[] = [
+      { kind: "tools", calls: [readCall("read-1")] },
+      // The output token limit cut this message, so pi refuses to execute any
+      // of its calls: the salvaged arguments may be incomplete.
+      {
+        kind: "truncated",
+        calls: [handoffCall("handoff-cut", { handoff: "HANDOFF-HEAD: the dialog lives in" })],
+      },
+      { kind: "text", text: "Final report: reissued later." },
+    ];
+    const harness = createRun({ kind: "tool-calls", value: 1 }, [readTool([])]);
+    harness.agent.streamFunction = scriptedProvider(script, requests);
+
+    const result = await harness.run.run();
+
+    // The delegate reads the loop's own truncation reason...
+    expect(requestText(requests[2]!)).toContain("hit the output token limit");
+    // ...and none of the cut text entered the context or the checkpoint.
+    expect(pendingOf(harness.run)).toBeUndefined();
+    expect(result.handoffs).toBeUndefined();
+    // The loop reports the un-executed call as an error without a duration, so
+    // it costs one charge in the same bounded budget; the ask is renewed under
+    // the next boundary's own request rather than spun on this one.
+    expect(stateOf(harness.run).failures).toBe(1);
+    expect(stateOf(harness.run).unanswered).toBe(1);
+    const history = requestText(harness.agent.state.messages as unknown as LlmMessage[]);
+    expect(history).toContain("contents of read-1");
+    expect(history).not.toContain("[Delegated-task handoff");
+    expect(history).not.toContain("HANDOFF-HEAD");
+  });
+
+  it("leaves the bounded asks unspent after a long submission is accepted", async () => {
+    // The retired cap was enforced by the schema: a long but valid submission
+    // was refused before `execute`, so each retry spent one of the bounded asks
+    // and a delegate could end up unable to hand off at all.
+    const authored = oversizedHandoff();
+    const requests: LlmMessage[][] = [];
+    const script: ScriptedReply[] = [
+      { kind: "tools", calls: [readCall("read-1")] },
+      { kind: "tools", calls: [handoffCall("handoff-long", { handoff: authored })] },
+      { kind: "tools", calls: [readCall("read-2")] },
+      { kind: "text", text: "Final report: handled in one submission." },
+    ];
+    const harness = createRun({ kind: "tool-calls", value: 1 }, [readTool([])]);
+    harness.agent.streamFunction = scriptedProvider(script, requests);
+
+    const result = await harness.run.run();
+
+    // The first segment asked and was answered; the new segment asks again with
+    // its own fresh budget instead of inheriting a spent one.
+    expect(askCount(requests)).toBe(2);
+    expect(hasInstruction(requests[0]!)).toBe(false);
+    expect(hasInstruction(requests[3]!)).toBe(true);
+    expect(result.handoffs).toBe(1);
+    expect(stateOf(harness.run).failures).toBe(0);
+    expect(stateOf(harness.run).unanswered).toBe(1);
+  });
+});
+
+/**
+ * A continuation enters the child loop as its own dispatch text, after the
+ * public entry validated it. Nothing downstream may clip it: the first request
+ * the resumed run sends carries every character.
+ */
+describe("SubagentRun continued task text", () => {
+  it("sends an over-long continued task whole in the first request", async () => {
+    const authored = [
+      "CONTINUE-HEAD: go deeper from the earlier segment.",
+      "follow-up detail with a path and a line number. ".repeat(1_000),
+      "CONTINUE-MIDDLE: the constraint that still binds.",
+      "astral marker \u{1F642} and CJK marker \u{4EA4}\u{63A5} ".repeat(500),
+      "CONTINUE-TAIL: report the exact line.",
+    ].join("\n");
+    expect(authored.length).toBeGreaterThan(20_000);
+    const requests: LlmMessage[][] = [];
+    const { run, agent } = createRun({ kind: "tool-calls", value: 1 }, [readTool([])], undefined, authored);
+    agent.streamFunction = scriptedProvider(
+      [{ kind: "text", text: "Final report: continued and done." }],
+      requests,
+    );
+
+    const result = await run.run();
+
+    expect(result.status).toBe("completed");
+    expect(requests).toHaveLength(1);
+    const first = requestText(requests[0]!);
+    expect(first).toContain(authored);
+    expect(countOf(first, "CONTINUE-HEAD")).toBe(1);
+    expect(countOf(first, "CONTINUE-MIDDLE")).toBe(1);
+    expect(countOf(first, "CONTINUE-TAIL")).toBe(1);
+  });
 });

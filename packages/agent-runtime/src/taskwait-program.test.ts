@@ -148,6 +148,33 @@ async function settleStatus(runtime: DesktopAgentRuntime, delegationId: string) 
   });
 }
 
+/**
+ * pi-agent-core's acceptance step: an accepted message is pushed into
+ * `state.messages` first, then `message_end` listeners run. A `TaskWait`
+ * report batch is delivered there, never when the tool merely returns.
+ */
+async function acceptAcceptedMessage(runtime: DesktopAgentRuntime, message: unknown) {
+  const agent = (runtime as any).agent;
+  agent.state.messages.push(message);
+  await (runtime as any).handleAgentEvent({ type: "message_end", message });
+}
+
+async function acceptTaskWaitResult(
+  runtime: DesktopAgentRuntime,
+  toolCallId: string,
+  result: { content: unknown; details?: unknown },
+) {
+  await acceptAcceptedMessage(runtime, {
+    role: "toolResult",
+    toolCallId,
+    toolName: "TaskWait",
+    content: result.content,
+    details: result.details,
+    isError: false,
+    timestamp: Date.now(),
+  });
+}
+
 beforeEach(() => {
   subagentRuns.calls.length = 0;
   subagentRuns.instances.length = 0;
@@ -303,6 +330,7 @@ describe("program-wait TaskWait", () => {
       const first = await waitTool(runtime).execute("wait-1", {
         delegationIds: [delegationId],
       });
+      await acceptTaskWaitResult(runtime, "wait-1", first);
       expect((first.content[0] as { text: string }).text).toContain("src/app.ts:12 misses the null check.");
       expect((runtime as any).delegations.get(delegationId).reportDelivered).toBe(true);
       const reread = await waitTool(runtime).execute("wait-2", {

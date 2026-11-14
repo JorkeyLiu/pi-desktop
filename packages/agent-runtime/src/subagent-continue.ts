@@ -138,9 +138,6 @@ export function validateSubagentContinue(
   if (!rawText.trim() && images.length === 0) {
     throw codedError("Continuation text required", "INVALID_ARGUMENT");
   }
-  if (rawText.trim().length > 20_000) {
-    throw codedError("continueSubagent payload out of bounds", "INVALID_ARGUMENT");
-  }
   const candidateId =
     typeof request.messageId === "string" ? request.messageId.trim() : "";
   const idempotencyKey = candidateId ? candidateId : undefined;
@@ -385,6 +382,51 @@ export function continueEmissions(options: {
 }
 
 /**
+ * Parse a sidecar `agent.steerSubagent` call.
+ *
+ * The transport form is re-checked here because a hand-written or corrupted
+ * payload can reach the sidecar without passing the main-process handler. Only
+ * structure is validated: the identifiers that address the run, and the rule
+ * that a steer carries something — text, or images when the user sent a
+ * picture and no words. The text itself is the user's own input and has no
+ * length bound, so it crosses unchanged.
+ */
+export function parseSteerSubagentParams(params: unknown): {
+  delegationId: string;
+  expectedTurnId: string;
+  content: string;
+  images?: ImageContent[];
+  attachments?: MessageAttachment[];
+  messageId?: string;
+} {
+  const source = (params ?? {}) as Record<string, unknown>;
+  const delegationId = String(source.delegationId ?? "");
+  const expectedTurnId = String(source.expectedTurnId ?? "");
+  const content = String(source.content ?? "");
+  const images = parseChildInputImages(source.images);
+  const attachments = parseChildInputAttachments(source.attachments);
+  const messageId =
+    typeof source.messageId === "string" && source.messageId.trim()
+      ? source.messageId.trim()
+      : undefined;
+  // An image-only steer is a real input; requiring text would drop it.
+  if (!delegationId.trim() || !expectedTurnId.trim() || (!content.trim() && images.length === 0)) {
+    throw codedError("delegationId, expectedTurnId and content required", "INVALID_ARGUMENT");
+  }
+  if (delegationId.length > 128 || expectedTurnId.length > 128) {
+    throw codedError("steerSubagent payload out of bounds", "INVALID_ARGUMENT");
+  }
+  return {
+    delegationId,
+    expectedTurnId,
+    content,
+    ...(images.length ? { images } : {}),
+    ...(attachments.length ? { attachments } : {}),
+    ...(messageId ? { messageId } : {}),
+  };
+}
+
+/**
  * Parse a sidecar `agent.continueSubagent` call. The runtime revalidates the
  * chain, decides delivery, and adopts the execution turn after this dispatch,
  * so a stale or busy target fails there with its coded error rather than
@@ -417,7 +459,7 @@ export function parseContinueSidecarParams(params: unknown): {
   if (!sessionId || !delegationId.trim() || (!content.trim() && images.length === 0)) {
     throw codedError("delegationId and content required", "INVALID_ARGUMENT");
   }
-  if (delegationId.length > 128 || (expectedTurnId && expectedTurnId.length > 128) || content.length > 20_000) {
+  if (delegationId.length > 128 || (expectedTurnId && expectedTurnId.length > 128)) {
     throw codedError("continueSubagent payload out of bounds", "INVALID_ARGUMENT");
   }
   return {

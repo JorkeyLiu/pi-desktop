@@ -29,6 +29,9 @@ export const ptBREntries: ChangelogEntry[] = [
       "Um texto longo colado agora chega ao modelo como o próprio texto colado, no ponto em que você colou, em vez de um caminho de arquivo que ele precisaria abrir. O rascunho e o histórico mantêm o chip compacto, e todo caminho de envio — repetir, uma mensagem na fila ou uma conversa reaberta — leva o mesmo texto.",
       "Consultar os subagentes em execução responde na hora: a lista de tarefas mostra o estado atual em vez de esperar que um deles termine, e aguardar continua sendo um passo separado.",
       "O relatório de um subagente agora chega inteiro ao agente principal, por mais longo que seja: nenhum limite de tamanho o corta, nenhum caminho de arquivo o substitui, e uma espera que agrupa vários relatórios ainda entrega o primeiro por completo antes de adiar o restante.",
+      "O relatório de um subagente só conta como entregue quando chega de fato à conversa do agente principal: se a entrega for recusada ou substituída antes, o relatório continua aguardando, chega na próxima espera ou retomada e nunca é enviado duas vezes.",
+      "A passagem de contexto de um subagente e o acompanhamento que você envia a ele agora aceitam texto de qualquer comprimento: continuações longas chegam inteiras ao delegado em vez de serem recusadas por um limite fixo de caracteres.",
+      "A saída stdio de plugins e servidores MCP agora é medida quadro a quadro nos bytes UTF-8 que cada quadro realmente transporta: um quadro com texto multibyte conta os bytes que de fato tem, e vários quadros pequenos que chegam em uma só leitura são medidos separadamente em vez de somar seus tamanhos.",
     ],
   },
   {
