@@ -9,11 +9,13 @@ import type {
 } from "@pi-desktop/shared";
 
 /**
- * Delivery-ownership acceptance for direct user continuations: the parent
- * receives a run's report only while it expects THIS chain
- * (startedEpoch == turnEpoch, undelivered, not stopped/aborted, owning turn
- * alive). Anything else continues user-owned: no parent prompt, no parent
- * context, no billing of an unrelated turn.
+ * Direct intervention acceptance: a continued child is an ordinary child of
+ * its session. It runs independently of the parent turn — no parent provider
+ * request, no parent-context injection, no billing of an unrelated turn — and
+ * its status, report and usage stay visible through the normal subagent
+ * interfaces. A live parent additionally receives the report through its
+ * turn-local delivery when it is still waiting on this chain; that routing
+ * never depends on who sent the text.
  *
  * The delegate loop is replaced by a recorder (as in `runtime.test.ts`);
  * every other export stays real.
@@ -296,10 +298,10 @@ describe("attached continuation", () => {
         expectedParentTurnId: "parent-turn",
         text: "Go deeper.",
       });
-      expect(continued.delivery).toBe("parent");
       expect(continued.turnId).toBe("parent-turn");
       const record = (runtime as any).delegations.get(continued.delegationId);
-      expect(record.delivery).toBe("parent");
+      expect(record.parentTurnId).toBe("parent-turn");
+      expect(record.taskTurnId).toBe("parent-turn");
       expect(record.startedEpoch).toBe((runtime as any).turnEpoch);
       expect(record.reportDelivered).toBe(false);
       const waited = await waitTool(runtime).execute("wait-1", {
@@ -315,8 +317,8 @@ describe("attached continuation", () => {
   });
 });
 
-describe("detached user continuation", () => {
-  it("delivered source continues user-owned with no parent prompt, context, or billing", async () => {
+describe("independent continuation", () => {
+  it("an ended parent's child continues independently with no wake or parent prompt", async () => {
     const seen: any[] = [];
     const runtime = createRuntime({ onEvent: (envelope) => seen.push(envelope) });
     const prompts: string[] = [];
@@ -335,7 +337,7 @@ describe("detached user continuation", () => {
       const firstId = (started.details as any).delegationId as string;
       await settleStatus(runtime, firstId);
       seedChildRow(runtime, "task-1", "child-1");
-      // Deliver the first report so the parent no longer expects this chain.
+      // The parent turn already consumed this report and ended.
       const waitedFirst = await waitTool(runtime).execute("wait-0", {
         delegationIds: [firstId],
       });
@@ -344,20 +346,28 @@ describe("detached user continuation", () => {
       expect((runtime as any).getStatus().isRunning).toBe(false);
 
       const historyBefore = (runtime as any).transcriptHistory.length;
+      subagentRuns.result = completedResult("Deeper findings.", {
+        operationId: "op-2",
+        inputTokens: 3,
+        outputTokens: 4,
+        totalTokens: 7,
+      });
       const continued = await runtime.continueSubagent({
         delegationId: firstId,
         text: "Go deeper on your own.",
         messageId: "123e4567-e89b-12d3-a456-426614174000",
       });
       expect(continued.accepted).toBe(true);
-      expect(continued.delivery).toBe("user");
+      // The run carries a transcript-attribution id, never the parent's turn.
       expect(continued.turnId).toBeDefined();
       expect(continued.turnId).not.toBe("parent-turn");
       const record = (runtime as any).delegations.get(continued.delegationId);
-      expect(record.delivery).toBe("user");
-      expect(record.executionTurnId).toBe(continued.turnId);
-      // No parent model call ran for the detached execution.
+      expect(record.parentTurnId).toBeUndefined();
+      expect(record.taskTurnId).toBe(continued.turnId);
+      expect(record.userOrigin).toBe(true);
+      // No parent model call ran and no parent turn was begun.
       expect(prompts).toHaveLength(0);
+      expect((runtime as any).getStatus().isRunning).toBe(false);
       // The followup persists as attributed child history, never a main row.
       const history = (runtime as any).transcriptHistory as UiMessage[];
       expect(history.length).toBeGreaterThan(historyBefore);
@@ -389,14 +399,14 @@ describe("detached user continuation", () => {
       for (const envelope of followupEnd) {
         expect(envelope.parentToolCallId).toBe(echo[0].parentToolCallId);
       }
-      // The marker names the run's OWN execution turn, so a surface that
-      // outlives this process (a reopened tab, a rebuilt renderer) can steer
-      // the detached run without inferring an owner from parent state.
+      // The row publishes provenance and its chain link only: the run owns no
+      // turn, so no surface has to read an owner identity back out of it.
       expect(toolDetailsOf(marker[0])).toMatchObject({
         delegationId: continued.delegationId,
-        executionTurnId: continued.turnId,
+        resumedFrom: firstId,
       });
-      // The live progress snapshot republishes the same identity.
+      expect(toolDetailsOf(marker[0])).not.toHaveProperty("executionTurnId");
+      expect(toolDetailsOf(marker[0])).not.toHaveProperty("delivery");
       const snapshot = seen.find(
         (envelope) =>
           envelope.event.type === "message_end" &&
@@ -405,45 +415,41 @@ describe("detached user continuation", () => {
           (toolDetailsOf(envelope.event.message)?.delegationId === continued.delegationId) &&
           toolDetailsOf(envelope.event.message)?.status === "running",
       );
-      expect(
-        toolDetailsOf(
-          (snapshot?.event as { message?: UiMessage } | undefined)?.message,
-        ),
-      ).toMatchObject({ executionTurnId: continued.turnId });
+      expect(toolDetailsOf((snapshot?.event as { message?: UiMessage } | undefined)?.message))
+        .not.toHaveProperty("executionTurnId");
 
-      // The first parent-owned run's spend stays where it settled.
+      // The first parent-attached run's spend stays where it settled.
       const parentUsageBefore = JSON.stringify((runtime as any).turnSubagentUsage);
       await settleStatus(runtime, continued.delegationId);
-      // Child spend lands on its own record, never merged into another turn.
-      expect(record.usage?.totalTokens).toBe(12);
+      // Child spend stays on its own Task history, never a closed parent turn.
+      expect(record.usage?.totalTokens).toBe(7);
       expect(JSON.stringify((runtime as any).turnSubagentUsage)).toBe(parentUsageBefore);
-      // The detached execution closes its own turn without a parent conclusion.
-      const terminal = seen.find(
-        (envelope) =>
-          (envelope.event.type === "agent_end" || envelope.event.type === "error") &&
-          envelope.turnId === continued.turnId,
-      );
-      expect(terminal?.event.type).toBe("agent_end");
-      // Parent accounting excludes the user-owned run.
+      // The independent run concluded no turn of its own.
+      expect(
+        seen.find(
+          (envelope) =>
+            (envelope.event.type === "agent_end" || envelope.event.type === "error") &&
+            envelope.turnId === continued.turnId,
+        ),
+      ).toBeUndefined();
+      // A later parent turn sees the run through the normal interfaces.
       const listed = await listTool(runtime).execute("list-1", {});
       expect(
         (listed.details.delegations as Array<{ delegationId: string }>).some(
           (entry) => entry.delegationId === continued.delegationId,
         ),
-      ).toBe(false);
-      const waited = await waitTool(runtime).execute("wait-1", {});
-      expect((waited.content[0] as { text: string }).text).toContain("No subagents are currently running");
+      ).toBe(true);
       const named = await waitTool(runtime).execute("wait-2", {
         delegationIds: [continued.delegationId],
       });
-      expect(named.details.unknownIds).toContain(continued.delegationId);
-      expect(record.reportDelivered).toBe(false);
+      expect((named.content[0] as { text: string }).text).toContain("Deeper findings.");
+      expect(named.details.unknownIds).toBeUndefined();
     } finally {
       await runtime.dispose();
     }
   });
 
-  it("chains two user followups and steers the detached run by its execution turn", async () => {
+  it("chains two user followups and steers the independent run", async () => {
     const runtime = createRuntime();
     subagentRuns.deferred = true;
     try {
@@ -459,27 +465,30 @@ describe("detached user continuation", () => {
       await waitTool(runtime).execute("wait-0", { delegationIds: [firstId] });
 
       const one = await runtime.continueSubagent({ delegationId: firstId, text: "First followup." });
-      expect(one.delivery).toBe("user");
       const steered = runtime.steerSubagent({
         delegationId: one.delegationId,
-        expectedParentTurnId: one.turnId!,
+        expectedParentTurnId: one.turnId,
         text: "Meanwhile, check auth.",
       });
       expect(steered).toEqual({ accepted: true, delegationId: one.delegationId, turnId: one.turnId });
       expect(subagentRuns.steered).toEqual(["Meanwhile, check auth."]);
-      // The live parent turn (there is none) cannot steer a detached run.
-      expect(() =>
+      // The run is alive whatever parent turn the caller last saw: a stale
+      // caller turn is informational, not ownership.
+      expect(
         runtime.steerSubagent({
           delegationId: one.delegationId,
           expectedParentTurnId: "parent-turn",
-          text: "Wrong owner.",
-        }),
-      ).toThrow(expect.objectContaining({ errorCode: "TURN_NOT_FOUND" }));
+          text: "Also check the parser.",
+        }).accepted,
+      ).toBe(true);
+      expect(subagentRuns.steered).toEqual([
+        "Meanwhile, check auth.",
+        "Also check the parser.",
+      ]);
       subagentRuns.resolveRun!(completedResult("Second report."));
       await settleStatus(runtime, one.delegationId);
 
       const two = await runtime.continueSubagent({ delegationId: one.delegationId, text: "Second followup." });
-      expect(two.delivery).toBe("user");
       const chains = (runtime as any).delegationChains;
       expect(chains.lookup(two.delegationId).delegateSessionId).toBe(
         chains.lookup(one.delegationId).delegateSessionId,
@@ -500,7 +509,7 @@ describe("detached user continuation", () => {
     }
   });
 
-  it("explicit parent Task(resume) reattaches a user-owned chain", async () => {
+  it("explicit parent Task(resume) reattaches an independently continued chain", async () => {
     const runtime = createRuntime();
     try {
       subagentRuns.result = completedResult("First report.");
@@ -513,7 +522,7 @@ describe("detached user continuation", () => {
       seedChildRow(runtime, "task-1", "child-1");
       await waitTool(runtime).execute("wait-0", { delegationIds: [firstId] });
       const one = await runtime.continueSubagent({ delegationId: firstId, text: "User followup." });
-      expect(one.delivery).toBe("user");
+      expect((runtime as any).delegations.get(one.delegationId).parentTurnId).toBeUndefined();
       await settleStatus(runtime, one.delegationId);
 
       const resumed = await taskTool(runtime).execute("task-9", {
@@ -523,7 +532,10 @@ describe("detached user continuation", () => {
       });
       const resumedId = (resumed.details as any).delegationId as string;
       const record = (runtime as any).delegations.get(resumedId);
-      expect(record.delivery).toBe("parent");
+      // A parent `Task(resume)` is an ordinary parent spawn again: it reports
+      // back to the runtime's live turn.
+      expect(record.parentTurnId).toBe((runtime as any).turnId);
+      expect(record.userOrigin).toBeUndefined();
       const listed = await listTool(runtime).execute("list-1", {});
       expect(
         (listed.details.delegations as Array<{ delegationId: string }>).some(
@@ -537,7 +549,7 @@ describe("detached user continuation", () => {
 });
 
 describe("continue guards", () => {
-  it("rejects busy instead of attaching a detached source to a live parent", async () => {
+  it("continues while the main is live instead of reporting agent-busy", async () => {
     const runtime = createRuntime();
     (runtime as any).agent.state.isStreaming = true;
     try {
@@ -548,20 +560,20 @@ describe("continue guards", () => {
       });
       const firstId = (started.details as any).delegationId as string;
       await settleStatus(runtime, firstId);
-      const delegationsBefore = (runtime as any).delegations.size;
-      const historyBefore = (runtime as any).transcriptHistory.length;
-      await expect(
-        runtime.continueSubagent({ delegationId: firstId, text: "Barge in." }),
-      ).rejects.toMatchObject({ errorCode: "AGENT_BUSY" });
-      expect((runtime as any).delegations.size).toBe(delegationsBefore);
-      expect((runtime as any).transcriptHistory.length).toBe(historyBefore);
+      const continued = await runtime.continueSubagent({ delegationId: firstId, text: "Barge in." });
+      expect(continued.accepted).toBe(true);
+      const record = (runtime as any).delegations.get(continued.delegationId);
+      // The main is live right now, so this run reports back to it — the fact
+      // that the source settled under an older turn changes nothing.
+      expect(record.parentTurnId).toBe("parent-turn");
+      await settleStatus(runtime, continued.delegationId);
     } finally {
       (runtime as any).agent.state.isStreaming = false;
       await runtime.dispose();
     }
   });
 
-  it("refuses a stale expected turn against a live parent", async () => {
+  it("accepts an intervention whose remembered turn is stale", async () => {
     const runtime = createRuntime();
     (runtime as any).agent.state.isStreaming = true;
     try {
@@ -572,14 +584,14 @@ describe("continue guards", () => {
       });
       const firstId = (started.details as any).delegationId as string;
       await settleStatus(runtime, firstId);
-      await expect(
-        runtime.continueSubagent({
-          delegationId: firstId,
-          expectedParentTurnId: "other-turn",
-          text: "Late.",
-        }),
-      ).rejects.toMatchObject({ errorCode: "TURN_NOT_FOUND" });
-      expect((runtime as any).delegations.size).toBe(1);
+      const continued = await runtime.continueSubagent({
+        delegationId: firstId,
+        expectedParentTurnId: "other-turn",
+        text: "Late.",
+      });
+      expect(continued.accepted).toBe(true);
+      expect((runtime as any).delegations.size).toBe(2);
+      await settleStatus(runtime, continued.delegationId);
     } finally {
       (runtime as any).agent.state.isStreaming = false;
       await runtime.dispose();
@@ -649,7 +661,6 @@ describe("continue guards", () => {
         text: "Pick it back up.",
       });
       expect(continued.accepted).toBe(true);
-      expect(continued.delivery).toBe("user");
       // Seeded with the original brief, then the new input — no fabricated rows.
       const seeded = subagentRuns.calls.at(-1)?.initialMessages ?? [];
       expect(seeded.map((message: { role: string }) => message.role)).toEqual(["user"]);
@@ -694,12 +705,12 @@ describe("continue guards", () => {
 
 describe("post-restart hydration continuation", () => {
   it.each(["completed", "failed", "interrupted", "stopped", "aborted"] as const)(
-    "a %s chain continues user-owned with no parent prompt after restart",
+    "a %s chain continues as an ordinary child with no parent prompt after restart",
     async (status) => {
       // Post-restart: a fresh idle runtime hydrated from the persisted
       // transcript only (no live parent turn, no in-memory delegation
-      // records). Delivery must be `user` from real turn liveness — never a
-      // parent expectation reconstructed from the old record alone.
+      // records). The run is independent because the parent turn is not live
+      // — never because a persisted row recorded who "owned" the report.
       const delegationId = `del-restart-${status}`;
       const toolCallId = `task-restart-${status}`;
       const rows: UiMessage[] = [
@@ -760,19 +771,21 @@ describe("post-restart hydration continuation", () => {
           text: "Follow up after restart.",
         });
         expect(continued.accepted).toBe(true);
-        expect(continued.delivery).toBe("user");
         expect(continued.turnId).toBeDefined();
-        // No parent model request ran for the detached execution.
+        // No parent model request ran and no parent turn was begun.
         expect(prompts).toHaveLength(0);
-        // The child spawned exactly once under its own accounting turn.
+        expect((restarted as any).getStatus().isRunning).toBe(false);
+        // The child spawned exactly once.
         expect(subagentRuns.calls.length).toBe(callsBefore + 1);
         const record = (restarted as any).delegations.get(continued.delegationId);
-        expect(record.delivery).toBe("user");
-        expect(record.executionTurnId).toBe(continued.turnId);
-        // Every emitted row is owned by the execution turn, never the parent.
+        expect(record.parentTurnId).toBeUndefined();
+        expect(record.taskTurnId).toBe(continued.turnId);
+        expect(record.userOrigin).toBe(true);
+        // Emitted rows carry the run's transcript attribution or no turn at
+        // all — never a parent turn that does not exist.
         expect(seen.length).toBeGreaterThan(0);
         for (const envelope of seen) {
-          expect(envelope.turnId).toBe(continued.turnId);
+          expect([undefined, continued.turnId]).toContain(envelope.turnId);
         }
       } finally {
         await restarted.dispose();
@@ -816,7 +829,6 @@ describe("continuation input bound", () => {
         text: authored,
       });
 
-      expect(continued.delivery).toBe("parent");
       // The spawned run's opening input is the whole continuation, unchanged.
       const spawn = subagentRuns.calls.at(-1) as { task?: string };
       expect(spawn.task).toBe(authored);

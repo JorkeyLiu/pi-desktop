@@ -602,7 +602,7 @@ describe("explicit TaskWait delivery", () => {
   });
 });
 
-describe("batch and ownership boundaries", () => {
+describe("batch boundaries", () => {
   it("delivers a >50k first report whole and defers the next report to a later batch", async () => {
     const runtime = createRuntime();
     const internals = internalsOf(runtime);
@@ -623,15 +623,14 @@ describe("batch and ownership boundaries", () => {
       });
       const secondId = (secondStarted.details as { delegationId: string }).delegationId;
       await settleStatus(runtime, secondId);
-      // A user-owned run is never expected, waited on, or marked.
-      subagentRuns.result = completedResult(`user-owned-${"c".repeat(2_000)}`);
+      // A third settled report is an ordinary pending report like the others.
+      subagentRuns.result = completedResult(`third-report-${"c".repeat(2_000)}`);
       const userStarted = await taskTool(runtime).execute("task-3", {
         agent: "explorer",
         task: "User work.",
       });
       const userId = (userStarted.details as { delegationId: string }).delegationId;
       await settleStatus(runtime, userId);
-      internals.delegations.get(userId)!.delivery = "user";
 
       const agent = internals.agent;
       agent.prompt = vi.fn(async (input: unknown) => {
@@ -649,7 +648,8 @@ describe("batch and ownership boundaries", () => {
       });
       (runtime as any).waitForIdleAndSteering = vi.fn(async () => undefined);
 
-      // One resume converges every pending report, one bounded batch each.
+      // One resume converges a bounded batch each; the remaining settled
+      // report waits for the next resume.
       await internals.resumeAfterDelegations();
       expect(prompts).toHaveLength(2);
       // The oversized first settled report is delivered whole, never truncated.
@@ -659,7 +659,10 @@ describe("batch and ownership boundaries", () => {
       expect(prompts[1]).not.toContain(oversized);
       expect(internals.delegations.get(firstId)!.reportDelivered).toBe(true);
       expect(internals.delegations.get(secondId)!.reportDelivered).toBe(true);
-      expect(internals.delegations.get(userId)!.reportDelivered).toBe(false);
+      // The third settled report is an ordinary pending report: it converges
+      // in the same resume, into a batch of its own.
+      expect(internals.delegations.get(userId)!.reportDelivered).toBe(true);
+      expect(prompts.join("\n")).toContain(`third-report-${"c".repeat(2_000)}`);
 
       await internals.resumeAfterDelegations();
       expect(prompts).toHaveLength(2);

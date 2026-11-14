@@ -6,7 +6,7 @@ import type {
 } from "@pi-desktop/shared";
 import { addUsage, hostedSearchRounds } from "@pi-desktop/shared";
 import { isDelegationStartTool } from "./tool-display";
-import { subagentDeliveryOwner } from "./subagent-actions";
+import { isUserOriginTaskMarker } from "./subagent-actions";
 import { messageContentFacts } from "./transcript-summary";
 
 export type AssistantActivityItem =
@@ -86,7 +86,7 @@ function isUserContinueMarker(message: UiMessage): boolean {
   if (message.role !== "tool" || !isDelegationStartTool(message.toolName)) {
     return false;
   }
-  return subagentDeliveryOwner({ toolArgs: message.toolArgs }) === "user";
+  return isUserOriginTaskMarker({ toolArgs: message.toolArgs });
 }
 
 function isVisibleMessage(message: UiMessage): boolean {

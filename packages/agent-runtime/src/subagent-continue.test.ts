@@ -5,14 +5,12 @@ import {
   buildContinueSyntheticMessages,
   continueEmissions,
   continueHydrationSource,
-  decideContinueDelivery,
   isUserContinueTaskRow,
   mapContinueSpawnError,
   parseContinueSidecarParams,
   parseSteerSubagentParams,
   prepareSubagentContinue,
   validateSubagentContinue,
-  type ContinueSourceState,
 } from "./subagent-continue.js";
 
 /** The `details` record a tool result carries, without assuming its shape. */
@@ -38,23 +36,13 @@ function chain(overrides: Partial<DelegationChain> = {}): DelegationChain {
   };
 }
 
-function ownership(overrides = {}) {
-  return {
-    expectedParentTurnId: undefined,
-    currentTurnId: "parent-turn",
-    turnAlive: false,
-    runtimeRunning: false,
-    ...overrides,
-  };
-}
-
 describe("validateSubagentContinue", () => {
   it("rejects unknown chains and empty text", () => {
     expect(() =>
-      validateSubagentContinue(undefined, { delegationId: "x", text: "hi" }, ownership(), new Set()),
+      validateSubagentContinue(undefined, { delegationId: "x", text: "hi" }, new Set()),
     ).toThrow(expect.objectContaining({ errorCode: "DELEGATION_NOT_FOUND" }));
     expect(() =>
-      validateSubagentContinue(chain(), { delegationId: "del-1", text: "  " }, ownership(), new Set()),
+      validateSubagentContinue(chain(), { delegationId: "del-1", text: "  " }, new Set()),
     ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
   });
 
@@ -77,7 +65,6 @@ describe("validateSubagentContinue", () => {
     const out = validateSubagentContinue(
       chain(),
       { delegationId: "del-1", text: authored },
-      ownership(),
       new Set(),
     );
     expect(out.outcome).toBe("continue");
@@ -97,15 +84,6 @@ describe("validateSubagentContinue", () => {
       validateSubagentContinue(
         chain(),
         { delegationId: "del-1", text: "go", messageId: "m".repeat(129) },
-        ownership(),
-        new Set(),
-      ),
-    ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
-    expect(() =>
-      validateSubagentContinue(
-        chain(),
-        { delegationId: "del-1", text: "go" },
-        ownership({ expectedParentTurnId: "t".repeat(129) }),
         new Set(),
       ),
     ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
@@ -116,29 +94,23 @@ describe("validateSubagentContinue", () => {
       validateSubagentContinue(
         chain(),
         { delegationId: "del-1", text: "more" },
-        ownership(),
         new Set(["del-1"]),
       ),
     ).toThrow(expect.objectContaining({ errorCode: "CHAIN_BUSY" }));
   });
 
-  it("refuses a stale expected turn and demands one when busy", () => {
-    expect(() =>
-      validateSubagentContinue(
-        chain(),
-        { delegationId: "del-1", text: "more", messageId: undefined },
-        ownership({ expectedParentTurnId: "other-turn", turnAlive: true, runtimeRunning: true }),
-        new Set(),
-      ),
-    ).toThrow(expect.objectContaining({ errorCode: "TURN_NOT_FOUND" }));
-    expect(() =>
-      validateSubagentContinue(
-        chain(),
-        { delegationId: "del-1", text: "more" },
-        ownership({ runtimeRunning: true, turnAlive: true }),
-        new Set(),
-      ),
-    ).toThrow(expect.objectContaining({ errorCode: "AGENT_BUSY" }));
+  /**
+   * The caller's remembered turn is not ownership: an intervention reaches
+   * the child whatever parent state the renderer last saw. Only the chain's
+   * own liveness can refuse it, and it names the live run to steer.
+   */
+  it("continues from a stale or ended caller turn", () => {
+    const out = validateSubagentContinue(
+      chain(),
+      { delegationId: "del-1", text: "more" },
+      new Set(),
+    );
+    expect(out.outcome).toBe("continue");
   });
 
   it("dedups a retried caller message id", () => {
@@ -146,47 +118,10 @@ describe("validateSubagentContinue", () => {
     const out = validateSubagentContinue(
       chain(),
       { delegationId: "del-1", text: "more", messageId: "mid-1" },
-      ownership(),
       new Set(),
       seen,
     );
     expect(out).toEqual({ outcome: "already-applied", delegationId: "del-1", newDelegationId: "del-2" });
-  });
-});
-
-describe("decideContinueDelivery", () => {
-  const pending: ContinueSourceState = {
-    delegationId: "del-1",
-    delivery: "parent",
-    startedEpoch: 3,
-    reportDelivered: false,
-    status: "completed",
-  };
-
-  it("attaches a pending settled source the parent still expects", () => {
-    expect(decideContinueDelivery(pending, 3, true, true)).toEqual({ delivery: "parent" });
-  });
-
-  it("detaches delivered, stopped, stale-epoch, and dead-turn sources when idle", () => {
-    expect(decideContinueDelivery({ ...pending, reportDelivered: true }, 3, false, false)).toEqual({
-      delivery: "user",
-    });
-    expect(decideContinueDelivery({ ...pending, status: "stopped" }, 3, false, false)).toEqual({
-      delivery: "user",
-    });
-    expect(decideContinueDelivery(pending, 4, false, false)).toEqual({ delivery: "user" });
-    expect(decideContinueDelivery(pending, 3, false, false)).toEqual({ delivery: "user" });
-    expect(decideContinueDelivery({ ...pending, delivery: "user" }, 3, false, false)).toEqual({
-      delivery: "user",
-    });
-    expect(decideContinueDelivery(undefined, 3, false, false)).toEqual({ delivery: "user" });
-  });
-
-  it("rejects busy instead of attaching a detached source to a live parent", () => {
-    expect(decideContinueDelivery({ ...pending, reportDelivered: true }, 3, true, true)).toEqual({
-      rejected: "AGENT_BUSY",
-    });
-    expect(decideContinueDelivery(undefined, 3, true, true)).toEqual({ rejected: "AGENT_BUSY" });
   });
 });
 
@@ -258,10 +193,10 @@ describe("continue synthetic rows", () => {
     expect(emissions.followup.agentName).toBe("explorer");
   });
 
-  it("publishes the run's own execution turn on its Task marker", () => {
-    // The marker is the row a reopened tab reads back, so it must name the
-    // turn that owns the continuation's steering rather than leaving the
-    // surface to infer one from parent state.
+  it("publishes no turn ownership on its Task marker", () => {
+    // The marker is the row a reopened tab reads back. A continuation no longer
+    // owns a turn: the run is an ordinary child, so the row names only the
+    // chain relationship and the transcript attribution stays on the envelope.
     const synthetic = buildContinueSyntheticMessages({
       chain: chain(),
       delegationId: "del-1",
@@ -270,7 +205,7 @@ describe("continue synthetic rows", () => {
     });
     const built = buildContinueSpawnEmissions({
       sessionId: "s",
-      executionTurnId: "exec-turn",
+      turnId: "row-turn",
       agentName: "explorer",
       validated: {
         outcome: "continue",
@@ -287,17 +222,11 @@ describe("continue synthetic rows", () => {
     expect(toolDetailsOf(built.taskMessage)).toMatchObject({
       delegationId: "del-2",
       resumedFrom: "del-1",
-      executionTurnId: "exec-turn",
     });
-    expect(JSON.parse(built.taskMessage.content).details).toMatchObject({
-      executionTurnId: "exec-turn",
-    });
-    // Both marker emissions carry it, so a message_start-only subscriber sees
-    // the same identity as one that waits for message_end.
-    for (const envelope of [built.markerStart, built.markerEnd]) {
-      const message = (envelope.event as { message?: typeof built.taskMessage }).message;
-      expect(toolDetailsOf(message)).toMatchObject({ executionTurnId: "exec-turn" });
-    }
+    expect(toolDetailsOf(built.taskMessage)).not.toHaveProperty("executionTurnId");
+    expect(toolDetailsOf(built.taskMessage)).not.toHaveProperty("delivery");
+    expect(built.markerStart.turnId).toBe("row-turn");
+    expect(built.markerEnd.turnId).toBe("row-turn");
   });
 });
 
@@ -397,9 +326,11 @@ describe("parseSteerSubagentParams", () => {
     expect(() =>
       parseSteerSubagentParams({ expectedTurnId: "parent-turn", content: "go" }),
     ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
-    expect(() =>
-      parseSteerSubagentParams({ delegationId: "del-1", content: "go" }),
-    ).toThrow(expect.objectContaining({ errorCode: "INVALID_ARGUMENT" }));
+    // Steering targets the live child: no turn identity is required.
+    expect(parseSteerSubagentParams({ delegationId: "del-1", content: "go" })).toEqual({
+      delegationId: "del-1",
+      content: "go",
+    });
     expect(() =>
       parseSteerSubagentParams({
         delegationId: "d".repeat(129),
@@ -445,62 +376,58 @@ describe("parseSteerSubagentParams", () => {
 
 describe("prepareSubagentContinue", () => {
   function state(overrides = {}) {
-    const adopted: string[] = [];
     return {
-      adopted,
       turnId: "parent-turn",
-      turnEpoch: 3,
       disposed: false,
       runCancelled: false,
       turnHadError: false,
       isRunning: false,
       lookupChain: () => chain(),
-      lookupRecord: () => undefined,
       runningDelegationIds: new Set<string>(),
       seenContinuations: new Map<string, string>(),
-      adoptExecutionTurn: (id: string) => {
-        adopted.push(id);
-      },
-      mintTurnId: () => "minted-exec",
       ...overrides,
     };
   }
 
-  it("mints and adopts an execution turn for a detached source when idle", () => {
+  it("starts an independent run between parent turns", () => {
     const host = state();
     const out = prepareSubagentContinue({ delegationId: "del-1", text: "more" }, host as never);
-    expect(out).toMatchObject({ outcome: "ready", delivery: "user", executionTurnId: "minted-exec" });
-    expect(host.adopted).toEqual(["minted-exec"]);
+    expect(out.outcome).toBe("ready");
+    expect((out as { parentTurnId?: string }).parentTurnId).toBeUndefined();
   });
 
-  it("adopts a host-begun execution turn instead of minting", () => {
+  it("ignores the caller's remembered turn when it is stale", () => {
     const host = state();
     const out = prepareSubagentContinue(
       { delegationId: "del-1", text: "more", expectedParentTurnId: "exec-9" },
       host as never,
     );
-    expect(out).toMatchObject({ outcome: "ready", delivery: "user", executionTurnId: "exec-9" });
-    expect(host.adopted).toEqual(["exec-9"]);
+    expect(out.outcome).toBe("ready");
+    expect((out as { parentTurnId?: string }).parentTurnId).toBeUndefined();
   });
 
-  it("keeps the live parent turn for an attached source", () => {
-    const source: ContinueSourceState = {
-      delegationId: "del-1",
-      delivery: "parent",
-      startedEpoch: 3,
-      reportDelivered: false,
-      status: "completed",
-    };
-    const host = state({
-      isRunning: true,
-      lookupRecord: () => source,
-    });
+  it("reports back to the live parent turn", () => {
+    const host = state({ isRunning: true });
     const out = prepareSubagentContinue(
       { delegationId: "del-1", text: "more", expectedParentTurnId: "parent-turn" },
       host as never,
     );
-    expect(out).toMatchObject({ outcome: "ready", delivery: "parent", executionTurnId: "parent-turn" });
-    expect(host.adopted).toEqual([]);
+    expect(out).toMatchObject({ outcome: "ready", parentTurnId: "parent-turn" });
+  });
+
+  it("drops the parent link when the live turn is unusable", () => {
+    for (const bad of [
+      { disposed: true },
+      { runCancelled: true },
+      { turnHadError: true },
+    ]) {
+      const out = prepareSubagentContinue(
+        { delegationId: "del-1", text: "more" },
+        state({ isRunning: true, ...bad }) as never,
+      );
+      expect(out.outcome).toBe("ready");
+    expect((out as { parentTurnId?: string }).parentTurnId).toBeUndefined();
+    }
   });
 });
 

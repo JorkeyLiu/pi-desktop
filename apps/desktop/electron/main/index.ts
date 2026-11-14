@@ -645,8 +645,6 @@ const {
   isTurnDispatchable,
   isSessionBusy,
   isStaleTerminalEvent,
-  childExecutionTurns,
-  isChildExecutionTurn,
 } = sessionCoordination;
 
 /**
@@ -734,7 +732,6 @@ const eventPersistence = createEventPersistence({
   logger,
   finishTurn,
   isStaleTerminalEvent,
-  isChildExecutionTurn,
   finishApprovedExecution,
   emitAgentEvent: (envelope) => emitAgentEvent(envelope),
 });
@@ -752,7 +749,6 @@ const sidecarRuntime = createSidecarRuntime({
   inflightCheckpointer,
   finishTurn,
   isStaleTerminalEvent,
-  isChildExecutionTurn,
   finishApprovedExecution,
   superviseRestart,
   isQuitting: () => mainState.quitting,
@@ -886,7 +882,6 @@ function registerIpc() {
     dataDir,
     activeTurns,
     isTurnDispatchable,
-    childExecutionTurns,
     sessionProjects,
     persistenceOutbox,
     logger,

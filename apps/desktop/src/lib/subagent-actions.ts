@@ -25,12 +25,9 @@ export type SubagentSteerGate = {
   /** The delegate itself is live (backend-owned outcome, not parent UI). */
   running: boolean;
   /**
-   * Turn owning this steering: the live parent turn for an attached
-   * delegate, the delegate's execution-accounting turn for a detached
-   * user-owned run (kept from the continue/steer response or the current
-   * status). The backend validates it; the renderer never infers the
-   * relationship from the parent session's generic running flag, because a
-   * running child may outlive parent UI idleness.
+   * The turn the runtime currently records for this run, when known. It is
+   * informational: steering targets the live child itself, so the renderer
+   * never blocks a steer on turn identity.
    */
   expectedTurnId?: string;
 };
@@ -40,27 +37,25 @@ export type SubagentSteerGate = {
  * permission / remote / liveness matrix is executable without React.
  * Returns null when steering is allowed, otherwise the stable block reason.
  *
- * Liveness is the delegate's own `running` outcome plus a known owner turn;
- * the parent session's generic running flag is intentionally not consulted.
- * A stale or mismatched owner turn is the backend's rejection to make
- * (`TURN_NOT_FOUND`/busy) with the draft preserved — never a local guess.
+ * Liveness is the delegate's own `running` outcome; the parent session's
+ * generic running flag and turn identity are intentionally not consulted.
  */
 export function subagentSteerBlockedReason(gate: SubagentSteerGate): SubagentSteerBlock | null {
   if (gate.readOnlySession) return "read-only";
   if (!gate.canSteerParent) return "unavailable";
   if (!gate.running) return "unavailable";
-  if (!gate.expectedTurnId) return "unavailable";
   return null;
 }
 
 export type CapturedSteerIdentity =
-  | { ok: true; sessionId: string; turnId: string }
+  | { ok: true; sessionId: string; turnId?: string }
   | { ok: false; reason: SubagentSteerBlock };
 
 /**
- * Capture turn identity before the steer `await` (F6): a session switch or a
- * liveness change during dispatch must reject instead of steering the wrong
- * child. Pure so tests can assert the captured identity without React.
+ * Capture turn identity before the steer `await` (F6): a session switch during
+ * dispatch must reject instead of steering the wrong child. The turn id is
+ * informational and captured only when present. Pure so tests can assert the
+ * captured identity without React.
  */
 export function captureSteerIdentity(input: {
   sessionId?: string;
@@ -72,7 +67,7 @@ export function captureSteerIdentity(input: {
 }): CapturedSteerIdentity {
   const sessionId = input.sessionId;
   const turnId = input.turnId;
-  if (!sessionId || !turnId) return { ok: false, reason: "unavailable" };
+  if (!sessionId) return { ok: false, reason: "unavailable" };
   if (
     input.source === "remote" ||
     input.source === "pi-native" ||
@@ -82,7 +77,7 @@ export function captureSteerIdentity(input: {
     return { ok: false, reason: "read-only" };
   }
   if (!input.canSteer) return { ok: false, reason: "unavailable" };
-  return { ok: true, sessionId, turnId };
+  return turnId ? { ok: true, sessionId, turnId } : { ok: true, sessionId };
 }
 
 /**
@@ -132,63 +127,24 @@ export type CapturedContinueIdentity =
   | { ok: false; reason: SubagentSteerBlock };
 
 /**
- * Who receives one delegation run's report, from backend-owned persisted
- * fields — never inferred from parent UI state.
+ * Whether a recorded `Task` row is a user-origin continuation marker: the
+ * renderer sent that continuation directly from the delegate tab
+ * (`toolArgs.source === "user"` with a `resume` target).
  *
- * The runtime marks user-owned runs explicitly: `details.delivery ===
- * "user"` on a recorded summary, or a user-origin `Task` marker row
- * (`toolArgs.source === "user"` with a `resume` target). Parent-owned runs
- * omit both (backward-compatible default).
+ * This is input provenance, not ownership. The child it started is an ordinary
+ * child of its session: it appears in status, TaskList, TaskWait and result
+ * history like any other run. Historical rows may carry a retired
+ * `details.delivery` field; it is ignored.
  */
-export function subagentDeliveryOwner(input: {
-  details?: unknown;
-  toolArgs?: unknown;
-}): "parent" | "user" {
-  const details = input.details;
-  if (details && typeof details === "object" && !Array.isArray(details)) {
-    if ((details as { delivery?: unknown }).delivery === "user") return "user";
-  }
+export function isUserOriginTaskMarker(input: { toolArgs?: unknown }): boolean {
   const args = input.toolArgs;
-  if (args && typeof args === "object" && !Array.isArray(args)) {
-    const record = args as { source?: unknown; resume?: unknown };
-    if (
-      record.source === "user" &&
-      typeof record.resume === "string" &&
-      record.resume.trim()
-    ) {
-      return "user";
-    }
-  }
-  return "parent";
-}
-
-/**
- * Resolve the owner turn for one child steer, in one priority order:
- *
- * 1. the execution turn kept from an accepted steer/continue response (covers
- *    the status-lag window right after a continuation),
- * 2. the run's own execution turn read back from its `Task` result
- *    (`details.executionTurnId`) — the only authority that survives a closed
- *    tab or a rebuilt renderer, and the exact id a detached continuation's
- *    steering must name,
- * 3. the status's current turn, which the host points at the runtime's turn.
- *
- * Parent status is a fallback, never the authority for a user-owned run: a
- * detached child outlives the parent turn, so its parent-side turn id would
- * both go stale and name the wrong owner. The backend validates whichever id
- * is used here and rejects a mismatch with the draft preserved.
- */
-export function resolveSteerOwnerTurn(input: {
-  keptTurnId?: string;
-  runTurnId?: string;
-  currentTurnId?: string;
-}): string | undefined {
-  const kept = input.keptTurnId?.trim();
-  if (kept) return kept;
-  const run = input.runTurnId?.trim();
-  if (run) return run;
-  const current = input.currentTurnId?.trim();
-  return current || undefined;
+  if (!args || typeof args !== "object" || Array.isArray(args)) return false;
+  const record = args as { source?: unknown; resume?: unknown };
+  return (
+    record.source === "user" &&
+    typeof record.resume === "string" &&
+    record.resume.trim().length > 0
+  );
 }
 
 /**

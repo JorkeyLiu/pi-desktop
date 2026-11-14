@@ -9,14 +9,11 @@ import { aggregateChainMetricsFromMessages } from "../../lib/subagent-metrics";
 import {
   captureContinueIdentity,
   captureSteerIdentity,
-  resolveSteerOwnerTurn,
   shouldClearSteerDraft,
   shouldShowSubagentContinue,
   subagentSteerBlockedReason,
 } from "../../lib/subagent-actions";
 import {
-  subagentChainDeliveryOwner,
-  subagentChainExecutionTurnId,
   subagentChainInstantiated,
   subagentChainLatestDelegationId,
   subagentChainCallIds,
@@ -167,9 +164,6 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
   const canSteerParent = useChatSessionCapability("canSteer");
   const canPromptParent = useChatSessionCapability("canPrompt");
   const enterToSend = useAppStore((state) => state.settings?.enterToSend ?? true);
-  const expectedTurnId = useAppStore((state) =>
-    state.activeSessionId ? state.agentStatuses[state.activeSessionId]?.currentTurnId : undefined,
-  );
   const isRunning = useAppStore(
     (state) => (activeSessionId ? state.runningSessions[activeSessionId] ?? false : false),
   );
@@ -203,14 +197,6 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     return direct ?? "aborted";
   }, [messages, activeDelegationId, statuses]);
   const running = outcome === "running";
-
-  // Backend-owned report routing for the chain-latest run: `parent` when the
-  // parent still expects this delegate, `user` once the user took over the
-  // chain. Read from persisted Task fields, never from parent UI state.
-  const deliveryOwner = useMemo(
-    () => subagentChainDeliveryOwner(messages, activeDelegationId),
-    [messages, activeDelegationId],
-  );
 
   const delegateSettings = useMemo(() => {
     const result = messages.find((message) => {
@@ -348,40 +334,12 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     setSendError(null);
   }, [delegationId, activeSessionId]);
 
-  // Owner turn kept from accepted steer/continue responses, keyed by the run
-  // they own. It covers the status-lag window after a detached continuation:
-  // the host has adopted the execution turn before the status row catches up.
-  // Entries are keyed per delegation so a d1 -> d2 continuation never steers
-  // the new run with the old run's turn; a mismatch is the backend's
-  // rejection to make, with the draft preserved.
-  const ownerTurnRef = useRef(new Map<string, string>());
-  const keepOwnerTurn = (id: string, turnId: string | undefined) => {
-    if (!id || !turnId?.trim()) return;
-    if (ownerTurnRef.current.size > 200) ownerTurnRef.current.clear();
-    ownerTurnRef.current.set(id, turnId.trim());
-  };
-  // The turn owning a steer of this delegate: a kept execution turn first,
-  // else the status's current turn (the live parent turn when attached, the
-  // adopted execution turn when detached). Never the parent session's
-  // generic running flag: a running child may outlive parent UI idleness.
-  // The run's own execution turn, read from its persisted `Task` row: the
-  // authority a reopened tab or a rebuilt renderer still has after the
-  // in-memory kept turn is gone.
-  const runTurnId = useMemo(
-    () => subagentChainExecutionTurnId(messages, activeDelegationId),
-    [messages, activeDelegationId],
-  );
-  const ownerTurnId = resolveSteerOwnerTurn({
-    keptTurnId: ownerTurnRef.current.get(activeDelegationId),
-    runTurnId,
-    currentTurnId: expectedTurnId,
-  });
-
+  // A steer targets the live child itself: only the delegate's own liveness
+  // and the session's permission matrix gate it, never a parent turn id.
   const steerBlock = subagentSteerBlockedReason({
     readOnlySession,
     canSteerParent,
     running,
-    expectedTurnId: ownerTurnId,
   });
   const steerBlockedReason =
     steerBlock === "read-only"
@@ -406,28 +364,18 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     const outgoingIds = images.references.map((reference) => reference.id);
     // Capture turn identity, session, and the chain-latest delegation before
     // the await so a tab/session switch during dispatch never steers the
-    // wrong child and never clears the new context's draft. The owner turn
-    // is the kept execution turn when this run detached, else the status's
-    // current turn; the backend validates it either way.
+    // wrong child and never clears the new context's draft. The turn id is
+    // informational; steering targets the live child, so it is optional.
     const capturedSessionId = useAppStore.getState().activeSessionId;
     const capturedDelegationId = activeDelegationId;
     const capturedRevision = draftRevisionRef.current;
     const liveTurnId = capturedSessionId
       ? useAppStore.getState().agentStatuses[capturedSessionId]?.currentTurnId
       : undefined;
-    const capturedRunTurn = subagentChainExecutionTurnId(
-      useAppStore.getState().messages,
-      capturedDelegationId,
-    );
-    const capturedOwnerTurn = resolveSteerOwnerTurn({
-      keptTurnId: ownerTurnRef.current.get(capturedDelegationId),
-      runTurnId: capturedRunTurn,
-      currentTurnId: liveTurnId,
-    });
     const target = useAppStore.getState().sessions.find((item) => item.id === capturedSessionId);
     const captured = captureSteerIdentity({
       sessionId: capturedSessionId ?? undefined,
-      turnId: capturedOwnerTurn,
+      turnId: liveTurnId,
       source: target?.source,
       sessionStartsWithRemote: capturedSessionId?.startsWith("remote:") ?? false,
       sessionStartsWithNative: capturedSessionId?.startsWith("native-pi:") ?? false,
@@ -450,14 +398,11 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
       const response = await api.steerSubagent({
         sessionId,
         delegationId: capturedDelegationId,
-        expectedTurnId: turnId,
+        ...(turnId ? { expectedTurnId: turnId } : {}),
         content,
         ...(outgoing.length ? { attachments: outgoing } : {}),
         messageId,
       });
-      // Keep the owning turn for the next steer of this run: for a detached
-      // run it is the execution turn the status row may not show yet.
-      keepOwnerTurn(capturedDelegationId, response.turnId);
       // Echo is persisted backend and rendered in the chain; clear only on
       // success, only while the composer still belongs to this session and
       // still holds the text that was sent. A tab/session switch or text typed
@@ -538,11 +483,6 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
         messageId,
         ...(captured.turnId ? { expectedTurnId: captured.turnId } : {}),
       });
-      // The continued run arrives backend-side as a new chain segment under
-      // the returned delegation id; keep its owning turn (present for both
-      // attached and detached runs) so a prompt steer of the new run names
-      // the right owner before the status row catches up.
-      keepOwnerTurn(response.delegationId, response.turnId);
       // The continued run arrives backend-side as a new chain segment, so the
       // composer's chain target moves to the delegation this send just opened:
       // the accepted text clears there. A tab/session switch, text typed after
@@ -647,15 +587,6 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
   const modelLabel = [delegateSettings.modelId, delegateSettings.thinkingLevel]
     .filter(Boolean)
     .join(" · ");
-  // Concise report routing while live: only the takeover case is stated — the
-  // user took the chain over after the parent stopped expecting it, e.g. a
-  // detached continuation owning its own execution turn. A parent-owned run is
-  // the expected default and states nothing beside the outcome; settled runs
-  // omit it too, because their report already landed where it belongs.
-  const ownerLabel = running && deliveryOwner === "user"
-    ? t("chat.subagentDeliveryUser")
-    : null;
-  const ownerTitle = t("chat.subagentDeliveryUserHelp");
   // Explicit capability reasons: every blocked composer names its own cause
   // without exposing harness internals. A delegation with no backend instance
   // — a denied never-started call, or a tab whose Task chain is missing —
@@ -712,16 +643,6 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
         <div className="subagent-transcript-header" data-testid="subagent-panel-header">
           <span className="subagent-transcript-status" role="status">
             {t(`chat.subagentStatus.${outcome}`)}
-            {ownerLabel ? (
-              <span
-                className="subagent-transcript-owner"
-                data-testid="subagent-delivery-owner"
-                title={ownerTitle}
-              >
-                {" · "}
-                {ownerLabel}
-              </span>
-            ) : null}
           </span>
           {chainMetrics ? (
             <div

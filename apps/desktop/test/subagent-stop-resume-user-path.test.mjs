@@ -71,7 +71,8 @@ window.piDesktop = { platform: "darwin", channels: IPC,
     let data = null;
     if (channel === IPC.invoke.agentContinueSubagent) {
       continueCounter += 1;
-      // The host opens a child-only execution turn and returns its identity.
+      // The host starts the child run independently and returns its identity.
+      // Retained legacy reply fields are ignored by the renderer.
       const accepted = { accepted: true, delegationId: "d" + (continueCounter + 1), turnId: "turn-exec-" + continueCounter, delivery: "user" };
       if (continueMode === "deferred") {
         // Hold the reply open so the caller stays mid-dispatch while the
@@ -188,8 +189,7 @@ const until = async (condition, message) => {
 const check = (value, message) => { if (!value) throw new Error(message); };
 const tab = () => document.querySelector('[data-testid="subagent-transcript-tab"]');
 const header = () => document.querySelector('[data-testid="subagent-panel-header"] [role="status"]');
-// The header status span also carries the delivery-owner suffix while a run is
-// live; the run state is the part before it.
+// The header status span reports the run state alone.
 const statusText = () => (header()?.textContent?.trim() ?? "").split("·")[0].trim();
 // The header's own Context slot: the figure the reader sees under the state.
 const contextMetric = () =>
@@ -367,10 +367,9 @@ window.subagentStopResumeProbe = async () => {
   check(stopButton(), "stop disappeared after typing/clearing a draft");
 
   // Close and reopen the tab while the run is live: a real unmount/remount of
-  // the production component, with no parent turn id in store state. A
-  // detached continuation publishes no status event, and the previous terminal
-  // cleared the entry, so nothing but the run's own persisted Task row carries
-  // the execution turn.
+  // the production component, with no parent turn id in store state. The
+  // continuation is an ordinary child run, so nothing but the run's own
+  // persisted Task row carries its identity.
   flushSync(() => view.unmount());
   check(store.getState().agentStatuses.s1 === undefined,
     "the reopened tab must not be rescued by a parent turn id: " + JSON.stringify(store.getState().agentStatuses));
@@ -386,8 +385,8 @@ window.subagentStopResumeProbe = async () => {
   check(userTexts().filter((text) => text === FOLLOWUP).length === 1,
     "reopened tab duplicated the follow-up: " + JSON.stringify(userTexts()));
 
-  // A steer typed after the reopen reaches the same run and names its own
-  // execution turn — never a parent turn.
+  // A steer typed after the reopen reaches the same run. The parent holds no
+  // turn here, so the steer carries no turn guard at all.
   const steerBefore = calls.filter((call) => call.channel === IPC.invoke.agentSteerSubagent).length;
   await send("Steer the reopened tab.");
   await until(() => calls.filter((call) => call.channel === IPC.invoke.agentSteerSubagent).length > steerBefore,
@@ -395,8 +394,8 @@ window.subagentStopResumeProbe = async () => {
   const steerCall = calls.filter((call) => call.channel === IPC.invoke.agentSteerSubagent).at(-1).input;
   check(steerCall.sessionId === "s1" && steerCall.delegationId === "d2",
     "steer did not target the chain-latest run: " + JSON.stringify(steerCall));
-  check(steerCall.expectedTurnId === turnId,
-    "steer did not name the run's execution turn: " + JSON.stringify(steerCall));
+  check(!("expectedTurnId" in steerCall),
+    "a steer under a turn-less parent invented a turn guard: " + JSON.stringify(steerCall));
   check(steerCall.content === "Steer the reopened tab.", "steer lost its text: " + JSON.stringify(steerCall));
   // The dispatch is a store-level effect only; the panel survives it.
   await deliver(toolCallEnvelopes({ callId, turnId, toolCallId: "child-tool-after-remount", index: 5, delegationId: "d2", text: FOLLOWUP }));
@@ -428,7 +427,7 @@ window.subagentStopResumeProbe = async () => {
   check(store.getState().runningSessions.s1 !== true && store.getState().isRunning === false,
     "stopped continuation leaked a running session");
   const statuses = store.getState().agentStatuses;
-  check(!statuses.s1 || !statuses.s1.currentTurnId, "stopped continuation leaked its execution turn");
+  check(!statuses.s1 || !statuses.s1.currentTurnId, "stopped continuation published a parent turn identity");
 
   // The same tab continues the chain again: no new card is required.
   const secondBefore = calls.filter((call) => call.channel === IPC.invoke.agentContinueSubagent).length;
@@ -438,7 +437,7 @@ window.subagentStopResumeProbe = async () => {
   const secondCall = calls.filter((call) => call.channel === IPC.invoke.agentContinueSubagent).at(-1).input;
   check(secondCall.delegationId === "d2", "the second continuation targeted a stale chain segment: " + JSON.stringify(secondCall));
 
-  // The main chat is usable again once the child execution turn released.
+  // The main chat was never occupied by the child run.
   check(store.getState().runningSessions.s1 !== true, "main chat session stayed busy after the run settled");
 
   flushSync(() => view.unmount());

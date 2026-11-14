@@ -63,7 +63,6 @@ class FakeSidecar implements RuntimeSidecarLink {
   roots = new Map<string, string | undefined>();
   rejectPrompt = false;
   rejectContinue: Error | null = null;
-  continueDelivery: "parent" | "user" = "parent";
   running = false;
   /** Error `agent.compact` answers with; `null` accepts the compaction. */
   compactError: Error | null = null;
@@ -88,8 +87,7 @@ class FakeSidecar implements RuntimeSidecarLink {
         return {
           accepted: true,
           delegationId: "del-2",
-          turnId: params.expectedTurnId,
-          delivery: this.continueDelivery,
+          ...(params.expectedTurnId ? { turnId: params.expectedTurnId } : {}),
         } as T;
       case "agent.compact":
         this.beforeCompact?.();
@@ -375,7 +373,7 @@ describe("RuntimeService prompt lifecycle", () => {
     expect(await service.steer({ sessionId: "s1", turnId: "turn-9", content: "no", principal: owner })).toEqual({ accepted: false });
   });
 
-  it("steers a live delegate under the owning turn and refuses stale or empty targets", async () => {
+  it("steers a live delegate whatever turn the caller remembers and refuses empty targets", async () => {
     const { sidecar, service } = build();
     await service.prompt({ sessionId: "s1", content: "hello", effectivePermissionMode: "ask", principal: owner });
     await expect(
@@ -385,11 +383,17 @@ describe("RuntimeService prompt lifecycle", () => {
       method: "agent.steerSubagent",
       params: { sessionId: "s1", delegationId: "del-1", expectedTurnId: "turn-1", content: "Focus on auth." },
     });
-    // Stale turn: refused before the sidecar is touched.
-    const before = sidecar.calls.length;
+    // A stale remembered turn and a missing turn are informational: the child's
+    // own liveness decides, so the intervention still reaches it.
     await expect(
       service.steerSubagent({ sessionId: "s1", delegationId: "del-1", turnId: "turn-9", content: "late" }),
-    ).resolves.toEqual({ accepted: false });
+    ).resolves.toEqual({ accepted: true });
+    expect(sidecar.calls.at(-1)?.params).toMatchObject({ expectedTurnId: "turn-9", content: "late" });
+    await expect(
+      service.steerSubagent({ sessionId: "s1", delegationId: "del-1", content: "later" }),
+    ).resolves.toEqual({ accepted: true });
+    expect((sidecar.calls.at(-1)?.params as Record<string, unknown>).expectedTurnId).toBeUndefined();
+    const before = sidecar.calls.length;
     await expect(
       service.steerSubagent({ sessionId: "s1", delegationId: " ", turnId: "turn-1", content: "lost" }),
     ).resolves.toEqual({ accepted: false, errorCode: "INVALID_ARGUMENT" });
@@ -412,26 +416,29 @@ describe("RuntimeService prompt lifecycle", () => {
     expect(sidecar.calls.length).toBe(before);
   });
 
-  it("forwards an attached continuation under the live turn and guards stale guards", async () => {
+  it("forwards a continuation under the live turn and treats the remembered turn as informational", async () => {
     const { sidecar, service } = build();
     await service.prompt({ sessionId: "s1", content: "hello", effectivePermissionMode: "ask", principal: owner });
-    sidecar.continueDelivery = "parent";
     await expect(
       service.continueSubagent({ sessionId: "s1", delegationId: "del-1", content: "Go deeper.", expectedTurnId: "turn-1" }),
-    ).resolves.toEqual({ accepted: true, delegationId: "del-2", turnId: "turn-1", delivery: "parent" });
+    ).resolves.toEqual({ accepted: true, delegationId: "del-2", turnId: "turn-1" });
     expect(sidecar.calls.at(-1)).toMatchObject({
       method: "agent.continueSubagent",
       params: { sessionId: "s1", delegationId: "del-1", expectedTurnId: "turn-1", content: "Go deeper." },
     });
     const before = sidecar.calls.length;
+    // The remembered turn is informational: a stale id or none at all reaches
+    // the child, and the runtime decides attachment from its own liveness.
     await expect(
       service.continueSubagent({ sessionId: "s1", delegationId: "del-1", content: "Go deeper.", expectedTurnId: "turn-9" }),
-    ).rejects.toMatchObject({ errorCode: "TURN_NOT_FOUND" });
+    ).resolves.toEqual({ accepted: true, delegationId: "del-2", turnId: "turn-9" });
     await expect(
       service.continueSubagent({ sessionId: "s1", delegationId: "del-1", content: "Go deeper." }),
-    ).rejects.toMatchObject({ errorCode: "AGENT_BUSY" });
+    ).resolves.toEqual({ accepted: true, delegationId: "del-2" });
+    expect(sidecar.calls.length).toBeGreaterThan(before);
     // A host without file access refuses a child image input loudly instead of
     // continuing with text the user never sent.
+    const beforeImages = sidecar.calls.length;
     await expect(
       service.continueSubagent({
         sessionId: "s1",
@@ -442,24 +449,28 @@ describe("RuntimeService prompt lifecycle", () => {
         ],
       }),
     ).rejects.toMatchObject({ errorCode: "UNSUPPORTED" });
-    expect(sidecar.calls.length).toBe(before);
+    expect(sidecar.calls.length).toBe(beforeImages);
   });
 
-  it("opens a child-only execution turn for a detached continuation and ends it silently", async () => {
-    const { host, sidecar, service, events, ended } = build();
-    sidecar.continueDelivery = "user";
+  it("continues an idle delegate without opening a durable turn", async () => {
+    const { host, sidecar, service } = build();
     const result = await service.continueSubagent({ sessionId: "s1", delegationId: "del-1", content: "On your own." });
-    expect(result).toEqual({ accepted: true, delegationId: "del-2", turnId: "turn-1", delivery: "user" });
-    // Accounting only: a durable turn began, but no parent prompt ran and no
-    // main user row was persisted.
-    expect(host.calls.filter((call) => call.method === "session.beginTurn")).toHaveLength(1);
+    expect(result).toEqual({ accepted: true, delegationId: "del-2" });
+    // Independent by lifecycle, not by ownership: no durable turn is begun,
+    // no parent prompt runs, and no main user row is persisted.
+    expect(host.calls.filter((call) => call.method === "session.beginTurn")).toHaveLength(0);
     expect(sidecar.calls.some((call) => call.method === "agent.prompt")).toBe(false);
     expect(host.messages.get("s1") ?? []).toHaveLength(0);
-    expect(service.isChildExecutionTurn("s1", "turn-1")).toBe(true);
-    // Steering this detached run names its execution turn — the id the
-    // renderer reads back from the run's own Task row — and is dispatched;
-    // the parent's earlier turn is stale and refused before the sidecar.
-    const beforeSteer = sidecar.calls.length;
+    // The next main prompt is accepted while the child keeps working: the
+    // continuation reserved nothing on the session.
+    const nextTurn = await service.prompt({
+      sessionId: "s1",
+      content: "new main turn",
+      effectivePermissionMode: "ask",
+      principal: owner,
+    });
+    expect(nextTurn.turnId).toBeDefined();
+    // Steering this run is dispatched whatever turn the surface remembers.
     await expect(
       service.steerSubagent({ sessionId: "s1", delegationId: "del-2", turnId: "turn-1", content: "Stay on the cache." }),
     ).resolves.toEqual({ accepted: true });
@@ -467,29 +478,6 @@ describe("RuntimeService prompt lifecycle", () => {
       method: "agent.steerSubagent",
       params: { sessionId: "s1", delegationId: "del-2", expectedTurnId: "turn-1", content: "Stay on the cache." },
     });
-    const afterSteer = sidecar.calls.length;
-    await expect(
-      service.steerSubagent({ sessionId: "s1", delegationId: "del-2", turnId: "turn-parent", content: "Wrong owner." }),
-    ).resolves.toEqual({ accepted: false });
-    expect(sidecar.calls.length).toBe(afterSteer);
-    expect(afterSteer).toBe(beforeSteer + 1);
-    // The child's terminal finalizes its durable row without a parent conclusion.
-    sidecar.notify?.("agent.event", {
-      sessionId: "s1",
-      turnId: "turn-1",
-      ts: Date.now(),
-      event: { type: "agent_end", messageIds: [] },
-    });
-    await vi.waitFor(() => {
-      expect(host.calls.some((call) => call.method === "session.endTurn")).toBe(true);
-    });
-    expect(host.calls.find((call) => call.method === "session.endTurn")?.params).toMatchObject({
-      turnId: "turn-1",
-      status: "completed",
-    });
-    expect(events.some((envelope) => envelope.event.type === "agent_end")).toBe(false);
-    expect(ended).toContainEqual(expect.objectContaining({ sessionId: "s1", turnId: "turn-1", reason: "completed" }));
-    expect(service.isChildExecutionTurn("s1", "turn-1")).toBe(false);
   });
 
   it("idle continuation after restart carries launch hydration without a parent prompt", async () => {
@@ -498,39 +486,36 @@ describe("RuntimeService prompt lifecycle", () => {
     // transcript/chain with the normal launch preparation — never by running
     // a parent prompt first.
     const { host, sidecar, service } = build();
-    sidecar.continueDelivery = "user";
     const result = await service.continueSubagent({ sessionId: "s1", delegationId: "del-1", content: "After restart." });
-    expect(result).toEqual({ accepted: true, delegationId: "del-2", turnId: "turn-1", delivery: "user" });
+    expect(result).toEqual({ accepted: true, delegationId: "del-2" });
     const last = sidecar.calls.at(-1);
     expect(last?.method).toBe("agent.continueSubagent");
     expect(last?.params).toMatchObject({
       sessionId: "s1",
       delegationId: "del-1",
       content: "After restart.",
-      expectedTurnId: "turn-1",
       mode: "agent",
     });
+    expect((last?.params as Record<string, unknown>).expectedTurnId).toBeUndefined();
     expect((last?.params as Record<string, unknown>).provider).toMatchObject({ id: "p1", modelId: "m1" });
     expect((last?.params as Record<string, unknown>).commandShell).toMatchObject({ available: true });
-    // Accounting only: a durable turn began, but no parent prompt ran and no
-    // main user row was persisted — the child's usage owns the execution turn.
-    expect(host.calls.filter((call) => call.method === "session.beginTurn")).toHaveLength(1);
+    // No durable turn began, no parent prompt ran, no main user row persisted.
+    expect(host.calls.filter((call) => call.method === "session.beginTurn")).toHaveLength(0);
     expect(sidecar.calls.some((call) => call.method === "agent.prompt")).toBe(false);
     expect(host.messages.get("s1") ?? []).toHaveLength(0);
-    expect(service.isChildExecutionTurn("s1", "turn-1")).toBe(true);
   });
 
-  it("closes the accounting turn when a detached continuation is rejected", async () => {
+  it("surfaces a rejected continuation without closing a turn that never began", async () => {
     const { host, sidecar, service } = build();
     sidecar.rejectContinue = Object.assign(new Error("Unknown delegation"), { errorCode: "DELEGATION_NOT_FOUND" });
     await expect(
       service.continueSubagent({ sessionId: "s1", delegationId: "missing", content: "Go." }),
     ).rejects.toMatchObject({ errorCode: "DELEGATION_NOT_FOUND" });
-    expect(host.calls.some((call) => call.method === "session.endTurn")).toBe(true);
+    expect(host.calls.some((call) => call.method === "session.endTurn")).toBe(false);
     // The session did not leak busy: a fresh prompt starts normally.
     await expect(
       service.prompt({ sessionId: "s1", content: "hello", effectivePermissionMode: "ask", principal: owner }),
-    ).resolves.toMatchObject({ turnId: "turn-2" });
+    ).resolves.toMatchObject({ turnId: expect.any(String) });
   });
 
   it("refuses native Pi sessions and attachments the headless runtime cannot serve", async () => {

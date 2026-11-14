@@ -117,13 +117,6 @@ export class RuntimeService implements RuntimePort {
   private readonly turnFinalizations = new Map<string, Promise<void>>();
   private readonly pendingAbortReasons = new Map<string, TurnEndReason>();
   private readonly sessionOperations = new Map<string, Promise<void>>();
-  /**
-   * Child-only execution-accounting turns opened for detached user
-   * continuations (`continueSubagent` while idle). They finalize their own
-   * durable row but fan out no parent conclusion: terminal events for them
-   * are persisted, never emitted. Removed when the turn finalizes.
-   */
-  private readonly childExecutionTurns = new Set<string>();
   private readonly listeners = new Set<(envelope: AgentEventEnvelope) => void>();
   private readonly turnEndListeners = new Set<(info: TurnEndedInfo) => void>();
   private readonly events: TurnEventPipeline;
@@ -427,10 +420,13 @@ export class RuntimeService implements RuntimePort {
   }
 
   /**
-   * Steer one live delegate with user input. Turn-scoped like `steer`: the
-   * expected parent turn must still own the session, and the sidecar runtime
-   * revalidates before touching the child loop. Returns `accepted: false`
-   * instead of throwing, so headless callers get the safe contract.
+   * Steer one live delegate with user input. The child's own liveness is the
+   * only gate — the parent turn the caller saw is informational, because
+   * intervening is not a claim on the parent turn and an ended parent must
+   * not block communicating with a child that is still working. The sidecar
+   * runtime revalidates the live run before touching the child loop. Returns
+   * `accepted: false` instead of throwing, so headless callers get the safe
+   * contract.
    *
    * A child input's images are inlined from disk, which this host has no
    * access to: a request that carries them is refused with `UNSUPPORTED`
@@ -439,7 +435,8 @@ export class RuntimeService implements RuntimePort {
   async steerSubagent(request: {
     sessionId: string;
     delegationId: string;
-    turnId: string;
+    /** The turn the caller saw; informational only. */
+    turnId?: string;
     content: string;
     attachments?: AgentPromptAttachment[];
     sessionMessageId?: string;
@@ -456,7 +453,10 @@ export class RuntimeService implements RuntimePort {
     ) {
       return { accepted: false, errorCode: ErrorCodes.INVALID_ARGUMENT };
     }
-    if (!this.isTurnDispatchable(sessionId, request.turnId)) return { accepted: false };
+    const expectedTurnId =
+      typeof request.turnId === "string" && request.turnId.trim()
+        ? request.turnId.trim()
+        : undefined;
     try {
       const sidecar = this.requireSidecar();
       const messageId =
@@ -466,7 +466,7 @@ export class RuntimeService implements RuntimePort {
       const result = await sidecar.call<{ accepted?: boolean }>("agent.steerSubagent", {
         sessionId,
         delegationId,
-        expectedTurnId: request.turnId,
+        ...(expectedTurnId ? { expectedTurnId } : {}),
         content,
         ...(messageId ? { messageId } : {}),
       });
@@ -492,14 +492,14 @@ export class RuntimeService implements RuntimePort {
 
   /**
    * Continue one settled delegate as a new run of the same chain, authorized
-   * directly by the user. Attached while the parent still expects the chain
-   * (the live turn is named and the sidecar runtime confirms); otherwise
-   * detached under a fresh child-only execution turn opened here for
-   * accounting. The execution turn never prompts the parent model, never
-   * renders a main user row, and never bills an unrelated turn — it exists
-   * so the child's events and usage have an explicit owner. Serialized per
-   * session with prompts: a parent prompt racing a detached execution meets
-   * the existing one-turn busy guard instead of aborting it.
+   * directly by the user. The child is an ordinary child of the session:
+   * nothing about the parent-child relation, the chain's continuability, or
+   * where its status/report is readable from changes. When a parent turn is
+   * live the sidecar attaches the run to it and the normal `TaskWait` /
+   * idle-resume flow delivers; between turns the run is independent and no
+   * durable turn is begun here, so the next main prompt is not refused as
+   * `AGENT_BUSY`. Serialized per session with prompts, but only around the
+   * runtime call: the sidecar decides from the child's own spawn.
    */
   async continueSubagent(
     request: AgentContinueSubagentRequest,
@@ -546,29 +546,20 @@ export class RuntimeService implements RuntimePort {
     const sidecar = this.requireSidecar();
     const active = this.activeTurns.get(sessionId);
     if (active) {
-      // A live turn owns the session: only its own id attaches, and the
-      // sidecar runtime still decides attached vs busy from the source
-      // record — a detached source never joins an unrelated live turn.
-      if (!expectedTurnId || expectedTurnId !== active) {
-        throw typedError(
-          expectedTurnId ? "The target turn has ended" : "Session already has an active turn",
-          expectedTurnId ? "TURN_NOT_FOUND" : ErrorCodes.AGENT_BUSY,
-        );
-      }
+      // A live parent turn: the sidecar runtime decides from the child's own
+      // lifecycle whether the run reports back to it. `expectedTurnId` is
+      // informational, so a stale one never rejects the user's intervention.
       return sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
         sessionId,
         delegationId,
-        expectedTurnId: expectedTurnId,
+        ...(expectedTurnId ? { expectedTurnId } : {}),
         content,
         ...(messageId ? { messageId } : {}),
       });
     }
-    if (expectedTurnId) {
-      // Idle sessions own no turn: naming one is stale, not an adoption.
-      throw typedError("The target turn has ended", "TURN_NOT_FOUND");
-    }
-    // Idle path: open a child-only execution turn for accounting, then let
-    // the sidecar runtime adopt it. No parent prompt runs for this turn.
+    // Idle path: no durable turn is opened. The sidecar runtime hydrates from
+    // the persisted transcript/chain when it holds no live runtime, and the
+    // new run is independent — the next main prompt stays accepted.
     const host = this.requireHost();
     const detail = await host.call<{ session?: Record<string, unknown> | null }>("session.get", {
       id: sessionId,
@@ -578,33 +569,17 @@ export class RuntimeService implements RuntimePort {
     const settings = await host.call<Record<string, unknown>>("settings.get");
     const launch = await this.options.launch.resolve(sessionId, detail.session, settings ?? {});
     sidecar.setProjectInstructionRoot(sessionId, launch.projectPath);
-    const turnId = await this.beginTurn(sessionId, launch.providerId, launch.modelId);
-    this.childExecutionTurns.add(turnKey(sessionId, turnId));
-    try {
-      // The sidecar may have no live runtime after a restart: carry the
-      // normal launch preparation so it can hydrate an idle runtime from the
-      // persisted transcript/chain. No parent prompt runs for this turn.
-      return await sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
-        ...launch.sidecarParams,
-        sessionId,
-        delegationId,
-        expectedTurnId: turnId,
-        content,
-        ...(messageId ? { messageId } : {}),
-      });
-    } catch (error) {
-      // A rejected continuation owns no execution: close the accounting turn
-      // so the session does not leak busy, then surface the coded error.
-      this.childExecutionTurns.delete(turnKey(sessionId, turnId));
-      await this.finishTurn(sessionId, "error", errorCodeOf(error), { turnId });
-      throw error;
-    }
-  }
-
-  /** Whether the turn is a child-only execution owner (no parent conclusion). */
-  isChildExecutionTurn(sessionId: string, turnId: string | null | undefined): boolean {
-    if (typeof turnId !== "string" || !turnId.trim()) return false;
-    return this.childExecutionTurns.has(turnKey(sessionId.trim(), turnId.trim()));
+    // The sidecar may have no live runtime after a restart: carry the normal
+    // launch preparation so it can hydrate an idle runtime from the persisted
+    // transcript/chain. No parent prompt and no parent turn run here.
+    return sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
+      ...launch.sidecarParams,
+      sessionId,
+      delegationId,
+      ...(expectedTurnId ? { expectedTurnId } : {}),
+      content,
+      ...(messageId ? { messageId } : {}),
+    });
   }
 
   async stop(sessionId: string): Promise<{ requested: boolean }> {    const sidecar = this.requireSidecar();
@@ -813,7 +788,6 @@ export class RuntimeService implements RuntimePort {
       if (this.turnFinalizations.get(key) !== record) return;
       this.turnFinalizations.delete(key);
       this.pendingAbortReasons.delete(key);
-      this.childExecutionTurns.delete(key);
       const info: TurnEndedInfo = { sessionId: id, turnId, reason, ...(errorCode ? { errorCode } : {}), settled };
       for (const listener of this.turnEndListeners) {
         try {
@@ -851,16 +825,6 @@ export class RuntimeService implements RuntimePort {
   // -------------------------------------------------------------------------
 
   private emit(envelope: AgentEventEnvelope): void {
-    // A child-only execution turn finalizes its durable row through
-    // persistence, but its terminal must not read as a parent conclusion to
-    // listeners. Child content rows still fan out for the delegate transcript.
-    if (
-      (envelope.event.type === "agent_end" || envelope.event.type === "error") &&
-      !envelope.parentToolCallId &&
-      this.isChildExecutionTurn(envelope.sessionId, envelope.turnId)
-    ) {
-      return;
-    }
     for (const listener of this.listeners) {
       try {
         listener(envelope);
