@@ -3545,7 +3545,12 @@ validation still needed.
 - **Acceptance**: F (session metadata persistence), Quality (localized task
   management)
 - **Milestone**: M2
-- **Status**: Draft (run only in a capable environment when this surface changes)
+- **Status**: Draft (run in a capable environment when this surface changes).
+  Steps 8-9 only — New task, first prompt, and the generated title persisted and
+  visible — are automated by `scripts/e2e-automatic-session-title.mjs` (real
+  Electron, Host, agent sidecar, and a local SSE model under a temporary
+  profile); rename, restart, fallback-clearing, and manual-rename-during-
+  generation steps remain manual.
 
 #### E2E-021b: Developer mode copies a conversation id and opens session scratch
 

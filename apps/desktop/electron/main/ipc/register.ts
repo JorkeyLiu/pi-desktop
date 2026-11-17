@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { dialog, shell, type BrowserWindow, type IpcMain, type IpcMainInvokeEvent } from "electron";
-import { err, ErrorCodes, IPC, ok, type Result } from "@pi-desktop/shared";
+import { err, ErrorCodes, IPC, ok, type AppSettings, type Result } from "@pi-desktop/shared";
 import type { AgentHostBridge } from "../agent-host-bridge";
 import type { AgentSidecar } from "../agent-sidecar";
 import type { HostProcess } from "../host-process";
@@ -271,7 +271,7 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
   registerFastModelTitleIpc({
     registrar,
     getHost,
-    getSettings: async () => (await getHost()?.call<{ settings?: import("@pi-desktop/shared").AppSettings }>("settings.get"))?.settings ?? null,
+    getSettings: async () => (await getHost()?.call<AppSettings>("settings.get")) ?? null,
     complete: dependencies.completeFastModelTitle,
     logger,
   });
