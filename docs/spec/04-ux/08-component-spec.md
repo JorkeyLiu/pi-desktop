@@ -3045,6 +3045,23 @@ never summarizes from its own arguments:
   `details.delegations[]` (`TaskWait`/`TaskList`) or `details.stopped[]`
   (`TaskStop`). A repeated agent is counted (`explorer ×2`) rather than listed
   twice, and a subagent count chip sits beside the label.
+- **A `TaskWait` that delivered results is the exception** (D268): its summary
+  names the tasks whose reports that same result body carried, in body order,
+  and the row carries no subagent count chip beside it — what a convergence
+  call owes the reader is which work came back, not how many delegates were
+  waited on. Two delegations of one agent are two tasks, so both titles are
+  listed and never merged into `explorer ×2`. A task the conversation never
+  titled falls back to its agent name, as its card does, and neither a
+  delegation id nor the task brief ever reaches the line. A results body that
+  carried no settled block leaves the line with no summary at all. Every other
+  lifecycle state — a progress checkpoint, a timeout, an interruption, a
+  `TaskList` or `TaskStop` check — keeps the roster summary and its count,
+  because it reports on work that has delivered nothing yet.
+
+```text
+└─ [bot] Task wait  Reconcile child card titles   Results arrived  [›]
+```
+
 - **Its status badge rolls up that roster** using the same
   `chat.subagentStatus.*` vocabulary as a child card: anything still running
   keeps the row running, a `failed`/`denied` member outranks a completed

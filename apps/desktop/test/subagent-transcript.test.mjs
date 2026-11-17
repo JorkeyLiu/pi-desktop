@@ -142,14 +142,29 @@ test("a lifecycle row summarizes by agent name, never by delegation id", () => {
   // disclosure, so every wait stays reachable from the transcript.
   assert.match(transcriptSource, /export const FoldedWaitCheckpoints/);
   assert.match(transcriptSource, /messages\.map\(\(message\) => \(/);
-  // A lifecycle row summarizes by the roster and never by its raw arguments:
-  // while it is running it has no roster yet, and a `delegationIds` payload
-  // would reach the head as a blob of UUIDs (D268). Every other row keeps its
-  // argument summary, except the one repeat the head already printed.
+  // A lifecycle row summarizes by the work it reports on and never by its raw
+  // arguments: while it is running it has no roster yet, and a `delegationIds`
+  // payload would reach the head as a blob of UUIDs (D268). A delivered wait
+  // names the tasks its body carried; every other lifecycle state names the
+  // roster. Every other row keeps its argument summary, except the one repeat
+  // the head already printed.
   assert.match(
     transcriptSource,
-    /const summary = lifecycle\s*\? rosterSummary\s*: argSummary === formattedName\s*\? ""\s*: argSummary;/,
+    /const summary = lifecycle\s*\? lifecycleSummary\s*: argSummary === formattedName\s*\? ""\s*: argSummary;/,
   );
+  // Only a delivered `TaskWait` reads that line: a progress checkpoint, a
+  // timeout, an interruption, `TaskList` and `TaskStop` keep the roster
+  // summary and its count.
+  assert.match(
+    transcriptSource,
+    /const deliveredRoster =\s*\n\s*lifecycle === "wait" && waitLifecycle\?\.kind === "completed"\s*\n\s*\? waitDeliveredRoster\(message\)\s*\n\s*: null;/,
+  );
+  assert.match(transcriptSource, /waitDeliveredSummary\(deliveredRoster, conversationTitles\)/);
+  // The delivered line carries no roster total, and its tooltip names the same
+  // tasks the summary does.
+  assert.match(transcriptSource, /lifecycle && roster\.length > 0 && !deliveredRoster/);
+  assert.match(topologySource, /export function waitDeliveredRoster\(/);
+  assert.match(topologySource, /export function waitDeliveredSummary\(/);
   // ...and it is still not a topology node.
   assert.match(topologySource, /if \(isDelegationActivityItem\(item\)\) continue;/);
 });
@@ -161,7 +176,7 @@ test("a TaskWait row states its wait outcome on the right and keeps it in the to
   // subagent-wait-settled-row; here the source contract proves the outcome
   // reaches the status while the row's name stays the fixed tool identity.
   assert.match(transcriptSource, /t\(waitLabelKey \?\? LIFECYCLE_LABEL_KEYS\[lifecycle\]\)/);
-  assert.match(transcriptSource, /const waitTitle = waitLabelKey\s*\n?\s*\? \[t\(waitLabelKey\), rosterSummary\]/);
+  assert.match(transcriptSource, /const waitTitle = waitLabelKey\s*\n?\s*\? \[t\(waitLabelKey\), lifecycleSummary\]/);
   assert.match(transcriptSource, /WAIT_SETTLED_LABEL_KEYS\.completed/);
   // No per-wake-reason progress label reaches a settled TaskWait: that wording
   // belongs to an active TaskList checkpoint.

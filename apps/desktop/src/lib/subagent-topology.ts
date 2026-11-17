@@ -460,6 +460,59 @@ export function delegationRosterSummary(
     .join(", ");
 }
 
+/**
+ * The settled tasks a completed `TaskWait` actually delivered, in the order its
+ * result body listed them.
+ *
+ * `details.includedDelegationIds` is the runtime's own record of the blocks a
+ * body carried, which is not the roster the call was issued with: a delegate
+ * still running contributes a live heartbeat block, and a report the batch
+ * budget deferred never reaches the body at all. A delivered task is therefore
+ * that set intersected with the roster's settled entries — a heartbeat is a
+ * block, never a delivered result.
+ *
+ * An explicit empty list means this body carried nothing and stays empty; the
+ * roster the call was issued with is never a fallback for a row that says so.
+ * Only a row persisted before the field existed falls back to its settled
+ * roster, the strongest evidence such a row still carries.
+ */
+export function waitDeliveredRoster(
+  message: UiMessage,
+): DelegationRosterEntry[] {
+  const settled = delegationRoster(message).filter(
+    (entry) => entry.status !== "running",
+  );
+  const included = asRecord(toolResultPayload(message))?.includedDelegationIds;
+  if (!Array.isArray(included)) return settled;
+  const delivered = new Set(
+    included.filter((id): id is string => typeof id === "string" && Boolean(id)),
+  );
+  return settled.filter((entry) => delivered.has(entry.delegationId));
+}
+
+/**
+ * One line naming the tasks a delivered wait reported on: each task's own
+ * description, else the agent that ran it.
+ *
+ * Titles are never merged by agent — two delegations of the same agent are two
+ * different tasks, so two different titles both appear. Neither a delegation id
+ * nor the task brief ever reaches this line: a conversation that never titled a
+ * delegation falls back to its agent name, which is what the card for it says
+ * too.
+ */
+export function waitDeliveredSummary(
+  roster: readonly DelegationRosterEntry[],
+  titles: ReadonlyMap<string, string> | null | undefined,
+): string {
+  const labels: string[] = [];
+  for (const entry of roster) {
+    const title = titles?.get(entry.delegationId)?.trim();
+    const label = title || entry.agentName;
+    if (label) labels.push(label);
+  }
+  return labels.join(", ");
+}
+
 /** Roster status rolled up for the row's own badge. */
 export function delegationRosterOutcome(
   roster: readonly DelegationRosterEntry[],
