@@ -344,3 +344,132 @@ describe("program-wait TaskWait", () => {
     }
   });
 });
+
+describe("TaskWait details name the blocks its body carried", () => {
+  it("reports the included blocks beside the receipt that marks them", async () => {
+    const runtime = createRuntime();
+    subagentRuns.deferred = true;
+    try {
+      const first = await taskTool(runtime).execute("task-a", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const second = await taskTool(runtime).execute("task-b", {
+        agent: "explorer",
+        task: "Find it too.",
+      });
+      const firstId = (first.details as any).delegationId as string;
+      const secondId = (second.details as any).delegationId as string;
+      // The first settled report always ships whole, so one long report fills
+      // the batch on its own and the second is deferred to a later call.
+      subagentRuns.resolveRun!({
+        agentName: "explorer",
+        status: "completed",
+        report: "a".repeat(60_000),
+        turns: 1,
+        toolCalls: 1,
+      });
+      await settleStatus(runtime, firstId);
+      subagentRuns.resolveRun!({
+        agentName: "explorer",
+        status: "completed",
+        report: "The second report.",
+        turns: 1,
+        toolCalls: 1,
+      });
+      await settleStatus(runtime, secondId);
+
+      const result = await waitTool(runtime).execute("wait-1", {
+        delegationIds: [firstId, secondId],
+      });
+      expect(result.details.status).toBe("completed");
+      // A plain array in body order: exactly the blocks this result carried, so
+      // a report the batch budget deferred is not named.
+      expect(Array.isArray(result.details.includedDelegationIds)).toBe(true);
+      expect(result.details.includedDelegationIds).toEqual([firstId]);
+      const text = (result.content[0] as { text: string }).text;
+      expect(text).toContain(`(${firstId})`);
+      expect(text).not.toContain("The second report.");
+
+      // Same source as the receipt: accepting this result marks the delivered
+      // report and leaves the deferred one deliverable by a later call.
+      await acceptTaskWaitResult(runtime, "wait-1", result);
+      expect((runtime as any).delegations.get(firstId).reportDelivered).toBe(true);
+      expect((runtime as any).delegations.get(secondId).reportDelivered).toBe(false);
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("names a heartbeat block too: the body includes it, the reader does not", async () => {
+    const runtime = createRuntime();
+    subagentRuns.deferred = true;
+    try {
+      const first = await taskTool(runtime).execute("task-a", {
+        agent: "explorer",
+        task: "Find it.",
+      });
+      const second = await taskTool(runtime).execute("task-b", {
+        agent: "explorer",
+        task: "Find it too.",
+      });
+      const firstId = (first.details as any).delegationId as string;
+      const secondId = (second.details as any).delegationId as string;
+      subagentRuns.resolveRun!({
+        agentName: "explorer",
+        status: "completed",
+        report: "Found it.",
+        turns: 1,
+        toolCalls: 1,
+      });
+      await settleStatus(runtime, firstId);
+
+      const result = await waitTool(runtime).execute("wait-1", {
+        delegationIds: [firstId, secondId],
+        mode: "any",
+        minCompleted: 1,
+      });
+      expect(result.details.status).toBe("completed");
+      // Both blocks are in the body — the settled report and the live
+      // heartbeat of the delegate still running. Which of them is a delivered
+      // task is the settled filter the reader applies, never a second list the
+      // runtime would have to keep in step.
+      expect(result.details.includedDelegationIds).toEqual([firstId, secondId]);
+      expect(
+        (result.details.delegations as Array<{ delegationId: string; status: string }>)
+          .find((entry) => entry.delegationId === secondId)?.status,
+      ).toBe("running");
+    } finally {
+      subagentRuns.deferred = false;
+      await runtime.dispose();
+    }
+  });
+
+  it("names a recovered read of persisted history", async () => {
+    const runtime = createRuntime();
+    try {
+      const recovered = {
+        delegationId: "recovered-1",
+        agentName: "explorer",
+        status: "completed" as const,
+        report: "Stored report.",
+        startedAt: 1,
+        completedAt: 2,
+        turns: 1,
+        toolCalls: 1,
+      };
+      (runtime as any).recoveredDelegations = {
+        lookup: (id: string) => (id === recovered.delegationId ? recovered : undefined),
+      };
+      const result = await waitTool(runtime).execute("wait-1", {
+        delegationIds: [recovered.delegationId],
+      });
+      expect(Array.isArray(result.details.includedDelegationIds)).toBe(true);
+      expect(result.details.includedDelegationIds).toEqual([recovered.delegationId]);
+      expect((result.content[0] as { text: string }).text).toContain("Stored report.");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+});

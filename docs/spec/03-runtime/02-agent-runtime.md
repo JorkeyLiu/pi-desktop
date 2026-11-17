@@ -994,6 +994,17 @@ core set rather than the on-demand catalog of §7.1:
   tool call); the idle-await is the parent-model-loop-ended path with the durable parent turn
   still open — either way the wake continues the SAME turn via the tool return or a runtime
   prompt. `timeout` / progress / `wait-any` never detach unfinished delegates.
+  Every wait result also carries an additive `details.includedDelegationIds`
+  array: the delegations whose blocks that exact result body carried, in body
+  order — a settled report, a settled run that reported nothing, a live
+  progress heartbeat, or a read answered from persisted history. It is the same
+  set the delivery receipt marks, and it is not the roster the call was issued
+  with: a settled report deferred past the batch budget is absent even though
+  its delegate is settled. The array is authoritative including when it is
+  empty — a body that carried no block names none, and a reader must not fall
+  back to the full roster. Readers that want delivered results intersect it
+  with the settled entries of `details.delegations[]`; it changes no receipt,
+  no `markReportDelivered`, no wake id, and no timing.
 - `TaskList()` — current-snapshot read, answered immediately even while the parent still
   expects running children; it never waits, never starts, restarts, or shortens the program
   cadence, and never stops or consumes a delegate. Convergence stays `TaskWait`'s job, so a

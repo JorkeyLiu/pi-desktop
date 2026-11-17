@@ -48,9 +48,12 @@ import {
   delegationRosterSummary,
   lifecycleKindOf,
   taskWaitLifecycle,
+  waitDeliveredRoster,
+  waitDeliveredSummary,
   type SubagentOutcome,
   type SubagentTiming,
 } from "../../../lib/subagent-topology";
+import { useSubagentTaskTitles } from "../../../lib/subagent-title-provider";
 import { useAppStore } from "../../../stores/app-store";
 import { Markdown } from "../../../components/Markdown";
 import {
@@ -210,6 +213,10 @@ function HostToolRow({
   const pathId = useId();
   const localToolsAllowed = useChatSessionCapability("canUseLocalTools");
   const root = useAppStore((s) => localToolsAllowed ? s.workspace?.path : undefined);
+  // The tasks this row reports on are named by the conversation, not by this
+  // row's own part: a delegation's description lives on the `Task` call that
+  // started it, which may sit in a different activity part.
+  const conversationTitles = useSubagentTaskTitles();
   const openTarget = useOpenPreviewTarget();
   const { fileMenu, openFileMenu, closeFileMenu } = useChatFileMenu();
   const status = message.toolStatus;
@@ -312,13 +319,26 @@ function HostToolRow({
           : waitLifecycle?.kind === "progress" && lifecycle !== "wait"
             ? WAIT_PROGRESS_LABEL_KEYS[waitLifecycle.reason]
             : null;
+  // A delivered `TaskWait` names the tasks whose reports its own result body
+  // carried, not the roster the call was issued with (D268): what the reader
+  // wants from a convergence call is which work came back. Every other
+  // lifecycle state — a progress checkpoint, a timeout, an interruption, a
+  // `TaskList` or `TaskStop` check — keeps the roster summary and its count,
+  // because it reports on work that has not delivered anything yet.
+  const deliveredRoster =
+    lifecycle === "wait" && waitLifecycle?.kind === "completed"
+      ? waitDeliveredRoster(message)
+      : null;
+  const lifecycleSummary = deliveredRoster
+    ? waitDeliveredSummary(deliveredRoster, conversationTitles)
+    : rosterSummary;
   // History stays inspectable: a row that settles on an outcome label keeps that
   // outcome in the tooltip beside the roster, so repeated waits on the same live
   // delegation read as one ongoing state without losing what each row did. A
   // settled `TaskWait` that woke on progress has no outcome label to add, so it
   // carries no wait tooltip.
   const waitTitle = waitLabelKey
-    ? [t(waitLabelKey), rosterSummary].filter(Boolean).join(" · ")
+    ? [t(waitLabelKey), lifecycleSummary].filter(Boolean).join(" · ")
     : undefined;
   const agentName =
     action === "delegate" && !lifecycle
@@ -376,7 +396,7 @@ function HostToolRow({
   // printed — a row must not read "Subagent Handoff Subagent Handoff". Only that
   // self-repeat is dropped; every argument-derived summary stays as it was.
   const summary = lifecycle
-    ? rosterSummary
+    ? lifecycleSummary
     : argSummary === formattedName
       ? ""
       : argSummary;
@@ -507,7 +527,7 @@ function HostToolRow({
             ) : null}
             <ToolChips chips={chips} />
             {review ? <ReviewChangeCounts change={review} /> : null}
-            {lifecycle && roster.length > 0 ? (
+            {lifecycle && roster.length > 0 && !deliveredRoster ? (
               <span className="tool-row-lifecycle">
                 <span className="tool-row-agent is-count">
                   {t("chat.subagentCount", { count: roster.length })}

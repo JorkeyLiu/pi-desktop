@@ -645,6 +645,16 @@ export function finalizeWaitResult(options: {
     unknownIds?: string[];
     /** Ids answered from persisted history rather than a live record. */
     recoveredDelegationIds?: string[];
+    /**
+     * The delegations this exact result body carried a block for, in body
+     * order: a settled report, a finished-without-a-report placeholder, a live
+     * heartbeat, or a read of persisted history. It is the same set the
+     * delivery receipt marks, and it is not the roster the call was issued
+     * with — a body that deferred a report past the batch budget does not name
+     * it. A reader that needs delivered results intersects this with the
+     * settled entries of `delegations`; nothing here redefines delivery.
+     */
+    includedDelegationIds: string[];
     delegations: Array<WaitResultSnapshot & { metrics: string }>;
   };
   /** The assembled report batch, waiting for acceptance into history. */
@@ -688,6 +698,7 @@ export function finalizeWaitResult(options: {
         : {}),
       ...(options.unknownIds.length ? { unknownIds: options.unknownIds } : {}),
       ...(recoveredIds.length ? { recoveredDelegationIds: recoveredIds } : {}),
+      includedDelegationIds: [...assembled.includedDelegationIds],
       delegations: assembled.delegations,
     },
     receipt: {

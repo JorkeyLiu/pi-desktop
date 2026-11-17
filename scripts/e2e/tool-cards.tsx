@@ -858,8 +858,9 @@ globalThis.toolCardsProbe = async () => {
     // A delegate control row keeps its own fixed name. What it did to the
     // subagents — the backend-owned wait outcome and the roster it reports on —
     // is stated on the right, never as the row's name.
+    // A delivered `TaskWait` names the tasks its own result body carried, so
+    // the roster total belongs to the check-shaped rows alone.
     const lifecycleCases = [
-      ["TaskWait", "Task wait"],
       ["TaskList", "Task list"],
       ["TaskStop", "Task stop"],
     ] as const;
@@ -887,6 +888,41 @@ globalThis.toolCardsProbe = async () => {
         cluster?.textContent,
       );
     }
+    // The delivered wait: no roster total, and the tasks it delivered named in
+    // its summary. This mount carries no conversation titles, so the fallback
+    // the contract promises — the agent that ran the task — is what renders.
+    const deliveredWaitHost = mount(wide, <ToolRow message={message("lifecycle-TaskWait", "", {
+      toolName: "TaskWait",
+      toolStatus: "success",
+      toolArgs: { delegationIds: ["del-roster"] },
+      toolResult: {
+        details: {
+          status: "completed",
+          includedDelegationIds: ["del-roster"],
+          delegations: [
+            { delegationId: "del-roster", agent: "fixer", status: "completed" },
+            { delegationId: "del-running", agent: "watcher", status: "running" },
+          ],
+        },
+      },
+    })} />);
+    const deliveredWaitName =
+      deliveredWaitHost.querySelector<HTMLElement>(".tool-row-name")?.textContent ?? "";
+    const deliveredWaitSummary =
+      deliveredWaitHost.querySelector<HTMLElement>(".tool-row-summary")?.textContent ?? "";
+    check("TaskWait keeps its own fixed name", deliveredWaitName === "Task wait", deliveredWaitName);
+    // The block this body carried, named by its agent because this mount knows
+    // no task titles; the delegate it waited on but did not deliver is absent,
+    // and so is the roster total the row used to print.
+    check(
+      "a delivered TaskWait names the tasks it delivered, not its roster",
+      deliveredWaitSummary === "fixer" &&
+        !deliveredWaitHost.querySelector(".tool-row-agent.is-count") &&
+        !/subagent/i.test(deliveredWaitHost.textContent ?? "") &&
+        deliveredWaitHost.querySelector<HTMLElement>(".tool-row-state")?.textContent ===
+          "Results arrived",
+      { summary: deliveredWaitSummary, text: deliveredWaitHost.textContent },
+    );
     const copiedStdout = await clickCopy(
       wideBash,
       ".tool-terminal-stream.is-stdout .tool-row-copy",
@@ -1261,7 +1297,7 @@ globalThis.toolCardsProbe = async () => {
       metrics: { contextTokens: 9_000, usage: { totalTokens: 1_200 } },
     });
     // A lifecycle row is not a delegation: it keeps its ordinary tool row and
-    // its roster, and must never become a second card for the same child.
+    // its header, and must never become a second card for the same child.
     const wait = message("task-wait", "", {
       toolName: "TaskWait",
       toolCallId: "call-task-wait",
@@ -1270,6 +1306,7 @@ globalThis.toolCardsProbe = async () => {
       toolResult: {
         details: {
           status: "completed",
+          includedDelegationIds: ["del-original"],
           delegations: [{ delegationId: "del-original", agent: "manifestor", status: "completed" }],
         },
       },
@@ -1348,7 +1385,7 @@ globalThis.toolCardsProbe = async () => {
       cardsHost.querySelectorAll(".subagent-task").length,
     );
     check(
-      "the lifecycle row keeps its own row, roster and header",
+      "the lifecycle row keeps its own row and header, not a roster summary",
       !cardsHost
         .querySelector('[data-message-id="task-wait"]')!
         .classList.contains("subagent-task") &&
@@ -1357,7 +1394,12 @@ globalThis.toolCardsProbe = async () => {
             .querySelector('[data-message-id="task-wait"]')!
             .querySelector(".tool-row-header"),
         ) &&
-        cardsHost
+        Boolean(
+          cardsHost
+            .querySelector('[data-message-id="task-wait"]')!
+            .querySelector(".tool-row-name"),
+        ) &&
+        !cardsHost
           .querySelector('[data-message-id="task-wait"]')!
           .textContent!.includes("manifestor"),
       cardsHost.querySelector('[data-message-id="task-wait"]')?.textContent?.slice(0, 80),
@@ -1388,14 +1430,18 @@ globalThis.toolCardsProbe = async () => {
         states: cardOf("task-original").querySelectorAll(".tool-row-state").length,
       },
     );
-    // The lifecycle row beside it states its own wait: a fixed name on the
-    // left, the roster count and the backend-owned wait outcome on the right.
+    // The lifecycle row beside it states what it delivered: a fixed name on the
+    // left, the delivered task's own description as its summary, and the
+    // backend-owned wait outcome on the right. It carries no roster total: this
+    // row names the tasks that came back, not a count of the delegates waited
+    // on — the count read as "one of these" without saying which.
     const waitRow = cardsHost.querySelector<HTMLElement>('[data-message-id="task-wait"]')!;
     check(
-      "a lifecycle row states its name on the left and its wait on the right",
+      "a delivered wait names the task it delivered and states its outcome",
       waitRow.querySelector<HTMLElement>(".tool-row-name")?.textContent === "Task wait" &&
-        Boolean(waitRow.querySelector(".tool-row-lifecycle .tool-row-agent.is-count")) &&
-        waitRow.querySelector<HTMLElement>(".tool-row-lifecycle .tool-row-state")?.textContent ===
+        waitRow.querySelector<HTMLElement>(".tool-row-summary")?.textContent === TASK_TITLE &&
+        !waitRow.querySelector(".tool-row-agent.is-count") &&
+        waitRow.querySelector<HTMLElement>(".tool-row-state")?.textContent ===
           "Results arrived",
       waitRow.textContent,
     );

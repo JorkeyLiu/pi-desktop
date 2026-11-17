@@ -24,6 +24,8 @@ const {
   subagentOutcome,
   summarizeSubagentActivity,
   taskWaitLifecycle,
+  waitDeliveredRoster,
+  waitDeliveredSummary,
 } = await import("../src/lib/subagent-topology.ts");
 
 function task(id, toolStatus, resultStatus, timing = {}) {
@@ -651,4 +653,114 @@ test("folded checkpoints keep every earlier row inspectable, including an active
   assert.equal((group[0].toolResult.details.delegations?.[0]?.delegationId), "d1");
   // A group with a single row never folds and owns no disclosure.
   assert.equal(foldedWaitCheckpointGroups([latest]).groups.size, 0);
+});
+test("a delivered wait names the tasks its own result body carried (D268)", () => {
+  // The runtime records the blocks a result body actually carried, which is not
+  // the roster the wait was issued with: a delegate still running contributes a
+  // heartbeat block, and a report pushed past the batch budget is deferred to a
+  // later call. A completed wait reports the settled tasks it delivered.
+  const delivered = lifecycle("TaskWait", {
+    status: "completed",
+    completion: "all",
+    includedDelegationIds: ["d1", "d3"],
+    delegations: [
+      { delegationId: "d1", agent: "explorer", status: "completed" },
+      { delegationId: "d2", agent: "fixer", status: "running" },
+      { delegationId: "d3", agent: "code-reviewer", status: "failed" },
+      { delegationId: "d4", agent: "test-runner", status: "completed" },
+    ],
+  });
+  const deliveredRoster = waitDeliveredRoster(delivered.message);
+  // A still-running target and a deferred report are not in this body.
+  assert.deepEqual(deliveredRoster.map((entry) => entry.delegationId), ["d1", "d3"]);
+
+  // A stopped or timed-out run and a read recovered from history are blocks of
+  // this body too, and each is a delivered result: this line names tasks, it
+  // does not re-judge outcomes.
+  const mixed = lifecycle("TaskWait", {
+    status: "completed",
+    includedDelegationIds: ["d1", "d2", "d3"],
+    delegations: [
+      { delegationId: "d1", agent: "explorer", status: "stopped" },
+      { delegationId: "d2", agent: "explorer", status: "timed_out" },
+      { delegationId: "d3", agent: "explorer", status: "completed", recovered: true },
+    ],
+  });
+  assert.deepEqual(
+    waitDeliveredRoster(mixed.message).map((entry) => entry.delegationId),
+    ["d1", "d2", "d3"],
+  );
+
+  // Two tasks of the same agent are two tasks: different descriptions are both
+  // named, never merged into one repeated-agent label.
+  const titles = new Map([
+    ["d1", "Find the slow query"],
+    ["d3", "Review the migration"],
+  ]);
+  const sameAgent = lifecycle("TaskWait", {
+    status: "completed",
+    includedDelegationIds: ["d1", "d3"],
+    delegations: [
+      { delegationId: "d1", agent: "explorer", status: "completed" },
+      { delegationId: "d3", agent: "explorer", status: "completed" },
+    ],
+  });
+  assert.equal(
+    waitDeliveredSummary(waitDeliveredRoster(sameAgent.message), titles),
+    "Find the slow query, Review the migration",
+  );
+
+  // A task the conversation never titled falls back to the agent that ran it —
+  // never to its delegation id and never to the brief.
+  const untitled = waitDeliveredSummary(
+    [{ delegationId: "d9", agentName: "test-runner", status: "completed" }],
+    titles,
+  );
+  assert.equal(untitled, "test-runner");
+  assert.doesNotMatch(untitled, /d9/);
+  assert.equal(
+    waitDeliveredSummary(
+      [{ delegationId: "d9", agentName: "test-runner", status: "completed" }],
+      null,
+    ),
+    "test-runner",
+  );
+
+  // An explicit empty list is the runtime saying this body carried no block. It
+  // must stay empty rather than fall back to the roster the call was issued
+  // with: a row that delivered nothing names nothing.
+  const empty = lifecycle("TaskWait", {
+    status: "completed",
+    includedDelegationIds: [],
+    delegations: [
+      { delegationId: "d1", agent: "explorer", status: "completed" },
+    ],
+  });
+  assert.deepEqual(waitDeliveredRoster(empty.message), []);
+  assert.equal(waitDeliveredSummary(waitDeliveredRoster(empty.message), titles), "");
+
+  // A row persisted before the field existed falls back to its settled roster —
+  // the strongest evidence it still carries — and never treats a running
+  // delegate as delivered.
+  const legacy = lifecycle("TaskWait", {
+    status: "completed",
+    delegations: [
+      { delegationId: "d1", agent: "explorer", status: "completed" },
+      { delegationId: "d2", agent: "fixer", status: "running" },
+    ],
+  });
+  assert.deepEqual(
+    waitDeliveredRoster(legacy.message).map((entry) => entry.delegationId),
+    ["d1"],
+  );
+
+  // Only a settled wait is a delivery: a progress checkpoint's blocks are live
+  // heartbeats, so nothing in it reads as a delivered task.
+  const progressing = lifecycle("TaskWait", {
+    status: "wakeup",
+    wakeReason: "time",
+    includedDelegationIds: ["d2"],
+    delegations: [{ delegationId: "d2", agent: "fixer", status: "running" }],
+  });
+  assert.deepEqual(waitDeliveredRoster(progressing.message), []);
 });
