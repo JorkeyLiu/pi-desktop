@@ -353,11 +353,14 @@ pub struct SearchHit {
 /// The renderer creates a session with its localized `chat.untitledTask` label
 /// and also recognizes `nav.newChat`, so host-core has to recognize the same
 /// values: it owns title eligibility and cannot read the renderer catalog when
-/// it decides whether a title may still be replaced. German, Spanish, and
-/// French fall back to the English label. Keep this in sync with the migration
-/// list in `db/session_title_source_migration.rs` and `LEGACY_DEFAULT_TITLES`
-/// in the renderer.
-const PLACEHOLDER_TITLES: [&str; 13] = [
+/// it decides whether a title may still be replaced. The list holds every
+/// shipped `chat.untitledTask` label plus the historical `nav.newChat` labels,
+/// compared case-sensitively so an arbitrary differently-cased title stays a
+/// user title. Keep this in sync with
+/// `LEGACY_DEFAULT_TITLES` in the renderer; the list in
+/// `db/session_title_source_migration.rs` is the frozen v22 → v23 backfill and
+/// deliberately reflects only the labels that existed at that schema version.
+const PLACEHOLDER_TITLES: [&str; 16] = [
     "",
     "New task",
     "New chat",
@@ -369,6 +372,9 @@ const PLACEHOLDER_TITLES: [&str; 13] = [
     "새 채팅",
     "Tarefa sem título",
     "Nova conversa",
+    "Neue Aufgabe",
+    "Nouvelle tâche",
+    "Nueva tarea",
     "Yeni görev",
     "Yeni sohbet",
 ];
@@ -5186,6 +5192,68 @@ mod tests {
                 "Derived label"
             );
         }
+    }
+
+    #[test]
+    fn shipped_locale_placeholders_stay_eligible_through_the_automatic_title_path() {
+        let db = test_db();
+        let title_source = |id: &str| -> String {
+            db.conn()
+                .query_row(
+                    "SELECT title_source FROM sessions WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+
+        // Each shipped `chat.untitledTask` label must create an eligible
+        // session, accept the deterministic first-prompt fallback, and still
+        // accept the fast-model compare-and-set afterwards.
+        for placeholder in ["Neue Aufgabe", "Nouvelle tâche", "Nueva tarea"] {
+            let session =
+                create_session(&db, Some(placeholder.into()), None, None, None, None).unwrap();
+            assert_eq!(
+                title_source(&session.id),
+                TITLE_SOURCE_DEFAULT,
+                "{placeholder} must be stored as a default title"
+            );
+            assert!(
+                derive_session_title(&db, &session.id, "First prompt fallback").unwrap(),
+                "{placeholder} must accept the first-prompt fallback"
+            );
+            assert!(
+                set_automatic_session_title(
+                    &db,
+                    &session.id,
+                    "First prompt fallback",
+                    "Generated label"
+                )
+                .unwrap(),
+                "{placeholder} must accept the generated title"
+            );
+            assert_eq!(
+                get_session(&db, &session.id)
+                    .unwrap()
+                    .unwrap()
+                    .summary
+                    .title,
+                "Generated label"
+            );
+            assert_eq!(title_source(&session.id), TITLE_SOURCE_GENERATED);
+        }
+
+        // Recognition stays an exact match: a differently-cased title is a
+        // user title and keeps every automatic path out.
+        let cased =
+            create_session(&db, Some("neue aufgabe".into()), None, None, None, None).unwrap();
+        assert_eq!(title_source(&cased.id), TITLE_SOURCE_MANUAL);
+        assert!(!derive_session_title(&db, &cased.id, "First prompt fallback").unwrap());
+        assert!(!set_automatic_session_title(&db, &cased.id, "neue aufgabe", "Generated").unwrap());
+        assert_eq!(
+            get_session(&db, &cased.id).unwrap().unwrap().summary.title,
+            "neue aufgabe"
+        );
     }
 
     #[test]

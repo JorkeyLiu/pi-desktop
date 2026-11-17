@@ -20,7 +20,9 @@ import {
 // English catalog instead of leaving `t()` returning keys.
 await i18n.init({
   lng: "en",
-  resources: { en: { translation: catalogs.en } },
+  resources: Object.fromEntries(
+    Object.entries(catalogs).map(([locale, translation]) => [locale, { translation }]),
+  ),
 });
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 const [api, protocol, host, rpc, queueSlice, main, store] = await Promise.all([
@@ -38,6 +40,61 @@ test("the first prompt becomes an immediate title, collapsed and capped", () => 
   assert.equal(promptFallbackSessionTitle("p".repeat(60), "New task"), "p".repeat(48));
   assert.equal(promptFallbackSessionTitle("   ", "New task"), "New task");
   assert.equal(promptFallbackSessionTitle("界".repeat(60), "New task"), "界".repeat(48));
+});
+
+test("a new session is created with the catalog's canonical placeholder", async () => {
+  // host-core persists this exact string and recognizes a placeholder only by
+  // an exact, case-sensitive match, so the created title must keep the
+  // catalog's casing instead of a normalized copy. A lowercased title was
+  // stored as `title_source = manual`, which blocked both the prompt fallback
+  // and every automatic title.
+  assert.equal(untitledTaskTitle(), "New task");
+  await i18n.changeLanguage("zh-CN");
+  try {
+    assert.equal(untitledTaskTitle(), "新建任务");
+  } finally {
+    await i18n.changeLanguage("en");
+  }
+  // The create path spends that canonical value, not a local lowercase copy.
+  assert.match(store, /title: untitledTaskTitle\(\)/);
+  // Matching itself stays case-insensitive, so a displayed or legacy
+  // lowercased placeholder is still recognized.
+  for (const title of ["New task", "new task", "NEW TASK", " New task ", "新建任务", "새 작업"]) {
+    assert.equal(isDefaultSessionTitle(title), true, title);
+  }
+  assert.equal(isDefaultSessionTitle("Fix login"), false);
+});
+
+test("every shipped placeholder title is a default title in its own locale", async () => {
+  const placeholderTitles = host.slice(
+    host.indexOf("const PLACEHOLDER_TITLES"),
+    host.indexOf("];", host.indexOf("const PLACEHOLDER_TITLES")),
+  );
+  assert.ok(placeholderTitles.length > 0, "host-core must keep an eligibility list");
+  // A session created under a non-English locale persists that catalog label,
+  // so both host-core's eligibility list and this renderer helper have to
+  // recognize every shipped `chat.untitledTask` value, not just the English one.
+  for (const [locale, translation] of Object.entries(catalogs)) {
+    const placeholder = translation.chat.untitledTask;
+    await i18n.changeLanguage(locale);
+    try {
+      assert.equal(untitledTaskTitle(), placeholder, `${locale} canonical title`);
+      assert.equal(isDefaultSessionTitle(placeholder), true, `${locale} ${placeholder}`);
+      assert.equal(
+        isDefaultSessionTitle(placeholder.toLowerCase()),
+        true,
+        `${locale} lowercased ${placeholder}`,
+      );
+    } finally {
+      await i18n.changeLanguage("en");
+    }
+    assert.ok(
+      placeholderTitles.includes(`"${placeholder}"`),
+      `host-core must recognize the ${locale} placeholder`,
+    );
+  }
+  // Recognition stays a placeholder check, never a casing-insensitive wildcard.
+  assert.equal(isDefaultSessionTitle("Fix login"), false);
 });
 
 test("the fallback only fires for a still-untitled session the owning host can title", () => {
