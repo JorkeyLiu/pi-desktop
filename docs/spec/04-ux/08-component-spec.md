@@ -3045,22 +3045,25 @@ never summarizes from its own arguments:
   `details.delegations[]` (`TaskWait`/`TaskList`) or `details.stopped[]`
   (`TaskStop`). A repeated agent is counted (`explorer ×2`) rather than listed
   twice, and a subagent count chip sits beside the label.
-- **A `TaskWait` that delivered results is the exception** (D268): its summary
-  names the tasks whose reports that same result body carried, in body order,
-  and the row carries no subagent count chip beside it — what a convergence
-  call owes the reader is which work came back, not how many delegates were
-  waited on. Two delegations of one agent are two tasks, so both titles are
-  listed and never merged into `explorer ×2`. A task the conversation never
-  titled falls back to its agent name, as its card does, and neither a
-  delegation id nor the task brief ever reaches the line. A results body that
-  carried no settled block leaves the line with no summary at all. Every other
-  lifecycle state — a progress checkpoint, a timeout, an interruption, a
-  `TaskList` or `TaskStop` check — keeps the roster summary and its count,
-  because it reports on work that has delivered nothing yet.
+ - **A `TaskWait` that delivered results is the exception** (D268): it keeps all
+   four slots — fixed identity, full roster summary, subagent chip, delivered
+   outcome — and only the third changes. The subagent count chip is replaced by
+   the tasks whose reports that same result body carried, named in body order:
+   what a convergence call owes the reader is which work came back, not how
+   many delegates were waited on. Two delegations of one agent are two tasks,
+   so both titles are listed in the chip and never merged into `explorer ×2`,
+   while the summary still reads the full roster (`explorer ×2`). A task the
+   conversation never titled falls back to its agent name, as its card does,
+   and neither a delegation id nor the task brief ever reaches the row. A
+   results body that carried no settled block leaves the chip absent while the
+   roster summary stays. Every other lifecycle state — a progress checkpoint, a
+   timeout, an interruption, a `TaskList` or `TaskStop` check — keeps the roster
+   summary and its count, because it reports on work that has delivered nothing
+   yet.
 
-```text
-└─ [bot] Task wait  Reconcile child card titles   Results arrived  [›]
-```
+ ```text
+ └─ [bot] Task wait  manifestor  Reconcile child card titles   Results arrived  [›]
+ ```
 
 - **Its status badge rolls up that roster** using the same
   `chat.subagentStatus.*` vocabulary as a child card: anything still running

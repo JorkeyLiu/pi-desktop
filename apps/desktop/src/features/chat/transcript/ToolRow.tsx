@@ -319,27 +319,31 @@ function HostToolRow({
           : waitLifecycle?.kind === "progress" && lifecycle !== "wait"
             ? WAIT_PROGRESS_LABEL_KEYS[waitLifecycle.reason]
             : null;
-  // A delivered `TaskWait` names the tasks whose reports its own result body
-  // carried, not the roster the call was issued with (D268): what the reader
-  // wants from a convergence call is which work came back. Every other
-  // lifecycle state — a progress checkpoint, a timeout, an interruption, a
-  // `TaskList` or `TaskStop` check — keeps the roster summary and its count,
-  // because it reports on work that has not delivered anything yet.
-  const deliveredRoster =
-    lifecycle === "wait" && waitLifecycle?.kind === "completed"
-      ? waitDeliveredRoster(message)
-      : null;
-  const lifecycleSummary = deliveredRoster
-    ? waitDeliveredSummary(deliveredRoster, conversationTitles)
-    : rosterSummary;
+   // A completed `TaskWait` keeps its four slots: the fixed identity, the full
+   // roster agent summary the call was issued with, the delivered tasks' own
+   // titles in place of the roster count chip, and the delivered outcome
+   // (D268). The second slot never changes: it still names every delegate the
+   // call waited on, including one that is still running. Only the third slot
+   // is replaced — what a convergence call owes the reader is which work came
+   // back. Every other lifecycle state — a progress checkpoint, a timeout, an
+   // interruption, a `TaskList` or `TaskStop` check — keeps the roster summary
+   // and its count, because it reports on work that has not delivered anything
+   // yet.
+   const deliveredRoster =
+     lifecycle === "wait" && waitLifecycle?.kind === "completed"
+       ? waitDeliveredRoster(message)
+       : null;
+   const deliveredSummary = deliveredRoster
+     ? waitDeliveredSummary(deliveredRoster, conversationTitles)
+     : "";
   // History stays inspectable: a row that settles on an outcome label keeps that
   // outcome in the tooltip beside the roster, so repeated waits on the same live
   // delegation read as one ongoing state without losing what each row did. A
   // settled `TaskWait` that woke on progress has no outcome label to add, so it
   // carries no wait tooltip.
-  const waitTitle = waitLabelKey
-    ? [t(waitLabelKey), lifecycleSummary].filter(Boolean).join(" · ")
-    : undefined;
+   const waitTitle = waitLabelKey
+     ? [t(waitLabelKey), rosterSummary].filter(Boolean).join(" · ")
+     : undefined;
   const agentName =
     action === "delegate" && !lifecycle
       ? delegateAgentName(message, delegate)
@@ -389,17 +393,20 @@ function HostToolRow({
           : run === "ok"
             ? t("chat.toolCompleted")
             : "";
-  // A lifecycle row never falls back to its arguments: while it is still
-  // running it has no roster yet, and `delegationIds` would otherwise reach the
-  // head as a JSON blob of UUIDs (D268). An unrecognized tool with nothing to
-  // summarize falls back to its own display name, which the head has just
-  // printed — a row must not read "Subagent Handoff Subagent Handoff". Only that
-  // self-repeat is dropped; every argument-derived summary stays as it was.
-  const summary = lifecycle
-    ? lifecycleSummary
-    : argSummary === formattedName
-      ? ""
-      : argSummary;
+   // A lifecycle row never falls back to its arguments: while it is still
+   // running it has no roster yet, and `delegationIds` would otherwise reach the
+   // head as a JSON blob of UUIDs (D268). A completed `TaskWait` still reads
+   // that roster line here: the delivered tasks' own titles replace the count
+   // chip beside the status, never this summary. An unrecognized tool with
+   // nothing to summarize falls back to its own display name, which the head
+   // has just printed — a row must not read "Subagent Handoff Subagent
+   // Handoff". Only that self-repeat is dropped; every argument-derived
+   // summary stays as it was.
+   const summary = lifecycle
+     ? rosterSummary
+     : argSummary === formattedName
+       ? ""
+       : argSummary;
   // A delegate control row states its own wait state on the right: which kind
   // of check it is making while it runs, the backend-owned outcome once it
   // settles. Its name stays the fixed tool identity.
@@ -527,16 +534,27 @@ function HostToolRow({
             ) : null}
             <ToolChips chips={chips} />
             {review ? <ReviewChangeCounts change={review} /> : null}
-            {lifecycle && roster.length > 0 && !deliveredRoster ? (
-              <span className="tool-row-lifecycle">
-                <span className="tool-row-agent is-count">
-                  {t("chat.subagentCount", { count: roster.length })}
-                </span>
-                {statusBadge}
-              </span>
-            ) : (
-              statusBadge
-            )}
+             {deliveredRoster ? (
+               deliveredSummary ? (
+                 <span className="tool-row-lifecycle">
+                   <span className="tool-row-agent is-delivered" title={deliveredSummary}>
+                     {deliveredSummary}
+                   </span>
+                   {statusBadge}
+                 </span>
+               ) : (
+                 statusBadge
+               )
+             ) : lifecycle && roster.length > 0 ? (
+               <span className="tool-row-lifecycle">
+                 <span className="tool-row-agent is-count">
+                   {t("chat.subagentCount", { count: roster.length })}
+                 </span>
+                 {statusBadge}
+               </span>
+             ) : (
+               statusBadge
+             )}
             {caret ? (
               <span className="tool-row-caret" aria-hidden="true">
                 {caret}

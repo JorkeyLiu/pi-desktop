@@ -2788,10 +2788,20 @@
   white-space: nowrap;
 }
 
-/* A fan-out count is lighter than a named delegate. */
-.tool-row-agent.is-count {
-  background: var(--ds-tile);
-}
+ /* A fan-out count is lighter than a named delegate. */
+ .tool-row-agent.is-count {
+   background: var(--ds-tile);
+ }
+
+ /* A delivered task title replaces the count, never its meaning: it keeps the
+   chip shape and truncates like the row summary so a long title cannot push
+   the status badge out of the row. */
+ .tool-row-agent.is-delivered {
+   background: var(--ds-tile);
+   max-width: 280px;
+   overflow: hidden;
+   text-overflow: ellipsis;
+ }
 
 .tool-row-summary.is-code {
   font-family: var(--font-mono);

@@ -234,74 +234,163 @@ function summaryText(html) {
   return match ? match[1] : null;
 }
 
+ /** The row's third-slot chip, as the transcript prints it; `null` when absent. */
+ function chipText(html) {
+   const spans = html.match(/<span class="tool-row-agent[^"]*"[^>]*>([^<]*)<\/span>/g);
+   if (!spans) return null;
+   const last = spans[spans.length - 1];
+   return last.replace(/<[^>]*>/g, "");
+ }
+
 /** The tooltip the row's fixed identity carries. */
 function nameTitle(html) {
   const match = html.match(/<span class="tool-row-name" title="([^"]*)">/);
   return match ? match[1] : null;
 }
 
-/**
- * The tasks a delivered wait names: the reports this body carried, not the
- * roster the call was issued with (D268).
- */
-test("a delivered wait names the tasks whose reports it carried", async (t) => {
-  const ssr = await slotSsr(t);
-  const { ToolRow } = await ssr.load("/src/features/chat/transcript/ToolRow.tsx");
-  const { SubagentTitleProvider } = await ssr.load(
-    "/src/lib/subagent-title-provider.tsx",
-  );
-  const messages = [
-    taskCall("d-a", "Find the slow query"),
-    taskCall("d-b", "Review the migration", "code-reviewer"),
-    taskCall("d-c", undefined, "test-runner"),
-  ];
-  const wait = deliveredWait({
-    // `d-run` was a target of this wait but its report has not settled, so the
-    // body carried a heartbeat block instead of a report: it is not delivered.
-    // `d-untouched` was never a target at all.
-    includedDelegationIds: ["d-a", "d-b", "d-c"],
-    delegations: [
-      { delegationId: "d-a", agent: "explorer", status: "completed" },
-      { delegationId: "d-b", agent: "code-reviewer", status: "completed" },
-      { delegationId: "d-c", agent: "test-runner", status: "completed" },
-      { delegationId: "d-run", agent: "fixer", status: "running" },
-    ],
-  });
-  const html = ssr.render(
-    createElement(
-      SubagentTitleProvider,
-      { messages },
-      createElement(ToolRow, { message: wait }),
-    ),
-  );
+ /**
+  * A completed `TaskWait` keeps four slots: the fixed identity, the full roster
+  * agent summary it was issued with, the delivered tasks' own titles in place
+  * of the roster count chip, and the delivered outcome (D268).
+  */
+ test("a delivered wait keeps its roster and names the delivered tasks in the chip", async (t) => {
+   const ssr = await slotSsr(t);
+   const { ToolRow } = await ssr.load("/src/features/chat/transcript/ToolRow.tsx");
+   const { SubagentTitleProvider } = await ssr.load(
+     "/src/lib/subagent-title-provider.tsx",
+   );
+   const messages = [
+     taskCall("d-a", "Find the slow query"),
+     taskCall("d-b", "Review the migration", "code-reviewer"),
+     taskCall("d-c", undefined, "test-runner"),
+   ];
+   const wait = deliveredWait({
+     // `d-run` was a target of this wait but its report has not settled, so the
+     // body carried a heartbeat block instead of a report: it is not delivered.
+     // `d-untouched` was never a target at all.
+     includedDelegationIds: ["d-a", "d-b", "d-c"],
+     delegations: [
+       { delegationId: "d-a", agent: "explorer", status: "completed" },
+       { delegationId: "d-b", agent: "code-reviewer", status: "completed" },
+       { delegationId: "d-c", agent: "test-runner", status: "completed" },
+       { delegationId: "d-run", agent: "fixer", status: "running" },
+     ],
+   });
+   const html = ssr.render(
+     createElement(
+       SubagentTitleProvider,
+       { messages },
+       createElement(ToolRow, { message: wait }),
+     ),
+   );
 
-  // The fixed identity is untouched: only what the row did changes.
-  assert.equal(
-    html.match(/<span class="tool-row-name"[^>]*>([^<]*)<\/span>/)?.[1],
-    "Task wait",
-  );
-  // Each delivered task is named by its own description; the one the
-  // conversation never titled falls back to the agent that ran it. A
-  // still-running delegate is not a delivered task.
-  assert.equal(
-    summaryText(html),
-    "Find the slow query, Review the migration, test-runner",
-  );
-  assert.doesNotMatch(html, /fixer/);
-  assert.doesNotMatch(html, /The full brief the model wrote/);
-  assert.doesNotMatch(html, /d-a|d-b|d-c/);
-  // The outcome stays, and the ambiguous roster total is gone: this row names
-  // the tasks it delivered, and a count of the whole roster said nothing about
-  // them.
-  assert.equal(stateBadge(html).label, "Results arrived");
-  assert.doesNotMatch(html, /tool-row-agent is-count/);
-  assert.doesNotMatch(html, /\d+ subagents?/);
-  // The tooltip agrees with the summary it sits beside.
-  assert.equal(
-    nameTitle(html),
-    "Results arrived · Find the slow query, Review the migration, test-runner",
-  );
-});
+   // Slot 1: the fixed identity is untouched.
+   assert.equal(
+     html.match(/<span class="tool-row-name"[^>]*>([^<]*)<\/span>/)?.[1],
+     "Task wait",
+   );
+   // Slot 2: the full roster agent summary the call was issued with,
+   // including the delegate that is still running.
+   assert.equal(
+     summaryText(html),
+     "explorer, code-reviewer, test-runner, fixer",
+   );
+   assert.doesNotMatch(summaryText(html) ?? "", /Find the slow query/);
+   // Slot 3: the delivered tasks' own descriptions replace the roster count
+   // chip. The one the conversation never titled falls back to the agent that
+   // ran it; a still-running delegate is not a delivered task. The roster
+   // count chip is gone because the count no longer sits in this slot.
+   assert.equal(
+     chipText(html),
+     "Find the slow query, Review the migration, test-runner",
+   );
+   assert.match(html, /tool-row-agent is-delivered/);
+   assert.doesNotMatch(html, /tool-row-agent is-count/);
+   assert.doesNotMatch(html, /\d+ subagents?/);
+   assert.doesNotMatch(chipText(html) ?? "", /fixer/);
+   assert.doesNotMatch(html, /The full brief the model wrote/);
+   assert.doesNotMatch(html, /d-a|d-b|d-c/);
+   // Slot 4: the outcome stays.
+   assert.equal(stateBadge(html).label, "Results arrived");
+   // The tooltip agrees with the roster summary it sits beside.
+   assert.equal(
+     nameTitle(html),
+     "Results arrived · explorer, code-reviewer, test-runner, fixer",
+   );
+ });
+
+ test("a delivered wait names one delivered task out of a larger roster", async (t) => {
+   const ssr = await slotSsr(t);
+   const { ToolRow } = await ssr.load("/src/features/chat/transcript/ToolRow.tsx");
+   const { SubagentTitleProvider } = await ssr.load(
+     "/src/lib/subagent-title-provider.tsx",
+   );
+   const messages = [taskCall("d-a", "Find the slow query")];
+   const wait = deliveredWait({
+     includedDelegationIds: ["d-a"],
+     delegations: [
+       { delegationId: "d-a", agent: "explorer", status: "completed" },
+       { delegationId: "d-b", agent: "manifestor", status: "running" },
+       { delegationId: "d-c", agent: "inspector", status: "running" },
+     ],
+   });
+   const html = ssr.render(
+     createElement(
+       SubagentTitleProvider,
+       { messages },
+       createElement(ToolRow, { message: wait }),
+     ),
+   );
+
+   assert.equal(
+     html.match(/<span class="tool-row-name"[^>]*>([^<]*)<\/span>/)?.[1],
+     "Task wait",
+   );
+   assert.equal(summaryText(html), "explorer, manifestor, inspector");
+   assert.equal(chipText(html), "Find the slow query");
+   assert.match(html, /tool-row-agent is-delivered/);
+   assert.doesNotMatch(html, /tool-row-agent is-count/);
+   assert.equal(stateBadge(html).label, "Results arrived");
+   assert.equal(nameTitle(html), "Results arrived · explorer, manifestor, inspector");
+ });
+
+ test("a delivered wait lists each same-agent task instead of counting it", async (t) => {
+   const ssr = await slotSsr(t);
+   const { ToolRow } = await ssr.load("/src/features/chat/transcript/ToolRow.tsx");
+   const { SubagentTitleProvider } = await ssr.load(
+     "/src/lib/subagent-title-provider.tsx",
+   );
+   const messages = [
+     taskCall("d-a", "Alpha task", "inspector"),
+     taskCall("d-b", "Beta task", "inspector"),
+   ];
+   const wait = deliveredWait({
+     includedDelegationIds: ["d-a", "d-b"],
+     delegations: [
+       { delegationId: "d-a", agent: "inspector", status: "completed" },
+       { delegationId: "d-b", agent: "inspector", status: "completed" },
+     ],
+   });
+   const html = ssr.render(
+     createElement(
+       SubagentTitleProvider,
+       { messages },
+       createElement(ToolRow, { message: wait }),
+     ),
+   );
+
+   assert.equal(
+     html.match(/<span class="tool-row-name"[^>]*>([^<]*)<\/span>/)?.[1],
+     "Task wait",
+   );
+   // The roster still counts the repeated agent; the chip never merges tasks.
+   assert.equal(summaryText(html), "inspector ×2");
+   assert.equal(chipText(html), "Alpha task, Beta task");
+   assert.match(html, /tool-row-agent is-delivered/);
+   assert.doesNotMatch(html, /tool-row-agent is-count/);
+   assert.equal(stateBadge(html).label, "Results arrived");
+   assert.equal(nameTitle(html), "Results arrived · inspector ×2");
+ });
 
 test("the same delivered row reads the same in Chinese", async (t) => {
   const ssr = await slotSsr(t);
@@ -343,14 +432,17 @@ test("the same delivered row reads the same in Chinese", async (t) => {
       ),
     ),
   );
-  assert.equal(
-    html.match(/<span class="tool-row-name"[^>]*>([^<]*)<\/span>/)?.[1],
-    "等待任务",
-  );
-  assert.equal(summaryText(html), "找出慢查询, 检查这次迁移");
-  assert.equal(stateBadge(html).label, "结果已送达");
-  assert.doesNotMatch(html, /个 Subagent/);
-  assert.equal(nameTitle(html), "结果已送达 · 找出慢查询, 检查这次迁移");
+   assert.equal(
+     html.match(/<span class="tool-row-name"[^>]*>([^<]*)<\/span>/)?.[1],
+     "等待任务",
+   );
+   assert.equal(summaryText(html), "explorer, code-reviewer");
+   assert.equal(chipText(html), "找出慢查询, 检查这次迁移");
+   assert.match(html, /tool-row-agent is-delivered/);
+   assert.doesNotMatch(html, /tool-row-agent is-count/);
+   assert.equal(stateBadge(html).label, "结果已送达");
+   assert.doesNotMatch(html, /个 Subagent/);
+   assert.equal(nameTitle(html), "结果已送达 · explorer, code-reviewer");
 });
 
 test("a delivered wait without the delivered ids falls back to its settled roster", async (t) => {
@@ -360,47 +452,52 @@ test("a delivered wait without the delivered ids falls back to its settled roste
     "/src/lib/subagent-title-provider.tsx",
   );
   const messages = [taskCall("d-a", "Find the slow query")];
-  const render = (message) =>
-    ssr.render(
-      createElement(
-        SubagentTitleProvider,
-        { messages },
-        createElement(ToolRow, { message }),
-      ),
-    );
+   const render = (message) =>
+     ssr.render(
+       createElement(
+         SubagentTitleProvider,
+         { messages },
+         createElement(ToolRow, { message }),
+       ),
+     );
 
-  // A row persisted before the runtime recorded its delivered blocks: the
-  // settled members of its roster are the best evidence it still has, and a
-  // delegate that was still running was never a delivered result.
-  const legacy = render(
-    deliveredWait({
-      delegations: [
-        { delegationId: "d-a", agent: "explorer", status: "completed" },
-        { delegationId: "d-run", agent: "fixer", status: "running" },
-      ],
-    }),
-  );
-  assert.equal(summaryText(legacy), "Find the slow query");
-  assert.doesNotMatch(legacy, /fixer/);
-  assert.doesNotMatch(legacy, /tool-row-agent is-count/);
-  assert.equal(stateBadge(legacy).label, "Results arrived");
+   // A row persisted before the runtime recorded its delivered blocks: the
+   // settled members of its roster are the best evidence it still has, and a
+   // delegate that was still running was never a delivered result. The roster
+   // summary still names the whole roster; only the chip falls back.
+   const legacy = render(
+     deliveredWait({
+       delegations: [
+         { delegationId: "d-a", agent: "explorer", status: "completed" },
+         { delegationId: "d-run", agent: "fixer", status: "running" },
+       ],
+     }),
+   );
+   assert.equal(summaryText(legacy), "explorer, fixer");
+   assert.equal(chipText(legacy), "Find the slow query");
+   assert.doesNotMatch(chipText(legacy) ?? "", /fixer/);
+   assert.match(legacy, /tool-row-agent is-delivered/);
+   assert.doesNotMatch(legacy, /tool-row-agent is-count/);
+   assert.equal(stateBadge(legacy).label, "Results arrived");
 
-  // An explicit empty list says this body carried no block at all. It must not
-  // widen to the roster the call was issued with.
-  const empty = render(
-    deliveredWait({
-      includedDelegationIds: [],
-      delegations: [
-        { delegationId: "d-a", agent: "explorer", status: "completed" },
-      ],
-    }),
-  );
-  assert.equal(summaryText(empty), null);
-  assert.doesNotMatch(empty, /explorer/);
-  assert.equal(stateBadge(empty).label, "Results arrived");
+   // An explicit empty list says this body carried no block at all: the chip
+   // stays absent while the roster summary still names who was waited on.
+   const empty = render(
+     deliveredWait({
+       includedDelegationIds: [],
+       delegations: [
+         { delegationId: "d-a", agent: "explorer", status: "completed" },
+       ],
+     }),
+   );
+   assert.equal(summaryText(empty), "explorer");
+   assert.equal(chipText(empty), null);
+   assert.doesNotMatch(empty, /tool-row-agent is-delivered/);
+   assert.doesNotMatch(empty, /tool-row-agent is-count/);
+   assert.equal(stateBadge(empty).label, "Results arrived");
 
-  // Every other lifecycle state keeps the roster summary and its count: only a
-  // delivered wait names tasks instead.
+   // Every other lifecycle state keeps the roster summary and its count: only a
+   // delivered wait swaps the count chip for the delivered task titles.
   const progressed = render(
     taskWait({
       toolStatus: "success",

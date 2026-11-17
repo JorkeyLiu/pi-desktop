@@ -13744,18 +13744,21 @@ This test plan spec is accepted when:
   that starts two delegates (`explorer`, `fixer`) with `Task`, then calls
   `TaskList`, `TaskWait` and `TaskStop`.
 - **Steps**: 1) Start both delegates and inspect the collapsed `TaskList` row
-  while both are running. 2) Let `explorer` complete and `fixer` fail, then
-  inspect the `TaskWait` row's summary — the delivered tasks' own titles, with
-  no subagent count chip — its badge and its expanded body. 3) Start a
+ - **Steps**: 1) Start both delegates and inspect the collapsed `TaskList` row
+   while both are running. 2) Let `explorer` complete and `fixer` fail, then
+   inspect the `TaskWait` row's four slots — fixed name, full roster summary,
+   the delivered tasks' own titles in place of the subagent count chip — its
+   badge and its expanded body. 3) Start a
   third delegate reusing the `explorer` definition, call `TaskList`, and read
   the summary. 4) Stop a running delegate and inspect the `TaskStop` row.
   5) Confirm the three lifecycle rows added no card of their own and changed no
   existing card's identity. 6) Repeat in Chinese.
-- **Expected**: Every lifecycle row summarizes by agent name — never by its
-  `delegationIds` argument, and no bare UUID appears in a collapsed row. A
-  `TaskWait` that settles with results is the one exception: its summary is the
-  description of each task whose report that result body carried — one entry per
-  task, so two tasks of one agent are both named, and an untitled task falls back
+   `TaskWait` that settles with results is the one exception: it keeps the roster
+   summary and replaces only the count chip with the description of each task
+   whose report that result body carried — one entry per task, so two tasks of
+   one agent are both named, and an untitled task falls back to its agent name —
+   and that row carries a delivered-tasks chip instead of the subagent count
+   chip; a brief never reaches it. Every other lifecycle state keeps the roster summary. A
   to its agent name — and that row carries no subagent count chip; a brief never
   reaches it. Every other lifecycle state keeps the roster summary. A
   `TaskList` never blocks: called while delegates run, it returns the current
