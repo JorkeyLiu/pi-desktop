@@ -792,6 +792,17 @@ criterion-by-criterion report of what was met and the evidence observed.
 - Pi `thinking` blocks become `UiMessage.thinking` and
   `message_update.deltaThinking`. They never append to `content` or
   `deltaText`.
+- Both producers fold pi-ai `thinking_start` / `thinking_delta` / `thinking_end`
+  frames (one per content block, forwarded by pi-agent-core as `message_update`
+  carriers) into a shared per-bubble tracker. `thinking_start` reports
+  `thinkingStatus: "streaming"` even though its block is still empty;
+  `thinking_end` reports `"complete"` even when the cumulative thinking text
+  did not grow; a duplicate or stray end for a block that is not open is
+  ignored so it can never clear a newer block. Text and tool-call frames never
+  move the phase. A stream that settles without `thinking_end` completes the
+  phase at the terminal boundary (`message_end`, abort, error, run teardown);
+  a fresh bubble resets it. Real thinking deltas that arrive without typed
+  frames still report `streaming` for compatibility.
 - Append-only `message_update` events set `stream: "delta"` and carry only the
   new chunk. The runtime keeps the full `currentAssistant` in memory, coalesces
   deltas every 16ms, and flushes before tool/terminal/abort/error/retry

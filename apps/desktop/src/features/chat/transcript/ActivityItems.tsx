@@ -1,6 +1,7 @@
 import { memo, useMemo } from "react";
 import type { UiMessage } from "@pi-desktop/shared";
 import type { AssistantActivityItem } from "../../../lib/assistant-turns";
+import { isThinkingActive } from "../../../lib/turn-process";
 import { foldedWaitCheckpointGroups, isDelegationActivityItem, type SubagentOutcome, type SubagentTiming } from "../../../lib/subagent-topology";
 import { ThinkingRow } from "./shared";
 import { HostedSearchRow } from "./HostedSearchRow";
@@ -91,7 +92,7 @@ const ActivityItemBlock = memo(function ActivityItemBlock({
     return <ThinkingRow
       key={`thinking-${item.message.id}`}
       message={item.message}
-      streaming={isActive && item.message.status === "streaming"}
+      streaming={isThinkingActive(item.message, isActive)}
       autoOpen={live && item === lastItem}
       onUserInteraction={onUserInteraction}
     />;

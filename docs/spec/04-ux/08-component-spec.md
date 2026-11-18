@@ -945,6 +945,23 @@ watching, and the reader's collapse choice for that row survives later streaming
 updates. Compact keeps all tool/search payloads closed and suppresses reasoning
 text and excerpts; only its active thinking indicator remains.
 
+Parallel tool calls keep their announcement order from preparing through
+running to completion and across durable refreshes: a call announced second
+stays second even when it starts or finishes first. A durable page that
+persists calls in start or finish order never reorders rows the transcript
+already showed; durable values stay authoritative, only shared positions are
+preserved.
+
+The explicit thinking phase owns the active indicator. A row whose
+`thinkingStatus` is `complete` stays still even while its assistant message
+still streams — after a tool, after reply text, or with nothing following it
+at all — and a row whose phase is `streaming` breathes while the turn is
+active. A newer `thinking_start` breathes again after an earlier `complete`.
+Rows that predate the phase field (restored history, legacy frames) keep the
+documented fallback: a streaming, content-free row breathes. Delegate rows
+follow the same rule. Later transcript activity never stands in for the
+phase.
+
 Whole process and item are independent controls. Closing the process keeps
 descendant choices and reopening restores them; opening it never expands all
 children. User interaction with a child claims the process without toggling it,

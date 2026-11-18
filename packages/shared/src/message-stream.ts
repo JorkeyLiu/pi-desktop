@@ -38,6 +38,13 @@ export function streamingMessageIdentity(message: UiMessage): UiMessage {
     content: "",
     createdAt: message.createdAt,
     status: message.status,
+    // An explicit phase is load-bearing, never incidental: a thinking_end
+    // with no content delta still has to reach the renderer. Identity frames
+    // must carry it, with an explicit undefined check so no truthiness
+    // shortcut can swallow it.
+    ...(message.thinkingStatus !== undefined
+      ? { thinkingStatus: message.thinkingStatus }
+      : {}),
     ...(message.modelId ? { modelId: message.modelId } : {}),
     ...(message.providerId ? { providerId: message.providerId } : {}),
     ...(message.parentToolCallId
@@ -54,7 +61,11 @@ export function hasMessageUpdateDeltas(event: MessageUpdateEvent): boolean {
     event.deltaText !== undefined ||
     event.deltaThinking !== undefined ||
     event.resetText === true ||
-    event.resetThinking === true
+    event.resetThinking === true ||
+    // A phase change with no content delta is still append-only progress: it
+    // parks in the coalescer and slims to a delta frame instead of resending
+    // the cumulative row or being dropped as a no-op.
+    event.message.thinkingStatus !== undefined
   );
 }
 
@@ -110,9 +121,19 @@ export function mergeMessageUpdates(
     next.resetThinking,
     next.deltaThinking,
   );
+  // The later frame's explicit phase wins; when it carries none, the earlier
+  // explicit phase survives instead of being silently lost. Explicit
+  // undefined checks: a phase is never a falsy default.
+  const thinkingStatus =
+    next.message.thinkingStatus !== undefined
+      ? next.message.thinkingStatus
+      : previous.message.thinkingStatus;
   return {
     type: "message_update",
-    message: next.message,
+    message: {
+      ...next.message,
+      ...(thinkingStatus !== undefined ? { thinkingStatus } : {}),
+    },
     ...(previous.stream === "delta" || next.stream === "delta"
       ? { stream: "delta" as const }
       : {}),
@@ -159,6 +180,14 @@ export function applyMessageUpdate(
   else if (event.deltaText) content += event.deltaText;
   if (event.resetThinking) thinking = event.deltaThinking ?? "";
   else if (event.deltaThinking) thinking += event.deltaThinking;
+  // An explicit phase on the frame wins; otherwise the live row keeps its own
+  // phase (legacy frames without the field never clear it).
+  const thinkingStatus =
+    event.message.thinkingStatus !== undefined
+      ? event.message.thinkingStatus
+      : seed.id === event.message.id
+        ? seed.thinkingStatus
+        : undefined;
   return {
     ...seed,
     id: event.message.id,
@@ -167,6 +196,7 @@ export function applyMessageUpdate(
     status: event.message.status ?? seed.status,
     content,
     ...(thinking ? { thinking } : { thinking: undefined }),
+    ...(thinkingStatus !== undefined ? { thinkingStatus } : {}),
     ...(event.message.modelId ? { modelId: event.message.modelId } : {}),
     ...(event.message.providerId ? { providerId: event.message.providerId } : {}),
     ...(event.message.parentToolCallId

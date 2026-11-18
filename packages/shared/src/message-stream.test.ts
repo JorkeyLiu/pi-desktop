@@ -205,3 +205,91 @@ describe("deltaStreamPayloadFits", () => {
     ).toBe(false);
   });
 });
+
+describe("thinkingStatus transport", () => {
+  it("keeps an explicit thinking phase through identity, wire slimming, and apply", () => {
+    const live = assistant({ id: "m1", content: "", thinkingStatus: "streaming" });
+    const identity = streamingMessageIdentity(live);
+    expect(identity.thinkingStatus).toBe("streaming");
+    const wire = toWireMessageUpdate({ type: "message_update", message: live });
+    expect(wire.stream).toBe("delta");
+    expect(wire.message.content).toBe("");
+    expect(wire.message.thinkingStatus).toBe("streaming");
+    const applied = applyMessageUpdate(assistant({ id: "m1", content: "" }), wire);
+    expect(applied.thinkingStatus).toBe("streaming");
+    expect(applied.status).toBe("streaming");
+  });
+  it("transmits a phase change with no content delta", () => {
+    const end = assistant({ id: "m1", content: "", thinkingStatus: "complete" });
+    const wire = toWireMessageUpdate({ type: "message_update", message: end });
+    expect(wire.stream).toBe("delta");
+    expect(wire.message.thinkingStatus).toBe("complete");
+    expect(wire.deltaText).toBeUndefined();
+    expect(wire.deltaThinking).toBeUndefined();
+    const applied = applyMessageUpdate(
+      assistant({ id: "m1", content: "", thinkingStatus: "streaming" }),
+      wire,
+    );
+    expect(applied.thinkingStatus).toBe("complete");
+  });
+  it("lets an explicit complete survive later text deltas through merge and apply", () => {
+    const complete = streamingMessageIdentity(
+      assistant({ id: "m1", content: "", thinkingStatus: "complete" }),
+    );
+    const merged = mergeMessageUpdates(
+      { type: "message_update", stream: "delta", message: complete },
+      {
+        type: "message_update",
+        stream: "delta",
+        message: streamingMessageIdentity(assistant({ id: "m1", content: "" })),
+        deltaText: "hi",
+      },
+    );
+    expect(merged.message.thinkingStatus).toBe("complete");
+    expect(merged.deltaText).toBe("hi");
+    const applied = applyMessageUpdate(
+      assistant({ id: "m1", content: "", thinkingStatus: "streaming" }),
+      merged,
+    );
+    expect(applied.content).toBe("hi");
+    expect(applied.thinkingStatus).toBe("complete");
+  });
+  it("lets a newer streaming phase replace an older complete through merge", () => {
+    const merged = mergeMessageUpdates(
+      {
+        type: "message_update",
+        stream: "delta",
+        message: streamingMessageIdentity(
+          assistant({ id: "m1", content: "", thinkingStatus: "complete" }),
+        ),
+      },
+      {
+        type: "message_update",
+        stream: "delta",
+        message: streamingMessageIdentity(
+          assistant({ id: "m1", content: "", thinkingStatus: "streaming" }),
+        ),
+      },
+    );
+    expect(merged.message.thinkingStatus).toBe("streaming");
+  });
+  it("keeps the phase on snapshot replacement and never invents one", () => {
+    const snapshot = assistant({ id: "m1", content: "hi", thinkingStatus: "complete" });
+    expect(
+      applyMessageUpdate(assistant({ id: "m1", content: "" }), {
+        type: "message_update",
+        message: snapshot,
+      }).thinkingStatus,
+    ).toBe("complete");
+    const legacy = applyMessageUpdate(
+      assistant({ id: "m1", content: "", thinkingStatus: "streaming" }),
+      {
+        type: "message_update",
+        stream: "delta",
+        message: streamingMessageIdentity(assistant({ id: "m1", content: "" })),
+        deltaText: "hi",
+      },
+    );
+    expect(legacy.thinkingStatus).toBe("streaming");
+  });
+});

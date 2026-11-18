@@ -4948,7 +4948,14 @@ window; opening a normal panel afterward must still work.
   generated summary and never the newest line, so it holds still while later
   reasoning streams. Opening the row removes that line and shows the whole
   Markdown body, so the first sentence is not read twice; reasoning with no
-  visible text draws the label alone.
+  visible text draws the label alone. The explicit block-level thinking phase
+  owns the active indicator: a row whose phase is `complete` stays still even
+  while its assistant message still streams — after a tool, after reply text,
+  or with nothing following it — and a row whose phase is `streaming` breathes
+  while the turn is active; a newer `thinking_start` breathes again after an
+  earlier `complete`. Rows without the phase field (restored history, legacy
+  frames) keep the streaming-and-content-free fallback. Renderer position of
+  later activity never decides the phase.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md`,
   `04-ux/07-ui-design-system.md`, `04-ux/08-component-spec.md`, ADR 0018
 - **Acceptance**: C (chat and stream), Quality
@@ -7415,7 +7422,8 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   description is already parseable while it still streams, then the `ready`
   frame and `tool_start`. Open the child tab while the child runs and while it
   waits on a permission or a question. Re-run the preparing row and the
-  delegation card with `prefers-reduced-motion: reduce`.
+  delegation card with `prefers-reduced-motion: reduce`. Prepare two parallel
+  calls A then B; start and finish B first, then start and finish A.
 - **Expected**: The preparing row shows only its icon and localized name, both
   breathing with the 1.4s opacity loop while the model writes arguments; it
   shows no summary, chips, caret, spinner, status wording, preview, or raw
@@ -7449,7 +7457,10 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   phases and travel, the card's localized loading name and `aria-busy`, the
   in-place hand-off to the real card and then to the running card, and the
   reduced-motion suppression of both the breath and the shimmer with the
-  skeleton's geometry intact.
+  skeleton's geometry intact. The parallel pair reads A/B from preparing
+  through running to completion — B never moves ahead even though it starts
+  and finishes first — and a durable refresh that persists completion order
+  keeps the same A/B display.
 
 #### E2E-STREAM-long-turn-keeps-realtime
 

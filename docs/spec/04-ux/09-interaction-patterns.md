@@ -1018,6 +1018,13 @@ may be retained while exactly one workspace supplies the visible shell context.
   thinking item never causes a backward scan. Compact keeps every item payload
   closed and hides reasoning text/excerpts while retaining its active thinking
   indicator.
+ - Parallel tool calls keep announcement order from preparing through execution
+   to completion and across durable refreshes; a later-announced call never
+   moves ahead when it starts or finishes first.
+ - The explicit thinking phase shows the active indicator in a turn and
+   in a delegate run: `complete` stays still even with nothing after it,
+   `streaming` breathes while active, and a newer start breathes again. Rows
+   without the phase field keep the streaming-and-content-free fallback.
 - Activating the process or an item header toggles only that level. Closing a
   parent preserves item state, reopening restores it, and sibling rows remain
   independent. Opening a parent is never an expand-all action.

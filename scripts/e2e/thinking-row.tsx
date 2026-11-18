@@ -411,6 +411,88 @@ globalThis.thinkingRowProbe = async () => {
       useAppStore.setState({ settings: previousSettings ?? settings }),
     );
 
+    // ── 9. The explicit thinking phase decides the dot, not later activity ──
+    // A thought the runtime already completed stays still with nothing after
+    // it: the thinking_end alone stops the indicator while the message still
+    // streams. A newer thought with a streaming phase breathes again beside a
+    // running tool. Same production projection and production turn as above.
+    const settledTurnEntry = buildTranscriptEntries([
+      message("live-user", "Keep going.", { role: "user" }),
+      message("thought-1", "", {
+        thinking: "First thought takes shape.",
+        status: "streaming",
+        thinkingStatus: "complete",
+      }),
+    ]).entries.find((entry) => entry.kind === "assistant-turn");
+    if (!settledTurnEntry) throw new Error("the settled turn did not build");
+    const settledHost = mount(narrow, <AssistantTurn entry={settledTurnEntry as never} isActive />);
+    await settle();
+    const settledThinking = [...settledHost.querySelectorAll<HTMLElement>(".tool-row.thinking")];
+    check("the completed thought stays painted", settledThinking.length === 1, settledThinking.length);
+    check(
+      "a thinking_end with no later activity still stops the dot",
+      settledHost.querySelector(".tool-row.thinking .tool-row-name.running") === null,
+      settledHost.textContent?.slice(0, 120),
+    );
+    const liveTurnEntry = buildTranscriptEntries([
+      message("live-user", "Keep going.", { role: "user" }),
+      message("thought-1", "", {
+        thinking: "First thought takes shape.",
+        status: "streaming",
+        thinkingStatus: "complete",
+      }),
+      message("live-call", "", {
+        role: "tool",
+        toolName: "Bash",
+        toolCallId: "live-call",
+        toolStatus: "running",
+        status: "streaming",
+        toolArgs: { command: "sleep 30" },
+      }),
+      message("thought-2", "", {
+        thinking: "Second thought carries on.",
+        status: "streaming",
+        thinkingStatus: "streaming",
+      }),
+    ]).entries.find((entry) => entry.kind === "assistant-turn");
+    if (!liveTurnEntry) throw new Error("the live turn did not build");
+    const turnHost = mount(narrow, <AssistantTurn entry={liveTurnEntry as never} isActive />);
+    await settle();
+    const turnHeader = turnHost.querySelector<HTMLElement>(".turn-process > .tool-activity-header");
+    if (turnHeader && turnHeader.getAttribute("aria-expanded") !== "true") {
+      turnHeader.click();
+      await settle();
+    }
+    const turnThinking = [...turnHost.querySelectorAll<HTMLElement>(".tool-row.thinking")];
+    check("the active turn keeps both thoughts painted", turnThinking.length === 2, turnThinking.length);
+    const runningNames = [...turnHost.querySelectorAll<HTMLElement>(".tool-row.thinking .tool-row-name.running")];
+    check("the explicit complete beats the streaming status", runningNames.length === 1, runningNames.length);
+    const openThinking = turnHost.querySelector<HTMLElement>(".tool-row.thinking.open");
+    check(
+      "a newer streaming phase breathes again",
+      Boolean(openThinking && runningNames.length === 1 && openThinking.contains(runningNames[0])),
+      openThinking?.outerHTML?.slice(0, 200),
+    );
+    const stillThought = turnThinking.find((row) => row !== openThinking);
+    check(
+      "the completed thought goes still beside the running tool",
+      Boolean(stillThought) &&
+        stillThought!.querySelector(".tool-row-name.running") === null &&
+        stillThought!.querySelector(".thinking-preview")?.textContent === "First thought takes shape.",
+      stillThought?.textContent?.slice(0, 120),
+    );
+    flushSync(() =>
+      useAppStore.setState({
+        settings: { ...settings, thinkingDisplayMode: "compact" },
+      }),
+    );
+    await settle();
+    const compactThinking = [...turnHost.querySelectorAll<HTMLElement>(".tool-row.thinking.thinking-compact")];
+    check("compact keeps only the streaming phase breathing", compactThinking.length === 1, compactThinking.length);
+    flushSync(() =>
+      useAppStore.setState({ settings: previousSettings ?? settings }),
+    );
+    await settle();
     check(
       "the rendered components raised no errors",
       renderErrors.length === 0,

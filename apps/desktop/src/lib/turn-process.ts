@@ -8,7 +8,20 @@ export function resolveThinkingDisplayMode(value: unknown): ThinkingDisplayMode 
   return value === "compact" ? "compact" : "detailed";
 }
 
+/**
+ * Whether one thinking row owns the breathing dot.
+ *
+ * The block-level `thinkingStatus` the runtime emits is authoritative: an
+ * explicit `complete` stops the indicator even while the assistant message
+ * itself still streams (tools, text, or nothing following), and an explicit
+ * `streaming` breathes while the turn is active. Rows that predate the phase
+ * field — restored history, legacy frames — keep the documented fallback of
+ * the previous rule: a streaming, content-free row breathes. Renderer
+ * position (later tools, text, or thoughts) never decides the phase.
+ */
 export function isThinkingActive(message: UiMessage, active: boolean): boolean {
+  if (message.thinkingStatus === "complete") return false;
+  if (message.thinkingStatus === "streaming") return active;
   return active && message.status === "streaming" && !message.content.trim();
 }
 
@@ -24,6 +37,7 @@ export function isTurnThinking(
     isThinkingActive(latestActivity.message, active)
   );
 }
+
 
 export function processContainsMessage(
   parts: readonly AssistantTurnPart[],

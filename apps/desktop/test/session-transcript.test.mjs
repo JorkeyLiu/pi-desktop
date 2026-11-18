@@ -383,3 +383,63 @@ test("a durable-only new user row stays ahead of a live streaming tail (D317)", 
     ["keep", "prompt", "answer"],
   );
 });
+
+test("parallel calls keep announcement order when durable persists completion order", () => {
+  const user = at("user", "2026-09-05T00:00:00.000Z", { role: "user" });
+  const assistant = at("assistant", "2026-09-05T00:00:01.000Z", { status: "streaming" });
+  const call = (id, createdAt, status, toolStatus, content) =>
+    at(id, createdAt, {
+      role: "tool",
+      content,
+      status,
+      toolCallId: id,
+      toolName: "Bash",
+      toolStatus,
+    });
+  // B finished first, so the durable page persists completion order while the
+  // live transcript still shows announcement order. The refresh must not swap
+  // the rows the user already saw as A/B.
+  const durable = [
+    user,
+    assistant,
+    call("call-b", "2026-09-05T00:00:03.000Z", "complete", "success", "b"),
+    call("call-a", "2026-09-05T00:00:02.000Z", "complete", "success", "a"),
+  ];
+  const live = [
+    user,
+    assistant,
+    call("call-a", "2026-09-05T00:00:02.000Z", "complete", "success", "a"),
+    call("call-b", "2026-09-05T00:00:03.000Z", "complete", "success", "b"),
+  ];
+  assert.deepEqual(
+    mergeLiveSessionMessages(durable, live).map((row) => row.id),
+    ["user", "assistant", "call-a", "call-b"],
+  );
+});
+
+test("a partial durable refresh keeps the running call ahead of the completed one", () => {
+  const user = at("user", "2026-09-05T00:00:00.000Z", { role: "user" });
+  const assistant = at("assistant", "2026-09-05T00:00:01.000Z", { status: "streaming" });
+  const runningA = at("call-a", "2026-09-05T00:00:02.000Z", {
+    role: "tool",
+    content: "",
+    status: "streaming",
+    toolCallId: "call-a",
+    toolName: "Bash",
+    toolStatus: "running",
+  });
+  const doneB = at("call-b", "2026-09-05T00:00:03.000Z", {
+    role: "tool",
+    content: "b",
+    status: "complete",
+    toolCallId: "call-b",
+    toolName: "Bash",
+    toolStatus: "success",
+  });
+  const merged = mergeLiveSessionMessages([user, assistant, doneB], [user, assistant, runningA, doneB]);
+  assert.deepEqual(
+    merged.map((row) => row.id),
+    ["user", "assistant", "call-a", "call-b"],
+  );
+  assert.equal(merged.at(-1), doneB, "the durable value stays authoritative");
+});

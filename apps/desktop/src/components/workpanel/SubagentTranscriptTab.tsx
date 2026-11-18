@@ -1,4 +1,5 @@
 import { toolResultPayload } from "../../lib/tool-presentation";
+import { isThinkingActive } from "../../lib/turn-process";
 import { SubagentStopButton } from "../../features/chat/transcript/SubagentStopButton";
 import {
   collectDelegationStatuses,
@@ -774,7 +775,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                         <ThinkingRow
                           key={`thinking-${row.message.id}`}
                           message={row.message}
-                          streaming={isRunning && row.message.status === "streaming"}
+                          streaming={isThinkingActive(row.message, isRunning)}
                         />
                       ) : row.kind === "steering-user" ? (
                         <div
