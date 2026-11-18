@@ -29,6 +29,7 @@ import {
 import { buildTranscriptEntries } from "../../apps/desktop/src/lib/assistant-turns";
 import { SubagentTranscriptTab } from "../../apps/desktop/src/components/workpanel/SubagentTranscriptTab";
 import { useAppStore } from "../../apps/desktop/src/stores/app-store";
+import { mergeLiveSessionMessages } from "../../apps/desktop/src/lib/session-transcript";
 import type { AppState } from "../../apps/desktop/src/stores/app-state";
 import { createSessionRuntime } from "../../apps/desktop/src/stores/runtime/session-runtime";
 import { createEventsSlice } from "../../apps/desktop/src/stores/slices/events-slice";
@@ -675,6 +676,54 @@ async function preparationChecks(): Promise<{
     childRoot.unmount();
     childRoot.unmount();
     childHost.remove();
+     // ── Parallel calls keep announcement order through a durable refresh ──
+     // A then B are announced; B finishes first while A still runs, then a
+     // durable refresh persists B's completion without A's running state. The
+     // persisted values stay authoritative but the live announcement order owns
+     // the positions, so the painted rows still read A before B.
+     const parallel = createFixture([message("user-2", "user", "Check both.")]);
+     parallel.send({ type: "message_start", message: message("answer-2", "assistant", "", { status: "streaming" }) });
+     parallel.send({ type: "tool_prepare", toolCallId: "call-a", toolName: "Bash" });
+     parallel.send({ type: "tool_prepare", toolCallId: "call-b", toolName: "Bash" });
+     parallel.send({ type: "tool_start", toolCallId: "call-a", toolName: "Bash", args: { command: "sleep 30" } });
+     parallel.send({ type: "tool_end", toolCallId: "call-b", result: "b", isError: false });
+     const liveIds = parallel.state.messages.map((item) => item.id);
+     check(
+       liveIds.join(",") === "user-2,answer-2,call-a,call-b",
+       `B completing first moved it ahead of A (${liveIds.join(",")})`,
+     );
+     // The streaming assistant bubble is not persisted yet, so the durable
+     // page holds only what settled: the user request and B's completion.
+     // The live bubble still owns the running row's position and values.
+     const durable = [
+       message("user-2", "user", "Check both."),
+       ...parallel.state.messages.filter((item) => item.id === "call-b"),
+     ];
+     const refreshed = mergeLiveSessionMessages(durable, parallel.state.messages);
+     const refreshedIds = refreshed.map((item) => item.id);
+     check(
+       refreshedIds.join(",") === "user-2,answer-2,call-a,call-b",
+       `a durable refresh moved completed B ahead of running A (${refreshedIds.join(",")})`,
+     );
+     render({ ...parallel.state, messages: refreshed });
+     // The empty streaming assistant bubble paints no row of its own, so the
+     // DOM order omits the live-only answer while the message order keeps it.
+     const paintedIds = ids();
+     check(
+       paintedIds.join(",") === "user-2,call-a,call-b",
+       `the refreshed rows painted out of order (${paintedIds.join(",")})`,
+     );
+     check(
+       row("call-a")?.querySelector(".tool-row-state")?.textContent?.includes("Working") === true,
+       "the refreshed running row lost its running UI",
+     );
+     const refreshedDone = row("call-b");
+     check(
+       Boolean(refreshedDone) && !refreshedDone!.classList.contains("is-preparing"),
+       "the refreshed completed row lost its place or its presentation",
+     );
+     observations.parallelAB = { live: liveIds, refreshed: paintedIds };
+
     return { ok: failures.length === 0, failures, observations };
   } finally {
     try {

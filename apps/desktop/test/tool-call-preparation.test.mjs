@@ -405,3 +405,35 @@ test("the preparing row reaches the transcript at its chronological position", (
   assert.equal(firstTurn.parts[0].kind, "activity");
   assert.equal(firstTurn.parts[0].items[0].message.id, "call-1");
 });
+
+test("parallel calls keep announcement order when the second call finishes first", () => {
+  const h = harness([message("user-1", "user", "Run both.")]);
+  h.send(assistantStart(), { at: 1 });
+  h.send(prepared("call-a", "Bash"), { at: 2 });
+  h.send(prepared("call-b", "Bash"), { at: 3 });
+  assert.deepEqual(
+    h.rows().map((row) => row.id),
+    ["user-1", "answer", "call-a", "call-b"],
+  );
+  h.send(started("call-b", "Bash", { command: "b" }), { at: 4 });
+  assert.deepEqual(
+    h.rows().map((row) => row.id),
+    ["user-1", "answer", "call-a", "call-b"],
+    "starting B does not move it ahead of A",
+  );
+  h.send({ type: "tool_end", toolCallId: "call-b", result: "b", isError: false }, { at: 5 });
+  assert.deepEqual(
+    h.rows().map((row) => row.id),
+    ["user-1", "answer", "call-a", "call-b"],
+    "B completing first does not move it ahead of A",
+  );
+  assert.equal(h.rows()[3].toolStatus, "success");
+  h.send(started("call-a", "Bash", { command: "a" }), { at: 6 });
+  h.send({ type: "tool_end", toolCallId: "call-a", result: "a", isError: false }, { at: 7 });
+  assert.deepEqual(
+    h.rows().map((row) => row.id),
+    ["user-1", "answer", "call-a", "call-b"],
+    "A completing later keeps announcement order",
+  );
+  assert.equal(h.rows()[2].toolStatus, "success");
+});

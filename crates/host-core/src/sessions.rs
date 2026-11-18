@@ -4586,6 +4586,42 @@ mod tests {
         }
     }
 
+    /// The renderer-only thinking phase (`thinkingStatus`) is a transient
+    /// projection: the host must ignore it on ingress and never persist it.
+    /// `UiMessage` intentionally carries no such field, so serde drops the
+    /// key and `ui_to_record` — which rebuilds the record field by field —
+    /// cannot leak it into the transcript file, the index, or a migration.
+    #[test]
+    fn transient_thinking_status_is_ignored_and_never_persisted() {
+        let incoming = serde_json::json!({
+            "id": "m1",
+            "role": "assistant",
+            "content": "",
+            "createdAt": "2026-11-18T00:00:00.000Z",
+            "status": "streaming",
+            "thinking": "plan",
+            "thinkingStatus": "streaming",
+        });
+        let message: UiMessage = serde_json::from_value(incoming).unwrap();
+        assert_eq!(message.status.as_deref(), Some("streaming"));
+        assert_eq!(message.thinking.as_deref(), Some("plan"));
+
+        let (record, _) = ui_to_record(&message);
+        let stored = serde_json::to_value(&record).unwrap();
+        let serialized = serde_json::to_string(&stored).unwrap();
+        assert!(
+            !serialized.contains("thinkingStatus"),
+            "transient phase leaked into the record: {serialized}"
+        );
+        // The round trip also carries no phase back to the renderer: restored
+        // history uses the documented status fallback.
+        let restored = record_to_ui(record);
+        let restored_value = serde_json::to_value(&restored).unwrap();
+        assert!(!serde_json::to_string(&restored_value)
+            .unwrap()
+            .contains("thinkingStatus"));
+    }
+
     /// A failed transcript device flush must not leave an index row that makes
     /// replay of the same append a no-op.
     #[cfg(unix)]

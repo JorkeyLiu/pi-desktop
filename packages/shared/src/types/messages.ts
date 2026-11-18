@@ -5,6 +5,14 @@ import type { PlanHistoryEntry } from "./plans.js";
 
 export type UiMessageRole = "user" | "assistant" | "system" | "tool";
 
+/**
+ * Block-level thinking phase of one assistant message. `streaming` means a
+ * thinking block is still open; `complete` means every observed thinking block
+ * closed (or the stream terminated). Absent on rows that never carried the
+ * phase — history and legacy frames.
+ */
+export type ThinkingStatus = "streaming" | "complete";
+
 /** Minimal provenance for an accepted Live Voice work input. */
 export type VoiceOrigin = {
   callId: string;
@@ -110,6 +118,17 @@ export type UiMessage = {
   steering?: boolean;
   /** Model reasoning kept separate from the answer text. */
   thinking?: string;
+  /**
+   * Block-level thinking phase for one assistant message, independent of the
+   * message-level `status` (which stays `streaming` through thinking, tools,
+   * and text alike). The runtime sets `streaming` on `thinking_start` and
+   * `complete` on the matching `thinking_end` or at the terminal boundary
+   * when the end frame never arrives. The renderer stops the thinking
+   * indicator on an explicit `complete`, never on later transcript activity.
+   * Transient only: the host ignores it on ingress and never persists it, so
+   * restored history carries no phase and uses the documented status fallback.
+   */
+  thinkingStatus?: ThinkingStatus;
   createdAt: string;
   status?: "streaming" | "complete" | "error" | "aborted";
   /** Provider/model that produced this assistant turn, when known. */

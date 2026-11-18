@@ -246,6 +246,7 @@ import {
   type DelegationRowHost,
   type DelegationWaitHost,
 } from "./subagent-progress.js";
+import { createThinkingPhaseTracker } from "./thinking-phase.js";
 import {
   applyDelegationActivity,
   applyValidatedSteer,
@@ -1807,6 +1808,8 @@ export class DesktopAgentRuntime {
   private currentAssistant?: UiMessage;
   /** Calls whose identity settled while their arguments were still streaming. */
   private readonly toolArgsPreparation = createToolArgsPreparation();
+  /** Block-level thinking phase for the live assistant bubble. */
+  private readonly thinkingPhase = createThinkingPhaseTracker();
   private pluginTools: PluginToolDef[];
   private pluginSkills: PluginSkillDef[];
   private trustedExtensionSpecs: TrustedExtensionSpec[];
@@ -8345,12 +8348,16 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
                 ? retryingAssistant?.content ?? ""
                 : content.text;
           this.toolArgsPreparation.reset();
+          if (!retryingAssistant) this.thinkingPhase.reset();
           this.currentAssistant = {
             id: retryingAssistant?.id ?? randomUUID(),
             role: "assistant",
             content: initialText,
             ...(content.hasThinking && content.thinking
               ? { thinking: content.thinking }
+              : {}),
+            ...(retryingAssistant?.thinkingStatus !== undefined
+              ? { thinkingStatus: retryingAssistant.thinkingStatus }
               : {}),
             createdAt: nowIso(),
             status: "streaming",
@@ -8400,6 +8407,12 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           const thinkingDelta = content.hasThinking
             ? cumulativeDelta(previousThinking, content.thinking)
             : { delta: "", reset: false };
+          // Typed thinking frames drive the block-level phase; a real thinking
+          // delta without typed frames keeps the row breathing too. Later text
+          // or tool activity never moves the phase here.
+          const phaseChange =
+            this.thinkingPhase.observe(event.assistantMessageEvent) ??
+            (thinkingDelta.delta ? this.thinkingPhase.noteThinkingDelta() : undefined);
           this.currentAssistant = {
             ...this.currentAssistant,
             content: nextText,
@@ -8408,13 +8421,15 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
               : content.hasThinking
                 ? { thinking: undefined }
                 : {}),
+            ...(phaseChange !== undefined ? { thinkingStatus: phaseChange } : {}),
             status: "streaming",
           };
           if (
             textDelta.delta ||
             thinkingDelta.delta ||
             textDelta.reset ||
-            thinkingDelta.reset
+            thinkingDelta.reset ||
+            phaseChange !== undefined
           ) {
             this.emit({
               type: "message_update",
@@ -8723,6 +8738,9 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
                   thinking: nextThinking,
                 })
               : undefined;
+          // The stream settles here with or without a thinking_end frame:
+          // still-open thinking completes at this terminal boundary.
+          const terminalThinking = this.thinkingPhase.finish();
           this.currentAssistant = {
             ...this.currentAssistant,
             content: nextText,
@@ -8731,6 +8749,9 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
               : content.hasThinking
                 ? { thinking: undefined }
                 : {}),
+            ...(terminalThinking !== undefined
+              ? { thinkingStatus: terminalThinking }
+              : {}),
             status: failed || emptyResponse
               ? "error"
               : aborted
@@ -8977,9 +8998,15 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         status === "aborted"
           ? estimateVisibleResponseOutputTokens(this.currentAssistant)
           : undefined;
+      // The run died without message_end; the terminal boundary still ends
+      // active thinking so the bubble never sticks mid-stream.
+      const terminalThinking = this.thinkingPhase.finish();
       this.currentAssistant = {
         ...this.currentAssistant,
         status,
+        ...(terminalThinking !== undefined
+          ? { thinkingStatus: terminalThinking }
+          : {}),
         ...(responseDurationMs !== undefined ? { responseDurationMs } : {}),
         ...(responseDurationMs !== undefined
           ? { modelStreamDurationMs }

@@ -30,6 +30,7 @@ import {
   isToolPathSummary,
 } from "../../../lib/tool-display";
 import { ToolPathSummary } from "./ToolPathSummary";
+import { isThinkingActive } from "../../../lib/turn-process";
 import {
   buildToolPresentation,
   hasToolDetails,
@@ -783,7 +784,7 @@ function SubagentRunFollow({
                 <ThinkingRow
                   key={`thinking-${item.message.id}`}
                   message={item.message}
-                  streaming={item.message.status === "streaming"}
+                  streaming={isThinkingActive(item.message, true)}
                 />
               ) : item.kind === "steering-user" ? (
                 <div

@@ -162,3 +162,86 @@ test("settings writes validate the mode without changing other preferences", asy
     /thinkingDisplayMode is invalid/,
   );
 });
+
+const { isThinkingActive, isTurnThinking } = await import("../src/lib/turn-process.ts");
+
+// Authoritative phase contract: the block-level thinkingStatus the runtime
+// emits decides the indicator. The assistant message stays streaming through
+// thinking, tools, and text alike, so neither the message status nor later
+// transcript activity may stand in for the thinking phase.
+
+test("an explicit streaming phase breathes with no text and no later activity", () => {
+  const thinking = message("t1", "assistant", "", {
+    thinking: "Reasoning",
+    status: "streaming",
+    thinkingStatus: "streaming",
+  });
+  assert.equal(isThinkingActive(thinking, true), true);
+  assert.equal(isThinkingActive(thinking, false), false);
+  const entry = turn([message("u", "user", "Go"), thinking]);
+  assert.equal(isTurnThinking(entry.parts, true), true);
+});
+
+test("an explicit complete stops the indicator while the message still streams", () => {
+  const done = message("t1", "assistant", "", {
+    thinking: "Reasoning",
+    status: "streaming",
+    thinkingStatus: "complete",
+  });
+  assert.equal(isThinkingActive(done, true), false);
+  // Complete beats position: earlier, later, or tool-adjacent, the dot stays still.
+  const tool = message("call-1", "tool", "", {
+    toolName: "Bash",
+    toolCallId: "call-1",
+    toolStatus: "running",
+    status: "streaming",
+  });
+  const entry = turn([message("u", "user", "Go"), done, tool]);
+  const tail = entry.parts.at(-1);
+  assert.equal(tail.kind, "activity");
+  assert.deepEqual(
+    tail.items.map((item) => item.kind),
+    ["thinking", "tool"],
+  );
+  assert.equal(isThinkingActive(tail.items[0].message, true), false);
+  assert.equal(isTurnThinking(entry.parts, true), false);
+});
+
+test("a newer streaming phase breathes again after an earlier complete", () => {
+  const first = message("t1", "assistant", "", {
+    thinking: "First thought",
+    status: "streaming",
+    thinkingStatus: "complete",
+  });
+  const second = message("t2", "assistant", "", {
+    thinking: "Second thought",
+    status: "streaming",
+    thinkingStatus: "streaming",
+  });
+  assert.equal(isThinkingActive(first, true), false);
+  assert.equal(isThinkingActive(second, true), true);
+  const entry = turn([message("u", "user", "Go"), first, second]);
+  assert.equal(isTurnThinking(entry.parts, true), true);
+});
+
+test("legacy rows without a phase keep the documented status fallback", () => {
+  // Rows written before the phase field existed (or restored history) carry
+  // no thinkingStatus: a streaming, content-free row still breathes, and
+  // anything settled or answered stays still.
+  const live = message("t1", "assistant", "", {
+    thinking: "Reasoning",
+    status: "streaming",
+  });
+  assert.equal(isThinkingActive(live, true), true);
+  assert.equal(isThinkingActive(live, false), false);
+  const answered = message("t2", "assistant", "Partial answer", {
+    thinking: "Reasoning",
+    status: "streaming",
+  });
+  assert.equal(isThinkingActive(answered, true), false);
+  const settled = message("t3", "assistant", "", {
+    thinking: "Reasoning",
+    status: "complete",
+  });
+  assert.equal(isThinkingActive(settled, true), false);
+});

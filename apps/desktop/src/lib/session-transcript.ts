@@ -405,10 +405,47 @@ export function mergeLiveSessionMessages(
     push(message);
   }
 
+  // Parallel calls are announced in prepare order, but a durable refresh can
+  // persist them in start or finish order: B completing first lands B before
+  // A in the durable page while the transcript already showed A/B. Shared
+  // rows keep the order the transcript already showed (the live announcement
+  // order); rows the durable page alone owns stay on the durable skeleton,
+  // and durable values stay authoritative — only positions are preserved.
+  const liveOrder = new Map<string, number>();
+  for (const [index, message] of liveNormalized.entries()) {
+    if (!liveOrder.has(message.id)) liveOrder.set(message.id, index);
+  }
+  const sharedPositions: number[] = [];
+  for (const [index, message] of merged.entries()) {
+    if (durableIds.has(message.id) && liveOrder.has(message.id)) sharedPositions.push(index);
+  }
+  let sharedOrdered = true;
+  for (let step = 1; step < sharedPositions.length; step += 1) {
+    const previous = liveOrder.get(merged[sharedPositions[step - 1]].id) ?? 0;
+    const current = liveOrder.get(merged[sharedPositions[step]].id) ?? 0;
+    if (previous > current) {
+      sharedOrdered = false;
+      break;
+    }
+  }
+  let ordered = merged;
+  if (!sharedOrdered) {
+    const sorted = sharedPositions
+      .map((position) => merged[position])
+      .sort(
+        (left, right) => (liveOrder.get(left.id) ?? 0) - (liveOrder.get(right.id) ?? 0),
+      );
+    const next = merged.slice();
+    sharedPositions.forEach((position, step) => {
+      next[position] = sorted[step];
+    });
+    ordered = next;
+  }
+
   const unchanged =
-    merged.length === durable.length &&
-    merged.every((message, index) => message === durable[index]);
-  return unchanged ? durable : merged;
+    ordered.length === durable.length &&
+    ordered.every((message, index) => message === durable[index]);
+  return unchanged ? durable : ordered;
 }
 
 function isInFlightMessage(message: UiMessage): boolean {

@@ -55,6 +55,7 @@ import {
 } from "@pi-desktop/shared";
 import { classifyAgentError } from "./agent-errors.js";
 import { createToolArgsPreparation } from "./tool-args-preparation.js";
+import { createThinkingPhaseTracker } from "./thinking-phase.js";
 import { readLocalRequestErrorDetails } from "./local-request-errors.js";
 import { withProviderFetchFailure } from "./provider-transport-recovery.js";
 import {
@@ -331,6 +332,8 @@ export class SubagentRun {
   private currentAssistant?: UiMessage;
   /** Calls whose identity settled while their arguments were still streaming. */
   private readonly toolArgsPreparation = createToolArgsPreparation();
+  /** Block-level thinking phase for the live assistant bubble. */
+  private readonly thinkingPhase = createThinkingPhaseTracker();
   /**
    * Estimate-relevant size of the assistant row this run is streaming: the text
    * and thinking the transcript shows plus the names and arguments of the tool
@@ -1529,6 +1532,7 @@ export class SubagentRun {
           : undefined;
         this.streamStartedAt = Date.now();
         this.toolArgsPreparation.reset();
+        if (!retryingAssistant) this.thinkingPhase.reset();
         this.streamedRowChars = 0;
         this.streamedToolCallChars = 0;
         this.emittedRowChars = 0;
@@ -1565,10 +1569,17 @@ export class SubagentRun {
         const thinkingDelta = content.hasThinking
           ? cumulativeDelta(previousThinking, content.thinking)
           : { delta: "", reset: false };
+        // Typed thinking frames drive the block-level phase; a real thinking
+        // delta without typed frames keeps the row breathing too. Later text
+        // or tool activity never moves the phase here.
+        const phaseChange =
+          this.thinkingPhase.observe(event.assistantMessageEvent) ??
+          (thinkingDelta.delta ? this.thinkingPhase.noteThinkingDelta() : undefined);
         this.currentAssistant = {
           ...this.currentAssistant,
           content: nextText,
           ...(nextThinking ? { thinking: nextThinking } : {}),
+          ...(phaseChange !== undefined ? { thinkingStatus: phaseChange } : {}),
           status: "streaming",
         };
         this.streamedRowChars =
@@ -1584,7 +1595,7 @@ export class SubagentRun {
         const visibleDelta = Boolean(
           textDelta.delta || thinkingDelta.delta || textDelta.reset || thinkingDelta.reset,
         );
-        if (visibleDelta || growing) {
+        if (visibleDelta || growing || phaseChange !== undefined) {
           this.emittedRowChars = this.streamedRowChars;
           this.emit({
             type: "message_update",
@@ -1673,6 +1684,9 @@ export class SubagentRun {
           this.emit({ type: "message_update", message: this.currentAssistant });
           break;
         }
+        // The run settles here with or without a thinking_end frame:
+        // still-open thinking completes at this terminal boundary.
+        const terminalThinking = this.thinkingPhase.finish();
         const row: UiMessage = {
           ...(this.currentAssistant ?? this.newAssistantRow()),
           content: content.hasText
@@ -1680,6 +1694,9 @@ export class SubagentRun {
             : (this.currentAssistant?.content ?? ""),
           ...(content.hasThinking && content.thinking
             ? { thinking: content.thinking }
+            : {}),
+          ...(terminalThinking !== undefined
+            ? { thinkingStatus: terminalThinking }
             : {}),
           status: failed ? "error" : aborted ? "aborted" : "complete",
           ...(messageUsage ? { usage: messageUsage } : {}),
@@ -1744,7 +1761,14 @@ export class SubagentRun {
     if (this.currentAssistant.content.trim()) {
       this.lastReportText = this.currentAssistant.content;
     }
-    const row: UiMessage = { ...this.currentAssistant, status: "aborted" };
+    const terminalThinking = this.thinkingPhase.finish();
+    const row: UiMessage = {
+      ...this.currentAssistant,
+      status: "aborted",
+      ...(terminalThinking !== undefined
+        ? { thinkingStatus: terminalThinking }
+        : {}),
+    };
     this.currentAssistant = undefined;
     this.emit({ type: "message_end", message: row });
   }
