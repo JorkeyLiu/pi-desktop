@@ -1,7 +1,7 @@
 import { addUsage } from "@pi-desktop/shared";
 import type { MessageUsage, UiMessage } from "@pi-desktop/shared";
 import { contextOccupancyTokens } from "./context-usage";
-import { delegationLifecycleKind } from "./tool-display";
+import { delegationLifecycleKind, isDelegationStartTool } from "./tool-display";
 import { delegationIdForMessage } from "./subagent-panel";
 import { toolResultPayload } from "./tool-presentation";
 import {
@@ -48,6 +48,11 @@ import {
  *   target is in the chain, and backward only along the edge the link map kept
  *   for that target, so a fork reaches every continuation from the parent and a
  *   sibling that no later call resumed stays on itself;
+ * - only a `Task` call names a chain: it is the only row that seeds one, the
+ *   only row that can be a chain's latest segment, and the only row that
+ *   contributes an identity to the title and chain-key maps. An ordinary tool
+ *   row can still be a chain member through a resume edge that names it, and
+ *   still receives the chain's folded figures, but it opens no chain of its own;
  * - a resume that names nothing resolvable still records its edge, so the
  *   dangling name is a chain member — malformed history stays readable exactly
  *   as before, and a cycle terminates;
@@ -126,6 +131,8 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
   }
 
   const calls: CallRow[] = [];
+  /** The `Task` calls: the only rows that name, seed, extend or retarget a chain. */
+  const delegationCalls: CallRow[] = [];
   /** Every tool row with a call id, for the segment fold's fallback path. */
   const toolRows: UiMessage[] = [];
   /** First described call per call id, in session order. */
@@ -159,16 +166,21 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
       continue;
     }
     if (!callId) continue;
-    const target = resumeTarget(resumeArgOf(message), callByDelegationId);
-    if (target) forward.set(target, [...(forward.get(target) ?? EMPTY_LIST), callId]);
-    calls.push({
+    const delegationCall = isDelegationStartTool(message.toolName);
+    if (delegationCall) {
+      const target = resumeTarget(resumeArgOf(message), callByDelegationId);
+      if (target) forward.set(target, [...(forward.get(target) ?? EMPTY_LIST), callId]);
+    }
+    const row: CallRow = {
       callId,
       delegationId: delegationIdForMessage(message),
       order,
       snapshot: parseSubagentMetrics(toolResultPayload(message)),
       segment: isTaskSegmentTool(message),
       message,
-    });
+    };
+    calls.push(row);
+    if (delegationCall) delegationCalls.push(row);
   }
 
   const chains = new Map<string, ReadonlySet<string>>();
@@ -181,7 +193,7 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
     const cached = chains.get(target);
     if (cached) return cached;
     const seeds: string[] = [];
-    for (const call of calls) {
+    for (const call of delegationCalls) {
       if (call.delegationId === target || call.callId === target) seeds.push(call.callId);
     }
     const chain = new Set(seeds);
@@ -300,7 +312,7 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
     if (cached !== undefined) return cached;
     const chain = chainCallIds(target);
     let latest: CallRow | undefined;
-    for (const call of calls) {
+    for (const call of delegationCalls) {
       if (chain.has(call.callId)) latest = call;
     }
     const value = latest ? latest.callId : null;
@@ -320,13 +332,13 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
     return earliest?.title ?? "";
   };
 
-  const { titles, chainKeys } = batchMaps(calls, resumeLink);
+  const { titles, chainKeys } = batchMaps(delegationCalls, resumeLink);
 
   // One fold per chain, published under every call id the chain holds, so a card
   // of any segment reads the figures of the work it belongs to.
   const metricsByCallId = new Map<string, SubagentMetrics>();
   const seen = new Set<string>();
-  for (const call of calls) {
+  for (const call of delegationCalls) {
     if (seen.has(call.callId)) continue;
     const chain = chainCallIds(call.delegationId);
     if (chain.size === 0) continue;
@@ -342,7 +354,7 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
     latestDelegationId: (delegationId: string): string => {
       const latest = latestCallId(delegationId);
       if (!latest) return delegationId.trim() ? delegationId.trim() : delegationId;
-      for (const call of calls) {
+      for (const call of delegationCalls) {
         if (call.callId === latest) return call.delegationId;
       }
       return latest;

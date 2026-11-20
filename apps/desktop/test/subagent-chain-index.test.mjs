@@ -85,6 +85,16 @@ function lifecycleRow(id, toolName, entries, { stopped = false } = {}) {
   });
 }
 
+/** An ordinary workspace tool row: not a delegation, so it opens no chain. */
+const ordinaryRow = (id, callId, toolName = "Bash") =>
+  message(id, "tool", "", {
+    toolName,
+    toolCallId: callId,
+    toolStatus: "success",
+    toolArgs: { command: "printf done" },
+    toolResult: { stdout: "done", exitCode: 0 },
+  });
+
 /** A child assistant row: the occupancy/spend fallback for a legacy segment. */
 const childRow = (id, callId, usage) =>
   message(id, "assistant", `child output ${id}`, {
@@ -408,6 +418,138 @@ test("malformed history resolves the way the surfaces already resolve it", () =>
   assert.equal(api.title.subagentTaskTitle(plain, "d1"), "");
   assert.equal(api.keys.subagentChainKeysByIdentity(plain).size, 0);
   assert.equal(api.metricsProvider.subagentChainMetricsByIdentity(plain).size, 0);
+});
+
+/**
+ * A `Task` whose resume names an ordinary tool's call id, with that tool row
+ * later in the conversation. Only a `Task` call names a chain: the tool row is
+ * a member of the chain the resume edge points at, but it is never a segment,
+ * never the chain's latest segment, and never a chain of its own.
+ */
+test("a bare tool id never seeds or retargets a delegation chain", () => {
+  const messages = [
+    user("u1", "audit"),
+    taskCall("t1", "call-1", {
+      delegationId: "d1",
+      description: "Audit auth",
+      resume: "call-bash",
+      metrics: { turns: 2, toolCalls: 3, contextTokens: 900 },
+    }),
+    ordinaryRow("b1", "call-bash"),
+  ];
+
+  // The resume edge still makes the named call a member, forward and backward.
+  assert.deepEqual([...api.chain.subagentChainCallIds(messages, "d1")].sort(), [
+    "call-1",
+    "call-bash",
+  ]);
+  // The entry identity that names only the ordinary tool has no chain at all.
+  assert.equal(api.chain.subagentChainCallIds(messages, "call-bash").size, 0);
+  assert.equal(api.title.subagentTaskTitle(messages, "call-bash"), "");
+  assert.equal(api.metrics.aggregateChainMetricsFromMessages(messages, "call-bash"), null);
+
+  // The latest segment is the chain's last delegation call, never a later
+  // ordinary tool row that happens to share the chain.
+  assert.equal(api.chain.subagentChainLatestDelegationId(messages, "d1"), "d1");
+  assert.equal(api.chain.subagentChainLatestDelegationId(messages, "call-1"), "d1");
+  assert.equal(api.chain.subagentChainLatestDelegationId(messages, "call-bash"), "call-bash");
+
+  // The chain keeps its title and its own segment's figures.
+  assert.equal(api.title.subagentTaskTitle(messages, "d1"), "Audit auth");
+  assert.deepEqual(api.metrics.aggregateChainMetricsFromMessages(messages, "d1"), {
+    toolCalls: 3,
+    turns: 2,
+    contextTokens: 900,
+    contextProvenance: "snapshot",
+  });
+
+  // The batch maps name delegation identities only; an ordinary call id is not
+  // an identity any surface can ask a chain about.
+  assert.deepEqual([...api.title.subagentTaskTitles(messages).keys()], ["d1"]);
+  assert.deepEqual([...api.keys.subagentChainKeysByIdentity(messages).entries()].sort(), [
+    ["call-1", "call-bash"],
+    ["d1", "call-bash"],
+  ]);
+  // Folded figures stay published under every id the chain holds, as before.
+  assert.deepEqual([...api.metricsProvider.subagentChainMetricsByIdentity(messages).keys()].sort(), [
+    "call-1",
+    "call-bash",
+  ]);
+
+  // The dock lists the delegation, not the ordinary tool.
+  assert.deepEqual(
+    api.dock(messages).map((row) => [row.delegationId, row.title]),
+    [["d1", "Audit auth"]],
+  );
+});
+
+/**
+ * The ordinary shape: a chain whose segments sit between unrelated tool rows,
+ * with a lifecycle roster row and a child usage row in the same transcript.
+ * Every fallback row still reaches the fold, and no ordinary call id leaks into
+ * the identity maps.
+ */
+test("ordinary tool rows beside a chain keep every fallback figure", () => {
+  const messages = [
+    user("u1", "audit"),
+    taskCall("t1", "call-1", {
+      delegationId: "d1",
+      description: "Audit auth",
+      metrics: { turns: 4, toolCalls: 5, contextTokens: 1_000 },
+    }),
+    ordinaryRow("b1", "bash-1"),
+    childRow("a1", "call-1", { inputTokens: 10, outputTokens: 2 }),
+    lifecycleRow("w1", "TaskWait", [{ delegationId: "d1", turns: 4, toolCalls: 5, contextTokens: 1_200 }]),
+    taskCall("t2", "call-2", {
+      delegationId: "d2",
+      resume: "d1",
+      description: "Continuation",
+      metrics: { turns: 6, toolCalls: 7, contextTokens: 2_000 },
+    }),
+    ordinaryRow("b2", "bash-2", "Read"),
+    childRow("a2", "call-2", { inputTokens: 20, outputTokens: 3 }),
+  ];
+
+  for (const entry of ["d1", "call-1", "d2", "call-2"]) {
+    assert.deepEqual(
+      [...api.chain.subagentChainCallIds(messages, entry)].sort(),
+      ["call-1", "call-2"],
+      entry,
+    );
+    assert.equal(api.chain.subagentChainLatestDelegationId(messages, entry), "d2", entry);
+    assert.equal(api.title.subagentTaskTitle(messages, entry), "Audit auth", entry);
+  }
+  // A tool row is not an identity: no chain, no title, no figures.
+  for (const id of ["bash-1", "bash-2"]) {
+    assert.equal(api.chain.subagentChainCallIds(messages, id).size, 0, id);
+    assert.equal(api.chain.subagentChainLatestDelegationId(messages, id), id, id);
+    assert.equal(api.metrics.aggregateChainMetricsFromMessages(messages, id), null, id);
+  }
+
+  // The fold still reads both the snapshot and the lifecycle roster row.
+  const folded = api.metrics.aggregateChainMetricsFromMessages(messages, "d1");
+  assert.deepEqual([folded.turns, folded.toolCalls, folded.contextTokens], [10, 12, 2_000]);
+  assert.equal(folded.contextProvenance, "snapshot");
+
+  // Identity maps hold delegation identities and delegation call ids only.
+  assert.deepEqual([...api.title.subagentTaskTitles(messages).keys()].sort(), ["d1", "d2"]);
+  assert.deepEqual(
+    [...api.keys.subagentChainKeysByIdentity(messages).entries()].sort(),
+    [
+      ["call-1", "call-1"],
+      ["call-2", "call-1"],
+      ["d1", "call-1"],
+      ["d2", "call-1"],
+    ],
+  );
+  assert.deepEqual(
+    [...api.metricsProvider.subagentChainMetricsByIdentity(messages).keys()].sort(),
+    ["call-1", "call-2"],
+  );
+  assert.deepEqual(
+    api.dock(messages).map((row) => [row.delegationId, row.title, row.metrics?.turns]),
+    [["d2", "Audit auth", 10]],
+  );
 });
 
 test("the dock keeps one row per chain with the chain's title and figures", () => {
