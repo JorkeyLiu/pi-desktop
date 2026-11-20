@@ -882,6 +882,12 @@ The minimum selection is:
 - Composer slash-menu name/description layout: `pnpm build:js` followed by
   `pnpm test:e2e:composer-autocomplete`.
 - Transcript render boundaries and cross-part delegation display: `pnpm test:e2e:transcript`.
+- Renderer cost of long history with subagent chains, streaming deltas, and
+  dense tool lifecycle events: `pnpm test:e2e:transcript-event-workload`. An
+  offline synthetic replay through the production store slice, transcript, and
+  dock that reports deterministic call/row counts beside timings, so identical
+  replays can be compared before and after a change. It is a measurement, not a
+  pass/fail threshold.
 - Plan host/runtime behavior: `pnpm test:e2e` and `pnpm test:e2e:plan`.
 - Plan UI behavior: `pnpm test:e2e:plan` and `pnpm test:e2e:plan-ui`.
 - Host supervision, crash recovery, or restart behavior: `pnpm test:e2e` and

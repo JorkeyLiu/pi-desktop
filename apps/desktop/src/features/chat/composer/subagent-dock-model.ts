@@ -5,9 +5,10 @@ import {
   type TranscriptEntry,
 } from "../../../lib/assistant-turns";
 import { collectLiveDelegationEntries } from "../../../lib/live-delegation-entries";
-import { subagentChainLatestDelegationId } from "../../../lib/subagent-chain";
-import { aggregateChainMetricsFromMessages } from "../../../lib/subagent-metrics";
-import { subagentTaskTitle } from "../../../lib/subagent-title";
+import {
+  subagentTranscriptIndex,
+  type SubagentTranscriptIndex,
+} from "../../../lib/subagent-index";
 import {
   collectDelegationStatuses,
   collectDelegationTimings,
@@ -136,6 +137,9 @@ export function collectDockSubagents({
   if (!running) return [];
   const live = collectLiveDelegationEntries(history, tail, running);
   if (live.size === 0) return [];
+  // One analysis of this transcript answers every row's chain question: the
+  // live row set is what the dock iterates, not what it re-scans for.
+  const index = subagentTranscriptIndex(messages);
   const entries = tail ? [...history, tail] : [...history];
   const rows = new Map<string, DockSubagent>();
   for (const entry of entries) {
@@ -152,10 +156,7 @@ export function collectDockSubagents({
       const rawId = payload?.delegationId;
       const delegationId = typeof rawId === "string" ? rawId.trim() : "";
       // A resumed chain is one piece of work: only its latest run is live.
-      if (
-        delegationId &&
-        subagentChainLatestDelegationId(messages, delegationId) !== delegationId
-      ) {
+      if (delegationId && index.latestDelegationId(delegationId) !== delegationId) {
         continue;
       }
       if (subagentOutcome(message, statuses) !== "running") continue;
@@ -169,14 +170,11 @@ export function collectDockSubagents({
         timing?.startedAt ??
         timestamp(payload?.startedAt) ??
         callStartedAt(message);
-      const metrics = delegationId
-        ? dockSubagentMetrics(messages, delegationId)
-        : undefined;
+      const metrics = delegationId ? dockSubagentMetrics(index, delegationId) : undefined;
       rows.set(key, {
         key,
         ...(delegationId ? { delegationId } : {}),
-        title:
-          (delegationId ? subagentTaskTitle(messages, delegationId) : "") || role,
+        title: (delegationId ? index.title(delegationId) : "") || role,
         role,
         creating: delegationIsCreating(message),
         ...(startedAt !== undefined ? { startedAt } : {}),
@@ -191,18 +189,19 @@ export function collectDockSubagents({
  * The child's own reported counters for one live run, or `undefined` when the
  * runtime has not reported any yet.
  *
- * Read through the shared chain aggregation rather than off the parent
+ * Read through the conversation's chain fold rather than off the parent
  * transcript: a `Task` snapshot, a `TaskWait`/`TaskList` roster row, or the
  * child's own provider usage under its call id. Nothing here can see the
  * parent's context, and a creating row — no delegation id, no reports — gets
  * no numbers instead of an invented zero. The cost is bounded by the live row
- * set, which is the only set the dock ever asks about.
+ * set, which is the only set the dock ever asks about: the chain itself was
+ * resolved once for the whole transcript.
  */
 function dockSubagentMetrics(
-  messages: readonly UiMessage[],
+  index: SubagentTranscriptIndex,
   delegationId: string,
 ): DockSubagentMetrics | undefined {
-  const chain = aggregateChainMetricsFromMessages(messages, delegationId);
+  const chain = index.metrics(delegationId);
   if (!chain) return undefined;
   return {
     // A counter the chain never reported stays absent, so the row renders the

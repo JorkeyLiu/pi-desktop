@@ -1,7 +1,7 @@
 import type { UiMessage } from "@pi-desktop/shared";
-import { delegationChainMaps } from "./assistant-turns";
-import { isDelegationStartTool } from "./tool-display";
 import { delegationIdForMessage } from "./subagent-panel";
+import { subagentTranscriptIndex } from "./subagent-index";
+import { isDelegationStartTool } from "./tool-display";
 import { toolResultPayload } from "./tool-presentation";
 
 /**
@@ -10,56 +10,17 @@ import { toolResultPayload } from "./tool-presentation";
  * `Task(resume …)` that cites either a prior `delegationId` (the runtime's
  * shape) or a bare prior `toolCallId` (legible before any result lands)
  * closes the chain identically in both views.
+ *
+ * The component itself is resolved by the conversation's index
+ * (`subagent-transcript-index`), once per messages snapshot: a chain question
+ * about any identity is a lookup, not another walk of the transcript.
  */
-
-function resumeTarget(
-  resume: unknown,
-  callByDelegationId: ReadonlyMap<string, string>,
-): string | null {
-  if (typeof resume !== "string" || !resume.trim()) return null;
-  return callByDelegationId.get(resume.trim()) ?? resume.trim();
-}
-
-function resumeArgOf(message: UiMessage): unknown {
-  const args = message.toolArgs;
-  if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
-  return (args as { resume?: unknown }).resume;
-}
 
 /**
- * `childOf` plus the bare-call-id fallback: `delegationChainMaps` only links
- * the delegation-id form, so a resume that names the prior call id directly
- * needs its own edge to keep the chain connected before results land.
+ * The resume links of one conversation: the delegation-id map and the
+ * call-level link map the chain walk follows.
  */
-export function subagentResumeLinks(messages: readonly UiMessage[]): {
-  callByDelegationId: Map<string, string>;
-  resumeLink: Map<string, string>;
-} {
-  const { callByDelegationId, childOf } = delegationChainMaps(messages);
-  const resumeLink = new Map(childOf);
-  for (const message of messages) {
-    if (message.role !== "tool" || !isDelegationStartTool(message.toolName)) continue;
-    const target = resumeTarget(resumeArgOf(message), callByDelegationId);
-    if (!target || !message.toolCallId) continue;
-    if (!resumeLink.has(target)) resumeLink.set(target, message.toolCallId);
-  }
-  return { callByDelegationId, resumeLink };
-}
-
-function resumedCallIds(
-  messages: readonly UiMessage[],
-  priorCallIds: ReadonlySet<string>,
-  callByDelegationId: ReadonlyMap<string, string>,
-): Set<string> {
-  const next = new Set<string>();
-  for (const message of messages) {
-    if (message.role !== "tool" || !isDelegationStartTool(message.toolName)) continue;
-    const target = resumeTarget(resumeArgOf(message), callByDelegationId);
-    if (!target) continue;
-    if (priorCallIds.has(target) && message.toolCallId) next.add(message.toolCallId);
-  }
-  return next;
-}
+export { subagentResumeLinks } from "./subagent-task-call";
 
 /**
  * Every `Task` call id in the same resume chain as `delegationId`: the
@@ -76,40 +37,7 @@ export function subagentChainCallIds(
   messages: readonly UiMessage[],
   delegationId: string,
 ): Set<string> {
-  const target = delegationId.trim();
-  if (!target) return new Set();
-  const { callByDelegationId, resumeLink } = subagentResumeLinks(messages);
-  const calls = messages.filter(
-    (message) =>
-      message.role === "tool" &&
-      isDelegationStartTool(message.toolName) &&
-      Boolean(message.toolCallId),
-  );
-  let chain = new Set(
-    calls
-      .filter(
-        (call) =>
-          delegationIdForMessage(call) === target || call.toolCallId === target,
-      )
-      .map((call) => call.toolCallId as string),
-  );
-  for (;;) {
-    const forward = resumedCallIds(messages, chain, callByDelegationId);
-    const backward = new Set(
-      [...chain].flatMap((callId) =>
-        [...resumeLink.entries()]
-          .filter(([, next]) => next === callId)
-          .map(([priorId]) => priorId),
-      ),
-    );
-    const grown = new Set([
-      ...chain,
-      ...[...forward, ...backward].filter((id) => !chain.has(id)),
-    ]);
-    if (grown.size === chain.size) break;
-    chain = grown;
-  }
-  return chain;
+  return new Set(subagentTranscriptIndex(messages).chainCallIds(delegationId));
 }
 
 /**
@@ -121,39 +49,11 @@ export function subagentChainLatestDelegationId(
   messages: readonly UiMessage[],
   delegationId: string,
 ): string {
-  const target = delegationId.trim();
-  if (!target) return delegationId;
-  const last = subagentChainLatestCall(messages, target);
-  if (!last) return target;
-  return delegationIdForMessage(last);
+  return subagentTranscriptIndex(messages).latestDelegationId(delegationId);
 }
 
 /**
- * The chain's last `Task` call in session order. One resolution for the view,
- * the report owner, and the run's execution turn, so they can never disagree
- * about which segment of the chain is current.
- */
-function subagentChainLatestCall(
-  messages: readonly UiMessage[],
-  delegationId: string,
-): UiMessage | undefined {
-  const target = delegationId.trim();
-  if (!target) return undefined;
-  const chain = subagentChainCallIds(messages, target);
-  if (chain.size === 0) return undefined;
-  return messages
-    .filter(
-      (message) =>
-        message.role === "tool" &&
-        isDelegationStartTool(message.toolName) &&
-        message.toolCallId &&
-        chain.has(message.toolCallId),
-    )
-    .at(-1);
-}
-
-/**
- * The transcripts one conversation's delegation chains are resolved over.
+ * The transcript views one conversation's delegation chains are resolved over.
  *
  * A reader can be looking at a frozen range while the live tail keeps growing,
  * and the two hold different `Task` rows: the range carries calls the live
@@ -170,7 +70,7 @@ export function subagentChainCallIdsIn(
 ): Set<string> {
   const chain = new Set<string>();
   for (const messages of evidence) {
-    for (const callId of subagentChainCallIds(messages, delegationId)) {
+    for (const callId of subagentTranscriptIndex(messages).chainCallIds(delegationId)) {
       chain.add(callId);
     }
   }
@@ -228,7 +128,7 @@ export function subagentChainInstantiated(
 ): boolean {
   const target = delegationId.trim();
   if (!target) return false;
-  const chain = subagentChainCallIds(messages, target);
+  const chain = subagentTranscriptIndex(messages).chainCallIds(target);
   if (chain.size === 0) return false;
   return messages.some((message) => {
     if (
