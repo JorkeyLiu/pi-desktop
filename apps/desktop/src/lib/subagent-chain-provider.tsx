@@ -9,8 +9,7 @@ import type { UiMessage } from "@pi-desktop/shared";
 import { reuseReadonlyMap } from "./assistant-turns";
 import { reuseReferences } from "./transcript-summary";
 import { isDelegationStartTool } from "./tool-display";
-import { delegationIdForMessage } from "./subagent-panel";
-import { subagentResumeLinks } from "./subagent-chain";
+import { subagentTranscriptIndex } from "./subagent-index";
 
 /**
  * The canonical chain of every delegation identity in the conversation, keyed
@@ -24,44 +23,14 @@ import { subagentResumeLinks } from "./subagent-chain";
  * sides can agree on, the chain's earliest call id, so every card of an open
  * chain reports that panel as open and no other card does.
  *
- * `messages` only has to contain `Task` calls. Each resume edge points a
- * continuation at the call it continues, so a chain is the connected component
- * those edges form and walking to the earliest ancestor names it without
- * re-reading the conversation once per call.
+ * `messages` only has to contain `Task` calls. The conversation's index
+ * resolves each chain once, so the map is a lookup over an analysis that is
+ * already cached for this messages snapshot rather than another walk of it.
  */
 export function subagentChainKeysByIdentity(
   messages: readonly UiMessage[],
 ): ReadonlyMap<string, string> {
-  const calls = messages.filter(
-    (message) =>
-      message.role === "tool" &&
-      isDelegationStartTool(message.toolName) &&
-      Boolean(message.toolCallId),
-  );
-  const keys = new Map<string, string>();
-  if (calls.length === 0) return keys;
-  const { resumeLink } = subagentResumeLinks(calls);
-  const parentOf = new Map<string, string>();
-  for (const [prior, next] of resumeLink) {
-    if (!parentOf.has(next)) parentOf.set(next, prior);
-  }
-  const rootOf = (callId: string): string => {
-    let root = callId;
-    for (let guard = 0; guard <= calls.length; guard += 1) {
-      const parent = parentOf.get(root);
-      if (!parent || parent === root) break;
-      root = parent;
-    }
-    return root;
-  };
-  for (const call of calls) {
-    const callId = call.toolCallId as string;
-    const key = rootOf(callId);
-    keys.set(callId, key);
-    const delegationId = delegationIdForMessage(call);
-    if (!keys.has(delegationId)) keys.set(delegationId, key);
-  }
-  return keys;
+  return subagentTranscriptIndex(messages).chainKeys;
 }
 
 const SubagentChainKeyContext =
@@ -80,7 +49,7 @@ export function SubagentChainKeyProvider({
   children: ReactNode;
 }) {
   // Only a `Task` call can change a chain, so the projection keeps its identity
-  // across ordinary streaming updates and the fold below does not run per
+  // across ordinary streaming updates and the index below is not re-read per
   // token. The map itself is reused while its entries are unchanged, which
   // keeps every card's render boundary intact.
   const rawCalls = useMemo(
