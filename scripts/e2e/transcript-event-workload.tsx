@@ -66,7 +66,8 @@ function Surface() {
         messages={messages}
         isRunning={running}
       />
-      <SubagentDock sessionId={sessionId} />
+      {/* The composer mounts the dock only for a live session; mirror that. */}
+      {sessionId ? <SubagentDock sessionId={sessionId} /> : null}
     </div>
   );
 }
@@ -457,7 +458,7 @@ export async function transcriptEventWorkloadProbe() {
   let root: { unmount: () => void } | undefined;
   try {
     Date.now = () => wallTime;
-    api.getSession = async () => ({ session: undefined });
+    api.getSession = async () => ({ session: null });
     api.listSessions = async () => ({ sessions: [] });
     api.pendingPlans = async () => ({ plans: [], state: "inactive" });
     api.listQueuedPrompts = async () => ({ entries: [] });
@@ -466,6 +467,9 @@ export async function transcriptEventWorkloadProbe() {
       providers: [],
       providerModels: {},
       sessions: [],
+      // `AppState.settings` is optional, so this inherits whatever the store
+      // booted with and forces the two flags the replay depends on (the same
+      // seed shape `session-reading-position.tsx` uses).
       settings: { ...initial.settings, smoothStreaming: false, thinkingDisplayMode: "detailed" },
       notifications: [],
       workspace: undefined,
