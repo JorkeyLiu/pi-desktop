@@ -20,6 +20,7 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import i18n from "i18next";
 import { I18nextProvider } from "react-i18next";
+import type { AppSettings } from "@pi-desktop/shared";
 import { en } from "@pi-desktop/i18n";
 import { ChatTranscript } from "../../apps/desktop/src/features/chat/transcript/ChatTranscript";
 import { SubagentDock } from "../../apps/desktop/src/components/SubagentDock";
@@ -463,14 +464,22 @@ export async function transcriptEventWorkloadProbe() {
     api.pendingPlans = async () => ({ plans: [], state: "inactive" });
     api.listQueuedPrompts = async () => ({ entries: [] });
     api.composerCommands = async () => ({ commands: [] });
+    // The app's own defaults for the required fields, then whatever the store
+    // booted with, then the two preferences this replay depends on.
+    const seedSettings: AppSettings = {
+      theme: "system",
+      defaultMode: "agent",
+      enterToSend: true,
+      onboardingDismissed: true,
+      ...initial.settings,
+      smoothStreaming: false,
+      thinkingDisplayMode: "detailed",
+    };
     useAppStore.setState({
       providers: [],
       providerModels: {},
       sessions: [],
-      // `AppState.settings` is optional, so this inherits whatever the store
-      // booted with and forces the two flags the replay depends on (the same
-      // seed shape `session-reading-position.tsx` uses).
-      settings: { ...initial.settings, smoothStreaming: false, thinkingDisplayMode: "detailed" },
+      settings: seedSettings,
       notifications: [],
       workspace: undefined,
       selectingSessionId: undefined,
