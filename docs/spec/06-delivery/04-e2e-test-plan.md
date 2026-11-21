@@ -5188,8 +5188,13 @@ window; opening a normal panel afterward must still work.
   after `pnpm build:js`; that scenario also drives a real `MV` move, a real
   `REM` delete and a real stale-tag edit carrying a host warning, and asserts
   each expanded body is that record's diff plus, when the host reported one,
-  its warning — with no `Raw` disclosure, no field dump and no `ops` text. Full
-  UI journey Draft.
+  its warning — with no `Raw` disclosure, no field dump and no `ops` text. The
+  same scenario drives a real scratch edit and a real permission-authorized
+  external edit and asserts each shows its own `editDiff` +1/−1 counts, the
+  expanded one-add/one-delete diff, the localized root badge beside the counts,
+  no raw `ops` text, and no review rollback affordance — while the existing
+  workspace assertions (rollback, aggregate totals) keep passing unchanged.
+  Full UI journey Draft.
 
 #### E2E-058: Built-in interactive terminal is absent
 

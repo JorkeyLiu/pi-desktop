@@ -550,6 +550,7 @@ export const de = {
     "toolChipReplacements_other": "{{count}} Ersatz",
     "toolChipTruncated": "abgeschnitten",
     "toolChipScratch": "Scratch",
+    "toolChipExternal": "Extern",
     "toolChipLines": "{{range}}",
     "toolChipSize": "{{size}}",
     "toolRead": "Lesen",

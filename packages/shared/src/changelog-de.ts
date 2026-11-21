@@ -32,6 +32,7 @@ export const deEntries: ChangelogEntry[] = [
       "Ein Bericht eines Subagenten gilt erst als zugestellt, wenn er tatsächlich im Gespräch des Hauptagenten ankommt: Wird die Übergabe vorher abgelehnt oder ersetzt, wartet der Bericht weiter, kommt bei der nächsten Wartezeit oder Fortsetzung an und wird nie zweimal gesendet.",
       "Der eigene Kontext-Handoff eines Subagenten und ein Nachtrag, den Sie ihm senden, nehmen jetzt Text beliebiger Länge an: lange Fortsetzungen erreichen den Delegierten vollständig, statt an einer festen Zeichenzahl abgelehnt zu werden.",
       "Die stdio-Ausgabe von Plugin- und MCP-Servern wird jetzt Rahmen für Rahmen in den tatsächlich übertragenen UTF-8-Bytes gemessen: Ein Rahmen mit mehrbytigem Text zählt die Bytes, die er wirklich hat, und mehrere kleine Rahmen, die in einem Lesevorgang ankommen, werden einzeln gemessen, statt ihre Größen zu addieren.",
+      "Bearbeitete Dateien zeigen überall denselben Zeilendiff: im Projekt, in temporären Kopien und in freigegebenen externen Ordnern, jeweils mit eigener Ortsmarkierung.",
     ],
   },
   {

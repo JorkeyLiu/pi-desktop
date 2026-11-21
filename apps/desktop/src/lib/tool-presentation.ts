@@ -7,7 +7,7 @@ import {
   isSubagentHandoffTool,
   type ToolAction,
 } from "./tool-display";
-import { reviewChangeFromMessage } from "./workspace-review";
+import { editDiffFromMessage, reviewChangeFromMessage } from "./workspace-review";
 import { isWithinHighlightLimits } from "./render-content-limits";
 
 /*
@@ -30,8 +30,8 @@ const MAX_LIST_ITEMS = 200;
 const DIFF_CONTEXT_LINES = 2;
 /** Longer single-line strings become their own block instead of a field row. */
 const MAX_FIELD_VALUE = 120;
-/** Internal review snapshots are rendered by ReviewChangeCard, not as fields. */
-const HIDDEN_KEYS = new Set(["review"]);
+/** Internal review snapshots and per-call edit previews render as diffs, not fields. */
+const HIDDEN_KEYS = new Set(["review", "editDiff"]);
 
 export type ToolPresentationMessage = {
   role?: string;
@@ -54,7 +54,7 @@ export type ToolChip =
   | { role: "exit" | "matches" | "files" | "replacements"; count: number }
   /** AskTool progress: answered out of every question asked; a skip is not answered. */
   | { role: "answered"; answered: number; total: number }
-  | { role: "truncated" | "scratch" }
+  | { role: "truncated" | "scratch" | "external" }
   | { role: "lines"; text: string }
   | { role: "size"; text: string };
 
@@ -1025,6 +1025,7 @@ export function toolResultChips(message: ToolPresentationMessage): ToolChip[] {
   }
   if (details.truncated === true) chips.push({ role: "truncated" });
   if (details.root === "scratch") chips.push({ role: "scratch" });
+  if (details.root === "external") chips.push({ role: "external" });
   return chips;
 }
 
@@ -1115,10 +1116,12 @@ function resultBlocks(
     }
     case "edit": {
       const ops = stringAt(args, "ops");
-      // Workspace edits already own a ReviewChangeCard with the real diff;
-      // only scratch edits and imported sessions need the model's stated ops.
+      // An edit with line evidence owns its diff: a durable workspace review
+      // or the per-call preview scratch and approved external edits carry.
+      // Only edits without either need the model's stated ops.
       const reviewed =
-        reviewChangeFromMessage(message as unknown as UiMessage) !== null;
+        reviewChangeFromMessage(message as unknown as UiMessage) !== null ||
+        editDiffFromMessage(message as unknown as UiMessage) !== null;
       if (ops !== null && !reviewed) {
         blocks.push(codeBlock("input", ops));
       }
@@ -1128,11 +1131,11 @@ function resultBlocks(
           blocks.push({ kind: "note", role: "notice", text: warning });
         }
       }
-      // The mutation mapping has said its whole say: a reviewed change is the
-      // diff the row hosts, a scratch edit is its ops. The record's own
-      // `path`/`root`/`tag`/`deleted`/`ops` fields restate that at lower
-      // fidelity, so an empty body here is an answer rather than a payload the
-      // generic fallback still has to render (D226).
+      // The mutation mapping has said its whole say: an evidenced change is
+      // the diff the row hosts, an unevidenced edit is its ops. The record's
+      // own `path`/`root`/`tag`/`deleted`/`ops` fields restate that at lower
+      // fidelity, so an empty body here is an answer rather than a payload
+      // the generic fallback still has to render (D226).
       mapped = reviewed || ops !== null || resultFailed(message);
       break;
     }
@@ -1485,12 +1488,13 @@ export function buildToolPresentation(
     action === "run" &&
     options.hideSummaryArg === true &&
     getToolSummaryKey(message.toolName, args) !== null;
-  // A workspace mutation's record already states the file, the operation and
-  // the change; `path`/`tag`/`ops` are how the change was requested, not what
-  // it did, so the body must not print them beside the diff.
+  // A mutation's evidence already states the file, the operation and the
+  // change; `path`/`tag`/`ops` are how the change was requested, not what it
+  // did, so the body must not print them beside the diff.
   const reviewedEdit =
     action === "edit" &&
-    reviewChangeFromMessage(message as unknown as UiMessage) !== null;
+    (reviewChangeFromMessage(message as unknown as UiMessage) !== null ||
+      editDiffFromMessage(message as unknown as UiMessage) !== null);
   const wantArgs =
     action !== "delegate" &&
     !reviewedEdit &&

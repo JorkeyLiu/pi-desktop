@@ -304,8 +304,37 @@ type ReviewChange = {
   `Delete`; the host and the renderer still read those spellings, so an
   existing conversation keeps its counts and its diff, while a value outside
   the vocabulary is refused instead of displayed.
-- Scratch-root, failed, denied, and unresolvable writes have no `review`
-  record. Binary or oversized content may omit hunks and be non-reversible.
+ - Scratch-root, failed, denied, and unresolvable writes have no `review`
+   record. Binary or oversized content may omit hunks and be non-reversible.
+ - Every successful `Edit` — workspace, scratch, or permission-authorized
+   external — also carries a per-call preview that is independent of Git and
+   of the durable record above:
+
+ ```ts
+ type EditDiffPreview = {
+   version: 1;
+   path: string;
+   root: "workspace" | "scratch" | "external";
+   operation: "edit";
+   status: "modified" | "deleted" | "moved";
+   additions?: number;
+   deletions?: number;
+   hunks: DiffHunk[];
+   binary?: boolean;
+   truncated?: boolean;
+   reason?: ReviewDiffReason;
+ };
+ ```
+
+ - The preview is computed from the same bytes the call operated on, with the
+   same bounded differ and the same size/binary/truncation limits, so its
+   counts are the call's actual +/− and never inferred from the `ops` text. A
+   move carries no line change of its own: the path moved, so the content diff
+   is empty rather than a deletion plus an addition. Counts are absent — never
+   zero — when the change could not be counted.
+ - The preview confers no snapshot, no identity, and no rollback; it never
+   enters the session's review aggregates. Failed, denied, and no-change edits
+   carry no preview, so nothing fabricated is ever displayed.
 - Rollback is host-owned and hash-guarded. It restores the captured previous
   bytes, or removes a newly-created file, only when the current content still
   equals the post-tool hash. A later edit returns `conflict` without touching

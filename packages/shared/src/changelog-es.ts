@@ -32,6 +32,7 @@ export const esEntries: ChangelogEntry[] = [
       "El informe de un subagente solo cuenta como entregado cuando llega realmente a la conversación del agente principal: si la entrega se rechaza o se sustituye antes, el informe sigue esperando, llega en la siguiente espera o reanudación y nunca se envía dos veces.",
       "El traspaso de contexto de un subagente y el seguimiento que le envías aceptan ahora texto de cualquier longitud: las continuaciones largas llegan íntegras al delegado en lugar de rechazarse por un límite fijo de caracteres.",
       "La salida stdio de plugins y servidores MCP ahora se mide trama a trama en los bytes UTF-8 que cada trama transporta realmente: una trama con texto multibyte cuenta los bytes que de verdad tiene, y varias tramas pequeñas que llegan en una sola lectura se miden por separado en lugar de sumar sus tamaños.",
+      "Los archivos editados muestran la misma diferencia por líneas en el proyecto, en copias temporales y en carpetas externas aprobadas, cada uno con su insignia de ubicación.",
     ],
   },
   {

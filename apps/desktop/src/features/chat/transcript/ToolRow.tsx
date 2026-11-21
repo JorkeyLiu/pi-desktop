@@ -60,8 +60,12 @@ import { Markdown } from "../../../components/Markdown";
 import {
   ReviewChangeBody,
   ReviewChangeCounts,
+  ReviewDiffView,
 } from "../../../components/ReviewChangeCard";
-import { reviewChangeFromMessage } from "../../../lib/workspace-review";
+import {
+  editDiffFromMessage,
+  reviewChangeFromMessage,
+} from "../../../lib/workspace-review";
 import { ToolChips, ToolDetailBlocks } from "../../../components/ToolDetails";
 import {
   IconArrowDown,
@@ -259,10 +263,14 @@ function HostToolRow({
   // only what the row prints omits its middle.
   const summaryIsPath = isToolPathSummary(message.toolName, message.toolArgs);
   const summaryIsCode = getToolSummaryKey(message.toolName, message.toolArgs) === "command";
-  // A workspace mutation carries its own durable review record (D192): the row
-  // ends with its +a/−d and hosts the diff, so the transcript never grows a
-  // second collapsed row naming the same file.
+  // A mutation carries its own evidence (D192): a durable workspace review
+  // record, or the per-call preview scratch and approved external edits
+  // carry. The row ends with its +a/−d and hosts the diff, so the transcript
+  // never grows a second collapsed row naming the same file. Rollback stays
+  // owned by the durable workspace record; the preview never confers it.
   const review = reviewChangeFromMessage(message);
+  const editPreview = editDiffFromMessage(message);
+  const evidence = review ?? editPreview;
   const previewTarget = PREVIEWABLE_ACTIONS.has(action)
     ? getToolPreviewTarget(message.toolArgs, root)
     : null;
@@ -271,7 +279,11 @@ function HostToolRow({
   // A delegation is always expandable: its brief, report and the delegate's
   // own rows all live in the body.
   const hasDetails =
-    !preparing && (hasToolDetails(message) || Boolean(delegate) || Boolean(review));
+    !preparing &&
+    (hasToolDetails(message) ||
+      Boolean(delegate) ||
+      Boolean(review) ||
+      Boolean(editPreview));
   const chips = toolResultChips(message);
   // A lifecycle row (ADR 0089) is about subagents, so it is presented as one:
   // the agent names it reports on replace the bare delegation ids it was
@@ -534,7 +546,7 @@ function HostToolRow({
               </span>
             ) : null}
             <ToolChips chips={chips} />
-            {review ? <ReviewChangeCounts change={review} /> : null}
+            {evidence ? <ReviewChangeCounts change={evidence} /> : null}
              {deliveredRoster ? (
                deliveredSummary ? (
                  <span className="tool-row-lifecycle">
@@ -570,7 +582,7 @@ function HostToolRow({
           {summary}
         </span>
       ) : null}
-      {open && (Boolean(blocks && blocks.length > 0) || Boolean(review)) ? (
+      {open && (Boolean(blocks && blocks.length > 0) || Boolean(evidence)) ? (
         <div className="tool-row-body" id={detailsId} ref={disclosure.bodyRef} {...disclosure.bodyEvents}>
           <DisclosureCollapseRail
             label={t("chat.collapseToolOutput")}
@@ -582,6 +594,15 @@ function HostToolRow({
           {review ? (
             <div className="tool-row-review">
               <ReviewChangeBody message={message} />
+            </div>
+          ) : editPreview ? (
+            <div className="tool-row-review">
+              <ReviewDiffView
+                hunks={editPreview.hunks}
+                binary={editPreview.binary}
+                truncated={editPreview.truncated}
+                reason={editPreview.reason}
+              />
             </div>
           ) : null}
         </div>

@@ -1,5 +1,7 @@
 import type {
   DiffHunk,
+  EditDiffPreview,
+  EditDiffStatus,
   ReviewChange,
   ReviewChangeState,
   ReviewChangeStatus,
@@ -198,6 +200,67 @@ export function reviewChangesFromMessages(
     const change = reviewChangeFromMessage(message);
     return change ? [{ message, change }] : [];
   });
+}
+
+const EDIT_DIFF_ROOTS = new Set<EditDiffPreview["root"]>([
+  "workspace",
+  "scratch",
+  "external",
+]);
+const EDIT_DIFF_STATUSES = new Set<EditDiffStatus>([
+  "modified",
+  "deleted",
+  "moved",
+]);
+
+/**
+ * Read the per-call diff preview one successful `Edit` carries in its own
+ * result. This is the uniform evidence for workspace, scratch, and
+ * explicitly approved external edits; it is not a durable review record and
+ * never confers rollback. Callers fall back to `reviewChangeFromMessage` for
+ * messages written before the preview existed.
+ *
+ * The counts are `null` when the host could not count the change, so callers
+ * never read an unknown count as zero. Anything malformed reads as absent so
+ * no fake diff is ever rendered.
+ */
+export function editDiffFromMessage(message: UiMessage): EditDiffPreview | null {
+  if (message.role !== "tool" || message.toolStatus !== "success") {
+    return null;
+  }
+  if (message.toolName !== "Edit") return null;
+  const details = toolResultDetails(message);
+  const preview = recordValue(details?.editDiff);
+  if (!preview || preview.version !== 1) return null;
+  const path = nonEmptyString(preview.path);
+  const root = preview.root;
+  const status = preview.status;
+  const additions = nonNegativeInteger(preview.additions);
+  const deletions = nonNegativeInteger(preview.deletions);
+  if (
+    !path ||
+    typeof root !== "string" ||
+    !EDIT_DIFF_ROOTS.has(root as EditDiffPreview["root"]) ||
+    preview.operation !== "edit" ||
+    typeof status !== "string" ||
+    !EDIT_DIFF_STATUSES.has(status as EditDiffStatus)
+  ) {
+    return null;
+  }
+  const reason = parseReason(preview.reason);
+  return {
+    version: 1,
+    path,
+    root: root as EditDiffPreview["root"],
+    operation: "edit",
+    status: status as EditDiffStatus,
+    ...(additions === null ? {} : { additions }),
+    ...(deletions === null ? {} : { deletions }),
+    hunks: parseHunks(preview.hunks),
+    ...(preview.binary === true ? { binary: true } : {}),
+    ...(preview.truncated === true ? { truncated: true } : {}),
+    ...(reason ? { reason } : {}),
+  };
 }
 
 /** One file's net change as the host reported it. */

@@ -57,6 +57,43 @@ export type ReviewChange = {
   reason?: ReviewDiffReason;
   reversible: boolean;
 };
+/**
+ * The `Edit` tool this preview was produced for. Only `Edit` carries a
+ * preview; `Write` keeps its existing presentation.
+ */
+export type EditDiffOperation = "edit";
+
+/**
+ * What one successful `Edit` did to the file's bytes. A move carries no line
+ * change of its own: the path moved, so the content diff is empty rather
+ * than a deletion plus an addition.
+ */
+export type EditDiffStatus = "modified" | "deleted" | "moved";
+
+/**
+ * The per-call diff preview one successful `Edit` carries in its own result,
+ * on workspace, scratch, and explicitly approved external paths alike.
+ * Unlike `ReviewChange` this is not durable: it holds no snapshot identity,
+ * no rollback state, and no reversible flag, so a scratch or external edit
+ * gets the same line evidence as a workspace edit without review snapshots
+ * or aggregate/revert capabilities.
+ *
+ * `additions` / `deletions` are absent when the change could not be counted;
+ * an unknown count is never reported as zero.
+ */
+export type EditDiffPreview = {
+  version: 1;
+  path: string;
+  root: "workspace" | "scratch" | "external";
+  operation: EditDiffOperation;
+  status: EditDiffStatus;
+  additions?: number;
+  deletions?: number;
+  hunks: DiffHunk[];
+  binary?: boolean;
+  truncated?: boolean;
+  reason?: ReviewDiffReason;
+};
 
 /**
  * One file's net change: the bytes the conversation first recorded for it,

@@ -33,6 +33,10 @@ type ToolReviewPayloads = {
   moved: HostContent;
   /** A real `Edit` that deleted the file (`REM`). */
   removed: HostContent;
+  /** A real scratch `Edit`: the per-call preview, no durable record. */
+  scratchEdit: HostContent;
+  /** A real external `Edit`: the per-call preview, no durable record. */
+  externalEdit: HostContent;
 };
 
 const createdAt = "2026-10-18T00:00:00.000Z";
@@ -257,6 +261,77 @@ globalThis.toolReviewProbe = async (payloads: ToolReviewPayloads) => {
         "expanding the real Edit row shows its one-line diff",
         editAdds === 1 && editDels === 1,
         { editAdds, editDels },
+      );
+    }
+    // ── 1b. Scratch and external edits carry the same per-call diff ──
+    // No durable record exists for these roots, so the row reads the
+    // preview: the same +a/−d and expanded hunks, the root's own badge, and
+    // no rollback handle.
+    const rootBadgedRows: Array<{
+      id: string;
+      label: string;
+      content: HostContent;
+      badge: string;
+    }> = [
+      {
+        id: "edit-scratch",
+        label: "scratch",
+        content: payloads.scratchEdit,
+        badge: "scratch",
+      },
+      {
+        id: "edit-external",
+        label: "external",
+        content: payloads.externalEdit,
+        badge: "external",
+      },
+    ];
+    for (const entry of rootBadgedRows) {
+      const host = mount(
+        column,
+        <ToolRow message={toolMessageFromContent(entry.id, "Edit", entry.content)} />,
+      );
+      await settle();
+      const counts = countsText(host);
+      check(
+        `the real ${entry.label} Edit row states +a and −d`,
+        counts.includes("+1") && counts.includes("−1"),
+        counts,
+      );
+      const chips = [...host.querySelectorAll(".tool-chip")].map(
+        (chip) => chip.textContent ?? "",
+      );
+      check(
+        `the real ${entry.label} Edit row keeps its ${entry.badge} badge`,
+        chips.some((text) => text.includes(entry.badge)),
+        chips,
+      );
+      await expand(host);
+      const adds = host.querySelectorAll(
+        ".review-change-diff .diff-line.add",
+      ).length;
+      const dels = host.querySelectorAll(
+        ".review-change-diff .diff-line.del",
+      ).length;
+      check(
+        `expanding the real ${entry.label} Edit row shows its one-line diff`,
+        adds === 1 && dels === 1,
+        { adds, dels },
+      );
+      const bodyText = host.querySelector(".tool-row-body")?.textContent ?? "";
+      check(
+        `the real ${entry.label} Edit row prints no raw ops beside its diff`,
+        !bodyText.includes("PUT 2.="),
+        bodyText.slice(0, 200),
+      );
+      check(
+        `the real ${entry.label} Edit row offers no rollback`,
+        host.querySelector(".review-change-rollback") === null &&
+          host.querySelector(".review-change-state") === null,
+        {
+          rollback: Boolean(host.querySelector(".review-change-rollback")),
+          state: Boolean(host.querySelector(".review-change-state")),
+        },
       );
     }
 

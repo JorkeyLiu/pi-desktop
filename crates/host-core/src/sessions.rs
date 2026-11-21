@@ -9154,4 +9154,99 @@ mod tests {
         assert_eq!(trimmed["details"]["review"]["reversible"], json!(true));
         assert_eq!(trimmed["details"]["review"]["additions"], json!(1_200));
     }
+
+    /// A per-call edit preview must survive the display trim applied to a
+    /// re-read transcript: identity and actual counts stay parseable after
+    /// `record_to_ui_for_display`, and a count the host could not compute
+    /// stays absent instead of reading as zero when the hunks are cut.
+    #[test]
+    fn a_large_edit_preview_keeps_identity_and_counts_under_display_trimming() {
+        let hunks: Vec<Value> = (0..1_200)
+            .map(|index| {
+                json!({
+                    "header": format!("@@ -{index},1 +{index},1 @@"),
+                    "lines": [{ "type": "add", "text": "x".repeat(400) }],
+                })
+            })
+            .collect();
+        let record = MessageRecord {
+            id: "tool-1".into(),
+            role: "tool".into(),
+            tool_name: Some("Edit".into()),
+            is_error: false,
+            blocks: json!([{
+                "type": "tool_call",
+                "callId": "call-1",
+                "name": "Edit",
+                "args": {
+                    "path": "outside/large.ts",
+                    "tag": "0000",
+                    "ops": "x".repeat(100_000),
+                },
+                "result": {
+                    "ok": true,
+                    "details": {
+                        "root": "external",
+                        "editDiff": {
+                            "version": 1,
+                            "path": "outside/large.ts",
+                            "root": "external",
+                            "operation": "edit",
+                            "status": "modified",
+                            "additions": 1_200,
+                            "deletions": 0,
+                            "hunks": hunks.clone(),
+                        },
+                    },
+                },
+                "status": "success",
+            }]),
+            meta: None,
+            created_at: "2026-10-18T00:00:00.000Z".into(),
+        };
+
+        let message = record_to_ui_for_display(record, 64 * 1024);
+        let preview = &message
+            .tool_result
+            .as_ref()
+            .expect("tool result survives display trim")["details"]["editDiff"];
+        assert_eq!(preview["version"], json!(1));
+        assert_eq!(preview["root"], json!("external"));
+        assert_eq!(preview["path"], json!("outside/large.ts"));
+        assert_eq!(preview["operation"], json!("edit"));
+        assert_eq!(preview["status"], json!("modified"));
+        assert_eq!(preview["additions"], json!(1_200));
+        assert_eq!(preview["deletions"], json!(0));
+        // The hunks were cut by the bound while the counts stayed actual.
+        let cut = preview["hunks"]
+            .as_array()
+            .expect("hunks stay an array under display trim");
+        assert!(cut
+            .iter()
+            .any(|hunk| hunk.as_str() == Some("[truncated for display]")));
+
+        // An uncounted preview carries no counts; trimming its hunks must not
+        // invent zeros the renderer could mistake for a real +0/-0.
+        let uncounted = json!({
+            "details": {
+                "root": "scratch",
+                "editDiff": {
+                    "version": 1,
+                    "path": "note.txt",
+                    "root": "scratch",
+                    "operation": "edit",
+                    "status": "modified",
+                    "hunks": hunks,
+                    "reason": "fileTooLarge",
+                    "truncated": true
+                }
+            }
+        });
+        let trimmed = preview_value(uncounted, 64 * 1024);
+        let preview = &trimmed["details"]["editDiff"];
+        assert_eq!(preview["root"], json!("scratch"));
+        assert_eq!(preview["status"], json!("modified"));
+        assert!(preview.get("additions").is_none());
+        assert!(preview.get("deletions").is_none());
+    }
 }

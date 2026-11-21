@@ -32,6 +32,7 @@ export const trEntries: ChangelogEntry[] = [
       "Bir alt ajan raporu ancak ana ajanın konuşmasına gerçekten ulaştığında teslim edilmiş sayılır: aktarım öncesinde reddedilirse veya değiştirilirse rapor beklemeye devam eder, bir sonraki bekleme veya sürdürmede gelir ve asla iki kez gönderilmez.",
       "Bir alt ajanın kendi bağlam devri ve ona gönderdiğiniz devam mesajı artık her uzunlukta metni kabul ediyor: uzun devam metinleri sabit bir karakter sınırında reddedilmek yerine yetkilendirilmiş çalışana olduğu gibi ulaşıyor.",
       "Eklenti ve MCP sunucularının stdio çıktısı artık her çerçevenin gerçekten taşıdığı UTF-8 baytlarıyla çerçeve çerçeve ölçülüyor: çok baytlı metin taşıyan bir çerçeve gerçek bayt sayısıyla sayılır ve tek bir okumada gelen birkaç küçük çerçeve, boyutları toplanmak yerine ayrı ayrı ölçülür.",
+      "Düzenlenen dosyalar; projede, geçici kopyalarda ve onaylı harici klasörlerde aynı satır farkını, her biri kendi konum rozetiyle gösterir.",
     ],
   },
   {

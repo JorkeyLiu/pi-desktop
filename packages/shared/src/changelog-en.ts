@@ -32,6 +32,7 @@ export const enEntries: ChangelogEntry[] = [
       "A subagent's report counts as delivered only once it actually reaches the main agent's conversation: if the hand-off is rejected or replaced before that, the report keeps waiting, arrives with the next wait or resume, and is never sent twice.",
       "A subagent's own context handoff and a follow-up you send it now accept text of any length: long continuations reach the delegate whole instead of being refused at a fixed character count.",
       "Plugin and MCP server stdio output is now measured frame by frame in the UTF-8 bytes each frame actually carries: a frame holding multibyte text counts the bytes it really has, and several small frames arriving in one read are measured separately instead of having their sizes added up.",
+      "Edited files show the same line diff in the project, in temporary copies, and in approved outside folders, each with its own location badge.",
     ],
   },
   {

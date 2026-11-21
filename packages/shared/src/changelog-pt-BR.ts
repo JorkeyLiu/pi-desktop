@@ -32,6 +32,7 @@ export const ptBREntries: ChangelogEntry[] = [
       "O relatório de um subagente só conta como entregue quando chega de fato à conversa do agente principal: se a entrega for recusada ou substituída antes, o relatório continua aguardando, chega na próxima espera ou retomada e nunca é enviado duas vezes.",
       "A passagem de contexto de um subagente e o acompanhamento que você envia a ele agora aceitam texto de qualquer comprimento: continuações longas chegam inteiras ao delegado em vez de serem recusadas por um limite fixo de caracteres.",
       "A saída stdio de plugins e servidores MCP agora é medida quadro a quadro nos bytes UTF-8 que cada quadro realmente transporta: um quadro com texto multibyte conta os bytes que de fato tem, e vários quadros pequenos que chegam em uma só leitura são medidos separadamente em vez de somar seus tamanhos.",
+      "Arquivos editados mostram a mesma diferença linha por linha no projeto, em cópias temporárias e em pastas externas aprovadas, cada um com seu selo de local.",
     ],
   },
   {

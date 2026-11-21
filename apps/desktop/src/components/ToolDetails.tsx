@@ -412,6 +412,7 @@ const CHIP_LABEL_KEYS: Record<ToolChip["role"], string> = {
   replacements: "chat.toolChipReplacements",
   truncated: "chat.toolChipTruncated",
   scratch: "chat.toolChipScratch",
+  external: "chat.toolChipExternal",
   lines: "chat.toolChipLines",
   size: "chat.toolChipSize",
 };

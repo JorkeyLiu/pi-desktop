@@ -549,6 +549,7 @@ export const ptBR = {
     toolChipReplacements_other: "{{count}} substituições",
     toolChipTruncated: "Conteúdo truncado",
     toolChipScratch: "Temporário",
+    toolChipExternal: "Externo",
     toolChipLines: "{{range}}",
     toolChipSize: "{{size}}",
     toolRead: "Lido",

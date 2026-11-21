@@ -18,7 +18,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -114,6 +114,16 @@ async function runHost() {
           Array.isArray(editReview.hunks) &&
           editReview.hunks.length > 0,
         "the real Edit record is not contract-cased: " + shortJson(edited.content),
+      );
+      assert(
+        edited.content?.editDiff?.root === "workspace" &&
+          edited.content.editDiff?.operation === "edit" &&
+          edited.content.editDiff?.status === "modified" &&
+          edited.content.editDiff.additions === 1 &&
+          edited.content.editDiff.deletions === 1 &&
+          Array.isArray(edited.content.editDiff.hunks) &&
+          edited.content.editDiff.hunks.length > 0,
+        "the real workspace Edit carries no per-call diff: " + shortJson(edited.content),
       );
       assert(
         written.content?.root === "workspace" &&
@@ -241,8 +251,108 @@ async function runHost() {
         "the move record lost its source: " + shortJson(moved.content),
       );
 
+      // A scratch edit and a permission-authorized external edit through the
+      // same host path. Both carry the same per-call diff as workspace edits
+      // without durable review records: rollback stays workspace-only.
+      const scratchDir = join(dataDir, "scratch", session.id);
+      await mkdir(scratchDir, { recursive: true });
+      const scratchPath = join(scratchDir, "scratch-note.txt");
+      await writeFile(scratchPath, "alpha\nbeta\n", "utf8");
+      const scratchRead = await host.call(
+        "tools.execute",
+        {
+          sessionId: session.id,
+          toolCallId: "read-scratch",
+          toolName: "Read",
+          args: { path: scratchPath },
+          mode: "agent",
+        },
+        20_000,
+      );
+      assertToolSuccess(scratchRead, "read-scratch");
+      const scratchEdited = await host.call(
+        "tools.execute",
+        {
+          sessionId: session.id,
+          toolCallId: "edit-scratch",
+          toolName: "Edit",
+          args: {
+            path: scratchPath,
+            tag: scratchRead.content.tag,
+            ops: "PUT 2.=2:\n+BETA\n",
+          },
+          mode: "agent",
+        },
+        20_000,
+      );
+      assertToolSuccess(scratchEdited, "edit-scratch");
+      assert.equal(scratchEdited.content?.root, "scratch", shortJson(scratchEdited.content));
+      assert(
+        !("review" in (scratchEdited.content ?? {})),
+        "a scratch edit must not gain a durable review record: " +
+          shortJson(scratchEdited.content),
+      );
+      assert(
+        scratchEdited.content?.editDiff?.additions === 1 &&
+          scratchEdited.content?.editDiff?.deletions === 1 &&
+          Array.isArray(scratchEdited.content?.editDiff?.hunks) &&
+          scratchEdited.content.editDiff.hunks.length > 0,
+        "the scratch Edit carries no real diff: " + shortJson(scratchEdited.content),
+      );
+
+      const outsideDir = join(tempRoot, "outside");
+      await mkdir(outsideDir, { recursive: true });
+      const outsidePath = join(outsideDir, "outside.txt");
+      await writeFile(outsidePath, "one\ntwo\n", "utf8");
+      const outsideRead = await host.call(
+        "tools.execute",
+        {
+          sessionId: session.id,
+          toolCallId: "read-outside",
+          toolName: "Read",
+          args: { path: outsidePath },
+          mode: "agent",
+        },
+        20_000,
+      );
+      assertToolSuccess(outsideRead, "read-outside");
+      const outsideEdited = await host.call(
+        "tools.execute",
+        {
+          sessionId: session.id,
+          toolCallId: "edit-outside",
+          toolName: "Edit",
+          args: {
+            path: outsidePath,
+            tag: outsideRead.content.tag,
+            ops: "PUT 2.=2:\n+TWO\n",
+          },
+          mode: "agent",
+        },
+        20_000,
+      );
+      assertToolSuccess(outsideEdited, "edit-outside");
+      assert.equal(outsideEdited.content?.root, "external", shortJson(outsideEdited.content));
+      assert(
+        !("review" in (outsideEdited.content ?? {})),
+        "an external edit must not gain a durable review record: " +
+          shortJson(outsideEdited.content),
+      );
+      assert(
+        outsideEdited.content?.editDiff?.additions === 1 &&
+          outsideEdited.content?.editDiff?.deletions === 1 &&
+          Array.isArray(outsideEdited.content?.editDiff?.hunks) &&
+          outsideEdited.content.editDiff.hunks.length > 0,
+        "the external Edit carries no real diff: " + shortJson(outsideEdited.content),
+      );
+
+      // Old persisted messages predate the per-call preview: they carry a
+      // review record and nothing else, so the legacy fallback is what the
+      // renderer may read for them.
+      const { editDiff: _droppedPreview, ...editWithoutPreview } = edited.content;
+      void _droppedPreview;
       const withOperation = (operation) => ({
-        ...edited.content,
+        ...editWithoutPreview,
         review: { ...editReview, operation },
       });
       return {
@@ -251,6 +361,8 @@ async function runHost() {
         warned: warned.content,
         moved: moved.content,
         removed: removed.content,
+        scratchEdit: scratchEdited.content,
+        externalEdit: outsideEdited.content,
         // The same real record as hosts persisted it before the contract.
         legacyEdit: withOperation("Edit"),
         // The same real record with an operation no contract names.
@@ -403,7 +515,7 @@ try {
   const payloads = await runHost();
   await runRenderer(payloads);
   console.log(
-    "PASS E2E-tool-review-inline: real tools.execute Write/Edit records render their +a/−d and diff on the main and delegate rows, including pre-contract records",
+    "PASS E2E-tool-review-inline: real tools.execute Write/Edit records render their +a/−d and diff on the main and delegate rows, including pre-contract records and the per-call preview on scratch and external edits",
   );
 } finally {
   await rm(tempRoot, { recursive: true, force: true });

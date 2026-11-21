@@ -29,6 +29,45 @@ pub enum ReviewChangeState {
     RolledBack,
 }
 
+/// What one successful `Edit` did to the file's bytes. A move carries no line
+/// change of its own: the path moved, so the content diff is empty rather
+/// than a deletion plus an addition.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum EditDiffStatus {
+    Modified,
+    Deleted,
+    Moved,
+}
+
+/// The per-call diff preview one successful `Edit` carries in its own result.
+/// Unlike `ReviewChange` this is not durable: it holds no snapshot identity,
+/// no rollback state, and no reversible flag, so a scratch or explicitly
+/// approved external edit gets the same line evidence as a workspace edit
+/// without gaining review snapshots or aggregate/revert capabilities.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditDiff {
+    pub version: u8,
+    pub path: String,
+    /// The root the result already reports: `workspace`, `scratch`, or
+    /// `external`.
+    pub root: String,
+    pub operation: ReviewChangeOperation,
+    pub status: EditDiffStatus,
+    /// Omitted when the comparison could not count the change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additions: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<usize>,
+    pub hunks: Vec<ReviewDiffHunk>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub binary: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ReviewDiffLimit>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewDiffLine {

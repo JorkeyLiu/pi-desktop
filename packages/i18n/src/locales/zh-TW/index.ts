@@ -552,6 +552,7 @@ export const zhTW = {
     toolChipReplacements_other: "替換 {{count}} 處",
     toolChipTruncated: "已截斷",
     toolChipScratch: "臨時目錄",
+    toolChipExternal: "外部目錄",
     toolChipLines: "{{range}}",
     toolChipSize: "{{size}}",
     toolRead: "讀取",

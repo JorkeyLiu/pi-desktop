@@ -32,6 +32,7 @@ export const frEntries: ChangelogEntry[] = [
       "Le rapport d'un sous-agent n'est considéré comme livré qu'une fois réellement parvenu dans la conversation de l'agent principal : si la remise est refusée ou remplacée avant, le rapport reste en attente, arrive à la prochaine attente ou reprise et n'est jamais envoyé deux fois.",
       "Le transfert de contexte d'un sous-agent et la suite que vous lui envoyez acceptent désormais un texte de n'importe quelle longueur : les continuations longues parviennent intégralement au délégué au lieu d'être refusées par un plafond de caractères fixe.",
       "La sortie stdio des plugins et serveurs MCP est désormais mesurée trame par trame dans les octets UTF-8 que chaque trame transporte réellement : une trame contenant du texte multioctet compte les octets qu'elle contient vraiment, et plusieurs petites trames arrivant dans une seule lecture sont mesurées séparément au lieu d'additionner leurs tailles.",
+      "Les fichiers modifiés affichent la même différence ligne par ligne dans le projet, dans les copies temporaires et dans les dossiers externes approuvés, chacun avec son badge d'emplacement.",
     ],
   },
   {
