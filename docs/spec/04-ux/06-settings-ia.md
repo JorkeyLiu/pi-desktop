@@ -644,12 +644,16 @@ system while preserving their different data ownership:
   Light and dark themes use the shared Settings surface, typography, borders,
   and semantic tokens; capability pages do not introduce a separate color
   system.
-- Each page is one workbench, not a stack of per-level sections (D257): a
-  single toolbar above a single elevated panel. The toolbar carries the level
-  filter as a segmented control with live counts (All / Global / Project), one
-  search field with a clear affordance, the selected-project picker, and the
-  page's primary actions right-aligned. Subagents omits the filter and the
-  picker because it is global-only, keeping only search and its actions.
+ - Each page is one workbench, not a stack of per-level sections (D257): a
+   single toolbar above a single elevated panel. The toolbar carries the level
+   filter as a segmented control with live counts (All / Global / Project), one
+   search field with a clear affordance, the selected-project picker, and the
+   page's primary actions right-aligned. Subagents omits the filter and the
+   picker because it is global-only, keeping only search and its actions.
+   Skills replaces the level filter with an explicit management-mode segmented
+   control (Global / Project) with live counts: the project picker only
+   appears in Project mode, because Global management is workspace-independent
+   and never queries with a project path.
   The panel still uses two in-panel groups: **Built-in** (the five shipped
   definitions `explorer`, `code-reviewer`, `test-runner`, `fixer`, and
   `ui-designer`) and **Global** (`~/.agents/subagents`, user-owned). An enabled
@@ -660,12 +664,19 @@ system while preserving their different data ownership:
   carry a source badge, **Copy as mine** (opens the create sheet pre-filled from
   that definition, with the matching template chip selected), and the same
   enablement switch a user row has (D202 activation, ADR 0270): turning one off
-  writes app-local state rather than a document, the row stays listed and dimmed
-  so the switch is still the way back on, and the next catalog load stops
-  offering it to `Task`. Reveal and delete remain absent because a builtin is
-  not a file.
-- The level filter narrows which groups the panel renders; it never hides the
-  toolbar or moves the actions. New capabilities are created at the level the
+ - The level filter narrows which groups the panel renders; it never hides the
+   toolbar or moves the actions. New capabilities are created at the level the
+   filter points at — Global under All or Global, Project under Project — and
+   the primary action's tooltip names that destination so the choice is never
+   implicit. Choosing Project without a selected project reports that instead
+   of failing silently.
+ - Skills management mode routes both loads and writes. Global management
+   queries global skills without a project path and owns builtins plus global
+   documents with full controls. Project management resolves the selected
+   project: its own skills with full controls, plus that project's view of the
+   global skills as context rows. New, Scan, and Market installs follow the
+   mode — Project mode without a selected project reports that instead of
+   failing silently or writing to a hidden workspace project.
   filter points at — Global under All or Global, Project under Project — and
   the primary action's tooltip names that destination so the choice is never
   implicit. Choosing Project without a selected project reports that instead
@@ -689,12 +700,26 @@ system while preserving their different data ownership:
   actions — Reveal and Remove for skills and subagents, Test connection and
   Remove for MCP, and Move to Global / Move into <project> on MCP and Skill
   rows — and Remove arms on first press, relabels to ask for confirmation,
-  and disarms on its own if the menu is dismissed or left alone. The move
-  direction follows the row's own level: a global row offers Move into the
-  project named by the page toolbar's project picker, and a project row offers
-  Move to Global. With no project selected the Move into <project> item is not
-  offered and the project group asks for a project selection instead, so a
-  capability is never sent to an unnamed project.
+   and disarms on its own if the menu is dismissed or left alone. The move
+   direction follows the row's own level: a global row offers Move into the
+   project named by the page toolbar's project picker, and a project row offers
+   Move to Global. With no project selected the Move into <project> item is not
+   offered and the project group asks for a project selection instead, so a
+   capability is never sent to an unnamed project. Skills differs: Global
+   management shows no project picker, so a global skill's Move opens an
+   explicit destination dialog where the user picks the project — never a
+   hidden workspace project — while a project skill's Move to Global stays a
+   direct menu action. In Project management the global context rows offer no
+   Edit, Reveal, Remove, or move; content edits go through the Open in Global
+   action, which switches back to Global management.
+ - In Project management every global row names its provenance: Inherited from
+   Global, or Overridden for this project once its switch has written a
+   per-project override. The switch on a context row only ever writes that
+   project's override — it never edits the global default — and provenance is
+   read from the host's stored override state, never inferred from matching
+   booleans. Only overridden rows offer Restore inheritance, which atomically
+   clears that one project's stored override and reloads; the reload result is
+   the truth, not the mutation response.
 - The MCP editor's optional connection timeout accepts 1–600 seconds. A blank
   value clears the server override and restores the default; saving a changed
   timeout refreshes that server's live connection.
@@ -708,28 +733,32 @@ system while preserving their different data ownership:
   (`IconBookOpen` / `IconServer` / `IconBot`) inside a chip wrapper; do not
   pad or resize the SVG itself, because Lucide already sets inline size.
   An empty level offers the same primary action rather than being a dead end,
-  and a search with no matches says so and suggests widening the level filter.
+   and a search with no matches says so and suggests widening the level filter (or switching Skills management mode).
 - When the viewport is narrow the toolbar stacks: the segmented control spans
   the width with evenly divided segments, search sits below it, and the
   actions wrap left-aligned. Group headers drop the resolved path so row copy
   keeps the width.
-- Skills exposes a Market action beside New and Scan other tools. Market is a second view
-  of the same page, not a new Settings destination: browse catalog sources,
-  preview the assembled markdown (including inlined sibling `.md` files), and
-  install through `skills.create` into `~/.agents/skills`. Built-in picks are
-  English-titled offline fallback. Default GitHub sources are queried with
-  user-added sources; a remote badge uses `sourceId`, not id collision with
-  builtin rows. Documents that would exceed the 128 KiB host cap cannot be
-  installed. A preview that fails is reported in the sheet with its reason and
-  a Retry action — the install button may sit disabled, but never without an
-  explanation — and a market whose sources were refused by the public-network
-  guard says so instead of calling every source unreachable, because a proxied
-  user sees that refusal while the same URL opens in their browser (ADR 0177).
-  Back reloads the skill list.
-- Skills also exposes **Scan other tools** in its toolbar. The explicit scan
-  opens inline on the Skills page, and imported entries follow the current
-  Global / Project filter and selected project. The native file and folder
-  import actions remain available in their level groups.
+ - Skills exposes a Market action beside New and Scan other tools. Market is a second view
+   of the same page, not a new Settings destination: browse catalog sources,
+   preview the assembled markdown (including inlined sibling `.md` files), and
+   install through `skills.create`. The install destination follows the
+   management mode — Global installs into `~/.agents/skills`, Project installs
+   into the selected project — and the sheet names that destination explicitly,
+   with an Install to Global instead action when Project mode has no project
+   selected. Built-in picks are English-titled offline fallback. Default GitHub
+   sources are queried with user-added sources; a remote badge uses `sourceId`,
+   not id collision with builtin rows. Documents that would exceed the 128 KiB
+   host cap cannot be installed. A preview that fails is reported in the sheet
+   with its reason and a Retry action — the install button may sit disabled,
+   but never without an explanation — and a market whose sources were refused
+   by the public-network guard says so instead of calling every source
+   unreachable, because a proxied user sees that refusal while the same URL
+   opens in their browser (ADR 0177). Back reloads the skill list.
+ - Skills also exposes **Scan other tools** in its toolbar. The explicit scan
+   opens inline on the Skills page, and imported entries follow the current
+   management-mode destination and selected project — never All, which no
+   longer exists on this page. The native file and folder import actions remain
+   available in their level groups.
 - MCP exposes **Scan other tools** beside Add and Market. The explicit scan
   opens inline on the MCP page. Imported servers follow the current Global /
   Project filter and selected project; secrets and header values are never
@@ -1076,14 +1105,16 @@ system while preserving their different data ownership:
 20. Command shell selection persists a platform-valid catalog ID, exposes
     status only when it adds information (default, unavailable, fallback, or no
     effective shell), and never authorizes a stale ID/dialect
-21. Skills, MCP, and Subagents each render one toolbar above one panel; the
-    level filter changes which groups appear without hiding the toolbar or the
-    primary actions, and the counts on the segments agree with the rows the
-    panel renders under the active search
-22. Each capability page can create, edit, and delete a capability without
-    leaving Settings; new capabilities land at the level the filter points at,
-    the primary action names that destination, and choosing a project level
-    with no selected project reports it instead of failing silently
+ 21. Skills, MCP, and Subagents each render one toolbar above one panel; the
+     level filter (Skills: the Global / Project management-mode switch) changes
+     which groups appear without hiding the toolbar or the primary actions, and
+     the counts on the segments agree with the rows the panel renders under the
+     active search
+ 22. Each capability page can create, edit, and delete a capability without
+     leaving Settings; new capabilities land at the level the filter (Skills:
+     the management mode) points at, the primary action names that destination,
+     and choosing a project level with no selected project reports it instead
+     of failing silently
 23. Removing a capability requires two presses of the same menu item, the
     second press labelled as the confirmation, and the arming lapses on its own
     if the menu is dismissed
@@ -1092,9 +1123,10 @@ system while preserving their different data ownership:
 25. Toggling one capability leaves every other row interactive, does not
     replace the list with skeletons, and restores the previous switch position
     if the host rejects the change
-26. Info exposes a Report a problem action that opens the GitHub bug form
-    with version and OS filled in; Settings search indexes the row
-27. The Skills page Market view browses public-HTTPS catalogs, previews
+ 27. The Skills page Market view browses public-HTTPS catalogs, previews
+     the assembled document, and installs only through `skills.create` into the
+     management-mode destination; oversized expanded documents are refused and
+     source badges follow `sourceId`
     the assembled document, and installs only through `skills.create`; oversized
     expanded documents are refused and source badges follow `sourceId`
 28. All Settings UI must use shared primitives from `components/ui.tsx` and

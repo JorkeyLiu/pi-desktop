@@ -5282,6 +5282,26 @@ async fn handle_request(
                 .map_err(skill_err)?;
             Ok(json!({ "skill": skill }))
         }
+        "skills.resetEnabled" => {
+            let id = require_id(&params)?;
+            let (level, project_path) = parse_capability_query(&params)?;
+            if level != CapabilityLevel::Global {
+                return Err(capability_err(
+                    "skills.resetEnabled clears a project override of a global skill",
+                ));
+            }
+            let Some(project) = project_path else {
+                return Err(capability_err(
+                    "projectPath required to reset a project skill override",
+                ));
+            };
+            let mut st = state.lock().await;
+            let skill = st
+                .user_skills
+                .reset_project_override(&id, &project)
+                .map_err(skill_err)?;
+            Ok(json!({ "skill": skill }))
+        }
         "skills.setScope" => {
             let id = require_id(&params)?;
             let scope = parse_scope(&params)?;
@@ -5642,6 +5662,54 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(current, json!({ "disabled": [] }));
+    }
+    #[tokio::test]
+    async fn skill_reset_enabled_rejects_invalid_context() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let state = Arc::new(Mutex::new(app_state));
+        let tx = mpsc::unbounded_channel().0;
+        // Missing id.
+        let err = handle_request(
+            state.clone(),
+            "skills.resetEnabled",
+            json!({ "level": "global", "projectPath": "/repo" }),
+            tx.clone(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, 1002);
+        // Project level is never a reset target.
+        let err = handle_request(
+            state.clone(),
+            "skills.resetEnabled",
+            json!({ "id": "review", "level": "project", "projectPath": "/repo" }),
+            tx.clone(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, 1018);
+        // Global without a project names no override to clear.
+        let err = handle_request(
+            state.clone(),
+            "skills.resetEnabled",
+            json!({ "id": "review", "level": "global" }),
+            tx.clone(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, 1018);
+        // Unknown skills resolve to null, like the other mutations.
+        let ok = handle_request(
+            state.clone(),
+            "skills.resetEnabled",
+            json!({ "id": "no-such-skill-reset-probe", "level": "global", "projectPath": "/repo" }),
+            tx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(ok, json!({ "skill": null }));
     }
 
     // Issue #1071: the per-request wall-clock budget must cut loose requests

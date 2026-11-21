@@ -138,6 +138,16 @@ export type UserSkillRecord = {
   projectPath?: string;
   description?: string;
   enabled: boolean;
+  /**
+   * How `enabled` was resolved when a global skill is listed with a project
+   * context: `override` when that project stores its own value, `inherited`
+   * when the row follows the global default. Determined by stored-override
+   * presence, never by comparing booleans. Absent on project-level rows and
+   * on global rows listed without a project context.
+   */
+  enabledSource?: "inherited" | "override";
+  /** The global default behind `enabled`; present alongside `enabledSource`. */
+  globalEnabled?: boolean;
   scope?: ActivationScope;
   /** `created` writes a template; `imported` copies an existing document. */
   source: "created" | "imported";

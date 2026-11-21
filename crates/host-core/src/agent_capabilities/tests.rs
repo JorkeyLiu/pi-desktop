@@ -374,3 +374,79 @@ fn moving_a_file_never_replaces_an_existing_destination() {
     assert_eq!(fs::read_to_string(&to).unwrap(), "source");
     assert_eq!(fs::read_to_string(&from).unwrap(), "second");
 }
+#[test]
+fn stored_override_equal_to_a_changed_global_default_stays_an_override() {
+    let dir = tempdir().unwrap();
+    let mut state = CapabilityState::new(dir.path(), "skills");
+    // The user disables the skill globally, then re-enables it for one
+    // project: the override differs from the default, so it is stored.
+    state
+        .set_enabled("skills", CapabilityLevel::Global, "review", None, false)
+        .unwrap();
+    state
+        .set_enabled(
+            "skills",
+            CapabilityLevel::Global,
+            "review",
+            Some("/a"),
+            true,
+        )
+        .unwrap();
+    assert_eq!(state.project_override("skills", "review", "/a"), Some(true));
+    // The global default is later switched back on. The stored override now
+    // equals the default, but it is still an override: presence decides,
+    // never boolean equality.
+    state
+        .set_enabled("skills", CapabilityLevel::Global, "review", None, true)
+        .unwrap();
+    assert_eq!(state.project_override("skills", "review", "/a"), Some(true));
+    assert!(state.enabled("skills", CapabilityLevel::Global, "review", Some("/a")));
+    assert!(state.enabled("skills", CapabilityLevel::Global, "review", None));
+    assert_eq!(state.project_override("skills", "review", "/b"), None);
+}
+#[test]
+fn clear_project_override_restores_inheritance_and_keeps_other_projects() {
+    let dir = tempdir().unwrap();
+    let mut state = CapabilityState::new(dir.path(), "skills");
+    state
+        .set_enabled("skills", CapabilityLevel::Global, "review", None, false)
+        .unwrap();
+    state
+        .set_enabled(
+            "skills",
+            CapabilityLevel::Global,
+            "review",
+            Some("/a"),
+            true,
+        )
+        .unwrap();
+    state
+        .set_enabled(
+            "skills",
+            CapabilityLevel::Global,
+            "review",
+            Some("/b"),
+            true,
+        )
+        .unwrap();
+    assert!(state
+        .clear_project_override("skills", "review", "/a")
+        .unwrap());
+    // The cleared project inherits the global default again ...
+    assert!(!state.enabled("skills", CapabilityLevel::Global, "review", Some("/a")));
+    assert_eq!(state.project_override("skills", "review", "/a"), None);
+    // ... while the default and the other project's override survive.
+    assert!(!state.enabled("skills", CapabilityLevel::Global, "review", None));
+    assert!(state.enabled("skills", CapabilityLevel::Global, "review", Some("/b")));
+    assert_eq!(state.project_override("skills", "review", "/b"), Some(true));
+    // Clearing twice is a no-op, not an error.
+    assert!(!state
+        .clear_project_override("skills", "review", "/a")
+        .unwrap());
+    // After the reset, the row tracks future changes of the global default.
+    state
+        .set_enabled("skills", CapabilityLevel::Global, "review", None, true)
+        .unwrap();
+    assert!(state.enabled("skills", CapabilityLevel::Global, "review", Some("/a")));
+    assert!(state.enabled("skills", CapabilityLevel::Global, "review", Some("/b")));
+}

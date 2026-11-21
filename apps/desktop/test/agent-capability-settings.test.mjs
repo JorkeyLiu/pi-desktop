@@ -47,24 +47,39 @@ test("bundled skill activation validates the catalog and writes host-owned state
   assert.match(skillImport, /sendToRenderer\(IPC\.event\.pluginChanged, \{ reason: "skill" \}\)/);
 });
 
-test("skills and MCP filter one list by level instead of stacking two sections", () => {
-  for (const source of [skills, mcp]) {
-    assert.match(source, /useAgentProjects\(\)/);
-    assert.match(source, /AgentProjectPicker/);
-    assert.match(source, /level: "global"/);
-    assert.match(source, /level: "project"/);
-    // One toolbar, one panel, group headers inside it — not a section per level.
-    assert.match(source, /<CapabilityToolbar/);
-    assert.match(source, /<CapabilityPanel/);
-    assert.match(source, /CapabilityGroupHeader/);
-    assert.match(source, /useState<CapabilityFilter>\("all"\)/);
-    assert.match(source, /const showGlobal = filter !== "project"/);
-    assert.match(source, /const showProject = filter !== "global"/);
-  }
+test("MCP filters one list by level; skills manages explicit global/project modes", () => {
+  // MCP keeps the level filter: one toolbar, one panel, groups inside it.
+  assert.match(mcp, /useAgentProjects\(\)/);
+  assert.match(mcp, /AgentProjectPicker/);
+  assert.match(mcp, /level: "global"/);
+  assert.match(mcp, /level: "project"/);
+  // One toolbar, one panel, group headers inside it — not a section per level.
+  assert.match(mcp, /<CapabilityToolbar/);
+  assert.match(mcp, /<CapabilityPanel/);
+  assert.match(mcp, /CapabilityGroupHeader/);
+  assert.match(mcp, /useState<CapabilityFilter>\("all"\)/);
+  assert.match(mcp, /const showGlobal = filter !== "project"/);
+  assert.match(mcp, /const showProject = filter !== "global"/);
   assert.doesNotMatch(layout, /AgentCapabilitySection|AgentCapabilityColumn/);
   assert.match(layout, /agent-capability-list/);
   assert.match(layout, /<SegmentedControl[\s\S]*?value=\{filter\}/);
   assert.match(layout, /settings\.capabilityFilterAll/);
+  // Skills replaces the filter with a Global/Project management switch: the
+  // picker only exists in Project mode and Global never sends a projectPath.
+  assert.match(skills, /useAgentSkillsManagement\(deleteArm\)/);
+  assert.match(skills, /modeSwitch=\{/);
+  assert.match(skills, /value=\{mode\}/);
+  assert.match(skills, /settings\.skillsManageGlobal/);
+  assert.match(skills, /settings\.skillsManageProject/);
+  assert.match(skills, /settings\.skillsManageModeLabel/);
+  assert.match(skills, /settings\.skillsGlobalModeDesc/);
+  assert.match(skills, /settings\.skillsProjectModeDesc/);
+  assert.match(skills, /isProjectMode \? \(/);
+  assert.match(skills, /"global"|"project"/);
+  assert.doesNotMatch(skills, /CapabilityFilter/);
+  assert.doesNotMatch(skills, /showGlobal|showProject/);
+  assert.doesNotMatch(skills, /targetLevel/);
+  assert.match(layout, /\{modeSwitch \?\? null\}/);
   // Subagents are global-only, so they get no level filter and no project.
   assert.doesNotMatch(subagents, /AgentProjectPicker|projectPath|CapabilityFilter/);
   assert.doesNotMatch(subagentSettings, /AgentProjectPicker|projectPath|CapabilityFilter/);
@@ -93,10 +108,15 @@ test("skills keep file imports in group headers and expose the external scan in-
   assert.match(toolbar, /ImportToggleButton/);
   assert.match(toolbar, /settings\.importSkillFromTools/);
   assert.doesNotMatch(toolbar, /extensions\.skills\.add/);
-  assert.match(skills, /action=\{importButton\("global"\)\}/);
-  assert.match(skills, /action=\{selectedProjectPath \? importButton\("project"\) : undefined\}/);
+  assert.match(skills, /action=\{importButton\("global", true\)\}/);
+  assert.match(
+    skills,
+    /selectedProjectPath \? importButton\("project", true\) : undefined/,
+  );
   assert.match(skills, /<AgentSkillImportPanel/);
-  assert.match(skills, /level=\{targetLevel\}/);
+  assert.match(skills, /level=\{destination\.level\}/);
+  assert.match(skills, /\{destination\.ok \? \(/);
+  assert.match(skills, /disabled=\{!destination\.ok\}/);
   assert.match(mcp, /<AgentMcpImportPanel/);
   assert.match(mcp, /settings\.importMcpFromTools/);
   assert.match(layout, /action\?: ReactNode/);
@@ -228,11 +248,20 @@ test("a busy row does not lock the page and a refresh does not flash skeletons",
     assert.match(source, /busy=\{busy/);
     assert.doesNotMatch(source, /disabled=\{loading \|\| busy/);
     // Skeletons are first paint only; later loads dim the rows they already
-    // have. The shared collection hook owns that state for all three pages.
-    assert.match(source, /useHostCollection\(/);
+    // have. MCP and Subagents own that state through the shared collection
+    // hook; Skills owns it through the extracted management hook.
     assert.doesNotMatch(source, /hydrated = useRef\(false\)/);
     assert.match(source, /refreshing=\{refreshing\}/);
   }
+  assert.match(mcp, /useHostCollection\(/);
+  assert.match(subagents, /useHostCollection\(/);
+  assert.match(skills, /useAgentSkillsManagement\(deleteArm\)/);
+  const management = read("../src/components/settings/useAgentSkillsManagement.ts");
+  // Switching mode or project refetches instead of showing stale rows: the
+  // fetch closes over the scope, so its identity changes with it and the
+  // collection retires the in-flight request for the dead scope.
+  assert.match(management, /globalSkillsQuery\(scope\.mode, scope\.projectPath\)/);
+  assert.match(management, /\}, \[scope\]\);/);
   assert.match(hostCollection, /hydrated = useRef\(false\)/);
   assert.match(hostCollection, /if \(hydrated\.current\) setRefreshing\(true\)/);
   assert.match(styles, /\.agent-capability-panel\.is-refreshing \.agent-capability-list\s*\{/);
@@ -241,11 +270,10 @@ test("a busy row does not lock the page and a refresh does not flash skeletons",
 
 test("toggling a capability flips locally and reverts only if the host refuses", () => {
   const cases = [
-    [skills, "setUserSkillEnabled"],
-    [mcp, "setMcpServerEnabled"],
-    [subagents, "setUserSubagentEnabled"],
+    [mcp, "setMcpServerEnabled", "server"],
+    [subagents, "setUserSubagentEnabled", "subagent"],
   ];
-  for (const [source, method] of cases) {
+  for (const [source, method, row] of cases) {
     const toggle = source.slice(
       source.indexOf("const toggle = async"),
       source.indexOf("const toggle = async") + 1400,
@@ -255,15 +283,29 @@ test("toggling a capability flips locally and reverts only if the host refuses",
     assert.match(toggle, new RegExp(`api\\.${method}`));
     // Success needs no reload: the local patch already matches what the host did.
     assert.doesNotMatch(toggle.slice(0, toggle.indexOf("catch")), /await load\(\)/);
-    assert.match(toggle, /catch[\s\S]*?enabled: (?:skill|server|subagent)\.enabled/);
+    assert.match(toggle, new RegExp(`catch[\\s\\S]*?enabled: ${row}\\.enabled`));
   }
+  // Skills toggles through the extracted management hook: the row's provenance
+  // prediction flips first, the call carries the row's scope query, and a
+  // response that lands after a scope switch reloads instead of patching rows
+  // it no longer owns. Only a refusal on the current scope reverts the patch.
+  const management = read("../src/components/settings/useAgentSkillsManagement.ts");
+  const toggle = management.slice(management.indexOf("const toggle = async"));
+  assert.notEqual(toggle, "", "skills toggle should be present");
+  assert.match(toggle, /provenanceAfterToggle\(skill, next\)/);
+  assert.match(toggle, /api\.setUserSkillEnabled\(skill\.id, next, query\)/);
+  assert.match(toggle, /toggleQueryForRow\(captured\.scope, level\)/);
+  assert.match(toggle, /sameSkillsScope\(captured\.scope, guard\.current\.current\(\)\)/);
+  assert.match(toggle, /await load\(\)/);
+  assert.match(toggle, /catch[\s\S]*?enabled: skill\.enabled/);
 });
 
 test("each capability page can create, edit, and delete without leaving settings", () => {
-  assert.match(skills, /api\.createUserSkill/);
-  assert.match(skills, /api\.updateUserSkill/);
-  assert.match(skills, /api\.removeUserSkill/);
-  assert.match(skills, /api\.revealUserSkill/);
+  const management = read("../src/components/settings/useAgentSkillsManagement.ts");
+  assert.match(management, /api\.createUserSkill/);
+  assert.match(management, /api\.updateUserSkill/);
+  assert.match(management, /api\.removeUserSkill/);
+  assert.match(management, /api\.revealUserSkill/);
   assert.match(skills, /<SkillEditorSheet/);
   assert.match(subagents, /api\.createUserSubagent/);
   assert.match(subagents, /api\.updateUserSubagent/);
@@ -272,8 +314,14 @@ test("each capability page can create, edit, and delete without leaving settings
   assert.match(subagents, /<SubagentEditorSheet/);
   assert.match(mcp, /api\.upsertMcpServer/);
   assert.match(mcp, /api\.removeMcpServer/);
-  // Destructive row actions arm first and say so before they fire.
-  for (const source of [skills, mcp, subagents]) {
+  // Destructive row actions arm first and say so before they fire. The
+  // page owns the arm through the shared hook; the extracted management
+  // hook receives it, so the arm keeps one expiring implementation.
+  assert.match(skills, /const deleteArm = useArmedDelete\(\)/);
+  assert.match(management, /useAgentSkillsManagement\(arm: SkillsDeleteArm\)/);
+  assert.match(skills, /settings\.capabilityRemoveConfirm/);
+  assert.match(skills, /danger: true/);
+  for (const source of [mcp, subagents]) {
     assert.match(source, /useArmedDelete\(\)/);
     assert.match(source, /settings\.capabilityRemoveConfirm/);
     assert.match(source, /danger: true/);
@@ -303,7 +351,10 @@ test("revealing a skill carries the level so project skills resolve", () => {
   const handler = skillImport.slice(skillImport.indexOf("IPC.invoke.skillReveal"));
   assert.match(handler, /typeof payload === "string" \? \{ id: payload \} : payload/);
   assert.match(handler, /host\.call<\{ skill: UserSkillRecord \| null \}>\("skills\.read", request\)/);
-  assert.match(skills, /api\.revealUserSkill\(skill\.id, levelQuery\(level\)\)/);
+  const management = read("../src/components/settings/useAgentSkillsManagement.ts");
+  assert.match(management, /api\.revealUserSkill\(skill\.id, toggleQueryForRow\(scope, level\)\)/);
+  assert.match(management, /api\.readUserSkill\(skill\.id, query\)/);
+  assert.match(management, /api\.removeUserSkill\(skill\.id, toggleQueryForRow\(scope, level\)\)/);
 });
 
 test("skill file import stays single-select while folder import selects many", () => {
@@ -450,16 +501,68 @@ test("a capability can be moved between the global and a project level", () => {
 });
 
 test("the move action offers a level only when there is a destination", () => {
-  for (const source of [skills, mcp]) {
-    assert.match(source, /settings\.capabilityMoveToGlobal/);
-    assert.match(source, /settings\.capabilityMoveToProject/);
-    assert.match(source, /settings\.capabilityMovedRenamed/);
-    assert.match(source, /IconArrowUpDown/);
-    // The project picker owns the destination, so a global row has nowhere to
-    // go until a project is selected; a project row always has Global.
-    assert.match(source, /moveTarget\[level === "global" \? "project" : "global"\]/);
-    assert.match(source, /showToast\(t\("settings\.selectProjectFirst"\)/);
-  }
+  const management = read("../src/components/settings/useAgentSkillsManagement.ts");
+  assert.match(mcp, /settings\.capabilityMoveToGlobal/);
+  assert.match(mcp, /settings\.capabilityMoveToProject/);
+  assert.match(mcp, /settings\.capabilityMovedRenamed/);
+  assert.match(mcp, /IconArrowUpDown/);
+  // The project picker owns the destination, so a global row has nowhere to
+  // go until a project is selected; a project row always has Global.
+  assert.match(mcp, /moveTarget\[level === "global" \? "project" : "global"\]/);
+  assert.match(mcp, /showToast\(t\("settings\.selectProjectFirst"\)/);
+  // Skills moves through an explicit destination dialog: Global management
+  // shows no picker, so a global row asks for the project instead of using a
+  // hidden one; the project row's Move to Global stays direct, and the global
+  // context rows in Project management offer no move at all.
+  assert.match(skills, /settings\.capabilityMoveToGlobal/);
+  assert.match(skills, /settings\.capabilityMoveToProjectMenu/);
+  assert.match(management, /settings\.capabilityMovedRenamed/);
+  assert.match(skills, /IconArrowUpDown/);
+  assert.match(skills, /settings\.skillMoveTitle/);
+  assert.match(skills, /settings\.skillMoveDestinationLabel/);
+  assert.match(skills, /settings\.skillMoveConfirm/);
+  assert.match(skills, /role="dialog"/);
+  assert.match(skills, /confirmMoveToProject\(moveProjectChoice\)/);
+  assert.match(skills, /moveToGlobal\(skill\)/);
+  assert.match(management, /from: \{ level: "global" \}/);
+  assert.match(management, /to: \{ level: "project", projectPath: destinationProjectPath \}/);
+  assert.match(management, /from: \{ level: "project", projectPath \}/);
+  assert.match(management, /to: \{ level: "global" \}/);
+  assert.doesNotMatch(skills, /moveTarget\[/);
+  // Opening the dialog resets its choice so a stale project is never sent.
+  assert.match(skills, /setMoveProjectChoice\(""\);\s*\n\s*setMoveDestinationFor\(skill\)/);
+});
+
+test("project-mode global rows toggle an override and restore only that project's inheritance", () => {
+  const management = read("../src/components/settings/useAgentSkillsManagement.ts");
+  const model = read("../src/components/settings/skills-management-model.ts");
+  // Provenance is the host's stored override state, never inferred from equal
+  // booleans: the field alone decides.
+  assert.match(model, /return skill\.enabledSource === "override"/);
+  assert.match(model, /enabledSource\?: "inherited" \| "override"/);
+  // Global management queries without a project path; Project management pairs
+  // the global level with the selected project so rows carry provenance.
+  assert.match(model, /if \(mode === "project" && projectPath\) return \{ level: "global", projectPath \}/);
+  assert.match(management, /toggleQueryForRow\(captured\.scope, level\)/);
+  // Reset clears exactly one project's stored override and the reload is the
+  // truth; it is only offered on overridden rows.
+  assert.match(
+    management,
+    /api\.resetUserSkillEnabled\(skill\.id, \{ level: "global", projectPath \}\)/,
+  );
+  assert.match(management, /if \(!projectPath \|\| !isSkillOverrideForProject\(skill\)\) return/);
+  assert.match(skills, /\{overridden \? \(/);
+  assert.match(skills, /settings\.skillRestoreInheritance/);
+  assert.match(management, /settings\.skillInheritanceRestored/);
+  assert.match(skills, /settings\.skillInheritedFromGlobal/);
+  assert.match(skills, /settings\.skillOverriddenForProject/);
+  assert.match(skills, /settings\.skillGlobalReadOnlyHint/);
+  assert.match(skills, /settings\.skillOpenInGlobal/);
+  assert.match(skills, /settings\.skillsBuiltinsGlobalOnlyHint/);
+  // Selection and mode switches retire in-flight loads instead of showing them.
+  assert.match(model, /createSkillsScopeGuard/);
+  assert.match(model, /isCurrent\(captured: \{ token: number \}\)/);
+  assert.match(management, /guard\.current\.isCurrent\(captured\)/);
 });
 
 test("MCP OAuth subscribe is owned by a ref cleaned up on unmount", () => {

@@ -292,6 +292,15 @@ export function registerSkillsIpc({
       return res;
     },
   );
+  handle(
+    IPC.invoke.skillResetEnabled,
+    async (payload: { id: string } & Partial<AgentCapabilityQuery>) => {
+      if (!host) throw new Error("host unavailable");
+      const res = await host.call("skills.resetEnabled", payload);
+      sendToRenderer(IPC.event.pluginChanged,{ reason: "skill" });
+      return res;
+    },
+  );
 
   handle(
     IPC.invoke.skillSetScope,

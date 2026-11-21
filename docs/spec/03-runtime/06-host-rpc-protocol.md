@@ -800,8 +800,8 @@ against a live host, and replaying one after the final row would be wrong.
 ### Agent capabilities (skills, subagents, MCP servers)
 - `skills.list` / `skills.active` / `skills.read` / `skills.create` /
   `skills.update` / `skills.remove` / `skills.import` /
-  `skills.setEnabled` / `skills.setScope` / `skills.transfer` — user skill
-  documents (`SKILL_INVALID` on validation failure)
+  `skills.setEnabled` / `skills.resetEnabled` / `skills.setScope` /
+  `skills.transfer` — user skill documents (`SKILL_INVALID` on validation failure)
 - `agents.list` / `agents.active` / `agents.read` / `agents.create` /
   `agents.update` / `agents.remove` / `agents.setEnabled` /
   `agents.setScope` — user subagent documents (`SUBAGENT_INVALID`)

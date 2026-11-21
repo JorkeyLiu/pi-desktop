@@ -142,15 +142,25 @@ function saveSources(sources: SkillMarketSource[]): void {
  * the existing create path, and the full document is previewed before
  * anything is saved.
  */
-export function SkillMarketPanel({
-  installedIds,
-  onBack,
-  onInstalled,
-}: {
-  installedIds: readonly string[];
-  onBack: () => void;
-  onInstalled: (id: string) => void;
-}) {
+ export function SkillMarketPanel({
+   installedIds,
+   level,
+   projectPath,
+   projectName,
+   onGoGlobal,
+   onBack,
+   onInstalled,
+ }: {
+   installedIds: readonly string[];
+   /** Management mode the install lands in; project needs a projectPath. */
+   level: "global" | "project";
+   projectPath?: string;
+   projectName?: string;
+   /** Offered when the project destination is incomplete. */
+   onGoGlobal?: () => void;
+   onBack: () => void;
+   onInstalled: (id: string) => void;
+ }) {
   const { t } = useTranslation();
   const showToast = useAppStore((state) => state.showToast);
   const [search, setSearch] = useState("");
@@ -334,26 +344,36 @@ export function SkillMarketPanel({
     if (installFor) loadDocument(installFor);
   };
 
-  const install = async () => {
-    if (!installFor || installing) return;
-    setInstalling(true);
-    try {
-      const document = await api.fetchSkillMarketDocument(installFor);
-      const assembled = assembleSkillInstall(document, installFor);
-      if (assembled.tooLarge) {
-        setDocumentBody(assembled.body);
-        setDocumentTooLarge(true);
-        return;
-      }
-      const created = await api.createUserSkill({
-        id: installFor.id,
-        name: assembled.name,
-        description: assembled.description,
-        body: assembled.body,
-        level: "global",
-        scope: GLOBAL_SCOPE,
-        enabled: true,
-      });
+   const installDestinationReady = level === "global" || Boolean(projectPath);
+   const install = async () => {
+     if (!installFor || installing) return;
+     if (!installDestinationReady) {
+       showToast(t("settings.selectProjectFirst"), { variant: "error" });
+       return;
+     }
+     setInstalling(true);
+     try {
+       const document = await api.fetchSkillMarketDocument(installFor);
+       const assembled = assembleSkillInstall(document, installFor);
+       if (assembled.tooLarge) {
+         setDocumentBody(assembled.body);
+         setDocumentTooLarge(true);
+         return;
+       }
+       const installLevel = level === "project" && projectPath ? "project" : "global";
+       const created = await api.createUserSkill({
+         id: installFor.id,
+         name: assembled.name,
+         description: assembled.description,
+         body: assembled.body,
+         level: installLevel,
+         scope:
+           installLevel === "project" && projectPath
+             ? { mode: "projects", projects: [projectPath] }
+             : GLOBAL_SCOPE,
+         ...(installLevel === "project" && projectPath ? { projectPath } : {}),
+         enabled: true,
+       });
       showToast(t("settings.sklm.installSuccess", { name: assembled.name }), {
         variant: "success",
       });
@@ -560,10 +580,40 @@ export function SkillMarketPanel({
         </div>
 
         <div className="ext-sheet-body">
-          <div className="ext-field-group">
-            <div className="ext-field-label">{t("settings.sklm.willInstall")}</div>
-            <code className="sklm-cmd is-block">{installFor.url}</code>
-          </div>
+           <div className="ext-field-group">
+             <div className="ext-field-label">{t("settings.sklm.willInstall")}</div>
+             <code className="sklm-cmd is-block">{installFor.url}</code>
+           </div>
+
+           <div className="ext-field-group">
+             <div className="ext-field-label">{t("settings.sklm.installDestination")}</div>
+             {level === "project" && projectPath ? (
+               <p className="sklm-note">
+                 {t("settings.sklm.installDestinationProject", {
+                   project: projectName ?? projectPath,
+                 })}
+               </p>
+             ) : level === "project" ? (
+               <p className="sklm-note">
+                 {t("settings.sklm.installNeedsProject")}{" "}
+                 {onGoGlobal ? (
+                   <button
+                     type="button"
+                     className="sklm-install is-ghost"
+                     onClick={() => {
+                       setInstallFor(null);
+                       onGoGlobal();
+                     }}
+                     disabled={installing}
+                   >
+                     {t("settings.sklm.installToGlobalInstead")}
+                   </button>
+                 ) : null}
+               </p>
+             ) : (
+               <p className="sklm-note">{t("settings.sklm.installDestinationGlobal")}</p>
+             )}
+           </div>
 
           <div className="ext-field-group">
             <div className="ext-field-label">{t("settings.sklm.preview")}</div>
@@ -585,16 +635,16 @@ export function SkillMarketPanel({
                 {previewFailure.detail}
               </p>
             ) : null}
-            {previewFailure ? (
-              <button
-                type="button"
-                className="sklm-install is-ghost"
-                onClick={retryPreview}
-                disabled={installing}
-              >
-                {t("settings.sklm.retryPreview")}
-              </button>
-            ) : null}
+             {previewFailure ? (
+               <button
+                 type="button"
+                 className="sklm-install is-ghost"
+                 onClick={retryPreview}
+                 disabled={installing}
+               >
+                 {t("settings.sklm.retryPreview")}
+               </button>
+             ) : null}
             {documentTooLarge ? <p className="sklm-note">{t("settings.sklm.documentTooLarge")}</p> : null}
           </div>
 
@@ -617,14 +667,19 @@ export function SkillMarketPanel({
             >
               {t("common.cancel")}
             </button>
-            <button
-              type="button"
-              className="sklm-install"
-              onClick={() => void install()}
-              disabled={installing || documentBody === null || documentTooLarge}
-            >
-              {installing ? t("common.saving") : t("settings.sklm.install")}
-            </button>
+             <button
+               type="button"
+               className="sklm-install"
+               onClick={() => void install()}
+               disabled={
+                 installing ||
+                 documentBody === null ||
+                 documentTooLarge ||
+                 !installDestinationReady
+               }
+             >
+               {installing ? t("common.saving") : t("settings.sklm.install")}
+             </button>
           </div>
         </div>
       </div>

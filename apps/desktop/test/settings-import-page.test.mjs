@@ -37,7 +37,8 @@ test("model, skills, and MCP imports are available from their own settings pages
 
   assert.match(skillsPage, /ImportToggleButton/);
   assert.match(skillsPage, /<AgentSkillImportPanel/);
-  assert.match(skillsPage, /level=\{targetLevel\}/);
+  assert.match(skillsPage, /\{destination\.ok \? \(/);
+  assert.match(skillsPage, /level=\{destination\.level\}/);
   assert.match(skillImport, /api\.scanExternalSkills\(/);
   assert.match(skillImport, /level,\s*\.\.\./);
   assert.match(skillImport, /description=\{t\("settings\.importAgentSkillsDesc"\)\}/);
@@ -63,11 +64,19 @@ test("model, skills, and MCP imports are available from their own settings pages
 });
 
 test("capability imports follow the selected project and reset when scope changes", () => {
-  for (const source of [skillsPage, mcpPage]) {
+  for (const source of [mcpPage]) {
     assert.match(source, /key=\{`\$\{targetLevel\}:/);
     assert.match(source, /projectPath=\{targetLevel === "project" \? selectedProjectPath/);
     assert.match(source, /disabled=\{targetLevel === "project" && !selectedProjectPath\}/);
   }
+  // Skills imports follow the management-mode destination instead of a
+  // filter: project mode without a project reports instead of importing.
+  assert.match(skillsPage, /key=\{`\$\{destination\.level\}:/);
+  assert.match(
+    skillsPage,
+    /projectPath=\{\s*destination\.level === "project" \? destination\.projectPath : undefined\s*\}/,
+  );
+  assert.match(skillsPage, /disabled=\{!destination\.ok\}/);
   assert.match(skillImport, /level === "project" && projectPath/);
   assert.match(mcpImport, /level === "project" && projectPath/);
 });

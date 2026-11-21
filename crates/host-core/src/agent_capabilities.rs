@@ -107,6 +107,41 @@ impl CapabilityState {
             CapabilityLevel::Project => self.get(kind, level, id, project_path).unwrap_or(true),
         }
     }
+    /// The stored per-project override for one global record, if the user ever
+    /// set one for this project.
+    ///
+    /// Presence — not the value — is what marks a row overridden: a stored
+    /// override can later equal the global default (see `set_enabled`, which
+    /// prunes only at write time), so callers must never infer override state
+    /// by comparing the effective value against the global default.
+    pub fn project_override(&self, kind: &str, id: &str, project_path: &str) -> Option<bool> {
+        self.get(kind, CapabilityLevel::Global, id, Some(project_path))
+    }
+
+    /// Drop one project's stored override for one global record, restoring
+    /// inheritance of the global default.
+    ///
+    /// Only the selected project's entry is removed: the global default and
+    /// every other project's override survive. Removing a missing entry is a
+    /// no-op that reports `false`, not an error.
+    pub fn clear_project_override(
+        &mut self,
+        kind: &str,
+        id: &str,
+        project_path: &str,
+    ) -> Result<bool> {
+        let key = Self::key(
+            kind,
+            CapabilityLevel::Global,
+            id,
+            Some(&normalize_project_path(project_path)),
+        );
+        if self.values.remove(&key).is_none() {
+            return Ok(false);
+        }
+        self.save()?;
+        Ok(true)
+    }
 
     pub fn set_enabled(
         &mut self,
