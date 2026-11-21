@@ -569,6 +569,7 @@ export const zhTW = {
     toolIdentityTaskWait: "等待任務",
     toolIdentityTaskList: "任務清單",
     toolIdentityTaskStop: "停止任務",
+    toolIdentityTaskSteer: "引導任務",
     toolIdentityTodo: "待辦事項",
     toolIdentitySkill: "技能",
     toolIdentityToolSearch: "搜尋工具",

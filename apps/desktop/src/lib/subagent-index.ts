@@ -15,13 +15,13 @@ import {
   UNMEASURED_CONTEXT,
   type SubagentMetrics,
 } from "./subagent-metrics-values";
+import { isAcceptedSubagentCall } from "./assistant-turns";
 import {
   delegateTaskTitle,
   resumeArgOf,
   resumeTarget,
   subagentResumeLinks,
 } from "./subagent-task-call";
-
 /**
  * One conversation's delegation chains, resolved once.
  *
@@ -53,6 +53,9 @@ import {
  *   contributes an identity to the title and chain-key maps. An ordinary tool
  *   row can still be a chain member through a resume edge that names it, and
  *   still receives the chain's folded figures, but it opens no chain of its own;
+ * - only an executed `Task` call seeds or extends one: a rejected resume with
+ *   no handle, no spawn in flight and no child rows is a request attempt, not
+ *   a segment, so the chain's latest segment stays on the last accepted call;
  * - a resume that names nothing resolvable still records its edge, so the
  *   dangling name is a chain member — malformed history stays readable exactly
  *   as before, and a cycle terminates;
@@ -121,7 +124,6 @@ export function subagentTranscriptIndex(
 
 function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
   const { callByDelegationId, resumeLink } = subagentResumeLinks(messages);
-
   // A resume edge is walked forward from every `Task` call that names it, and
   // backward only from the single edge the link map kept for that target.
   const forward = new Map<string, string[]>();
@@ -142,9 +144,15 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
   /** Latest valid child assistant report per parent call id. */
   const childUsage = new Map<string, { occupancy: number; usage: MessageUsage }>();
 
+  // The child rows arrive after the call they belong to, so a call's acceptance
+  // is judged after the pass; the stashed rows keep session order, so the
+  // forward edges and the seed list read exactly as before for executed calls.
+  const childParents = new Set<string>();
+  const taskRows: CallRow[] = [];
   for (let order = 0; order < messages.length; order += 1) {
     const message = messages[order];
     const callId = message.toolCallId;
+    if (message.parentToolCallId) childParents.add(message.parentToolCallId);
     if (callId) {
       const dispatchTitle = delegateTaskTitle(message);
       if (dispatchTitle && !firstTitle.has(callId)) {
@@ -166,11 +174,6 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
       continue;
     }
     if (!callId) continue;
-    const delegationCall = isDelegationStartTool(message.toolName);
-    if (delegationCall) {
-      const target = resumeTarget(resumeArgOf(message), callByDelegationId);
-      if (target) forward.set(target, [...(forward.get(target) ?? EMPTY_LIST), callId]);
-    }
     const row: CallRow = {
       callId,
       delegationId: delegationIdForMessage(message),
@@ -180,7 +183,16 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
       message,
     };
     calls.push(row);
-    if (delegationCall) delegationCalls.push(row);
+    if (isDelegationStartTool(message.toolName)) taskRows.push(row);
+  }
+  // Only an executed call seeds or extends a chain: a rejected resume is a
+  // request attempt with no run behind it, so it must neither move the
+  // chain's latest segment nor open a chain.
+  for (const row of taskRows) {
+    if (!isAcceptedSubagentCall(row.message, childParents.has(row.callId))) continue;
+    delegationCalls.push(row);
+    const target = resumeTarget(resumeArgOf(row.message), callByDelegationId);
+    if (target) forward.set(target, [...(forward.get(target) ?? EMPTY_LIST), row.callId]);
   }
 
   const chains = new Map<string, ReadonlySet<string>>();

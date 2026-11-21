@@ -576,6 +576,7 @@ export const tr = {
     toolIdentityTaskWait: "Görevi bekle",
     toolIdentityTaskList: "Görev listesi",
     toolIdentityTaskStop: "Görevi durdur",
+    toolIdentityTaskSteer: "Görevi yönlendir",
     toolIdentityTodo: "Yapılacaklar",
     toolIdentitySkill: "Yetenek",
     toolIdentityToolSearch: "Araçları ara",

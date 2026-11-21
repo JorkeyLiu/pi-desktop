@@ -161,6 +161,17 @@ export function delegationLifecycleKind(
 }
 
 /**
+ * The model steer tool (TaskSteer). It drives a running delegation like the
+ * lifecycle tools do, but it is deliberately NOT a lifecycle kind: lifecycle
+ * rows roll up rosters and chain state, while a steer row is a single queued
+ * message into one live run. Matching it exactly (minus any provider
+ * namespace) gives it the delegation presentation with its own identity.
+ */
+export function isTaskSteerTool(toolName?: string): boolean {
+  return bareToolName(toolName) === "tasksteer";
+}
+
+/**
  * The exact names of the built-in tools that carry their own card. They are
  * matched exactly, minus any provider namespace, so a plugin tool that merely
  * sounds similar keeps the generic presentation.
@@ -203,7 +214,9 @@ function exactBuiltinAction(toolName?: string): ToolAction | null {
     : rawName;
   if (name.includes(".")) return null;
   const normalized = normalizedToolName(name);
-  if (isDelegationStartTool(name) || delegationLifecycleKind(name)) return "delegate";
+  if (isDelegationStartTool(name) || delegationLifecycleKind(name) || isTaskSteerTool(name)) {
+    return "delegate";
+  }
   const exact = EXACT_TOOL_ACTIONS[bareToolName(name)];
   if (exact) return exact;
   if (bareToolName(name) === "todowrite") return "todo";
@@ -221,8 +234,9 @@ export function getToolAction(toolName?: string): ToolAction {
     );
   // Delegation (ADR 0062, ADR 0089) is matched on the exact name, minus any
   // provider namespace: a plugin tool called "CreateTask" is not a subagent
-  // call and keeps its generic presentation.
-  if (isDelegationStartTool(toolName) || delegationLifecycleKind(toolName)) {
+  // call and keeps its generic presentation. TaskSteer shares the delegation
+  // presentation but is never a lifecycle kind, so it cannot pollute chains.
+  if (isDelegationStartTool(toolName) || delegationLifecycleKind(toolName) || isTaskSteerTool(toolName)) {
     return "delegate";
   }
   const exact = EXACT_TOOL_ACTIONS[bareToolName(toolName)];
@@ -255,6 +269,7 @@ export type ToolIdentityKey =
   | "chat.toolIdentityTaskWait"
   | "chat.toolIdentityTaskList"
   | "chat.toolIdentityTaskStop"
+  | "chat.toolIdentityTaskSteer"
   | "chat.toolIdentityTodo"
   | "chat.toolIdentitySkill"
   | "chat.toolIdentityToolSearch"
@@ -293,6 +308,7 @@ export function getToolIdentityKey(toolName?: string): ToolIdentityKey | null {
   if (lifecycle === "wait") return "chat.toolIdentityTaskWait";
   if (lifecycle === "list") return "chat.toolIdentityTaskList";
   if (lifecycle === "stop") return "chat.toolIdentityTaskStop";
+  if (isTaskSteerTool(toolName)) return "chat.toolIdentityTaskSteer";
   // A question tool is not an action, so it only has an identity name: its
   // exact name reaches its own card and its history row must not print the
   // raw provider word.

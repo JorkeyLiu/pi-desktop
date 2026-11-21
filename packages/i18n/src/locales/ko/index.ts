@@ -576,6 +576,7 @@ export const ko = {
     toolIdentityTaskWait: "작업 대기",
     toolIdentityTaskList: "작업 목록",
     toolIdentityTaskStop: "작업 중지",
+    toolIdentityTaskSteer: "작업 개입",
     toolIdentityTodo: "할 일",
     toolIdentitySkill: "스킬",
     toolIdentityToolSearch: "도구 검색",

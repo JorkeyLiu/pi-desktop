@@ -977,11 +977,13 @@ The explicit thinking phase owns the active indicator. A row whose
 `thinkingStatus` is `complete` stays still even while its assistant message
 still streams — after a tool, after reply text, or with nothing following it
 at all — and a row whose phase is `streaming` breathes while the turn is
-active. A newer `thinking_start` breathes again after an earlier `complete`.
-Rows that predate the phase field (restored history, legacy frames) keep the
-documented fallback: a streaming, content-free row breathes. Delegate rows
-follow the same rule. Later transcript activity never stands in for the
-phase.
+active. The phase names what the model is generating, not which reasoning
+blocks are still open: it turns `complete` as soon as real reply text or a tool
+call starts streaming, even when the provider never closes its thinking block,
+and only a newer thinking frame makes it breathe again. Rows that predate
+the phase field (restored history, legacy frames) keep the documented fallback:
+a streaming, content-free row breathes. Delegate rows follow the same rule.
+Later transcript activity and the newest tool row never stand in for the phase.
 
 Whole process and item are independent controls. Closing the process keeps
 descendant choices and reopening restores them; opening it never expands all
@@ -1470,9 +1472,12 @@ not a working claim, is what the reader sees.
   is guaranteed not to. The header and process follow that own source, so a
   running child's thinking, tool calls, and answer fragments arrive and stream
   there, not through the main pane.
-- A chain is read across all of its `Task(resume)` runs, so a delegation opened
+- A chain is read across all of its executed `Task(resume)` runs, so a delegation opened
   by a resumed run is the same child conversation as its original dispatch, and
-  an older caller's `Task` tool-call id resolves to it too. The scoped read
+  an older caller's `Task` tool-call id resolves to it too. A rejected resume —
+  `error`/`denied` with no delegation handle and no child rows — started no run,
+  so it joins no chain, seeds none, and renders no turn: the tab stays on the
+  running delegation and the failed request keeps only its parent tool row.
   answers with the chain's canonical identity — the earliest root dispatch's
   `delegationId` — and returns every `Task` / `Task(resume)` message of that
   chain as history context, so the brief row is readable even when those calls
@@ -2739,7 +2744,9 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
   `Failed`, `Denied`), and the identity on the left carries no running colour or
   pulse. A delegate control row (`TaskWait`, `TaskList`, `TaskStop`) keeps its
   own fixed name and puts the subagent count and its wait outcome on the right,
-  the backend-owned outcome outranking the generic lifecycle label.
+  the backend-owned outcome outranking the generic lifecycle label. `TaskSteer`
+  keeps the same fixed-identity rule with its own label (`Task steer`): one queued
+  message into one live delegation, never a roster count (ADR 0337).
 - A provider-hosted search round follows the same identity rule: the globe and
   the kind's own name (`Web search`, `Open page`, `Find in page`) hold for the
   whole round, the right edge states `Searching the web` while it searches or
@@ -3066,7 +3073,10 @@ projection; terminal Task snapshots still take precedence.
 
 The lifecycle rows (`TaskWait`/`TaskList`/`TaskStop`) stay compact tool rows —
 they are not child cards and must not inflate the delegation count — but they
-are presented as subagent rows rather than as generic tool calls (D269). A
+are presented as subagent rows rather than as generic tool calls (D269).
+`TaskSteer` shares that subagent presentation with its own fixed identity
+(`Task steer`) but is not a lifecycle row: it names the one live delegation it
+queued a message into, never a roster rollup (ADR 0337). A
 lifecycle row is called with delegation ids, which read as bare UUIDs, so it
 never summarizes from its own arguments:
 

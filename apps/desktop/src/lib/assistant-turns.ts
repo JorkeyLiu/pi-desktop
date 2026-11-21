@@ -7,6 +7,7 @@ import type {
 import { addUsage, hostedSearchRounds } from "@pi-desktop/shared";
 import { isDelegationStartTool } from "./tool-display";
 import { isUserOriginTaskMarker } from "./subagent-actions";
+import { delegationIdForMessage } from "./subagent-panel";
 import { messageContentFacts } from "./transcript-summary";
 
 export type AssistantActivityItem =
@@ -158,10 +159,41 @@ function collectSubagentRuns(
 }
 
 /**
+ * Whether a `Task` row counts as an executed segment of a chain.
+ *
+ * A call counts when it carries the run's own identity — a delegation handle
+ * distinct from its call id — or when it is still spawning (`running` or
+ * `preparing` before the handle lands), or when its delegate left rows behind
+ * (legacy executions recorded no handle). A call that reports no failure
+ * keeps its old place even with neither yet: it is still pending or is a
+ * result-less legacy row, never a proven request attempt. Only a failed start
+ * — `error`/`denied` with no handle and no child rows — never started a run:
+ * it seeds no chain and extends none, while a run that started and later
+ * failed keeps its handle or its rows and stays in the chain.
+ *
+ * Every surface that walks resume edges shares this predicate — with the
+ * child set each already collects in its own single pass — so the run
+ * grouping, the resume links, the transcript index and the subagent transcript
+ * agree on which calls count as executed without re-reading the transcript.
+ */
+export function isAcceptedSubagentCall(message: UiMessage, hasChildRun: boolean): boolean {
+  if (message.role !== "tool" || !isDelegationStartTool(message.toolName)) return false;
+  const callId = message.toolCallId;
+  if (!callId) return false;
+  if (delegationIdForMessage(message) !== callId) return true;
+  if (message.toolStatus === "running" || message.toolStatus === "preparing") return true;
+  if (hasChildRun) return true;
+  // A call that reports no failure is still pending or is a legacy row without
+  // a recorded handle: only a failed start with no run behind it is excluded.
+  return message.toolStatus !== "error" && message.toolStatus !== "denied";
+}
+/**
+ * The delegation-chain structure of one transcript (ADR 0279).
  * The delegation-chain structure of one transcript (ADR 0279).
  *
  * `callByDelegationId` maps each Task result's `delegationId` to the call that
- * returned it; `childOf` links a resumed call to the call it resumed. Shared
+ * returned it; `childOf` links an executed resumed call to the call it resumed
+ * (a request attempt that never started a run extends no chain). Shared
  * by the delegation card grouping and the subagent transcript tab so both read
  * the same chain semantics from one place.
  */
@@ -171,7 +203,10 @@ export function delegationChainMaps(messages: readonly UiMessage[]): {
 } {
   const callByDelegationId = new Map<string, string>();
   const childOf = new Map<string, string>();
+  const childParents = new Set<string>();
+  const resumed: { prior: string; next: string; message: UiMessage }[] = [];
   for (const message of messages) {
+    if (message.parentToolCallId) childParents.add(message.parentToolCallId);
     if (message.role !== "tool" || !isDelegationStartTool(message.toolName)) {
       continue;
     }
@@ -198,7 +233,15 @@ export function delegationChainMaps(messages: readonly UiMessage[]): {
       typeof resume === "string" && resume.trim()
         ? callByDelegationId.get(resume.trim())
         : undefined;
-    if (prior) childOf.set(prior, toolCallId);
+    if (prior) resumed.push({ prior, next: toolCallId, message });
+  }
+  // The gate runs after the pass: child rows arrive after the call they belong
+  // to, so acceptance is only decided once the whole transcript is seen. A
+  // request attempt that never started a run extends no chain: without this
+  // the failed attempt would steal the resumed run's rows in the card grouping
+  // and retarget its chain.
+  for (const { prior, next, message } of resumed) {
+    if (isAcceptedSubagentCall(message, childParents.has(next))) childOf.set(prior, next);
   }
   return { callByDelegationId, childOf };
 }

@@ -1,5 +1,5 @@
 import type { MessageAttachment, UiMessage } from "@pi-desktop/shared";
-import { messageThinking, type SubagentRunItem } from "./assistant-turns";
+ import { isAcceptedSubagentCall, messageThinking, type SubagentRunItem } from "./assistant-turns";
 import { isUserOriginTaskMarker } from "./subagent-actions";
 import { isDelegationStartTool } from "./tool-display";
 import { subagentChainCallIds } from "./subagent-chain";
@@ -48,10 +48,11 @@ function chainCallIds(messages: readonly UiMessage[], delegationId: string): Set
 /**
  * Build the delegate's transcript from the session messages.
  *
- * A Task call belongs to the delegation of `delegationId` when the call
- * identifies itself by that id — via its result payload, or via its own call
- * id when the runtime recorded none — or when it resumed another call of that
- * chain. Turns appear in session order; each turn's rows are the messages
+ * An executed Task call belongs to the delegation of `delegationId` when the
+ * call identifies itself by that id — via its result payload, or via its own
+ * call id while the runtime is still spawning — or when it resumed another
+ * executed call of that chain. A rejected resume never started a run, so it
+ * opens no turn. Turns appear in session order; each turn's rows are the messages
  * whose `parentToolCallId` names that call, mapped exactly like the
  * delegation card's run grouping. Returns null when no Task call matches, so
  * the tab can show its unavailable state instead of an empty conversation.
@@ -87,10 +88,16 @@ export function buildSubagentTranscript(
     .find(Boolean);
   const agentName = runAgentName || requestedName;
 
-  const turns: SubagentTranscriptTurn[] = [];
+   // Child rows arrive after the call they belong to, so acceptance is decided
+   // against the whole transcript: a rejected resume never started a run and
+   // opens no turn.
+   const childParents = new Set<string>();
+   for (const message of messages) if (message.parentToolCallId) childParents.add(message.parentToolCallId);
+   const turns: SubagentTranscriptTurn[] = [];
   for (const call of calls) {
     const callId = call.toolCallId as string;
     if (!chain.has(callId)) continue;
+     if (!isAcceptedSubagentCall(call, childParents.has(callId))) continue;
     const task = delegateTaskDescription(call);
     // A user continuation's `Task` marker is the parent ledger row for a run
     // the user started; its follow-up enters the child as a user row.

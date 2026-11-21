@@ -1,6 +1,6 @@
 import type { SessionDetail, SessionHistoryScope, UiMessage } from "@pi-desktop/shared";
 import { delegationHistoryScope } from "@pi-desktop/shared";
-import { dedupeSessionMessages, upsertLiveSessionMessage } from "./session-transcript";
+ import { dedupeSessionMessages, orderRowsByLiveAnnouncement, upsertLiveSessionMessage } from "./session-transcript";
 import { subagentChainCallIds } from "./subagent-chain";
 import { delegationIdForMessage } from "./subagent-panel";
 import { isDelegationStartTool } from "./tool-display";
@@ -177,32 +177,36 @@ export function aliasesWith(aliases: readonly string[], next: string | undefined
   return [...aliases, next].slice(-MAX_ALIASES);
 }
 
-/**
- * Stable conversation order across the chain's evidence.
- *
- * Durable pages arrive in physical order, live rows arrive in session order,
- * and a chain's root `Task` records are kept apart from its child rows; the
- * merged view has to read like one conversation. Creation time is the order
- * the backend produced the rows in, and identical stamps keep their arrival
- * order, so the merge never reshuffles rows the reader already sees.
- */
-function orderedRows(rows: readonly UiMessage[]): UiMessage[] {
-  if (rows.length < 2) return [...rows];
-  const arrival = new Map<string, number>();
-  for (const [index, row] of rows.entries()) {
-    if (!arrival.has(row.id)) arrival.set(row.id, index);
-  }
-  return [...rows].sort((left, right) => {
-    const leftAt = left.createdAt;
-    const rightAt = right.createdAt;
-    if (leftAt !== rightAt) {
-      if (!leftAt) return 1;
-      if (!rightAt) return -1;
-      return leftAt < rightAt ? -1 : 1;
-    }
-    return (arrival.get(left.id) ?? 0) - (arrival.get(right.id) ?? 0);
-  });
-}
+
+ /**
+  * History baseline order for the delegate view: creation time, arrival-tied.
+  *
+  * This is the durable skeleton's own order — the rows the live tail does not
+  * name stay on it (paging, focus islands, and context keep the semantics the
+  * existing scoped-history tests pin down). It is not the tool order
+  * authority: rows the live tail names keep the first-announcement order the
+  * transcript already showed (see `orderRowsByLiveAnnouncement`), because
+  * completion re-stamps `createdAt` and durable pages arrive in finish order.
+  * The base stays chronological; the overlay only repositions live-named
+  * rows among themselves.
+  */
+ function orderedRows(rows: readonly UiMessage[]): UiMessage[] {
+   if (rows.length < 2) return [...rows];
+   const arrival = new Map<string, number>();
+   for (const [index, row] of rows.entries()) {
+     if (!arrival.has(row.id)) arrival.set(row.id, index);
+   }
+   return [...rows].sort((left, right) => {
+     const leftAt = left.createdAt;
+     const rightAt = right.createdAt;
+     if (leftAt !== rightAt) {
+       if (!leftAt) return 1;
+       if (!rightAt) return -1;
+       return leftAt < rightAt ? -1 : 1;
+     }
+     return (arrival.get(left.id) ?? 0) - (arrival.get(right.id) ?? 0);
+   });
+ }
 
 /** Every live row that belongs to the chain: its root `Task` rows and its children. */
 function ownedChainRows(
@@ -283,46 +287,83 @@ export function subagentHistoryTouchesLive(
   return false;
 }
 
-/**
- * The rows a delegate view renders: the chain's own cached rows plus the live
- * tail that belongs to it.
- *
- * The entry already owns the rows ingestion persisted; this merge keeps the
- * view correct for the publication boundary between a live event and a render,
- * and it resolves the chain over both views at once — a continuation opens its
- * own `Task(resume …)` call after the page was read, so only reading the cached
- * page and the live tail together keeps that segment on the tab that already
- * represents the chain.
- */
-export function subagentHistoryMessages(
-  entry: SubagentHistoryEntry | undefined,
-  live: readonly UiMessage[],
-): UiMessage[] {
+ /**
+  * The rows a delegate view renders: the chain's own cached rows plus the live
+  * tail that belongs to it.
+  *
+  * The entry already owns the rows ingestion persisted; this merge keeps the
+  * view correct for the publication boundary between a live event and a render,
+  * and it resolves the chain over both views at once — a continuation opens its
+  * own `Task(resume …)` call after the page was read, so only reading the cached
+  * page and the live tail together keeps that segment on the tab that already
+  * represents the chain.
+  *
+  * Two position rules, one authority each. The history baseline is
+  * chronological (`orderedRows`): rows the live tail does not name keep the
+  * creation-time order the existing scoped-history tests pin down, so paging,
+  * focus islands, and context keep their semantics. The live overlay
+  * (`orderRowsByLiveAnnouncement`) owns rows the live tail names: they keep
+  * the first-announcement order the transcript already showed, because
+  * completion re-stamps `createdAt` and durable pages arrive in finish order.
+  * For those live-named rows `createdAt` is display metadata, never a
+  * position key — a re-stamp or refresh only replaces values. Live rows stay
+  * authoritative for an id the cache already holds, so a completed child row
+  * replaces its streaming copy.
+  */
+ export function subagentHistoryMessages(
+   entry: SubagentHistoryEntry | undefined,
+   live: readonly UiMessage[],
+ ): UiMessage[] {
   if (!entry) return [...live];
-  const base = orderedRows(dedupeSessionMessages([...entry.context, ...entry.messages]));
-  if (!live.length) return base;
+  // Chronological history baseline first: the entry's own order already
+  // carries live announcement order for ingested rows, but paging prepends
+  // older pages ahead of focus islands, so the baseline must be restored by
+  // creation time. Completion re-stamps `createdAt` on the same id, so the
+  // baseline sort below only runs over rows the live tail does not name —
+  // live-named rows keep their entry slots here and the overlay restores
+  // their announcement order next. Either set alone would regress the other:
+  // a full re-sort moves a re-stamped A after B, entry order alone strands
+  // a paged focus island behind its older page.
+  const base = dedupeSessionMessages([...entry.context, ...entry.messages]);
+  if (!live.length) return orderedRows(base);
   const owned = ownedChainRows(entry, live);
-  if (!owned.context.length && !owned.messages.length) return base;
+  if (!owned.context.length && !owned.messages.length) return orderedRows(base);
   const ownedIds = new Set([...owned.context, ...owned.messages].map((row) => row.id));
   let output = base;
   for (const message of live) {
     if (!ownedIds.has(message.id)) continue;
-    // Live rows are authoritative for an id the cache already holds, so a
-    // completed child row replaces its streaming copy.
     output = upsertLiveSessionMessage(output, message);
   }
-  return orderedRows(output);
-}
+  const liveOrder = new Map<string, number>();
+  for (const [index, message] of live.entries()) {
+    if (!liveOrder.has(message.id)) liveOrder.set(message.id, index);
+  }
+  // Durable baseline: rows the live tail does not name keep chronological
+  // order among the positions they already hold; a live-only A is never
+  // moved by a sorted-B anchor because B's slot is not in this set.
+  const durablePositions: number[] = [];
+  for (const [index, message] of output.entries()) {
+    if (!liveOrder.has(message.id)) durablePositions.push(index);
+  }
+  const sortedDurable = orderedRows(durablePositions.map((position) => output[position]));
+  let next = output.slice();
+  durablePositions.forEach((position, step) => {
+    next[position] = sortedDurable[step];
+  });
+  // Live overlay second: rows the live tail names keep the first-announcement
+  // order among themselves; durable-only rows never move for them.
+  return orderRowsByLiveAnnouncement(next, liveOrder, (message) => liveOrder.has(message.id));
+ }
 
-/**
- * Trim the oldest rows of a chain that grew past its row budget.
- *
- * The focus row is kept wherever it sits, so trimming can leave it as an island
- * with a hole after it. That hole is recorded rather than hidden: the entry then
- * names the first row of the retained run that follows the island, and the view
- * states the omission there. A trim that only drops rows before every kept row
- * keeps the range contiguous, and no marker is set.
- */
+ /**
+  * Trim the oldest rows of a chain that grew past its row budget.
+  *
+  * The focus row is kept wherever it sits, so trimming can leave it as an island
+  * with a hole after it. That hole is recorded rather than hidden: the entry then
+  * names the first row of the retained run that follows the island, and the view
+  * states the omission there. A trim that only drops rows before every kept row
+  * keeps the range contiguous, and no marker is set.
+  */
 function limitRows(entry: SubagentHistoryEntry, limit: number): SubagentHistoryEntry {
   if (limit <= 0 || entry.messages.length <= limit) return entry;
   const focusId = entry.focus?.messageId;
