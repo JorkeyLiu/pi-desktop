@@ -32,6 +32,10 @@ const marketPanelSrc = readFileSync(
 );
 const settingsPageSrc = readSettingsSourceSync();
 const electronMainSrc = readMainSourceSync();
+const skillsManagement = [
+  readFileSync(join(settingsDir, "skills-management-model.ts"), "utf8"),
+  readFileSync(join(settingsDir, "useAgentSkillsManagement.ts"), "utf8"),
+].join("\n");
 const hostCapabilitySources = [
   readFileSync(join(here, "../../../crates/host-core/src/agent_capabilities.rs"), "utf8"),
   readFileSync(join(here, "../../../crates/host-core/src/user_skills.rs"), "utf8"),
@@ -148,13 +152,20 @@ test("Settings exposes three independent Agent capability destinations", () => {
   assert.match(settingsPageSrc, /tab === "subagents" && <AgentSubagentsPage \/>/);
   assert.match(settingsComponents.get("AgentCapabilityLayout.tsx"), /AgentCapabilityPage/);
   assert.match(settingsComponents.get("AgentCapabilityLayout.tsx"), /agent-capability-list/);
-  for (const name of ["AgentSkillsPage.tsx", "AgentMcpPage.tsx"]) {
+  for (const name of ["AgentMcpPage.tsx"]) {
     const source = settingsComponents.get(name);
     assert.match(source, /useAgentProjects\(\)/, name);
     assert.match(source, /AgentProjectPicker/, name);
     assert.match(source, /level: "global"/);
     assert.match(source, /level: "project"/);
   }
+  // Skills resolves its project through the extracted management hook; the
+  // page keeps the picker (Project mode only) and the level badges.
+  const skillsManagement = readFileSync(join(settingsDir, "useAgentSkillsManagement.ts"), "utf8");
+  assert.match(skillsManagement, /useAgentProjects\(\)/);
+  assert.match(settingsComponents.get("AgentSkillsPage.tsx"), /AgentProjectPicker/);
+  assert.match(settingsComponents.get("AgentSkillsPage.tsx"), /settings\.capabilityFilterGlobal/);
+  assert.match(settingsComponents.get("AgentSkillsPage.tsx"), /settings\.capabilityFilterProject/);
   assert.doesNotMatch(settingsComponents.get("AgentSubagentsPage.tsx"), /AgentProjectPicker|projectPath/);
 });
 
@@ -172,7 +183,7 @@ test("skill import is one native file and physically targets the selected level"
   assert.match(handler, /properties: \["openFile"\]/);
   assert.match(handler, /path: picked\.filePaths\[0\]/);
   assert.match(handler, /currentHost\.call\("skills\.import"/);
-  assert.match(settingsComponents.get("AgentSkillsPage.tsx"), /api\.importUserSkill\(/);
+  assert.match(skillsManagement, /api\.importUserSkill\(/);
   assert.match(hostCapabilitySources, /fs::copy\(source, target\)/);
 });
 
@@ -219,8 +230,11 @@ test("subagents are global-only and use the agents root", () => {
 });
 
 test("capability implementation does not use legacy .pi capability roots", () => {
+  const skillsModel = readFileSync(join(settingsDir, "skills-management-model.ts"), "utf8");
+  assert.match(skillsModel, /SKILLS_GLOBAL_PATH = "~\/\.agents\/skills"/);
   const implementation = [
     ...settingsComponents.values(),
+    skillsModel,
     pageSrc,
     settingsPageSrc,
     electronMainSrc,

@@ -9959,43 +9959,48 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   1. Open Settings > Agent and verify Skills, MCP, and Subagents are three
      independent navigation destinations. Open Extensions and verify that only
      Installed and Marketplace tabs are present.
-  2. Open Skills. Confirm one toolbar sits above one panel, the panel shows a
-     global group header rooted at `~/.agents/skills` and a project group header
-     rooted at project A's `.agents/skills`, both flow in one column at natural
-     page height, and the project picker changes the selected project. Confirm
-     the Skills toolbar has the same single primary action shape as MCP, with
-     the concise New label; the level-specific Import action is available in
-     each Skills group header.
-     On first paint confirm skeleton rows appear; on a later refresh confirm
-     the rows already on screen stay and the list dims instead.
-  3. Exercise the level filter and the search field. Confirm All / Global /
-     Project carry counts that agree with the rendered rows, that selecting a
-     level hides the other group without hiding the toolbar or its actions, that
-     search narrows both groups and its counts, that clearing the search
-     restores every row, and that a search with no matches reports it and
-     suggests widening the filter.
-  4. Toggle a global skill off while project A is selected. Confirm the switch
-     flips immediately without the list reverting to skeletons, the row is
-     dimmed, a toast names the skill, every other row stays interactive while
-     the request is in flight, and the global document remains unchanged. Switch
-     to project B and confirm the global skill remains enabled there. Force a
-     host rejection and confirm the switch returns to its previous position.
-  5. Create a skill from the page. With the filter on Global confirm the primary
-     action names the global destination and the new document lands in
-     `~/.agents/skills`; with the filter on Project confirm it names the project
-     and lands in project A. With Project selected and no project chosen,
-     confirm the attempt reports it instead of failing silently. Edit the new
-     skill, save, and confirm the body round-trips.
-  6. From a project skill's overflow menu choose Reveal and confirm the project
-     file is revealed, not a global file of the same id. Choose Remove and
-     confirm the first press only arms and relabels the item, the second press
-     deletes, and dismissing the menu disarms it.
-  7. Put a same-name project skill in A and disable it. Confirm the effective
-     runtime catalog does not fall back to the global skill; the project record
-     shadows first and filtering happens second.
-  8. Use the Import action to choose exactly one Markdown file. Confirm it is
-     physically copied to the level the filter points at, appears immediately,
-     and a second file cannot be selected in the same picker invocation.
+   2. Open Skills. Confirm one toolbar sits above one panel, the toolbar carries
+      a Global / Project management-mode switch with live counts and no All
+      filter, and the project picker appears only in Project mode. In Global
+      management confirm the panel shows the Built-in group plus a global group
+      rooted at `~/.agents/skills`; switch to Project management, pick project
+      A, and confirm the panel shows project A's `.agents/skills` group, the
+      global skills visible in A as context rows, and the read-only Built-in
+      group. Both modes flow in one column at natural page height. Confirm
+      the Skills toolbar has the same single primary action shape as MCP, with
+   3. Exercise the mode switch (MCP: the level filter) and the search field.
+      Confirm the segments carry counts that agree with the rendered rows, that
+      switching modes swaps the groups without hiding the toolbar or its
+      actions, that search narrows every group and its counts, that clearing
+      the search restores every row, and that a search with no matches reports
+      it and suggests widening the scope.
+   4. In Project management with project A selected, toggle a global context
+      skill off. Confirm the switch flips immediately without the list
+      reverting to skeletons, the row is dimmed and badged Overridden for this
+      project, a toast names the skill, every other row stays interactive while
+      the request is in flight, and the global document remains unchanged.
+      Choose Restore inheritance and confirm the row returns to the Inherited
+      from Global badge and the global value. Toggle it off again, switch to
+      project B, and confirm the global skill remains enabled there. Choose
+      Open in Global from a context row and confirm the page switches to Global
+      management. Force a host rejection and confirm the switch returns to its
+      previous position.
+   5. Create a skill from the page. In Global management confirm the primary
+      action names the global destination and the new document lands in
+      `~/.agents/skills`; in Project management with project A selected confirm
+      it names the project and lands in project A. In Project management with
+      no project chosen, confirm the attempt reports it instead of failing
+      silently. Edit the new skill, save, and confirm the body round-trips.
+   6. From a project skill's overflow menu choose Reveal and confirm the project
+      file is revealed, not a global file of the same id. Choose Remove and
+      confirm the first press only arms and relabels the item, the second press
+      deletes, and dismissing the menu disarms it.
+   7. Put a same-name project skill in A and disable it. Confirm the effective
+      runtime catalog does not fall back to the global skill; the project record
+      shadows first and filtering happens second.
+   8. Use the Import action to choose exactly one Markdown file. Confirm it is
+      physically copied to the management-mode destination, appears immediately,
+      and a second file cannot be selected in the same picker invocation.
   9. Open MCP. Add a project server and a global server, edit the project server,
      and test an existing connection from the row's overflow menu. Confirm the
      modal locks the id while editing, rejects a same-level duplicate id or
@@ -10036,11 +10041,12 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   - The three Settings pages use no tabs for switching capabilities, flow at
     natural page height for empty and populated states, support dark and light
     themes, and begin with quiet page-specific descriptions plus
-    project-over-global scope copy where relevant. Each page is one toolbar
-    above one panel: the toolbar carries the level filter with live counts, one
-    search field with a clear affordance, the project picker, and the primary
-    actions; the panel divides levels with group headers naming the level, its
-    resolved `.agents` path, and a localized count. Rows use quiet capability
+     project-over-global scope copy where relevant. Each page is one toolbar
+     above one panel: the toolbar carries the level filter with live counts
+     (Skills: the Global / Project management-mode switch, with the project
+     picker only in Project mode), one search field with a clear affordance,
+     and the primary actions; the panel divides levels with group headers naming
+     the level, its resolved `.agents` path, and a localized count. Rows use quiet
     icons, a level badge plus localized source/transport badges, descriptions,
     and persistent enablement switches; edit and the overflow menu stay quiet
     until the row is hovered, focused, or has its menu open, and are always
@@ -10051,8 +10057,9 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
     inside the panel without a decorative frame, show a host Lucide icon in a
     chip wrapper (not a padded raw SVG), and offer the page's primary
     action, and no capability-specific color system is introduced.
-  - Create, edit, and delete are available for all three capabilities without
-    leaving Settings. New capabilities land at the level the filter points at,
+   - Create, edit, and delete are available for all three capabilities without
+     leaving Settings. New capabilities land at the level the filter points at
+     (Skills: the management-mode destination, never a hidden project),
     destructive actions require two presses of the same relabelled menu item,
     and revealing a project-level skill opens that project's file rather than a
     global file sharing its id. The Subagents editor Model field is a grouped
@@ -10083,11 +10090,17 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 - **Status**: Source/unit covered by
   `apps/desktop/test/agent-capability-settings.test.mjs`,
   `apps/desktop/test/extensions-page.test.mjs`,
+  `apps/desktop/test/skills-management-model.test.mjs` (mode/project queries,
+  override provenance, destination gating, scope-guard staleness),
   `apps/desktop/test/subagent-models.test.mjs`,
   `apps/desktop/test/subagent-output-limit.test.mjs` (the output cap's path from
   the editor draft through host-core to the built delegate model), and host-core
-  capability tests;
-  full native-picker, rendered modal, project-switch, and runtime journey remain
+  capability tests. The rendered Skills journey — mode switch, project-scoped
+  list, override toggle, restore inheritance, create/import destination,
+  go-global navigation, explicit move destination — is covered by the isolated
+  Electron `apps/desktop/test/skills-management-user-path.test.mjs` (runs where
+  the Electron binary is installed);
+  full native-picker, runtime journey, and multi-project switching remain
   Draft (run only in a capable environment when this surface changes)
 
 #### E2E-CAPABILITY-move-across-levels: MCP servers and skills move between the global and project `.agents` levels
@@ -10099,8 +10112,10 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   `~/.agents/skills/review.md` (frontmatter name `Review`), and nothing else
   that uses the names used below. Project A owns no `echo` server and no
   `review` skill, and owns `<project A>/.agents/skills/with-resources/` holding
-  `SKILL.md` plus `scripts/run.sh` and `templates/report.md`. The MCP and
-  Skills pages show the project picker described in the Settings IA spec.
+   `SKILL.md` plus `scripts/run.sh` and `templates/report.md`. The MCP page shows
+   the project picker described in the Settings IA spec; the Skills page shows
+   it only in Project management — Global management moves a global skill
+   through an explicit destination dialog instead.
 - **Steps**:
   1. Open Settings > Agent > MCP with project A selected. Disable the global
      `echo` row, then choose Move into A. Confirm the row leaves the global
@@ -10112,11 +10127,14 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
      carries the disabled value.
   3. Create a new global `echo` server again (id `echo`, label `Echo`). With
      project A selected choose Move into A and confirm the arriving row is
-     `echo-2` with label `Echo (2)`, that project A's original `echo.json` is
-     byte-identical to before the move, and that both project rows list.
-  4. Open Skills with project A selected. Create a project `review.md` whose
-     frontmatter carries `name: Review`, a description, and an extra custom
-     field, plus a body; disable it, then choose Move to Global. Confirm it
+   4. Open Skills in Project management with project A selected. Create a project
+      `review.md` whose frontmatter carries `name: Review`, a description, and an
+      extra custom field, plus a body; disable it, then choose Move to Global.
+      Confirm it appears globally as `review-2`, arrives disabled, and leaves
+      the global `review.md` unchanged. Switch to Global management, choose Move
+      on the global `review` row, and confirm a destination dialog asks for an
+      explicit project — it never names a hidden workspace project. Pick project
+      B and confirm the row moves there.
      appears globally as `review-2`, arrives disabled, and leaves the global
      `review.md` unchanged.
   5. Diff the moved document against the project original: only the frontmatter
@@ -10126,10 +10144,12 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
      `<project A>/.agents/skills/with-resources/` is gone and
      `~/.agents/skills/with-resources/` holds `SKILL.md`, `scripts/run.sh`, and
      `templates/report.md` with identical bytes, and that the Skill tool still
-     resolves the document's resources.
-  7. Reload the global and project pages. Confirm the moved rows keep the
-     enablement they had across the reload, that project B lists none of the
-     project-A capabilities, and that the moved global `review-2` applies to
+   8. Clear the project selection in the toolbar. Confirm Move into <project> is
+      no longer offered on the remaining MCP global rows and the project group asks
+      for a project selection instead; re-select project B and confirm the
+      action returns. On the Skills page confirm Global management never shows
+      a project picker, and its global Move always opens the explicit
+      destination dialog.
      project B with the value it had after the move.
   8. Clear the project selection in the toolbar. Confirm Move into <project> is
      no longer offered on the remaining global rows and the project group asks
@@ -10166,8 +10186,11 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   root, asserting the documents and the state file on disk; host-core
   registry/state tests cover the rename, the id the scan derives, and directory
   resources; the source contract is pinned by
-  `apps/desktop/test/agent-capability-settings.test.mjs`). The rendered Settings
-  journey — row menu, toggle, toast — remains Draft.
+  `apps/desktop/test/agent-capability-settings.test.mjs`). The rendered
+  Settings journey — row menu, toggle, toast — for moves is covered by the
+  isolated Electron `apps/desktop/test/skills-management-user-path.test.mjs`
+  explicit-destination dialog run; the remaining rendered journey stays
+  Draft.
 
 #### E2E-120: Global plugin launch, next-turn editing, and stopped throughput
 

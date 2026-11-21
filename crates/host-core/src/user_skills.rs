@@ -43,6 +43,17 @@ pub struct UserSkillRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub enabled: bool,
+    /// How `enabled` was resolved when a global skill is listed with a
+    /// project context: `Override` when that project stores its own value,
+    /// `Inherited` when the row follows the global default. Absent on
+    /// project-level rows and on global rows listed without a project
+    /// context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_source: Option<SkillEnabledSource>,
+    /// The global default behind `enabled`; present alongside
+    /// `enabled_source`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_enabled: Option<bool>,
     #[serde(default)]
     pub scope: ActivationScope,
     pub source: String,
@@ -51,6 +62,16 @@ pub struct UserSkillRecord {
     pub size_bytes: u64,
     pub created_at: String,
     pub updated_at: String,
+}
+/// How a global skill's `enabled` value was resolved for one project: the
+/// project stores its own value (`Override`) or follows the global default
+/// (`Inherited`). Determined by stored-override presence, never by comparing
+/// `enabled` against the global default.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SkillEnabledSource {
+    Inherited,
+    Override,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -842,6 +863,30 @@ impl UserSkillRegistry {
             let enabled = self
                 .state
                 .enabled(SKILL_KIND, level, &id, effective_project);
+            // A global row listed with a project context carries how its toggle
+            // was resolved, so the settings page can show inherited vs.
+            // overridden state and offer to restore inheritance. Stored-override
+            // presence — never boolean equality — decides: a redundant override
+            // that equals the global default is still an override. Project rows
+            // and context-free global rows omit both fields.
+            let (enabled_source, global_enabled) = match (level, project_path) {
+                (CapabilityLevel::Global, Some(project)) => {
+                    let source = if self
+                        .state
+                        .project_override(SKILL_KIND, &id, project)
+                        .is_some()
+                    {
+                        SkillEnabledSource::Override
+                    } else {
+                        SkillEnabledSource::Inherited
+                    };
+                    (
+                        Some(source),
+                        Some(self.state.enabled(SKILL_KIND, level, &id, None)),
+                    )
+                }
+                _ => (None, None),
+            };
             let description = front
                 .get("description")
                 .map(|value| clip(value, MAX_DESCRIPTION_CHARS))
@@ -854,6 +899,8 @@ impl UserSkillRegistry {
                 project_path: owner_project_path.clone(),
                 description,
                 enabled,
+                enabled_source,
+                global_enabled,
                 scope,
                 source: "imported".into(),
                 path: path.to_string_lossy().to_string(),
@@ -1338,6 +1385,32 @@ impl UserSkillRegistry {
             Some(record_level),
             project_path.or(record.project_path.as_deref()),
         )
+    }
+    /// Drop one project's stored toggle override for one global skill, restoring
+    /// inheritance of the global default.
+    ///
+    /// Atomic and scoped: only the selected project's entry is removed — the
+    /// global default and every other project's override survive, and runtime
+    /// precedence is untouched. The skill must exist at the global level; a
+    /// project-only same-named document is a different file and is never
+    /// touched. A missing skill resolves to `None`, like `set_enabled`;
+    /// clearing a project that stores no override still returns the refreshed
+    /// record.
+    pub fn reset_project_override(
+        &mut self,
+        id: &str,
+        project_path: &str,
+    ) -> Result<Option<UserSkillRecord>> {
+        let project = normalize_project_path(project_path);
+        if project.is_empty() {
+            bail!("CAPABILITY_INVALID: projectPath is required to reset a project override");
+        }
+        let Some(record) = self.find(id, Some(CapabilityLevel::Global), Some(&project))? else {
+            return Ok(None);
+        };
+        self.state
+            .clear_project_override(SKILL_KIND, &record.id, &project)?;
+        self.find(&record.id, Some(CapabilityLevel::Global), Some(&project))
     }
 
     pub fn set_scope(

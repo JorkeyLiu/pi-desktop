@@ -12,14 +12,30 @@ const [panel, page, en, zh] = await Promise.all([
   read("../../../packages/i18n/src/locales/zh-CN/index.ts"),
 ]);
 
-test("skill market installs through the existing create path only", () => {
-  assert.match(panel, /api\.fetchSkillMarketDocument\(/);
-  assert.match(panel, /api\.createUserSkill\(/);
-  assert.match(panel, /assembleSkillInstall\(/);
-  assert.match(panel, /level: "global"/);
-  assert.match(panel, /scope: GLOBAL_SCOPE/);
-  assert.doesNotMatch(panel, /skillImport|writeFile|host\.call\(/);
-});
+ test("skill market installs through the existing create path only", () => {
+   assert.match(panel, /api\.fetchSkillMarketDocument\(/);
+   assert.match(panel, /api\.createUserSkill\(/);
+   assert.match(panel, /assembleSkillInstall\(/);
+   assert.match(panel, /level: installLevel,/);
+   assert.match(panel, /: GLOBAL_SCOPE,/);
+   assert.match(panel, /\{ mode: "projects", projects: \[projectPath\] \}/);
+   assert.doesNotMatch(panel, /skillImport|writeFile|host\.call\(/);
+ });
+
+ test("market install follows the management-mode destination with a go-global escape", () => {
+   assert.match(panel, /level: "global" \| "project";/);
+   assert.match(panel, /installDestinationReady = level === "global" \|\| Boolean\(projectPath\)/);
+   assert.match(panel, /if \(!installDestinationReady\) \{[\s\S]*?settings\.selectProjectFirst/);
+   assert.match(panel, /settings\.sklm\.installDestination/);
+   assert.match(panel, /settings\.sklm\.installDestinationProject/);
+   assert.match(panel, /settings\.sklm\.installNeedsProject/);
+   assert.match(panel, /settings\.sklm\.installToGlobalInstead/);
+   assert.match(panel, /settings\.sklm\.installDestinationGlobal/);
+   assert.match(panel, /onGoGlobal\?\.?\(\)|onGoGlobal\(\);/);
+   assert.match(page, /level=\{isProjectMode && selectedProjectPath \? "project" : "global"\}/);
+   assert.match(page, /projectPath=\{isProjectMode \? \(selectedProjectPath \?\? undefined\) : undefined\}/);
+   assert.match(page, /onGoGlobal=\{goGlobal\}/);
+ });
 
 test("install sheet previews the assembled document and blocks oversized bodies", () => {
   assert.match(panel, /settings\.sklm\.willInstall/);
@@ -95,7 +111,7 @@ test("a failed preview is reported instead of silently disabling install", () =>
     panel,
     /showToast\(\s*t\(\s*kind === "policy"[\s\S]{0,400}\{ variant: "error" \}/,
   );
-  assert.match(panel, /disabled=\{installing \|\| documentBody === null \|\| documentTooLarge\}/);
+  assert.match(panel, /disabled=\{\s*installing \|\|\s*documentBody === null \|\|\s*documentTooLarge \|\|\s*!installDestinationReady\s*\}/);
   assert.match(panel, /const retryPreview = \(\) => \{/);
   assert.match(panel, /if \(installFor\) loadDocument\(installFor\)/);
 });
@@ -154,41 +170,46 @@ test("a proxy fake-IP gets its own copy and names the address it came from", () 
     panel,
     /kind === "fake-ip"\s*\? "settings\.sklm\.previewFakeIpError"/,
   );
-  assert.match(panel, /settings\.sklm\.fakeIpHint/);
-  assert.match(panel, /settings\.sklm\.fakeIpHintPlain/);
-  // The hint names what actually happened: which host, and which address the
-  // local proxy answered with.
-  assert.match(panel, /const fakeIpFailureText = \(\) => \{/);
-  assert.match(
-    panel,
-    /t\("settings\.sklm\.fakeIpHint", \{ host: detail\.host, address: detail\.address \}\)/,
-  );
-  assert.match(panel, /remote\.failureKinds\[entry\] === "fake-ip"/);
-  // The address has to survive the state type, or the hint above cannot read it.
-  assert.match(panel, /address\?: string/);
-});
+   assert.match(panel, /settings\.sklm\.fakeIpHint/);
+   assert.match(panel, /settings\.sklm\.fakeIpHintPlain/);
+   // The hint names what actually happened: which host, and which address the
+   // local proxy answered with.
+   assert.match(panel, /const fakeIpFailureText = \(\) => \{/);
+   assert.match(
+     panel,
+     /t\("settings\.sklm\.fakeIpHint", \{ host: detail\.host, address: detail\.address \}\)/,
+   );
+   assert.match(panel, /remote\.failureKinds\[entry\] === "fake-ip"/);
+   // The address has to survive the state type, or the hint above cannot read it.
+   assert.match(panel, /address\?: string/);
+ });
 
-test("every shipped locale carries the new skill market strings", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const ids = ["en", "zh-CN", "zh-TW", "de", "es", "fr", "ko", "tr", "pt-BR"];
-  const keys = [
-    "previewError",
-    "previewPolicyError",
-    "previewResolveError",
-    "previewFakeIpError",
-    "proxyHint",
-    "dnsHint",
-    "fakeIpHint",
-    "fakeIpHintPlain",
-    "failureDetail",
-    "retryPreview",
-    "remoteErrorPolicy",
-    "remoteErrorUnresolved",
-    "remoteErrorFakeIp",
-    "remoteErrorQuery",
-    "remotePartial",
-    "failureSourceHost",
-  ];
+ test("every shipped locale carries the new skill market strings", async () => {
+   const { readFile } = await import("node:fs/promises");
+   const ids = ["en", "zh-CN", "zh-TW", "de", "es", "fr", "ko", "tr", "pt-BR"];
+   const keys = [
+     "previewError",
+     "previewPolicyError",
+     "previewResolveError",
+     "previewFakeIpError",
+     "proxyHint",
+     "dnsHint",
+     "fakeIpHint",
+     "fakeIpHintPlain",
+     "failureDetail",
+     "retryPreview",
+     "remoteErrorPolicy",
+     "remoteErrorUnresolved",
+     "remoteErrorFakeIp",
+     "remoteErrorQuery",
+     "remotePartial",
+     "failureSourceHost",
+     "installDestination",
+     "installDestinationGlobal",
+     "installDestinationProject",
+     "installNeedsProject",
+     "installToGlobalInstead",
+   ];
   for (const id of ids) {
     const locale = await readFile(
       new URL(`../../../packages/i18n/src/locales/${id}/index.ts`, import.meta.url),

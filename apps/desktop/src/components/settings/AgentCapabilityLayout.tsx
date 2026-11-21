@@ -198,15 +198,17 @@ export function AgentCapabilityPage({
   );
 }
 
-/**
- * One toolbar for the whole page: the level filter demoted from a page section
- * to a segmented control with live counts, one search field, the project the
- * project level resolves against, and the page's primary actions.
- */
+ /**
+  * One toolbar for the whole page: the level filter (or a page-owned mode
+  * switch in the same slot) as a segmented control with live counts, one
+  * search field, the project the project level resolves against, and the
+  * page's primary actions.
+  */
 export function CapabilityToolbar({
   filter,
   onFilterChange,
   counts,
+  modeSwitch,
   search,
   onSearchChange,
   searchPlaceholder,
@@ -217,6 +219,8 @@ export function CapabilityToolbar({
   filter?: CapabilityFilter;
   onFilterChange?: (filter: CapabilityFilter) => void;
   counts?: { all: number; global: number; project: number };
+  /** Page-owned scope switch (e.g. Skills management modes) in the filter slot. */
+  modeSwitch?: ReactNode;
   search: string;
   onSearchChange: (value: string) => void;
   searchPlaceholder: string;
@@ -242,6 +246,7 @@ export function CapabilityToolbar({
       : [];
   return (
     <div className="agent-capability-toolbar">
+      {modeSwitch ?? null}
       {filter && onFilterChange && segments.length > 0 ? (
         <SegmentedControl
           value={filter}

@@ -74,6 +74,8 @@ fn disabled_project_skill_shadows_global_skill() {
         project_path: None,
         description: Some("Global".into()),
         enabled: true,
+        enabled_source: None,
+        global_enabled: None,
         scope: ActivationScope::default(),
         source: "imported".into(),
         path: "/global/review.md".into(),
@@ -246,6 +248,8 @@ fn record(id: &str, name: &str) -> UserSkillRecord {
         project_path: None,
         description: None,
         enabled: true,
+        enabled_source: None,
+        global_enabled: None,
         scope: ActivationScope::default(),
         source: "imported".into(),
         path: String::new(),
@@ -956,4 +960,183 @@ fn directory_skill_package_rejects_traversal() {
         .to_string();
     assert!(error.contains("SKILL_INVALID"));
     assert!(!app.path().join("outside.txt").exists());
+}
+#[test]
+fn global_list_with_project_context_reports_inherited_vs_override() {
+    let home = tempdir().unwrap();
+    let app = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    let project_path = project_dir(project.path());
+    test_support::with_global_agents(home.path(), || {
+        skill_home(home.path());
+        fs::write(
+            home.path().join("skills/review.md"),
+            "---\nname: Review\ndescription: Check code\n---\n\nDo it.\n",
+        )
+        .unwrap();
+        let mut registry = UserSkillRegistry::new(app.path());
+        // No stored state: the row inherits the global default.
+        let listed = registry
+            .list(CapabilityLevel::Global, Some(&project_path))
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].enabled);
+        assert_eq!(
+            listed[0].enabled_source,
+            Some(SkillEnabledSource::Inherited)
+        );
+        assert_eq!(listed[0].global_enabled, Some(true));
+        // A project toggle stores an override: the source flips while the
+        // reported global default stays put.
+        registry
+            .set_enabled(
+                "review",
+                false,
+                Some(CapabilityLevel::Global),
+                Some(&project_path),
+            )
+            .unwrap();
+        let listed = registry
+            .list(CapabilityLevel::Global, Some(&project_path))
+            .unwrap();
+        assert!(!listed[0].enabled);
+        assert_eq!(listed[0].enabled_source, Some(SkillEnabledSource::Override));
+        assert_eq!(listed[0].global_enabled, Some(true));
+        // The contract fields travel under their camelCase names.
+        let wire = serde_json::to_value(&listed[0]).unwrap();
+        assert_eq!(wire["enabledSource"], "override");
+        assert_eq!(wire["globalEnabled"], true);
+        // Project rows and context-free global rows omit both fields.
+        let plain = registry.list(CapabilityLevel::Global, None).unwrap();
+        assert_eq!(plain[0].enabled_source, None);
+        assert_eq!(plain[0].global_enabled, None);
+    });
+}
+#[test]
+fn redundant_override_stays_an_override_until_it_is_reset() {
+    let home = tempdir().unwrap();
+    let app = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    let project_path = project_dir(project.path());
+    test_support::with_global_agents(home.path(), || {
+        skill_home(home.path());
+        fs::write(
+            home.path().join("skills/review.md"),
+            "---\nname: Review\n---\n\nDo it.\n",
+        )
+        .unwrap();
+        let mut registry = UserSkillRegistry::new(app.path());
+        registry
+            .set_enabled("review", false, Some(CapabilityLevel::Global), None)
+            .unwrap();
+        registry
+            .set_enabled(
+                "review",
+                true,
+                Some(CapabilityLevel::Global),
+                Some(&project_path),
+            )
+            .unwrap();
+        // The global default later flips to match the stored override.
+        registry
+            .set_enabled("review", true, Some(CapabilityLevel::Global), None)
+            .unwrap();
+        let listed = registry
+            .list(CapabilityLevel::Global, Some(&project_path))
+            .unwrap();
+        assert!(listed[0].enabled);
+        assert_eq!(listed[0].enabled_source, Some(SkillEnabledSource::Override));
+        assert_eq!(listed[0].global_enabled, Some(true));
+        // Reset restores inheritance; the row then tracks the default again.
+        let reset = registry
+            .reset_project_override("review", &project_path)
+            .unwrap()
+            .expect("global skill exists");
+        assert!(reset.enabled);
+        assert_eq!(reset.enabled_source, Some(SkillEnabledSource::Inherited));
+        registry
+            .set_enabled("review", false, Some(CapabilityLevel::Global), None)
+            .unwrap();
+        let listed = registry
+            .list(CapabilityLevel::Global, Some(&project_path))
+            .unwrap();
+        assert!(!listed[0].enabled);
+        assert_eq!(
+            listed[0].enabled_source,
+            Some(SkillEnabledSource::Inherited)
+        );
+    });
+}
+#[test]
+fn reset_project_override_is_scoped_and_validated() {
+    let home = tempdir().unwrap();
+    let app = tempdir().unwrap();
+    let first = tempdir().unwrap();
+    let second = tempdir().unwrap();
+    let first_path = project_dir(first.path());
+    let second_path = project_dir(second.path());
+    test_support::with_global_agents(home.path(), || {
+        skill_home(home.path());
+        fs::write(
+            home.path().join("skills/review.md"),
+            "---\nname: Review\n---\n\nDo it.\n",
+        )
+        .unwrap();
+        fs::create_dir_all(second.path().join(".agents/skills")).unwrap();
+        fs::write(
+            second.path().join(".agents/skills/review.md"),
+            "---\nname: Review\n---\n\nProject copy.\n",
+        )
+        .unwrap();
+        let mut registry = UserSkillRegistry::new(app.path());
+        registry
+            .set_enabled(
+                "review",
+                false,
+                Some(CapabilityLevel::Global),
+                Some(&first_path),
+            )
+            .unwrap();
+        registry
+            .set_enabled(
+                "review",
+                false,
+                Some(CapabilityLevel::Global),
+                Some(&second_path),
+            )
+            .unwrap();
+        // Resetting one project leaves the other's override alone.
+        let reset = registry
+            .reset_project_override("review", &first_path)
+            .unwrap()
+            .expect("global skill exists");
+        assert!(reset.enabled);
+        let second_listed = registry
+            .list(CapabilityLevel::Global, Some(&second_path))
+            .unwrap();
+        assert!(!second_listed[0].enabled);
+        assert_eq!(
+            second_listed[0].enabled_source,
+            Some(SkillEnabledSource::Override)
+        );
+        // A project-level same-named document is untouched: reset still
+        // reports the global row, which keeps its own (empty) state.
+        let project_listed = registry
+            .list(CapabilityLevel::Project, Some(&second_path))
+            .unwrap();
+        assert_eq!(project_listed.len(), 1);
+        assert_eq!(project_listed[0].enabled_source, None);
+        assert_eq!(project_listed[0].global_enabled, None);
+        // Unknown ids resolve to None, like `set_enabled`.
+        assert!(registry
+            .reset_project_override("no-such-skill", &first_path)
+            .unwrap()
+            .is_none());
+        // An empty project context is rejected, never treated as global.
+        assert!(registry
+            .reset_project_override("review", "   ")
+            .unwrap_err()
+            .to_string()
+            .contains("CAPABILITY_INVALID"));
+    });
 }

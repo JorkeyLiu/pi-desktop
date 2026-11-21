@@ -1340,6 +1340,16 @@ export const api = {
     enabled: boolean,
     query?: Partial<AgentCapabilityQuery>,
   ) => invoke(IPC.invoke.skillSetEnabled, { id, enabled, ...query }),
+  /**
+   * Drop one project's stored toggle override for a global skill, restoring
+   * inheritance of the global default. The global default and other projects
+   * are untouched. Carries the level plus the project, like the other
+   * project-context mutations.
+   */
+  resetUserSkillEnabled: (
+    id: string,
+    query: AgentCapabilityQuery,
+  ) => invoke(IPC.invoke.skillResetEnabled, { id, ...query }),
   setUserSkillScope: (id: string, scope: ActivationScope) =>
     invoke(IPC.invoke.skillSetScope, { id, scope }),
   /**

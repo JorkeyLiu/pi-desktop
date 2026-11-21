@@ -1807,8 +1807,19 @@ one-liner.
 - `skills.read({ id, level?, projectPath? })` → `{ skill, body }`
 - `skills.remove({ id, level?, projectPath? })`
 - `skills.setEnabled({ id, enabled, level, projectPath? })`
+- `skills.resetEnabled({ id, level: "global", projectPath })` → `{ skill }` —
+   drops one project's stored toggle override for a global skill, restoring
+   inheritance of the global default. The global default and other projects are
+   untouched; a missing skill resolves to `{ skill: null }`.
 - `skills.disabledBuiltins()` → `{ disabled: string[] }`
 - `skills.setBuiltinEnabled({ id, enabled })` → `{ id, enabled }`
+
+ When a global skill is listed with a project context, each record also carries
+ `enabledSource` (`"inherited"` when the row follows the global default,
+ `"override"` when the project stores its own value) and `globalEnabled` (the
+ global default). Override state is determined by stored-override presence,
+ never by comparing `enabled` against the global default. Both fields are
+ absent on project-level rows and on global rows listed without a project.
 
 Built-in skill activation is global and defaults to enabled. Host stores only
 disabled IDs in `<data>/agent-capabilities/skill-builtins.json`, separately

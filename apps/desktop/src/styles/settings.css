@@ -2587,6 +2587,24 @@
   font-size: var(--text-3xs);
   line-height: var(--leading-normal);
 }
+.agent-capability-scope-note {
+  margin: 0;
+  color: var(--ds-text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-compact);
+}
+
+.agent-capability-hint {
+  color: var(--ds-text-muted);
+  font-size: var(--text-xs);
+}
+
+.agent-capability-move-picker {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
 
 .agent-capability-row-actions {
   display: flex;
