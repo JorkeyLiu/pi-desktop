@@ -81,7 +81,7 @@ export function resolveResumeChain(
     case "running":
       return {
         ok: false,
-        message: `Delegation ${error.delegationId} is still running. Call TaskWait to converge with it first, or start a new delegation. Resuming a running delegation is not queued.`,
+        message: `Delegation ${error.delegationId} is still running. To steer it while it runs, call TaskSteer with its delegationId; TaskWait converges with it when it finishes. Resuming a running delegation is not queued.`,
       };
     case "agent-mismatch":
       return {

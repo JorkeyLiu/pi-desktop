@@ -37,16 +37,25 @@ never reached the renderer. There was also nowhere to put the phase:
 Add one optional, transient field, `UiMessage.thinkingStatus:
 "streaming" | "complete"`, owned end to end as follows:
 
-- Both producers (main runtime, subagent runtime) fold typed thinking frames
+- Both producers (main runtime, subagent runtime) fold typed provider frames
   through one shared helper (`packages/agent-runtime/src/thinking-phase.ts`).
-  `thinking_start` reports `streaming`, `thinking_end` reports `complete`,
-  each emitted even when the frame carries no content delta. A duplicate or
-  stray end for a block that is not open is ignored so it can never clear a
-  newer block; text and tool-call frames never move the phase. Streams that
-  settle without `thinking_end` (including upstream `done` frames that omit
-  it) complete the phase at the terminal boundary (`message_end`, abort,
-  error, run teardown); a fresh bubble resets it. Real thinking deltas that
-  arrive without typed frames still report `streaming` for compatibility.
+  The field states a *generation phase* — what the model is producing right
+  now — not whether any thinking block is still open. `thinking_start` /
+  `thinking_delta` report `streaming`. A real text or tool-call
+  `*_start` / `*_delta` reports `complete` even when the thinking block never
+  emits its own end: Responses can start a tool call before its reasoning
+  item is done, and completions stream one final finish block. `thinking_end`
+  ends only the block that is currently generating, so a late end for an
+  earlier block never closes newer thinking and a duplicate end never reopens
+  a completed phase; text and tool-call `*_end` markers describe another
+  lane and never move the phase. Every provider-attempt teardown completes
+  still-generating thinking through the helper's `finish()` — including the
+  silent-turn, progress-only, overflow, and provider-retry reruns that keep
+  the same visible bubble — and drops the tracked lane, so a retry reopens
+  thinking only on a real thinking frame. A fresh bubble resets it.
+  Real thinking deltas that arrive without typed frames still report
+  `streaming` for compatibility, while a typed frame always wins over a
+  cumulative thinking delta.
 - The shared transport (`streamingMessageIdentity`, delta detection, merge,
   apply) preserves an explicit phase with `!== undefined` checks, so slimming
   and coalescing keep `complete` as well as `streaming`.
@@ -62,9 +71,11 @@ Add one optional, transient field, `UiMessage.thinkingStatus:
 
 ## Consequences
 
-- The indicator now stops exactly when thinking stops, including the
-  thinking-then-nothing case, and restarts exactly on a newer
-  `thinking_start`, without inferring anything from later tools or text.
+- The indicator stops exactly when generation leaves thinking — a real text
+  or tool-call frame, an end of the block that is generating, the attempt
+  teardown, or the terminal boundary — even for providers that never close
+  the thinking block, and restarts exactly on a newer thinking frame, without
+  inferring anything from later tools, text, or the renderer's layout.
 - History rows restored from storage carry no phase and behave exactly as
   before via the documented fallback.
 - This ADR records an internal transient convention only. It changes no frozen

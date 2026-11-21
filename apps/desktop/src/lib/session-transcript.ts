@@ -112,6 +112,53 @@ export function projectMessageEnd(
     : upsertLiveSessionMessage(next, event.message);
 }
 
+ // A tool row's transcript position is fixed at its first announcement.
+ //
+ // A call is announced once (tool_prepare, or its first tool_start /
+ // message when it was never prepared) and completion, refresh, or replay
+ // must never move it: tool_end rewrites the row's value, durable pages
+ // arrive in finish order, and createdAt is re-stamped by completion and
+ // replay, so none of them are a stable sort key. The live tail owns the
+ // announcement order; a durable page owns only the rows the live tail does
+ // not name. Rows the live tail owns keep the order the transcript already
+ // showed; rows it does not name stay on the durable skeleton. Values keep
+ // their own authority here — only positions are restored.
+ //
+ // The predicate names the skeleton rows the live tail may order: the main
+ // merge passes rows the durable page holds, the delegate merge passes rows
+ // the live tail names. Both transcript paths therefore share one position
+ // authority instead of two contradictory order rules.
+ export function orderRowsByLiveAnnouncement(
+   merged: UiMessage[],
+   liveOrder: ReadonlyMap<string, number>,
+   liveOwnsPosition: (message: UiMessage) => boolean,
+ ): UiMessage[] {
+   const ownedPositions: number[] = [];
+   for (const [index, message] of merged.entries()) {
+     if (liveOwnsPosition(message) && liveOrder.has(message.id)) ownedPositions.push(index);
+   }
+   let ordered = true;
+   for (let step = 1; step < ownedPositions.length; step += 1) {
+     const previous = liveOrder.get(merged[ownedPositions[step - 1]].id) ?? 0;
+     const current = liveOrder.get(merged[ownedPositions[step]].id) ?? 0;
+     if (previous > current) {
+       ordered = false;
+       break;
+     }
+   }
+   if (ordered) return merged;
+   const sorted = ownedPositions
+     .map((position) => merged[position])
+     .sort(
+       (left, right) => (liveOrder.get(left.id) ?? 0) - (liveOrder.get(right.id) ?? 0),
+     );
+   const next = merged.slice();
+   ownedPositions.forEach((position, step) => {
+     next[position] = sorted[step];
+   });
+   return next;
+ }
+
 /**
  * Collapse repeated transcript rows by their canonical message id.
  *
@@ -410,37 +457,14 @@ export function mergeLiveSessionMessages(
   // A in the durable page while the transcript already showed A/B. Shared
   // rows keep the order the transcript already showed (the live announcement
   // order); rows the durable page alone owns stay on the durable skeleton,
-  // and durable values stay authoritative — only positions are preserved.
+  // and durable values stay authoritative — only positions are restored.
   const liveOrder = new Map<string, number>();
   for (const [index, message] of liveNormalized.entries()) {
     if (!liveOrder.has(message.id)) liveOrder.set(message.id, index);
   }
-  const sharedPositions: number[] = [];
-  for (const [index, message] of merged.entries()) {
-    if (durableIds.has(message.id) && liveOrder.has(message.id)) sharedPositions.push(index);
-  }
-  let sharedOrdered = true;
-  for (let step = 1; step < sharedPositions.length; step += 1) {
-    const previous = liveOrder.get(merged[sharedPositions[step - 1]].id) ?? 0;
-    const current = liveOrder.get(merged[sharedPositions[step]].id) ?? 0;
-    if (previous > current) {
-      sharedOrdered = false;
-      break;
-    }
-  }
-  let ordered = merged;
-  if (!sharedOrdered) {
-    const sorted = sharedPositions
-      .map((position) => merged[position])
-      .sort(
-        (left, right) => (liveOrder.get(left.id) ?? 0) - (liveOrder.get(right.id) ?? 0),
-      );
-    const next = merged.slice();
-    sharedPositions.forEach((position, step) => {
-      next[position] = sorted[step];
-    });
-    ordered = next;
-  }
+  const ordered = orderRowsByLiveAnnouncement(merged, liveOrder, (message) =>
+    durableIds.has(message.id),
+  );
 
   const unchanged =
     ordered.length === durable.length &&

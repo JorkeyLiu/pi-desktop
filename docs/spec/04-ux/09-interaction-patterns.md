@@ -1081,8 +1081,11 @@ it cannot be dragged or resized, and it never reaches the platform titlebar.
    moves ahead when it starts or finishes first.
  - The explicit thinking phase shows the active indicator in a turn and
    in a delegate run: `complete` stays still even with nothing after it,
-   `streaming` breathes while active, and a newer start breathes again. Rows
-   without the phase field keep the streaming-and-content-free fallback.
+   `streaming` breathes while active, and a newer start breathes again. It
+   reports generation, not open blocks: real text or a tool call starting
+   stops the indicator even when the provider never closes the thinking block,
+   and the newest tool row never decides it. Rows without the phase field keep
+   the streaming-and-content-free fallback.
 - Activating the process or an item header toggles only that level. Closing a
   parent preserves item state, reopening restores it, and sibling rows remain
   independent. Opening a parent is never an expand-all action.
@@ -1686,10 +1689,12 @@ Project drag/drop follows these patterns:
   replacing the tab strip. Multiple delegations coexist as independent tabs —
   ten subagents yield ten tabs — with the standard tab affordances (activate,
   drag-reorder, close via ×, middle-click, or Delete, and wheel overflow).
-  A tab shows the delegation as a message list: every `Task` call of the
+  A tab shows the delegation as a message list: every executed `Task` call of the
   resume chain renders its prompt as a user row, and the rows the delegate
   produced under that call render with the main transcript's message-list
-  language, so a follow-up prompt reads as the next user turn. A user
+  language, so a follow-up prompt reads as the next user turn. A rejected resume
+  started no run, so it renders no row there: its brief was never delivered, and
+  the failed request stays visible only as the parent's failed tool row. A user
   continuation's prompt appears once — the turn's user row — never again as a
   repeated child echo. One Send composer serves both states: a live delegate
   steers text-only via `pi-desktop/agent/steerSubagent` with the owning turn

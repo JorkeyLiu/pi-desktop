@@ -5,6 +5,8 @@ import { createInstance } from "i18next";
 import { I18nextProvider } from "react-i18next";
 import { catalogs } from "@pi-desktop/i18n";
 import type { AppSettings, HostedSearchRound, UiMessage } from "@pi-desktop/shared";
+import { applyMessageUpdate } from "@pi-desktop/shared";
+import thinkingGenerationTrace from "./fixtures/thinking-generation-phase.json";
 import { AssistantTurn } from "../../apps/desktop/src/features/chat/transcript/AssistantTurn";
 import { ThinkingRow } from "../../apps/desktop/src/features/chat/transcript/shared";
 import { ToolRow } from "../../apps/desktop/src/features/chat/transcript/ToolRow";
@@ -847,6 +849,104 @@ globalThis.thinkingRowProbe = async () => {
        restored: tokenInk("--ds-activity-read"),
        darkReadInk,
      });
+    // ── 11. The runtime's own wire trace decides the dot ──
+    // These frames are the agent runtime's real event stream (thinking frames
+    // through the production stream coalescer), checked in as
+    // scripts/e2e/fixtures/thinking-generation-phase.json and asserted by the
+    // agent-runtime thinking-status test. Nothing here sets a phase by hand:
+    // the row is rebuilt only through production applyMessageUpdate, so the
+    // check fails if the runtime stops reporting the generation phase.
+    const wireEvents = thinkingGenerationTrace as unknown as Array<{
+      type: string;
+      message?: UiMessage;
+      ready?: boolean;
+      toolCallId?: string;
+      toolName?: string;
+    }>;
+    let completeAt = -1;
+    let prepareAt = -1;
+    let readyPrepareAt = -1;
+    let readyPrepare: (typeof wireEvents)[number] | undefined;
+    wireEvents.forEach((event, index) => {
+      if (
+        completeAt === -1 &&
+        event.type === "message_update" &&
+        event.message?.thinkingStatus === "complete"
+      ) {
+        completeAt = index;
+      }
+      if (prepareAt === -1 && event.type === "tool_prepare") prepareAt = index;
+      if (readyPrepareAt === -1 && event.type === "tool_prepare" && event.ready === true) {
+        readyPrepareAt = index;
+        readyPrepare = event;
+      }
+    });
+    check(
+      "the recorded wire completes the phase before its tool row",
+      completeAt > -1 && prepareAt > -1 && completeAt < prepareAt,
+      { completeAt, prepareAt },
+    );
+    // The ready frame is the one that ends argument generation: it is the
+    // moment the tool row stops preparing, so the dot must stop before it.
+    check(
+      "the recorded wire completes the phase before tool arguments are ready",
+      completeAt > -1 && readyPrepareAt > -1 && completeAt < readyPrepareAt,
+      { completeAt, readyPrepareAt },
+    );
+    if (!readyPrepare?.toolCallId || !readyPrepare.toolName) {
+      throw new Error("the wire trace recorded no ready tool call");
+    }
+    const wiredToolCallId = readyPrepare.toolCallId;
+    const wiredToolName = readyPrepare.toolName;
+    let wireRow: UiMessage | undefined;
+    for (const event of wireEvents) {
+      if (event.type === "message_start" || event.type === "message_end") {
+        wireRow = event.message;
+      } else if (event.type === "message_update") {
+        wireRow = applyMessageUpdate(wireRow, event as never);
+        if (wireRow.thinkingStatus === "complete") break;
+      }
+    }
+    if (!wireRow) throw new Error("the wire trace produced no assistant row");
+    check(
+      "the replayed row is still streaming when its phase completes",
+      wireRow.thinkingStatus === "complete" && wireRow.status === "streaming",
+      { thinkingStatus: wireRow.thinkingStatus, status: wireRow.status },
+    );
+    const wireTurn = buildTranscriptEntries([
+      message("wire-user", "Keep going.", { role: "user" }),
+      wireRow,
+      message("wire-call", "", {
+        role: "tool",
+        toolName: wiredToolName,
+        toolCallId: wiredToolCallId,
+        toolStatus: "running",
+        status: "streaming",
+        toolArgs: {},
+      }),
+    ]).entries.find((entry) => entry.kind === "assistant-turn");
+    if (!wireTurn) throw new Error("the wire turn did not build");
+    const wireHost = mount(narrow, <AssistantTurn entry={wireTurn as never} isActive />);
+    await settle();
+    const wireHeader = wireHost.querySelector<HTMLElement>(
+      ".turn-process > .tool-activity-header",
+    );
+    if (wireHeader && wireHeader.getAttribute("aria-expanded") !== "true") {
+      wireHeader.click();
+      await settle();
+    }
+    const wireThinking = [...wireHost.querySelectorAll<HTMLElement>(".tool-row.thinking")];
+    check("the replayed thought stays painted", wireThinking.length === 1, wireThinking.length);
+    check(
+      "the replayed generation phase stops the dot while the message streams",
+      wireThinking[0]?.querySelector(".tool-row-name.running") === null,
+      wireThinking[0]?.textContent?.slice(0, 120),
+    );
+    check(
+      "the replayed tool row appears beside the stopped dot",
+      wireHost.querySelector('[data-message-id="wire-call"]') !== null,
+      wireHost.textContent?.slice(0, 160),
+    );
      check(
        "the rendered components raised no errors",
        renderErrors.length === 0,

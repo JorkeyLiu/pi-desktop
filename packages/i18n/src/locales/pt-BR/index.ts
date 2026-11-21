@@ -566,6 +566,7 @@ export const ptBR = {
     toolIdentityTaskWait: "Aguardar tarefa",
     toolIdentityTaskList: "Lista de tarefas",
     toolIdentityTaskStop: "Parar tarefa",
+    toolIdentityTaskSteer: "Orientar tarefa",
     toolIdentityTodo: "Lista de tarefas",
     toolIdentitySkill: "Habilidade",
     toolIdentityToolSearch: "Pesquisar ferramentas",

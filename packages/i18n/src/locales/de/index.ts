@@ -567,6 +567,7 @@ export const de = {
     "toolIdentityTaskWait": "Aufgabe abwarten",
     "toolIdentityTaskList": "Aufgabenliste",
     "toolIdentityTaskStop": "Aufgabe stoppen",
+    "toolIdentityTaskSteer": "Aufgabe steuern",
     "toolIdentityTodo": "Aufgabenliste",
     "toolIdentitySkill": "Fähigkeit",
     "toolIdentityToolSearch": "Werkzeuge suchen",

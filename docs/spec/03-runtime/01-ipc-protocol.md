@@ -858,13 +858,16 @@ terminal, abort, error, and retry events.
 replacements omit `stream`. These fields are additive in protocol v11 (D412).
 
 `UiMessage.thinkingStatus` is a transient, renderer-only projection of the
-block-level thinking phase: `streaming` while a thinking block is open,
-`complete` once every observed block closed or the stream settled. The runtime
-emits the change even when the frame carries no content delta, and the
-slimming/coalescing path preserves an explicit phase instead of dropping it.
-The host ignores the field on ingress and never persists it, so it adds no
-storage schema, no migration, and no protocol version bump; rows restored
-from history carry no phase and use the documented status fallback.
+assistant message's thinking generation phase: `streaming` while the model is
+producing reasoning, `complete` once generation left thinking — a real text or
+tool-call frame, the end of the block that is generating, a provider-attempt
+teardown, or the terminal boundary — even when the provider never closes the
+thinking block. The runtime emits the change even when the frame carries no
+content delta, and the slimming/coalescing path preserves an explicit phase
+instead of dropping it. The host ignores the field on ingress and never
+persists it, so it adds no storage schema, no migration, and no protocol
+version bump; rows restored from history carry no phase and use the documented
+status fallback.
 
 `status` events include an optional runtime-owned `activity` phase while a turn
 is active. `starting` is the prompt handoff; `waiting-model` is the interval

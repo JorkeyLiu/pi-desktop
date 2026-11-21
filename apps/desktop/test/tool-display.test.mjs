@@ -11,7 +11,9 @@ import {
   getToolSummaryValue,
   isAskToolName,
   isDelegationStartTool,
+  isTaskSteerTool,
   isToolPathSummary,
+  delegationLifecycleKind,
   toolSummarySpec,
 } from "../src/lib/tool-display.ts";
 import { toolPathName } from "../src/lib/tool-path-display.ts";
@@ -47,6 +49,8 @@ test("built-in identities are stable, localized action names and unknown tools r
     ["TaskWait", "chat.toolIdentityTaskWait"],
     ["TaskList", "chat.toolIdentityTaskList"],
     ["TaskStop", "chat.toolIdentityTaskStop"],
+    ["TaskSteer", "chat.toolIdentityTaskSteer"],
+    ["functions.TaskSteer", "chat.toolIdentityTaskSteer"],
     ["TodoWrite", "chat.toolIdentityTodo"],
     ["Skill", "chat.toolIdentitySkill"],
     ["ToolSearch", "chat.toolIdentityToolSearch"],
@@ -65,6 +69,8 @@ test("built-in identities are stable, localized action names and unknown tools r
     "plugin_tasks_list",
     "plugin_read_file",
     "plugin_subagent_handoff",
+    "plugin_tasksteer",
+    "mcp__weather__tasksteer",
     "some_custom_read_file",
     "mcp__weather__forecast",
     "mcp__weather__read_file",
@@ -89,14 +95,26 @@ test("delegation is its own action, matched exactly", () => {
   assert.equal(getToolAction("TaskWait"), "delegate");
   assert.equal(getToolAction("TaskList"), "delegate");
   assert.equal(getToolAction("TaskStop"), "delegate");
+  // TaskSteer shares the delegation presentation with its own identity, but it
+  // is never a lifecycle kind: it queues into one live run and must not join
+  // chain rosters or pollution guards built on the lifecycle set.
+  assert.equal(getToolAction("TaskSteer"), "delegate");
+  assert.equal(getToolAction("functions.TaskSteer"), "delegate");
+  assert.equal(isTaskSteerTool("TaskSteer"), true);
+  assert.equal(isTaskSteerTool("functions.TaskSteer"), true);
+  assert.equal(isTaskSteerTool("TaskStop"), false);
+  assert.equal(isTaskSteerTool("plugin_tasksteer"), false);
+  assert.equal(delegationLifecycleKind("TaskSteer"), null);
   // ...but only the start tool is a delegation activity item.
   assert.equal(isDelegationStartTool("Task"), true);
   assert.equal(isDelegationStartTool("functions.subagent"), true);
   assert.equal(isDelegationStartTool("TaskWait"), false);
   assert.equal(isDelegationStartTool("TaskStop"), false);
+  assert.equal(isDelegationStartTool("TaskSteer"), false);
   // A plugin tool that merely mentions tasks keeps its generic presentation.
   assert.equal(getToolAction("CreateTask"), "use");
   assert.equal(getToolAction("plugin_tasks_list"), "list");
+  assert.equal(getToolAction("plugin_tasksteer"), "use");
 });
 
 test("a delegation row shows its label, and the agent beside it", () => {

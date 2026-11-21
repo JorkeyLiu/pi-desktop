@@ -1,0 +1,89 @@
+[
+  {
+    "type": "message_start",
+    "message": {
+      "id": "assistant-bubble",
+      "role": "assistant",
+      "content": "",
+      "createdAt": "2026-11-21T00:00:00.000Z",
+      "status": "streaming",
+      "modelId": "local-model",
+      "providerId": "local"
+    }
+  },
+  {
+    "type": "message_update",
+    "stream": "delta",
+    "message": {
+      "id": "assistant-bubble",
+      "role": "assistant",
+      "content": "",
+      "createdAt": "2026-11-21T00:00:00.000Z",
+      "status": "streaming",
+      "thinkingStatus": "streaming",
+      "modelId": "local-model",
+      "providerId": "local"
+    }
+  },
+  {
+    "type": "message_update",
+    "stream": "delta",
+    "message": {
+      "id": "assistant-bubble",
+      "role": "assistant",
+      "content": "",
+      "createdAt": "2026-11-21T00:00:00.000Z",
+      "status": "streaming",
+      "thinkingStatus": "streaming",
+      "modelId": "local-model",
+      "providerId": "local"
+    },
+    "deltaThinking": "plan"
+  },
+  {
+    "type": "message_update",
+    "stream": "delta",
+    "message": {
+      "id": "assistant-bubble",
+      "role": "assistant",
+      "content": "",
+      "createdAt": "2026-11-21T00:00:00.000Z",
+      "status": "streaming",
+      "thinkingStatus": "complete",
+      "modelId": "local-model",
+      "providerId": "local"
+    }
+  },
+  {
+    "type": "tool_prepare",
+    "toolCallId": "call-1",
+    "toolName": "Read"
+  },
+  {
+    "type": "tool_prepare",
+    "toolCallId": "call-1",
+    "toolName": "Read",
+    "ready": true
+  },
+  {
+    "type": "message_end",
+    "message": {
+      "id": "assistant-bubble",
+      "role": "assistant",
+      "content": "done",
+      "createdAt": "2026-11-21T00:00:00.000Z",
+      "status": "complete",
+      "modelId": "local-model",
+      "providerId": "local",
+      "thinking": "plan",
+      "thinkingStatus": "complete",
+      "usage": {
+        "inputTokens": 10,
+        "outputTokens": 5,
+        "totalTokens": 15,
+        "usageOrigin": "pi",
+        "costStatus": "unknown"
+      }
+    }
+  }
+]

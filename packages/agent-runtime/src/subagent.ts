@@ -116,8 +116,10 @@ export const SUBAGENT_TOOL_NAME = "Task";
 export const SUBAGENT_WAIT_TOOL_NAME = "TaskWait";
 /** Report on the session's delegations without waiting (ADR 0089). */
 export const SUBAGENT_LIST_TOOL_NAME = "TaskList";
-/** Stop running delegations (ADR 0089). */
-export const SUBAGENT_STOP_TOOL_NAME = "TaskStop";
+ /** Stop running delegations (ADR 0089). */
+ export const SUBAGENT_STOP_TOOL_NAME = "TaskStop";
+ /** Queue one follow-up message into a running delegation from the parent model. */
+ export const SUBAGENT_STEER_TOOL_NAME = "TaskSteer";
 
 export type SubagentRunStatus = SharedSubagentRunStatus;
 
@@ -1532,6 +1534,12 @@ export class SubagentRun {
           : undefined;
         this.streamStartedAt = Date.now();
         this.toolArgsPreparation.reset();
+        // A retry keeps the same row but starts a new provider attempt: the
+        // previous attempt's thinking generation ends here.
+        const retryThinking = retryingAssistant
+          ? this.thinkingPhase.finish()
+          : undefined;
+        const carriedThinking = retryThinking ?? retryingAssistant?.thinkingStatus;
         if (!retryingAssistant) this.thinkingPhase.reset();
         this.streamedRowChars = 0;
         this.streamedToolCallChars = 0;
@@ -1542,6 +1550,7 @@ export class SubagentRun {
           ...(content.hasThinking && content.thinking
             ? { thinking: content.thinking }
             : {}),
+          ...(carriedThinking !== undefined ? { thinkingStatus: carriedThinking } : {}),
           status: "streaming",
         };
         if (retryingAssistant) {
@@ -1554,8 +1563,8 @@ export class SubagentRun {
       }
       case "message_update": {
         if (!this.currentAssistant || event.message.role !== "assistant") break;
-        this.prepareToolCalls(event.assistantMessageEvent);
-        this.trackStreamedToolCalls(event.assistantMessageEvent);
+        const typed = event.assistantMessageEvent;
+        this.trackStreamedToolCalls(typed);
         const content = assistantContent((event.message as AssistantMessage).content);
         const previousText = this.currentAssistant.content;
         const previousThinking = this.currentAssistant.thinking ?? "";
@@ -1569,12 +1578,15 @@ export class SubagentRun {
         const thinkingDelta = content.hasThinking
           ? cumulativeDelta(previousThinking, content.thinking)
           : { delta: "", reset: false };
-        // Typed thinking frames drive the block-level phase; a real thinking
-        // delta without typed frames keeps the row breathing too. Later text
-        // or tool activity never moves the phase here.
-        const phaseChange =
-          this.thinkingPhase.observe(event.assistantMessageEvent) ??
-          (thinkingDelta.delta ? this.thinkingPhase.noteThinkingDelta() : undefined);
+        // The phase follows the latest typed frame: thinking keeps the row
+        // breathing, while real text or tool-call generation stops it even
+        // when the thinking block never ends. Only streams without typed
+        // frames fall back to a real thinking delta.
+        const phaseChange = typed
+          ? this.thinkingPhase.observe(typed)
+          : thinkingDelta.delta
+            ? this.thinkingPhase.noteThinkingDelta()
+            : undefined;
         this.currentAssistant = {
           ...this.currentAssistant,
           content: nextText,
@@ -1613,6 +1625,9 @@ export class SubagentRun {
             ...(!visibleDelta ? { deltaText: "" } : {}),
           });
         }
+        // Tool preparation becomes a visible row, so it is emitted after the
+        // phase update: the dot stops before the tool row appears.
+        this.prepareToolCalls(typed);
         break;
       }
       case "message_end": {
@@ -1670,6 +1685,9 @@ export class SubagentRun {
             stopReason === "length" || stopReason === "max_tokens";
         }
         if (retryAttempt !== undefined) {
+          // A provider retry is a new attempt on the same row: this attempt's
+          // thinking generation stops before the delay.
+          const attemptThinking = this.thinkingPhase.finish();
           this.currentAssistant = {
             ...(this.currentAssistant ?? this.newAssistantRow()),
             content: content.hasText
@@ -1677,6 +1695,9 @@ export class SubagentRun {
               : (this.currentAssistant?.content ?? ""),
             ...(content.hasThinking && content.thinking
               ? { thinking: content.thinking }
+              : {}),
+            ...(attemptThinking !== undefined
+              ? { thinkingStatus: attemptThinking }
               : {}),
             status: "streaming",
             ...(messageUsage ? { usage: messageUsage } : {}),

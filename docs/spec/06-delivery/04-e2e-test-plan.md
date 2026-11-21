@@ -4976,24 +4976,29 @@ window; opening a normal panel afterward must still work.
   generated summary and never the newest line, so it holds still while later
   reasoning streams. Opening the row removes that line and shows the whole
   Markdown body, so the first sentence is not read twice; reasoning with no
-  visible text draws the label alone. The explicit block-level thinking phase
+  visible text draws the label alone. The explicit thinking generation phase
   owns the active indicator: a row whose phase is `complete` stays still even
   while its assistant message still streams — after a tool, after reply text,
   or with nothing following it — and a row whose phase is `streaming` breathes
-  while the turn is active; a newer `thinking_start` breathes again after an
-  earlier `complete`. Rows without the phase field (restored history, legacy
-  frames) keep the streaming-and-content-free fallback. Renderer position of
-  later activity never decides the phase.
+  while the turn is active. The phase reports generation, not open blocks: a
+  real text or tool-call frame stops the indicator even when the provider never
+  closes its thinking block, and only a newer thinking frame breathes again.
+  Rows without the phase field (restored history, legacy frames) keep the
+  streaming-and-content-free fallback. Renderer position of later activity
+  never decides the phase.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md`,
   `04-ux/07-ui-design-system.md`, `04-ux/08-component-spec.md`, ADR 0018
 - **Acceptance**: C (chat and stream), Quality
 - **Milestone**: M5
  - **Status**: Unit-covered (`thinking-ui.test.mjs`,
-   `thinking-row-preview.test.mjs`, agent-runtime event tests) and rendered
-   (`pnpm test:e2e:thinking-row`, whose probe also asserts the four
-   left activity-icon groups plus the neutral reasoning/coordination/unknown
-   rows and the boxed run glyph by rendered output in dark and light themes);
-   full streaming scenario Draft
+   `thinking-row-preview.test.mjs`, agent-runtime event tests, plus the
+   runtime-generated wire trace `scripts/e2e/fixtures/thinking-generation-phase.json`
+   asserted by `thinking-status.test.ts`) and rendered
+   (`pnpm test:e2e:thinking-row`, whose probe replays that wire trace through
+   the production projection to assert the dot stops before the tool row
+   appears, and also asserts the four left activity-icon groups plus the
+   neutral reasoning/coordination/unknown rows and the boxed run glyph by
+   rendered output in dark and light themes); full streaming scenario Draft
 
 #### E2E-054: Stored thinking reloads losslessly
 
@@ -7486,18 +7491,38 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md` §6,
   `04-ux/07-ui-design-system.md` §8.8, `04-ux/08-component-spec.md` §5.7, §9.2,
   §9.5, §9.7, §9.9.
-- **Status**: Automated by `pnpm test:e2e:tool-preparation`
-  (`scripts/e2e-tool-preparation.mjs`). The probe measures the rendered
+ - **Status**: Automated by `pnpm test:e2e:tool-preparation`
+   (`scripts/e2e-tool-preparation.mjs`). The parallel-pair announcement
+   contract is additionally covered by `transcript-announcement-order`,
+   `transcript-subagent-parallel-order`, and
+   `transcript-subagent-bash-parallel` node tests (real store, real tab
+   render, per-stage `data-message-id` DOM order) plus the Electron
+   `scripts/e2e-subagent-parallel-order.mjs` physical-top fixture. The probe
+   measures the rendered
   geometry: the three line slots and their bars, the pending card's height
   against the full card that replaces it in the same column (and its full
   opacity against the shared disabled dimming kept by the real card), the sweep's
   phases and travel, the card's localized loading name and `aria-busy`, the
   in-place hand-off to the real card and then to the running card, and the
   reduced-motion suppression of both the breath and the shimmer with the
-  skeleton's geometry intact. The parallel pair reads A/B from preparing
-  through running to completion — B never moves ahead even though it starts
-  and finishes first — and a durable refresh that persists completion order
-  keeps the same A/B display.
+   skeleton's geometry intact. The parallel pair reads A/B from preparing
+   through running to completion — B never moves ahead even though it starts
+   and finishes first — and a durable refresh that persists completion order
+   keeps the same A/B display. Position authority is the first announcement,
+   shared by the main transcript and the delegate tab: a live-named tool row
+   keeps the position of its first announcement (`tool_prepare`, else its
+   first start or message) while completion, refresh, replay, or a background
+   reselect only replace values. For those live-announced rows `createdAt` is
+   display metadata, never a position key — completion re-stamps it and
+   durable pages arrive in finish order, so the overlay never re-sorts them
+   by creation time. Rows the live tail does not name stay on the
+   chronological history baseline (`createdAt` order with arrival tiebreak),
+   which keeps the existing paging, focus-island, and context semantics. The delegate tab holds the same
+   A/B order when B ends first while A still runs, when A ends afterwards,
+   when the tab opens late onto a page that already holds durable B, across
+   `latest` refreshes, and when B ends while the parent session is parked on
+   another session (the main view drops delegate rows by design; the tab
+   keeps both rows from the entry until the durable row arrives).
 
 #### E2E-STREAM-long-turn-keeps-realtime
 
@@ -8052,13 +8077,21 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
      then the original card: the strip keeps one tab for the child, focused,
      the mounted panel element is unchanged, the draft and the staged image
      survive, and that tab renders the resumed run.
+  8. While the original delegation is still running, deliver a rejected parent
+    `Task(resume …)` for it (`error`, no delegation handle, no child rows, and
+    the `TaskList` still reporting the original delegation running): the open
+    tab stays on the original run with its prompt rendered once, the rejected
+    brief never renders as a delivered user prompt, and the header keeps reading
+    `Running`.
 - **Expected**: The follow-up renders exactly once (the run's own user row, not
   the `Task` marker's task argument plus the child echo). The tab keeps
   following the chain-latest run through the same tab element — no rebuild, no
   state flip between running and settled, no identity change, no lost draft.
   The live continued run reads `Running` and states no ownership label, keeps
   its input usable, and offers Stop when the draft is empty; Stop names the
-  current run's delegation id. The main session was never busy with the child:
+  current run's delegation id. A rejected resume changes none of this: the tab
+  keeps the original delegation's prompt and rows, renders no turn for the
+  failed request, and stays `Running`. The main session was never busy with the child:
   it carries no running flag or turn identity of the child, and a main prompt
   is admitted meanwhile. After the settle the composer returns to continue
   mode and the same tab continues the chain again with no new card. A run that
@@ -8069,6 +8102,14 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   production tab and store through a parent-issued resume and the original
   card's reopen, asserting one focused tab for the child and the resumed run
   rendered in it;
+  `apps/desktop/test/subagent-rejected-resume.test.mjs` (`node --test`) covers
+  the rejected-resume chain rule at the index/transcript level for both resume
+  shapes, and `apps/desktop/test/subagent-rejected-resume-tab.test.mjs`
+  renders the production `SubagentTranscriptTab` over that fixture, asserting
+  the open tab stays on the running delegation; `apps/desktop/test/subagent-rejected-resume-dock.test.mjs`
+  (isolated Electron, `PI_ELECTRON_BINARY` may reference an existing binary) mounts the
+  production dock and tab over a two-live-run fixture with a rejected resume, asserting
+  two dock entries and a `d1`-targeted stop click;
   `pnpm test:e2e:subagent-lifecycle` asserts the same identity end to end (phase
   3 reads the persisted user-origin marker's `source: "user"` plus `resume`,
   phase 5 covers stop, then direct continuation as an ordinary child run).
@@ -19489,6 +19530,33 @@ host-created files. The full app's file-preview viewer is covered separately.
   no production code changed. Runtime tests additionally cover cross-session
   isolation and uncooperative cancellation remaining pending;
   `e2e-subagent-parent-error.mjs` covers explicit cancellation/resume semantics.
+
+#### E2E-CHAT-tasksteer-model-steer-loop
+
+- **Preconditions**: Built agent-runtime workspace packages; real
+  `DesktopAgentRuntime`, real `SubagentRun` with the real pi agent loop,
+  real tool execution, and the real delivery coordinator. Only the provider
+  transport is scripted — a localhost OpenAI-chat SSE fixture — and only
+  the delegate's `Read` tool is gated on a barrier so the steer lands
+  mid-tool-call at an explicit sync point instead of racing settlement. No
+  real account, paid provider, or user data is used.
+- **Steps**: Start one delegate whose first provider round answers with a
+  `Read` call that blocks on the barrier. While it is blocked, have the
+  parent model call `TaskSteer` with the delegation id and a follow-up
+  message. Release the barrier and inspect the next assistant request and
+  the `TaskWait` report.
+- **Expected**: The steer receipt says `queued` for the next turn with
+  `source: "model"`, and the blocked tool is not aborted. Releasing the
+  barrier lets the child finish the tool, and the very next assistant
+  request already carries the steered message with the same delegation id
+  — no follow-up run — while `TaskWait` delivers the original run's report.
+- **Specs linked**: 03-runtime/02-agent-runtime.md §5f TaskSteer; ADR 0337.
+- **Acceptance**: C, E, Quality. **Milestone**: Maintenance.
+- **Status**: Automated via `packages/agent-runtime/src/task-steer-loop.test.ts`
+  (vitest, agent-runtime package) against the localhost fixture. No Electron
+  run: the render path is unchanged — `TaskSteer` reuses the existing
+  delegation presentation with its own fixed identity, covered by
+  `apps/desktop/test/tool-display.test.mjs`.
 
 ## BOM-marked UTF-16 text tools
 

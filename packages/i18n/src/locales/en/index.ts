@@ -579,6 +579,7 @@ export const en = {
     toolIdentityTaskWait: "Task wait",
     toolIdentityTaskList: "Task list",
     toolIdentityTaskStop: "Task stop",
+    toolIdentityTaskSteer: "Task steer",
     toolIdentityTodo: "Todo",
     toolIdentitySkill: "Skill",
     toolIdentityToolSearch: "Tool search",

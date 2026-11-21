@@ -569,6 +569,7 @@ export const zhCN = {
     toolIdentityTaskWait: "等待任务",
     toolIdentityTaskList: "任务列表",
     toolIdentityTaskStop: "停止任务",
+    toolIdentityTaskSteer: "引导任务",
     toolIdentityTodo: "待办事项",
     toolIdentitySkill: "技能",
     toolIdentityToolSearch: "搜索工具",
