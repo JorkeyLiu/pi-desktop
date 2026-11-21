@@ -85,16 +85,11 @@ test("a scheduled run's conversation remembers the row it was opened from", asyn
     assert.equal(returns.scheduledReturnFor(null), null);
     assert.equal(returns.scheduledReturnFor(undefined), null);
 
-    const back = [{ page: "chat" }, { page: "scheduled" }, { page: "chat" }];
-    assert.equal(returns.scheduledReturnUsesHistory(back, 2), true, "the row behind is the route");
-    assert.equal(returns.scheduledReturnUsesHistory(back, 1), false, "the route itself is not back");
     assert.equal(
-      returns.scheduledReturnUsesHistory([{ page: "chat" }, { page: "chat" }], 1),
+      "scheduledReturnUsesHistory" in returns,
       false,
-      "a conversation reached from elsewhere opens the route directly",
+      "the Scheduled window is reopened directly, so history is not consulted",
     );
-    assert.equal(returns.scheduledReturnUsesHistory([], 0), false);
-    assert.equal(returns.scheduledReturnUsesHistory(back, 3), false, "past the stack's end");
   });
 });
 
@@ -164,6 +159,8 @@ test("the Scheduled route is the one that writes the return origin", async () =>
   );
 
   assert.match(topbarSource, /const scheduledSession = activeSession\?\.scheduledRun === true/);
-  assert.match(topbarSource, /scheduledReturnUsesHistory\(navStack, navIndex\)/);
-  assert.match(topbarSource, /navBack\(\);[\s\S]{0,80}else setPage\("scheduled"\)/);
+  // Reopening the window restores the remembered task and run, so the way back
+  // never depends on a history entry.
+  assert.match(topbarSource, /const goBackToScheduled = \(\) => \{[\s\S]{0,200}setPage\("scheduled"\);\s*\};/);
+  assert.doesNotMatch(topbarSource, /scheduledReturnUsesHistory|navBack\(\)/);
 });

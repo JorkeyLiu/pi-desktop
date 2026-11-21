@@ -20,7 +20,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { createPortal } from "react-dom";
+import { portalToBody } from "../../lib/portal-visibility";
+import { useEscapeOwner, useSecondaryWindowActive } from "../../lib/secondary-window-context";
 
 const MARGIN = 8;
 const GAP = 6;
@@ -76,6 +77,8 @@ export function AnchoredMenu({
   onMenuKeyDown,
   restoreFocus = true,
 }: AnchoredMenuProps) {
+  const secondaryWindowActive = useSecondaryWindowActive();
+  useEscapeOwner(open && secondaryWindowActive);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -102,7 +105,7 @@ export function AnchoredMenu({
   }, [anchorRef, open, restoreFocus]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !secondaryWindowActive) return;
     const onPointer = (event: MouseEvent) => {
       const target = event.target as Node;
       if (
@@ -127,7 +130,7 @@ export function AnchoredMenu({
       window.removeEventListener("mousedown", onPointer);
       window.removeEventListener("keydown", onKey, true);
     };
-  }, [anchorRef, onClose, open]);
+  }, [anchorRef, onClose, open, secondaryWindowActive]);
 
   const updatePosition = useCallback(() => {
     const anchor = anchorRef?.current ?? triggerRef.current;
@@ -231,31 +234,30 @@ export function AnchoredMenu({
   return (
     <div className={className} ref={rootRef}>
       {trigger(triggerRef)}
-      {open && typeof document !== "undefined"
-        ? createPortal(
-            <div
-              ref={menuRef}
-              className={`${menuClassName}${position ? " is-open" : ""}`}
-              role={role}
-              aria-label={label}
-              onKeyDown={onMenuKeyDown}
-              style={
-                position
-                  ? {
-                      top: `${position.top}px`,
-                      left: `${position.left}px`,
-                      ...(position.width === undefined
-                        ? {}
-                        : { width: `${position.width}px` }),
-                    }
-                  : undefined
-              }
-            >
-              {children}
-            </div>,
-            document.body,
-          )
-        : null}
+      {open ? (
+        portalToBody(
+          <div
+            ref={menuRef}
+            className={`${menuClassName}${position ? " is-open" : ""}`}
+            role={role}
+            aria-label={label}
+            onKeyDown={onMenuKeyDown}
+            style={
+              position
+                ? {
+                    top: `${position.top}px`,
+                    left: `${position.left}px`,
+                    ...(position.width === undefined
+                      ? {}
+                      : { width: `${position.width}px` }),
+                  }
+                : undefined
+            }
+          >
+            {children}
+          </div>,
+        )
+      ) : null}
     </div>
   );
 }

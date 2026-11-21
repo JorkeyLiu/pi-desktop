@@ -7,8 +7,9 @@
 
 ## 1. Goal
 
-A clear, restrained, developer-first workbench: one window, one active
-destination, chat as the home surface, tools and permissions inline.
+A clear, restrained, developer-first workbench: one window whose home is chat,
+with Settings, Extensions, and Scheduled each presented in a single in-app
+floating window over that home, tools and permissions inline.
 
 ## 2. Shell regions
 
@@ -16,9 +17,9 @@ destination, chat as the home surface, tools and permissions inline.
 +----------------------------------------------------------------------+
 | Platform titlebar: macOS traffic lights / Windows/Linux actions     |
 +------------------+--------------------------------+------------------+
-| Sidebar (275px) | Main pane (active destination) | Work panel       |
+| Sidebar (275px) | Main pane (chat)              | Work panel       |
 |                  |  chat home / transcript        |  (optional,      |
-|                  |  or Extensions page            |   resizable      |
+|                  |  + one floating window         |   resizable      |
 |                  |                                |   ≥244px, dynamic|
 |  Sessions     +↕ |                                | surface          |
 |   Recent rows ↕  |                                |                  |
@@ -33,7 +34,8 @@ destination, chat as the home surface, tools and permissions inline.
   **Sessions** section with new-session and sort actions, retained open-project
   groups under a following **Projects** section with a persistent new-project
   action, and the WorkBuddy-inspired footer. The footer keeps compact Settings,
-  Extensions, Scheduled (clock), and notification icon actions. Each retained
+  Extensions, Scheduled (clock), and notification icon actions; the first three
+  open the single floating window, and the presented one toggles it closed.
   project is a
   path-keyed tab/group that can be
   collapsed independently. Project and conversation rows expose
@@ -51,13 +53,14 @@ destination, chat as the home surface, tools and permissions inline.
   brand returns the main pane to chat. The macOS expanded sidebar omits the
   logo/title brand and places only Collapse sidebar at the right of
   the traffic-light row. `Codex` remains only an external import source or a
-  design-reference term.
-- **Main pane**: exactly one destination at a time; destinations replace the
-  pane (they are pages, not modals). Once Settings or Extensions is selected,
-  bootstrap completion and background refreshes must not replace that
-  destination with the chat home; only an explicit navigation action may do so.
-  The outer pane stays fluid while the sidebar is collapsed. The centered chat
-  content band defaults to 760px and is user-resizable (D439); it compresses
+- **Main pane**: always chat. Settings, Extensions, and Scheduled do not replace
+  the pane; each opens the single in-app floating window described in §5,
+  centered over the chat surface, while the chat shell stays mounted behind it
+  and inert. Bootstrap completion and background refreshes never close or
+  replace that window; only an explicit dismissal action does. The outer pane
+  stays fluid while the sidebar is collapsed. The centered chat content band
+  defaults to 760px and is user-resizable (D439); it compresses with
+  `min(available pane, preferred)` instead of tightening to a 640px ceiling.
   with `min(available pane, preferred)` instead of tightening to a 640px ceiling.
 - **Titlebar**: platform-native desktop chrome (D118). macOS uses
   `hiddenInset` traffic lights and the system application menu. The expanded
@@ -80,10 +83,11 @@ destination, chat as the home surface, tools and permissions inline.
   Boot splash, search, and toasts stay above that band.
   Preview navigation must also remain above the panel;
   macOS keeps native traffic lights and its existing fullscreen insets.
-  Destination history is
+  Conversation history is
   shortcut-first (`Cmd/Ctrl+[` and `Cmd/Ctrl+]`) with no dedicated back/forward
-  chrome; while Extensions is active, the footer Plugins button performs one
-  Back step as the only pointer affordance. The main titlebar has no
+  chrome; the footer Settings, Extensions, and Scheduled buttons toggle the
+  floating window instead of recording a destination step, so there is no
+  "back to the app" control. The main titlebar has no
   notification action; the durable local inbox opens from the sidebar footer
   bell instead (D130/D117). In work-panel preview mode, MainChat is unmounted
   and a window-level 46px chrome row keeps New Task, sidebar, and native window
@@ -321,12 +325,13 @@ running. The task page shows that task's last run, next
 occurrence, project, permission and model, its instruction behind a disclosure,
 its own run history newest first (status, start time, duration, stable error
 code), and the transcript of the selected run read in the page through a bounded
-read. A run's transcript belongs to this route: the SessionList and global
-session search never list it, and Open conversation is the explicit action that
-carries it into the chat route, and the chat top bar then offers that
-conversation's own way back: the row names the task it belongs to, and returning
-restores the same task and the same run, reusing the navigation history when
-this route is directly behind it. The footer clock and global search open
+read. A run's transcript belongs to the Scheduled window: the SessionList and
+global session search never list it, and Open conversation is the explicit
+action that closes the window and carries the run into chat. The chat top bar
+then offers that conversation's own way back: the row names the task it belongs
+to, and opening Scheduled again restores the same task and the same run from the
+remembered origin. The footer clock and global search open
+this window. Run now dispatches in the background, selects the run it admitted,
 this route. Run now dispatches in the background, selects the run it admitted,
 and leaves the reader on this page. Automatic runs never steal foreground
 focus. See [desktop automations](../../adr/scheduled-desktop-automations.md).
@@ -378,13 +383,14 @@ header, toolbar, rows, cards and the detail sheet's sections are set apart by
 tone and spacing, and hairlines are reserved for floating layers (menus, sheet,
 dialogs). MCP, Skills, and Subagents are not tabs or sections of Extensions.
 
-### 3.5 Settings (full-page takeover)
-### 3.5 Settings (full-page takeover)
-Settings replaces the whole shell (D063): back-to-app + search + a grouped
-settings rail with concise, parallel destination labels. The Agent group
+### 3.5 Settings (floating window)
+Settings opens the single in-app floating window described in §5 rather than
+replacing the shell (D063): the window's own header carries the Settings title
+and the close control that dismisses it, and a grouped settings rail with
+concise, parallel destination labels fills the body. The Agent group
 contains independent Skills, MCP, and Subagents destinations alongside
 Instructions and Model configuration; selecting one
-changes the page destination rather than a tab inside a shared capability panel.
+changes the settings destination rather than a tab inside a shared capability panel.
 Appearance lives inside General; global AI behavior (permissions and context
 management) lives inside 全局 AI; keyboard shortcuts and global/project
 instructions have their own destinations; provider management lives inside
@@ -396,8 +402,8 @@ plugin API rather than a Settings destination. Project archive owns the durable 
 (search, add, expand, pin, archive/restore, close, and reopen) and always includes
 archived records. Opening or switching a project retains a sidebar tab, selects
 that project as the active workspace, and returns to chat. Other retained tabs
-stay open. Extension management remains solely on the app shell's independent
-Extensions destination described in §3.4. Settings > Agent has the following
+stay open. Extension management remains solely on the app shell's Extensions
+window described in §3.4. Settings > Agent has the following
 shared capability contract:
 
 - Each capability destination starts with a quiet localized description and
@@ -435,16 +441,33 @@ shared capability contract:
 | Notification inbox | sidebar footer bell | All/Unread views, task failure rows only (successful completions are hidden, D295), mark-all-read and clear actions (D130/D117) |
 | Toasts | events (plugin toast, backend restored, copy) | top-center; 4s default, 8s for errors |
 | Project switcher | empty-home underlined project name | sidebar open projects + search + clone git project + open project |
+| Secondary window | sidebar footer Settings / Extensions / Scheduled, `Cmd/Ctrl+,`, search and settings deep links | exactly one at a time; centered content-sized plate with a floating close control and no title band; scrim and `Esc` dismiss it the same way |
 
 ## 5. Navigation model
 
-- `page` state: `chat | scheduled | plugins | settings`; `chat` is the
-  conversation-surface route, not an operating mode. The project
-  archive is the `projects` settings tab rather than a standalone page.
-- Destination history is linear; `Cmd/Ctrl+[` and `Cmd/Ctrl+]` traverse it
-  without persistent back/forward chrome. While Extensions is active, the
-  footer Plugins button reuses one Back step (§2 shell regions); no separate
-  back or forward control is added.
+- `page` state: `chat | scheduled | plugins | settings` addresses one slot:
+  `chat` means no secondary window is presented, and any other value is the
+  single window currently presented. Selecting another destination switches
+  that window's content instead of stacking a second window or appending a
+  navigation entry. The project archive is the `projects` settings tab rather
+  than a standalone destination.
+- The window is an in-app centered plate, not a native window: it cannot be
+  dragged, resized, or promoted to its own operating-system window. It is
+  content-sized per destination (Settings largest, Extensions medium, Scheduled
+  wide) and falls back to a near-fullscreen inset on narrow viewports. While it
+  is presented the chat shell stays mounted and inert, so the conversation's
+  transcript, scroll position, draft, and running turn are preserved, and the
+  window never changes native window bounds or the work panel's dock.
+- Dismissal is one rule set: the floating close control, the scrim, `Esc`, the
+  presented footer button, and an external close all end in the same close
+  action. `Esc` closes one surface per press — an open dialog, sheet, menu, or
+  inline editor inside the window owns the key first. Closing returns focus to
+  the control that opened the window; an external close (opening a scheduled run
+  into chat, or switching conversation) leaves focus in chat.
+- Conversation history is chat-only: entries record conversations, and
+  `Cmd/Ctrl+[` / `Cmd/Ctrl+]` are inert while a window is presented, so
+  returning from a window never depends on a history step. Reopening Scheduled
+  restores the task and run it was showing from its remembered origin.
 - Selecting a project tab reuses `project.set` when its path differs from the
   selected host workspace and keeps the other tabs retained.
 - Selecting a project-scoped thread activates its project before switching to
@@ -470,14 +493,14 @@ shared capability contract:
 |---|---|
 | Cmd/Ctrl+K, Cmd/Ctrl+Shift+P | command palette |
 | Cmd/Ctrl+B | toggle sidebar |
-| Cmd/Ctrl+[ | previous destination |
-| Cmd/Ctrl+] | next destination |
+| Cmd/Ctrl+[ | previous conversation (inert while a secondary window is presented) |
+| Cmd/Ctrl+] | next conversation (inert while a secondary window is presented) |
 | Cmd/Ctrl+N | new task |
 | Cmd/Ctrl+O | open project |
 | Cmd/Ctrl+, | settings |
 | Cmd/Ctrl+. | abort current run |
 | Enter / Shift+Enter / Cmd/Ctrl+Enter | send / newline (Enter-to-send; when off, Cmd/Ctrl+Enter sends) |
-| Esc | dismiss overlay/menu |
+| Esc | dismiss the innermost surface (dialog, sheet, menu, inline editor), then the secondary window |
 
 ## 7. State-dependent chrome
 

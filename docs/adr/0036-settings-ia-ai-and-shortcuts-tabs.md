@@ -1,6 +1,6 @@
 # ADR 0036: Split Settings into AI and Shortcuts destinations
 
-- Status: Accepted
+- Status: Accepted; the full-page shell shape is superseded by D665
 - Date: 2026-07-30
 - Deciders: PI-Desktop core
 - Related: D090, D133, ADR 0013, ADR 0026
@@ -31,8 +31,11 @@ baseline decision rather than a silent rewrite.
 
 ## Decision
 
-Keep the full-page Settings shell, Back to app action, search control, rail
-metrics, content cards, and theme behavior unchanged. Replace the five-
+Keep the Settings rail, search control, rail metrics, content cards, and theme
+behavior unchanged. *(The full-page shell shape — replacing the app shell and
+the Back to app action — is superseded by D665: Settings now opens in the single
+in-app floating window over chat, whose header close control replaces Back to
+app.)* Replace the five-
 destination rail with seven destinations in this exact order:
 
 1. **Basics** (`general`, Lucide `SlidersHorizontal`) — Appearance and Defaults

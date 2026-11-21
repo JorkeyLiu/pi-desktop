@@ -353,7 +353,10 @@ test("session and page navigation share the latest-intent guard", () => {
     storeSource.match(/navigationIntentIsCurrent\(intent\)/g)?.length >= 12,
     "navigation intent must be checked after asynchronous boundaries",
   );
-  assert.match(interactionSource, /setPage: \(page, opts\) => \{\s*runtime\.beginNavigationIntent\(\)/);
+  assert.match(interactionSource, /setPage: \(page\) => \{[\s\S]{0,400}runtime\.beginNavigationIntent\(\);/);
+  // A destination is a window, not a history hop: `setPage` no longer records
+  // a stack entry of its own.
+  assert.doesNotMatch(interactionSource, /opts\?\.record/);
   assert.match(storeSource, /activateProject: async \(path, opts\)/);
   assert.match(storeSource, /clearProject: async \(opts\)/);
 });

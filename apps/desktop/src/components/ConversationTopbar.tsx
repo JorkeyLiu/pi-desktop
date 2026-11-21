@@ -7,10 +7,7 @@ import {
 } from "@pi-desktop/shared";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../stores/app-store";
-import {
-  scheduledReturnFor,
-  scheduledReturnUsesHistory,
-} from "../features/scheduled/scheduled-return";
+import { scheduledReturnFor } from "../features/scheduled/scheduled-return";
 import {
   IconChevronLeft,
   IconSidebar,
@@ -50,9 +47,6 @@ export function ConversationTopbar({
   const sessions = useAppStore((s) => s.sessions);
   const workspace = useAppStore((s) => s.workspace);
   const keybindings = useAppStore((s) => s.settings?.keybindings);
-  const navStack = useAppStore((s) => s.navStack);
-  const navIndex = useAppStore((s) => s.navIndex);
-  const navBack = useAppStore((s) => s.navBack);
   const setPage = useAppStore((s) => s.setPage);
   const platform = (
     typeof window === "undefined" ? "darwin" : window.piDesktop?.platform ?? "darwin"
@@ -102,9 +96,9 @@ export function ConversationTopbar({
     ? t("nav.backToScheduledTask", { title: scheduledReturn.taskTitle })
     : backAction;
   const goBackToScheduled = () => {
-    /* History first: it re-enters the route with the reader's own stack. */
-    if (scheduledReturnUsesHistory(navStack, navIndex)) navBack();
-    else setPage("scheduled");
+    // The window is the destination: reopening it restores the task and run
+    // the reader left, so this never depends on a history entry.
+    setPage("scheduled");
   };
 
   const fullTaskTitle = isDefaultSessionTitle(activeSession?.title)

@@ -13,7 +13,8 @@
 > updated values: sidebar 240–520px (default 275px), toolbar 46px (not 44px),
 > composer placeholder per D094/D066, home empty stack and bottom composer per
 > D111/D204/D206,
-> Projects index table per D066/D133, settings full-page shell per D063 with the
+> Projects index table per D066/D133, settings in the D063 codex shell presented
+> in the single in-app floating window per D665 with the
 > compact eight-destination directory from D090/D133/D166, and retained path-keyed
 > project groups per D093 (which preserves D088's Temporary/exact-path boundary
 > while restoring scoped project and conversation organization actions), and
@@ -56,16 +57,18 @@ Outer frame that positions Topbar, Sidebar, MainChat, and WorkPanel. Owns resize
   the aside stays in the tree through the exit keyframe, then unmounts
   (`is-exiting` flag + `animationend` guard, with a timeout fallback).
   Entrance requires an explicit `is-entering` phase from a collapsed-to-expanded
-  change on the presented main shell. Initial mounting and return from Settings
-  restore the full retained layout directly. Entering Settings cancels either
-  pending phase, including during rapid navigation; no hidden shell is kept
-  mounted solely to suppress animation.
+  change on the presented main shell. Initial mounting restores the full
+  retained layout directly. A presented secondary window never cancels or
+  delays either phase: the chat shell keeps being mounted behind it, so no
+  hidden shell is kept mounted solely to suppress animation and no return
+  transition plays when the window closes.
 - Sidebar width: the expanded column is user-resizable from 240px to 520px
   (default 275px) via the right-edge handle. Dragging below 160px collapses
   the sidebar and preserves the preferred expanded width (ADR 0141 / ADR 0290).
 - Work panel collapse: the sole control is the viewport-fixed toggle in the
-  window's top-right corner, available on every non-Settings route whether the
-  panel is open or closed. It does not sit in the work-panel content header.
+  window's top-right corner, available on every route whether the
+  panel is open or closed; while a secondary window is presented the dock stays
+  behind that window and the toggle keeps working. It does not sit in the work-panel content header.
   Opening and collapsing change only the shell's internal flex allocation; the
   native window bounds stay unchanged.
 - Work panel preview: the header maximize action temporarily unmounts MainChat
@@ -90,7 +93,9 @@ Outer frame that positions Topbar, Sidebar, MainChat, and WorkPanel. Owns resize
 ### 1.5 Accessibility
 
 - Landmark roles: `<nav>` for sidebar, `<main>` for chat, `<aside>` for work panel, `<header>` for topbar
-- Tab sequence: topbar → sidebar → main chat → work panel → composer
+- Tab sequence: topbar → sidebar → main chat → work panel → composer; while a
+  secondary window is presented, Tab cycles inside the plate and the chat shell
+  is inert, so those landmarks are skipped
 
 ### 1.6 MVP constraints
 
@@ -140,9 +145,10 @@ Outer frame that positions Topbar, Sidebar, MainChat, and WorkPanel. Owns resize
   track; the destination pane is revealed only once it has committed. A warm
   destination is revealed with no busy affordance at all. Nothing is dimmed and no
   skeleton-to-transcript animation is inserted (ADR 0137).
-- Settings, Plugins, and Scheduled are route-level lazy modules.
-  Chat and shell chrome stay in the initial renderer bundle; first entry to a
-  secondary destination shows a compact localized status indicator until its
+- Settings, Plugins, and Scheduled are route-level lazy modules loaded into the
+  secondary window. Chat and shell chrome stay in the initial renderer bundle;
+  the first open of a destination shows a compact localized status indicator
+  inside its plate until the local chunk resolves.
   local chunk resolves.
 - No status bar (deferred)
 
@@ -501,22 +507,24 @@ visually distinct from list content.
 - On Windows/Linux, click the PI-Desktop brand to return the main pane to the
   chat home while preserving the active conversation and workspace; macOS
   intentionally omits this brand control from the sidebar header
-- Click the footer Plugins icon immediately right of Settings to open the
-  Extensions destination; while Plugins is active, click it again to go back
-  one entry in the existing navigation history. If no previous entry exists,
-  open chat instead. The pressed state reflects the current page and the
-  localized label remains available on hover/focus.
-- This shortcut reuses the existing Back action (also bound to `Cmd/Ctrl+[`),
-  including its session selection and loading behavior. It does not skip
-  Settings entries or track a separate return destination. Settings navigation
-  is unchanged; its existing Back to app control opens chat. Both footer
-  destination buttons report their active state to assistive technology.
-- Reopening Plugins retains its Installed/Marketplace tab, both search inputs,
-  and category filter in renderer memory. Detail/settings/permission dialogs,
-  transient menus, and pending-operation UI are not retained. The page still
-  unmounts normally, releasing listeners, and an operation already in flight
-  still completes and reports through the normal toast channel; this is not a
-  hidden live workbench or durable preference across application restart.
+- Click the footer Settings, Extensions, and Scheduled icons to present the one
+  secondary window on that destination; clicking the presented one toggles it
+  closed instead of recording a history entry. The pressed state reflects the
+  presented destination and the localized label remains available on
+  hover/focus.
+- These footer buttons share the window's single dismissal path (floating
+  close control, scrim, Escape) and never traverse conversation history. The chat
+  shell stays mounted behind the window, so no back action or return
+  destination is tracked. Both footer destination buttons report their active
+  state to assistive technology.
+- Switching destinations keeps the Extensions plate mounted, so its
+  Installed/Marketplace tab, both search inputs, and category filter survive.
+  Detail/settings/permission dialogs, transient menus, and pending-operation UI
+  follow their own open state. A retained plate is inert and detached from
+  pointer input while another destination is presented, and an operation
+  already in flight still completes and reports through the normal toast
+  channel; this is not a hidden live workbench or durable preference across
+  application restart.
 - Plugin detail, settings, permission-review, template, and install-progress
   surfaces are viewport-wide overlays. Their backdrops and surfaces mount on
   `#pi-desktop-overlays`, outside the route scroll container and sidebar
@@ -660,8 +668,8 @@ visually distinct from list content.
   keyboard focus, without changing the directory label's position.
 - Sidebar toggle: expanded-header icon + keyboard shortcut; the
   collapsed main titlebar retains an Expand sidebar icon; the work-panel
-  toggle stays viewport-fixed in the window's top-right corner on every
-  non-Settings route
+  toggle stays viewport-fixed in the window's top-right corner on every route
+  and behind a presented secondary window
 - Click the local profile trigger: open or close the identity menu containing
   Settings, Logs, and Theme
 - Click the footer bell: open or close the durable notification inbox

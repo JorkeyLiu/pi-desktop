@@ -96,9 +96,10 @@ test("sidebar paints color and optional image layers separately", () => {
   assert.match(darwin, /--ds-bg-sidebar-image/);
 });
 
-test("scenic plugins use the normal full-window shell for compositing", () => {
+test("scenic plugins composite through the chat shell and the Settings window", () => {
   const baseSrc = readFileSync(join(desktopRoot, "src/styles/base.css"), "utf8");
   const settingsSrc = readFileSync(join(desktopRoot, "src/styles/settings.css"), "utf8");
+  const windowsSrc = readFileSync(join(desktopRoot, "src/styles/secondary-windows.css"), "utf8");
   assert.match(baseSrc, /\.app-shell\s*\{[^}]*position:\s*relative;[^}]*isolation:\s*isolate/s);
   assert.match(baseSrc, /\.app-scenic-backdrop\s*\{[^}]*position:\s*fixed;[^}]*inset:\s*0/s);
   // The backdrop is the shell's first child with `position: fixed`, so it needs
@@ -106,14 +107,15 @@ test("scenic plugins use the normal full-window shell for compositing", () => {
   // context and pin route overlays underneath the window chrome.
   assert.doesNotMatch(baseSrc, /\.app-shell\s*>\s*:not\(\.app-scenic-backdrop\)/);
   assert.match(settingsSrc, /data-plugin-theme\^="plugin:io\.github\.akshayxkill\.nexus-scenic-themes:/);
-  assert.match(settingsSrc, /\.app-shell\.settings-mode[^}]*background:\s*transparent\s*!important/s);
+  assert.match(windowsSrc, /data-plugin-theme\^="plugin:io\.github\.akshayxkill\.nexus-scenic-themes:/);
+  assert.match(windowsSrc, /\.secondary-window-settings[^}]*background:\s*transparent\s*!important/s);
   assert.match(settingsSrc, /\.settings-content[^}]*background:\s*transparent\s*!important/s);
 });
 
-test("scenic plugin themes expose a full-window settings compositing hook", () => {
+test("the Settings window exposes a scenic compositing hook", () => {
   const settingsCss = readFileSync(join(desktopRoot, "src/styles/settings.css"), "utf8");
   assert.match(settingsCss, /data-plugin-theme\^="plugin:io\.github\.akshayxkill\.nexus-scenic-themes:/);
-  assert.match(settingsCss, /\.app-shell\.settings-mode[^}]*background:\s*transparent\s*!important/s);
+  assert.match(settingsCss, /\.settings-shell-full,[^}]*background:\s*transparent\s*!important/s);
   assert.match(settingsCss, /\.settings-content[^}]*background:\s*transparent\s*!important/s);
   assert.match(settingsCss, /\.settings-shell-full\s+\.settings-nav\.sidebar-surface[^}]*background:\s*color-mix/s);
   assert.match(settingsCss, /\.settings-panel[^}]*background:\s*color-mix/s);

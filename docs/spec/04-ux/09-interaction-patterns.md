@@ -114,13 +114,15 @@ recency only breaks ties between equally relevant matches.
   work panel is open, those controls stay viewport-fixed at the window's right
   edge over the panel header, which reserves the control band plus the
   work-panel toggle so resource close remains reachable. The sole panel
-  collapse control is that viewport-fixed toggle. Destination history has no visible back/forward
-  controls and remains available through the renderer shortcuts. The first
-  transcript row starts below the 46px titlebar control band so user and
-  assistant content cannot overlap the minimize, maximize/restore, or close
-  targets. Destination pages and the plugin detail sheet start below the same
-  band, so page header actions and the sheet close control never stack under
-  those targets. F10 and Shift+F10 are not consumed by shell chrome.
+  collapse control is that viewport-fixed toggle. Conversation history has no
+  visible back/forward controls and stays available through the renderer
+  shortcuts; those shortcuts traverse conversations only and are inert while a
+  secondary window is presented. The first transcript row starts below the 46px
+  titlebar control band so user and assistant content cannot overlap the
+  minimize, maximize/restore, or close targets. The centered secondary window and
+  the plugin detail sheet stay below that band by construction, so their header
+  actions and close controls never stack under those targets. F10 and Shift+F10
+  are not consumed by shell chrome.
 - Windows/Linux keep New Task, Open Project, Settings, close-window,
   zoom, fullscreen, search, command-palette, sidebar, and work-panel shortcuts
   through renderer key handling. Standard editing shortcuts remain native
@@ -744,6 +746,62 @@ may be retained while exactly one workspace supplies the visible shell context.
   close buttons, and focus handling remain authoritative; native selection is
   not prevented and no pointer capture is added for dismissal.
 
+### 1.11 Secondary window (in-app floating window)
+
+Settings, Extensions, and Scheduled open in one in-app floating window over
+chat. The plate is one quiet surface on the Settings content background —
+subtle border and shadow, rounded, no OS-style title band and no duplicate
+title — centered and content-sized per destination, and never a native window:
+it cannot be dragged or resized, and it never reaches the platform titlebar.
+
+- **One window at a time.** `page` addresses one slot: `chat` means no window,
+  any other destination is the presented window. Selecting another destination
+  switches its content instead of stacking a second root window. Plates stay
+  mounted after their first open, so scroll offsets, unsaved editor drafts, and
+  in-flight reads survive a switch; only the presented plate is visible and
+  interactive.
+- **Chat stays home.** The chat shell keeps its transcript, scroll position,
+  composer draft, and running turn; it is `inert` and `aria-hidden` while a
+  window is presented, never unmounted or `hidden`. Selecting a conversation or
+  opening a scheduled run's conversation closes the window and lands on that
+  transcript.
+- **One dismissal path.** The floating close control, the scrim, `Esc`, the
+  presented footer destination button, and an external close all end in the
+  same close action. No destination owns a separate "back to the app" control,
+  and destination history is not used to leave a window.
+- **Escape ownership.** `Esc` closes one surface per press. An open dialog,
+  sheet, menu, or inline editor inside the window claims the key first through
+  the shared escape-owner registry (`useEscapeOwner`); the window closes only
+  when nothing above it claimed the key. Ownership follows being open, not
+  being mounted: a chat host that keeps a context menu mounted while closed
+  claims only with an open menu, because an unconditional claim pins the owner
+  set and no window could ever close. A nested surface kept alive but not
+  presented cannot claim it.
+- **Focus.** Opening saves the control that opened it and focuses the plate
+  container itself — never the close control, whose hover/focus tooltip would
+  otherwise paint with the pointer elsewhere — while the close control stays
+  the first Tab stop. Tab and Shift+Tab cycle inside the presented plate and
+  yield while a nested modal dialog or a body-portaled menu is open. Closing
+  returns focus to that saved control when it still exists; an external close
+  (a scheduled run opened into chat, a conversation switch) leaves focus on the
+  composer.
+- **Background inert, native surfaces blocked.** The scrim, `inert` chat shell,
+  and `aria-modal` container keep pointer and keyboard work inside the window.
+  Native plugin views composite above the renderer, so the shared blocking
+  overlay counter detaches them while a window is open, exactly as other
+  blocking overlays do.
+- **Retained window content is provider-scoped.** Each plate publishes its own
+  `useSecondaryWindowActive()` and portal-visibility flag so document-level
+  listeners and portal hosts in a hidden plate cannot answer for, or paint
+  over, the presented one.
+- **Deep links keep working.** Search, settings-tab, and row-anchor deep links
+  open Settings on that destination and keep the tab/anchor nonce behavior;
+  reopening Scheduled restores the task and run from its remembered origin.
+- **Warm on idle.** The layer's `lazy()` wrappers and an idle warmup scheduled
+  after startup share one loader table, so a first open paints its plate shell
+  immediately and the page modules are already imported. The warmup imports
+  only — no page mounts and no API read — and gives chat startup priority.
+
 ## 2. Streaming message behavior
 
 ### 2.1 Token rendering
@@ -1236,7 +1294,9 @@ or empty home.
 ### 7.1 Focus flow on page load
 
 1. Composer textarea receives initial focus in main chat view
-2. Settings pages: first interactive element receives focus
+2. Secondary window: its plate container receives focus (programmatic, not a
+   Tab stop; the close control is the first Tab stop) and nothing behind it
+   does, because the chat shell is inert while it is presented
 3. Command palette: search input receives focus on open
 
 ### 7.2 Focus flow after actions
@@ -1251,6 +1311,9 @@ or empty home.
 | Abort completed | Composer textarea |
 | Command palette closed | Previously focused element |
 | Dialog closed | Previously focused element |
+| Secondary window dismissed (floating close control, scrim, Escape, or footer toggle) | The control that opened it |
+| Secondary window closed externally (scheduled run opened into chat, conversation switch) | Composer textarea |
+| Secondary window switched to another destination | New plate container (first Tab stop is its close control) |
 | Notification popover closed with Escape | Notification bell |
 | Notification row/native notification activated | Activated session composer after transcript load |
 

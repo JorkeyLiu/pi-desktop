@@ -229,7 +229,12 @@ function PluginKeyEntry({
           placeholder={hasSecret ? t("settings.apiKeyKeepHint") : undefined}
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Escape") onCancel();
+            if (event.key === "Escape") {
+              // The key entry is the surface this Escape dismisses; it must not
+              // also reach the window layer behind it.
+              event.stopPropagation();
+              onCancel();
+            }
             if (event.key === "Enter" && canSave) onSave(value);
           }}
         />

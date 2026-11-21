@@ -62,6 +62,7 @@
     "test:e2e:todos": "node scripts/e2e-todo-checklist.mjs",
     "test:e2e:provider-model-layout": "node scripts/e2e-provider-model-layout.mjs",
     "test:e2e:settings-scroll": "node scripts/e2e-settings-scroll.mjs",
+    "test:e2e:secondary-windows": "node scripts/e2e-secondary-windows.mjs",
     "test:e2e:settings-inline-import": "node --test apps/desktop/test/settings-inline-import-user-path.test.mjs",
     "test:e2e:config-sync": "node scripts/e2e-config-sync-multidevice.mjs",
     "test:e2e:layout": "node scripts/e2e-three-column-layout.mjs",

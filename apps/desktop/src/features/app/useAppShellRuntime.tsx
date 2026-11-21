@@ -17,6 +17,7 @@ import { StartupSplash } from "../../components/StartupSplash";
 import { api } from "../../lib/api";
 import { subscribeRemoteInteractions } from "../../lib/remote-interactions";
 import { playNotificationChime } from "../../lib/notification-sound";
+import { scheduleSecondaryWindowWarmup } from "../../lib/secondary-window-pages";
 import {
   clampSidebarWidth,
   loadSidebarWidth,
@@ -73,7 +74,7 @@ export function useAppShellRuntime() {
   const [sidebarWidth, setSidebarWidth] = useState(() => loadSidebarWidth());
   const { sidebarEntering, sidebarExiting, handleSidebarAnimationEnd } = useSidebarTransition(
     sidebarCollapsed,
-    ready && page !== "settings",
+    ready,
   );
   const [shellWidth, setShellWidth] = useState(0);
   const appShellRef = useRef<HTMLDivElement>(null);
@@ -212,15 +213,6 @@ export function useAppShellRuntime() {
     presentedWorkPanelRef.current = presentedWorkPanelOpen;
   }, [presentedWorkPanelOpen]);
 
-  // Destination pages own the center pane. Leaving Chat while previewing must
-  // restore that pane before the destination is presented; otherwise the
-  // sidebar can change `page` successfully while the route stays unmounted.
-  useEffect(() => {
-    if (workPanelMaximized && page !== "chat") {
-      setWorkPanelMaximized(false);
-    }
-  }, [page, workPanelMaximized]);
-
   useEffect(() => {
     workPanelExitingRef.current = workPanelExiting;
   }, [workPanelExiting]);
@@ -282,10 +274,7 @@ export function useAppShellRuntime() {
   }, []);
 
   useEffect(() => {
-    const pageHidesWorkPanel =
-      page === "settings" || page === "plugins" || page === "scheduled";
-    const shouldPresent =
-      ready && !pageHidesWorkPanel && workPanelOpen;
+    const shouldPresent = ready && workPanelOpen;
     const request = ++workPanelReservationRequest.current;
 
     if (shouldPresent) {
@@ -462,6 +451,15 @@ export function useAppShellRuntime() {
     if (!ready) return;
     void useAppStore.getState().refreshPlugins();
     return api.onPluginChanged(() => void useAppStore.getState().refreshPlugins());
+  }, [ready]);
+
+  // Secondary-window pages warm in after startup idles: this only imports
+  // the three page modules (no mounting, no API reads), so a first open
+  // later only commits. Chat startup always wins because this waits for
+  // `ready` and then for an idle slot.
+  useEffect(() => {
+    if (!ready) return;
+    return scheduleSecondaryWindowWarmup();
   }, [ready]);
 
   // Work panel views are filtered by activation scope, so opening a different
@@ -793,13 +791,11 @@ export function useAppShellRuntime() {
           case "toggleSidebar":
             toggleSidebar();
             break;
-          case "openWorkPanel": {
-            const p = useAppStore.getState().page;
-            if (p !== "settings" && p !== "plugins" && p !== "scheduled") {
-              useAppStore.getState().toggleWorkPanel();
-            }
+          case "openWorkPanel":
+            // The work panel stays available behind a secondary window: the
+            // window covers the conversation, not the session's dock.
+            useAppStore.getState().toggleWorkPanel();
             break;
-          }
           case "abort":
             void abort();
             break;

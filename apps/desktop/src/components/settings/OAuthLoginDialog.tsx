@@ -14,6 +14,7 @@ import type { OAuthLoginSession } from "../../lib/oauth-login-session";
 import { canSubmitOAuthPrompt } from "../../lib/oauth-login-prompt";
 import { Button, Input, TooltipButton, cx, portalOverlay } from "../ui";
 import { IconCheck, IconCopy, IconExternal } from "../icons";
+import { useEscapeOwner, useSecondaryWindowActive } from "../../lib/secondary-window-context";
 
 type AuthUrlState = { url: string; instructions?: string; opened: boolean };
 
@@ -36,6 +37,8 @@ export function OAuthLoginDialog({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const secondaryWindowActive = useSecondaryWindowActive();
+  useEscapeOwner(secondaryWindowActive);
   const [status, setStatus] = useState<string>(t("settings.vendorLoginStarting"));
   const [authUrl, setAuthUrl] = useState<AuthUrlState | null>(null);
   const [deviceCode, setDeviceCode] = useState<DeviceCodeState | null>(null);
@@ -119,13 +122,14 @@ export function OAuthLoginDialog({
   }, [closing, onClose, session]);
 
   useEffect(() => {
+    if (!secondaryWindowActive) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       void cancel();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [cancel]);
+  }, [cancel, secondaryWindowActive]);
 
   const copy = (value: string) => {
     void navigator.clipboard.writeText(value).then(

@@ -72,7 +72,7 @@ test("work panel code is preloaded on demand behind an accessible dock fallback"
   assert.match(appSource, /const WorkPanel = lazy\(\(\) =>\s*loadWorkPanel\(\)/);
   assert.match(
     appSource,
-    /if \(!ready \|\| page !== "chat" \|\| !workPanelOpen\) return;[\s\S]*?loadWorkPanel\(\)\.catch/,
+    /if \(!ready \|\| !workPanelOpen\) return;[\s\S]*?loadWorkPanel\(\)\.catch/,
   );
   assert.match(
     appSource,
@@ -702,10 +702,9 @@ test("preview mode keeps shell actions and restores routes before navigation", (
     appSource,
     /if \(workPanelOpenRef\.current && !workPanelMaximizedRef\.current\)/,
   );
-  assert.match(
-    appSource,
-    /if \(workPanelMaximized && page !== "chat"\) \{\s*setWorkPanelMaximized\(false\);/s,
-  );
+  // A secondary window covers the chat shell; it never displaces the preview
+  // pane, so no page-change effect restores the dock's maximized state.
+  assert.doesNotMatch(appSource, /workPanelMaximized && page !== "chat"/);
   assert.match(
     appSource,
     /case "newTask":[\s\S]*?if \(workPanelMaximizedRef\.current\) setWorkPanelMaximized\(false\);/,

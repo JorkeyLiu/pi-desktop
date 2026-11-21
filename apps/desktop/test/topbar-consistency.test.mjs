@@ -12,13 +12,28 @@ test("shell titlebar surfaces share the toolbar metric and borderless surface", 
   for (const selector of [
     "\\.main-titlebar",
     "\\.conversation-topbar",
-    "\\.settings-titlebar",
   ]) {
     const block = styleBlock(selector);
     assert.match(block, /height:\s*var\(--ds-toolbar-height\);/);
     assert.match(block, /background:\s*var\(--ds-bg-primary\);/);
     assert.match(block, /border-bottom:\s*0;/);
   }
+});
+
+test("the secondary window paints one surface with no title band", () => {
+  // The plate is position-fixed and integrated into the chat it floats over, so
+  // the whole shell paints the Settings content tone instead of a separate 44px
+  // control row: the destination's own header is the one visible title, and the
+  // close control floats over reserved content space. Nothing drags the OS
+  // window.
+  const shell = styleBlock("\\.secondary-window");
+  assert.match(shell, /background:\s*var\(--ds-bg-primary\);/);
+  assert.doesNotMatch(shell, /app-region:\s*drag/);
+  assert.equal(styleBlock("\\.secondary-window-bar"), "");
+  const close = styleBlock("\\.secondary-window-close");
+  assert.match(close, /position:\s*absolute;/);
+  assert.match(close, /top:\s*12px;/);
+  assert.match(close, /right:\s*12px;/);
 });
 
 test("window chrome reserves the same titlebar height and native control band", () => {

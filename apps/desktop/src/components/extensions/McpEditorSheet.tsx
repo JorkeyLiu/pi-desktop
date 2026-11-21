@@ -13,6 +13,7 @@ import {
   type ProjectRecord,
 } from "@pi-desktop/shared";
 import { Button, Field, HelpIcon, Input, SettingsToggle, TooltipButton, cx, portalOverlay } from "../ui";
+import { useEscapeOwner, useSecondaryWindowActive } from "../../lib/secondary-window-context";
 import { IconPlay, IconServer, IconTerminal, IconX } from "../icons";
 import { ScopeControl } from "./ScopeControl";
 import { KeyValueRows, pairsToRecord, recordToPairs, type KeyValuePair } from "./KeyValueRows";
@@ -270,6 +271,8 @@ export function McpEditorSheet({
   managementProjectName?: string;
 }) {
   const { t } = useTranslation();
+  const secondaryWindowActive = useSecondaryWindowActive();
+  useEscapeOwner(secondaryWindowActive);
   const [idTouched, setIdTouched] = useState(!!editing);
   const launcher = mcpStdioLauncherChoice(draft.command);
   const errorKey = mcpDraftError(draft);
@@ -283,12 +286,13 @@ export function McpEditorSheet({
     !draft.url.trim();
 
   useEffect(() => {
+    if (!secondaryWindowActive) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !saving) onClose();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [saving, onClose]);
+  }, [saving, onClose, secondaryWindowActive]);
 
   const set = <K extends keyof McpDraft>(key: K, value: McpDraft[K]) =>
     setDraft({ ...draft, [key]: value });

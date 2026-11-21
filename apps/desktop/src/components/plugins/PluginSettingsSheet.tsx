@@ -8,14 +8,15 @@ import {
   keybindingFromEvent,
   keybindingsConflict,
   normalizeKeybinding,
-  resolveKeybinding,
   type PluginSettingDefinition,
+  resolveKeybinding,
   type PluginSummary,
   type ShortcutPlatform,
 } from "@pi-desktop/shared";
 import { api } from "../../lib/api";
 import { useBlockingOverlay } from "../../lib/blocking-overlay";
 import { useAppStore } from "../../stores/app-store";
+import { useEscapeOwner, useSecondaryWindowActive } from "../../lib/secondary-window-context";
 import {
   Button,
   HelpIcon,
@@ -87,6 +88,22 @@ export function PluginSettingsSheet({ plugin, platform, onClose, onSaved }: Prop
     setRecordingKey(null);
     setError(null);
   }, [plugin.id, plugin.settings]);
+
+  // This sheet owns Escape while it is the presented window's top surface; the
+  // window underneath must not close on the same key.
+  const secondaryWindowActive = useSecondaryWindowActive();
+  useEscapeOwner(secondaryWindowActive);
+  useEffect(() => {
+    if (!secondaryWindowActive) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose, secondaryWindowActive]);
 
   const shortcutConflict = useMemo(() => {
     const shortcuts = settings.filter((setting) => setting.type === "shortcut");
