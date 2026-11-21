@@ -2280,7 +2280,7 @@
    justify-content: center;
    border-radius: var(--radius-round);
    background: var(--ds-bg-active);
-   color: var(--ds-activity-coordinate);
+   color: var(--ds-text-muted);
  }
 
 .subagent-task-status-icon {
@@ -2697,17 +2697,10 @@
   background: transparent;
 }
 
-.tool-row-icon {
-  display: inline-flex;
-  flex: none;
-  color: var(--ds-text-muted);
-}
-
- /* A lifecycle row is a subagent row (D268): it carries the coordination tint
-    the child's `Task` card avatar uses, so scanning the transcript groups it
-    with the card it reports on rather than with the file tools around it. */
- .tool-row-icon.is-subagent {
-   color: var(--ds-activity-coordinate);
+ .tool-row-icon {
+   display: inline-flex;
+   flex: none;
+   color: var(--ds-text-muted);
  }
 
  /*
@@ -2716,17 +2709,14 @@
   * matches the `.tool-row-icon` wrapper against the existing `ToolActionIcon`
   * `data-icon` action hook (see getToolAction in lib/tool-display.ts) — no
   * duplicate name-to-color mapping — so the tint lives on the wrapper and the
-  * glyph inherits it via currentColor. Thinking (full and compact) plus
-  * skill/context match by row class and hook into the same reasoning tint;
-  * provider-hosted search matches by row class into the discovery tint. Only
-  * the generic `use` action stays on the neutral `--ds-text-muted` ink, and
-  * the subagent lifecycle rule above keeps winning for delegate rows.
-  * Direct wrapper color beats header-hover inheritance, so hover, completed,
-  * expanded, compact, and preparing states all keep the tint.
+  * glyph inherits it via currentColor. Thinking rows, skill/context, todo,
+  * mode, fork, and delegate rows stay on the neutral muted ink by design;
+  * only the four colored groups below tint. Provider-hosted search matches by
+  * row class into the discovery tint, and the generic `use` action stays on
+  * the neutral `--ds-text-muted` ink. Direct wrapper color beats header-hover
+  * inheritance, so hover, completed, expanded, compact, and preparing states
+  * all keep the tint.
   */
- .tool-row.thinking .tool-row-icon {
-   color: var(--ds-activity-reasoning);
- }
  .tool-row.hosted-search .tool-row-icon {
    color: var(--ds-activity-search);
  }
@@ -2748,15 +2738,6 @@
  .tool-row-icon:has(> [data-icon="run"]),
  .tool-row-icon:has(> [data-icon="schedule"]) {
    color: var(--ds-activity-run);
- }
- .tool-row-icon:has(> [data-icon="skill"]),
- .tool-row-icon:has(> [data-icon="context"]) {
-   color: var(--ds-activity-reasoning);
- }
- .tool-row-icon:has(> [data-icon="todo"]),
- .tool-row-icon:has(> [data-icon="mode"]),
- .tool-row-icon:has(> [data-icon="fork"]) {
-   color: var(--ds-activity-coordinate);
  }
 
 .tool-row-caret {

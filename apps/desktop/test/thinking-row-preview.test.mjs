@@ -189,7 +189,21 @@ test("the collapsed row keeps its disclosure contract", () => {
   const controls = collapsed.match(/aria-controls="([^"]+)"/)?.[1];
   assert.ok(controls, "the header lost its aria-controls target");
   assert.ok(!collapsed.includes(`id="${controls}"`), "a closed row rendered its body");
-});
+ });
+
+ test("the thinking cue renders the brain glyph, collapsed and open", () => {
+   const cases = [
+     ["collapsed", renderRow("## Reading the transcript")],
+     ["open", renderRow("## Reading the transcript", { open: true })],
+   ];
+   for (const [mode, markup] of cases) {
+     assert.ok(markup.includes("lucide-brain"), `the ${mode} thinking row lost its brain cue`);
+     assert.ok(
+       !markup.includes("lucide-sparkles"),
+       `the ${mode} thinking row still renders sparkles`,
+     );
+   }
+ });
 
 // Compact mode renders the active indicator from the store's *initial* state in
 // SSR, so it is asserted in the rendered Electron probe instead.

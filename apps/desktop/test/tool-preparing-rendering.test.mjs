@@ -147,7 +147,28 @@ test("the executing row that replaces it keeps the existing UI", async (t) => {
   assert.match(html, /class="tool-spinner" aria-label="Working…"/);
 });
 
-test("a preparing delegation card is one integrated skeleton, never placeholder text", async (t) => {
+ test("the run action renders the boxed terminal glyph", async (t) => {
+   const render = await transcriptSsr(t);
+   const html = render([
+     message("user-1", "user", "Run the tests."),
+     message("answer", "assistant", "", { status: "streaming" }),
+     message("call-1", "tool", "", {
+       toolCallId: "call-1",
+       toolName: "Bash",
+       toolStatus: "running",
+       status: "streaming",
+       toolArgs: { command: "pnpm test" },
+     }),
+   ]);
+   // The production run glyph carries the `run` action hook on its svg; the
+   // svg draws the boxed terminal (an enclosing rectangle), not the bare
+   // `>_` mark.
+   const glyph = html.match(/<svg[^>]*data-icon="run"[^>]*>(.*?)<\/svg>/s);
+   assert.ok(glyph, "the rendered run row carries the run action glyph");
+   assert.match(glyph[1], /<rect[^>]*>/, "the run svg draws the enclosing box");
+ });
+
+ test("a preparing delegation card is one integrated skeleton, never placeholder text", async (t) => {
   const render = await transcriptSsr(t);
   // Two frames of the same call: the first before any `description` is
   // parseable, the second after Pi reports one. Both are still being written,

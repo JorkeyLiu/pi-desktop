@@ -4968,9 +4968,10 @@ window; opening a normal panel afterward must still work.
 - **Milestone**: M5
  - **Status**: Unit-covered (`thinking-ui.test.mjs`,
    `thinking-row-preview.test.mjs`, agent-runtime event tests) and rendered
-   (`pnpm test:e2e:thinking-row`, whose probe also asserts the six exhaustive
-   left activity-icon groups plus the neutral generic fallback by computed
-   color in dark and light themes); full streaming scenario Draft
+   (`pnpm test:e2e:thinking-row`, whose probe also asserts the four
+   left activity-icon groups plus the neutral reasoning/coordination/unknown
+   rows and the boxed run glyph by rendered output in dark and light themes);
+   full streaming scenario Draft
 
 #### E2E-054: Stored thinking reloads losslessly
 

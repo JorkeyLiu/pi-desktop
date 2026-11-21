@@ -13,6 +13,7 @@ import {
   Bell,
   BookOpen,
   Bot,
+  Brain,
   Camera,
   Check,
   CheckCheck,
@@ -86,6 +87,7 @@ import {
   Smile,
   Sparkles,
   Square,
+  SquareTerminal,
   Star,
   Sun,
   Target,
@@ -169,6 +171,8 @@ export const IconFileText = icon(FileText);
 export const IconGlobe = icon(Globe2);
 export const IconBranch = icon(GitFork);
 export const IconTerminal = icon(Terminal);
+/** Boxed terminal for transcript run rows: rectangle around the `>_` glyph. */
+export const IconSquareTerminal = icon(SquareTerminal);
 export const IconPencil = icon(PencilLine);
 export const IconWrench = icon(Wrench);
 export const IconPullRequest = icon(GitPullRequestArrow);
@@ -192,6 +196,8 @@ export const IconDatabase = icon(Database);
 export const IconCheck = icon(Check);
 export const IconBell = icon(Bell);
 export const IconBot = icon(Bot);
+/** Thinking rows (full and compact): the reasoning cue. */
+export const IconBrain = icon(Brain);
 export const IconCheckCheck = icon(CheckCheck);
 export const IconShield = icon(Shield);
 export const IconChevronDown = icon(ChevronDown);

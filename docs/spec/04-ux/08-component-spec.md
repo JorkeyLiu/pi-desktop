@@ -946,13 +946,14 @@ updates. Compact keeps all tool/search payloads closed and suppresses reasoning
 text and excerpts; only its active thinking indicator remains.
 
   The leading icon of a tool, thinking, or hosted-search row carries a muted
- category tint so rows scan by kind: lavender for reasoning (Thinking full and
- compact, skill, context), muted blue for knowledge (read, list), muted teal
- for discovery (search, toolSearch, fetch, browser, provider-hosted search),
- warm gold for creation (write, edit, image), muted sage for execution (run,
- schedule), and muted rose for coordination (todo, mode, fork, delegate rows
- and the Task card avatar). The generic `use` action keeps the neutral muted
- ink. Only the icon ink differs — names, summaries, state markers,
+ category tint for four groups only: muted blue for knowledge (read, list),
+ muted teal for discovery (search, toolSearch, fetch, browser,
+ provider-hosted search), warm gold for creation (write, edit, image), and
+ muted sage for execution (run, schedule). Thinking (full and compact),
+ skill, context, todo, mode, fork, and delegate rows stay on the neutral
+ muted ink, as does the generic `use` action and the Task card avatar. The
+ run action renders a boxed terminal glyph (a rectangle around `>_`). Only
+ the icon ink or glyph differs — names, summaries, state markers,
  disclosure, and animation behavior are unchanged — and the tint holds across
  completion, hover, expanded, compact, and preparing states via theme-aware
  `--ds-activity-*` tokens with dark and light values.
@@ -2134,7 +2135,7 @@ Single message render — either user (plaintext) or assistant (markdown streami
   root in chat, and from the viewed file's directory when previewing a
   markdown document in the files tab. Parent escapes stay inert.
 - Thinking: separate lightweight disclosure above the answer with no card
-  background or outer border. Its Sparkles/chevron trigger uses secondary text,
+   background or outer border. Its Brain/chevron trigger uses secondary text,
   and the expanded markdown is indented by a subtle theme-token left rule. It
   is never concatenated into answer markdown.
 - Hover actions: quiet icon-only action chips under the bubble — Copy on idle

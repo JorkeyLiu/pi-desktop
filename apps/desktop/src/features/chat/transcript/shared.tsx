@@ -40,6 +40,7 @@ import {
   IconAudio,
   IconBookOpen,
   IconBot,
+  IconBrain,
   IconBranch,
   IconBrowser,
   IconChat,
@@ -58,9 +59,8 @@ import {
   IconRefresh,
   IconSearch,
   IconSheet,
-  IconSparkles,
+  IconSquareTerminal,
   IconTarget,
-  IconTerminal,
   IconVideo,
   IconWrench,
   IconX,
@@ -435,7 +435,7 @@ export function ToolActionIcon({ action }: { action: ToolAction }) {
     case "todo":
       return <IconListChecks {...props} />;
     case "run":
-      return <IconTerminal {...props} />;
+      return <IconSquareTerminal {...props} />;
     case "fetch":
       return <IconGlobe {...props} />;
     case "fork":
@@ -747,7 +747,7 @@ export const ThinkingRow = memo(function ThinkingRow({
     return isThinkingActive(message, streaming) ? (
       <div className="tool-row thinking thinking-compact" role="status">
         <span className="tool-row-icon" aria-hidden>
-          <IconSparkles size={15} />
+          <IconBrain size={15} />
         </span>
         <span className="tool-row-name running">
           {t("chat.thinking", { defaultValue: "Thinking" })}
@@ -770,7 +770,7 @@ export const ThinkingRow = memo(function ThinkingRow({
         onClick={toggleRow}
       >
         <span className="tool-row-icon">
-          <IconSparkles size={15} aria-hidden />
+          <IconBrain size={15} aria-hidden />
         </span>
         <span className={`tool-row-name ${streaming ? "running" : ""}`}>
           {t("chat.thinking", { defaultValue: "Thinking" })}

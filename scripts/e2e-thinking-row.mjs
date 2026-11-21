@@ -63,21 +63,29 @@ try {
   )
     .join("\n")
     .replace(/\s+/g, "");
-  for (const rule of [
-    ".thinking-preview{",
-    ".thinking-preview.is-heading{",
-    ".tool-row.thinking.tool-row-icon{",
-    ".tool-row-icon:has(>[data-icon=read])",
-  ]) {
-    assert(
-      builtCss.includes(rule),
-      `the built stylesheet is stale (missing ${rule}); build with pnpm build:js`,
-    );
-  }
-  assert(
-    builtCss.includes(".tool-row.thinking>.tool-row-header>.thinking-preview{"),
-    "the built stylesheet is stale (the preview overrides are not scoped to reasoning)",
-  );
+   for (const rule of [
+     ".thinking-preview{",
+     ".thinking-preview.is-heading{",
+     ".tool-row.hosted-search.tool-row-icon{",
+     ".tool-row-icon:has(>[data-icon=read])",
+   ]) {
+     assert(
+       builtCss.includes(rule),
+       `the built stylesheet is stale (missing ${rule}); build with pnpm build:js`,
+     );
+   }
+   // Thinking, skill/context, and todo/mode/fork rows are neutral by design:
+   // their tint rules were removed, so a build that still carries them is stale.
+   for (const rule of [
+     ".tool-row.thinking.tool-row-icon{",
+     ".tool-row-icon:has(>[data-icon=skill])",
+     ".tool-row-icon:has(>[data-icon=todo])",
+   ]) {
+     assert(
+       !builtCss.includes(rule),
+       `the built stylesheet is stale (still carries ${rule}); build with pnpm build:js`,
+     );
+   }
 
   await writeFile(
     join(temp, "index.html"),

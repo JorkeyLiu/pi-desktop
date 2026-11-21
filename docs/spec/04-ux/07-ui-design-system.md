@@ -1098,7 +1098,7 @@ query still ranks relevance first and uses recency only as a tiebreaker.
 
 - Assistant thinking renders before the final answer as a lightweight inline
   disclosure aligned with tool activity rows: transparent transcript surface,
-  Sparkles cue, rotating chevron, secondary text, and a subtle left rule only
+   Brain cue, rotating chevron, secondary text, and a subtle left rule only
   around expanded reasoning. It uses semantic theme and focus-ring tokens in
   light and dark modes; it must not introduce a separate inset card.
 - The latest thinking disclosure opens while a thinking-only response is

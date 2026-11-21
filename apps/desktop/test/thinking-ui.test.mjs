@@ -275,7 +275,9 @@ test("transcript keeps assistant thinking in a separate disclosure", () => {
   );
   // The process body is inert, not merely hidden, while its header is closed.
   assert.match(transcriptSource, /inert=\{!disclosure\.open\}/);
-  assert.match(transcriptSource, /IconSparkles/);
+   assert.match(transcriptSharedSource, /IconBrain/);
+   // The turn process header keeps its own Sparkles cue; the thinking row owns Brain.
+   assert.match(transcriptTurnProcessSource, /IconSparkles/);
   assert.match(transcriptSource, /messageThinking as thinkingText/);
   assert.match(transcriptSource, /thinking-prose[\s\S]*?Markdown source=\{text\}/);
   assert.match(transcriptSource, /CopyButton text=\{content\}/);
