@@ -220,7 +220,10 @@ test("Escape dismisses a finished install but never a running download", () => {
     dialogSrc,
     /const escapeLocked = running && \(job\.phase === "resolve" \|\| job\.phase === "download"\);/,
   );
-  assert.match(dialogSrc, /if \(escapeLocked\) return;/);
+  // A running download never answers Escape, and a retained-but-hidden window
+  // never answers for a surface the user cannot see.
+  assert.match(dialogSrc, /if \(escapeLocked \|\| !secondaryWindowActive\) return;/);
+  assert.match(dialogSrc, /useEscapeOwner\(secondaryWindowActive\)/);
   assert.match(dialogSrc, /if \(event\.key === "Escape"\) closeRef\.current\(\);/);
   // The dialog reuses the page's modal primitives instead of a second skin.
   assert.match(dialogSrc, /className="plugins-modal-backdrop"/);

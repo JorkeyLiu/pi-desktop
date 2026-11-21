@@ -10,8 +10,10 @@ const rowSource = await readFile(
 const styles = await loadStyles();
 
 test("font picker menu portals to the body so the settings card cannot clip it", () => {
-  assert.match(rowSource, /createPortal\(/);
-  assert.match(rowSource, /document\.body/);
+  // Body-level portaling goes through the shared helper, which is also what
+  // keeps a retained-but-hidden window's popup out of view.
+  assert.match(rowSource, /portalToBody\(/);
+  assert.match(rowSource, /import \{ portalToBody \} from "\.\.\/\.\.\/lib\/portal-visibility"/);
   assert.match(styles, /\.settings-font-menu\s*\{[^}]*position:\s*fixed;/s);
   assert.match(styles, /\.settings-font-menu\.is-open\s*\{/);
   assert.doesNotMatch(

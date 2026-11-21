@@ -3701,30 +3701,52 @@ validation still needed.
 - **Milestone**: M4
 - **Status**: Documented
 
-#### E2E-039: Settings titlebar drag moves the window
+#### E2E-039: The secondary window is fixed and its header is not a drag region
 
 - **Preconditions**: App running windowed on macOS with Settings open.
-- **Steps**: 1) Record the window position. 2) Confirm Back to app renders at
-  the rail's top-left inside the 46px drag band and carries focus on entry, and
-  that the rail exposes no page-local search field. 3) Drag the empty 46px band
-  above the settings rail. 4) Drag the same band above the content pane. 5) Use
-  Back, Project archive, and navigation controls. 6) In light and dark themes,
-  sample the top row's color above the rail and above the content pane.
-- **Expected**: Either top-band drag moves the native window; Back, Project
-  archive, and navigation remain interactive and never initiate a window drag.
-  The top row above the rail matches the rail surface (`#f4f4f4` light / `#000`
-  dark) and the top row above the content pane matches the primary surface, so
-  the band never renders a mismatched color over the rail.
+ - **Steps**: 1) Record the native window position. 2) Confirm the plate carries
+  the Settings accessible name with initial focus on the plate container (not
+  the close control, so its tooltip stays hidden), and that the rail exposes
+  no page-local search field and no back-to-app action.
+  3) Drag the plate surface, its edges, and the scrim, then use Project archive
+  and the rail destinations. 4) Resize the app window while Settings is open.
+  5) In light and dark themes, sample the plate, rail, and content surfaces.
+ - **Expected**: Nothing on the plate drags or resizes the native window; the
+  native titlebar outside the plate keeps all window movement. Rail
+  destinations and content controls stay interactive, resizing the app window
+  changes only the plate's available space, and the plate keeps one quiet
+  surface on the Settings content background with a floating close control —
+  no title band, no window-control band, no mismatched rail color.
+- **Specs linked**: `04-ux/06-settings-ia.md`, `04-ux/01-ui-ia.md`
+- **Acceptance**: Quality (key operations feel polished)
+- **Milestone**: M5
+- **Status**: Draft
 - **Specs linked**: `04-ux/06-settings-ia.md`, `04-ux/01-ui-ia.md`
 - **Acceptance**: Quality (key operations feel polished)
 - **Milestone**: M5
 - **Status**: Draft
 
-#### E2E-043: Settings content follows window width
+- **Automated coverage (2026-11-21)**: `scripts/e2e-secondary-windows.mjs`
+  (hidden Electron, `show: false`, throwaway profile, no live APIs) drives the
+  production secondary-window layer over the production Settings, Extensions,
+  and Scheduled modules, and measures at 1200x900 and 800x600: initial focus on
+  the plate container with the close control as the first Tab stop; one shared
+  computed window background equal to `--ds-bg-primary` for all three windows,
+  a transparent content root, and exactly one heading per window (no plate
+  chrome title); Escape precedence over a closed chat-hosted menu, an open chat
+  menu, an open nested menu, and a retained hidden detail sheet; a scheduled
+  open-session closing the window back into chat; and a cold versus warm first
+  open. Recorded limitation: a never-shown window cannot paint tooltips
+  (`document.hasFocus()` is false and the shared tooltip guards suppress
+  painting), so the open-time "no tooltip" measurement is corroborating only.
+  The load-bearing guarantee is the initial-focus contract above, and the probe
+  reports that capability explicitly as `tooltipCapability`.
+
+#### E2E-043: Settings content follows the plate width
 
 - **Preconditions**: App running windowed on macOS with Settings open.
 - **Steps**: 1) Open General at the default window width and record the content-card width. 2) Expand the window to 1600px wide. 3) Open Models, Skills, MCP, and Projects. 4) Shrink the window to the supported 800px minimum.
-- **Expected**: The right-side content cards expand and contract with the available pane at every tested width; the 275px rail and pane gutters remain stable; controls remain visible without clipping or horizontal page scrolling.
+- **Expected**: The plate grows to its 1120x820 preferred size and becomes a near-fullscreen inset below 860px width or 640px height; the rail measures 252px at the preferred size and 216px at small widths while pane gutters stay stable; content cards expand and contract with the available pane at every tested width and controls remain visible without clipping or horizontal page scrolling.
 - **Specs linked**: `04-ux/06-settings-ia.md`, `04-ux/07-ui-design-system.md`
 - **Acceptance**: Quality (key operations feel polished)
 - **Milestone**: M5
@@ -6070,7 +6092,8 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   Windows/Linux show no application menu inside the window; navigation and
   right-side controls do not collide with drag regions, keyboard shortcuts
   remain operational, and a viewport-fixed work-panel toggle is present on
-  non-Settings routes (not an application-menu command). While the panel is
+  every route, including behind a presented secondary window (not an
+  application-menu command). While the panel is
   open the native control band and that toggle overlay the panel header; the
   header ends its box before the band, so the resource tabs and close controls stay clear of the
   toggle and neither the window controls nor resource close sit under a drag
@@ -11381,10 +11404,14 @@ This test plan spec is accepted when:
 - Remote and Pi-native sessions retain their existing title behavior. The
   optional Session Titles plugin remains compatible under existing permissions.
 
-### US-UI-08 Shortcut-only destination history
-- Navigate Settings → Project archive → a project session → Plugins.
-- Expect no back/forward buttons in the expanded sidebar or main titlebar.
-- Press `Cmd/Ctrl+[` and `Cmd/Ctrl+]`; expect them to traverse that history.
+### US-UI-08 Shortcut-only conversation history
+ - Open Settings, switch to Extensions and Scheduled, and close each with its
+  floating close control, the scrim, and Escape.
+- Expect no back/forward buttons in the expanded sidebar or main titlebar and no
+  back-to-app control inside any window; opening a destination never appends a
+  history entry.
+- Open two conversations, then press `Cmd/Ctrl+[` and `Cmd/Ctrl+]`: history
+  traverses conversations only and is inert while a window is presented.
 
 ### US-UI-09 First-message title persistence
 - Open an older default-title local session with an existing first user message.
@@ -11526,17 +11553,22 @@ This test plan spec is accepted when:
 - Switch the sort to Name and expect rows to reorder inside every section with
   no row hidden; clear the search and expect the complete index back.
 
-### US-UI-24 Settings full-page shell
-- Open Settings (footer profile → Settings).
-- Expect **full-page** Codex settings (no app sidebar/nav). Left rail has Back
-  to app, search, and exactly General / AI / Shortcuts / Instructions / Models /
-  Skills / MCP / Subagents / Projects, Cloud sync / Remote Hosts / Info in that
-  order; packaged builds show both Cloud sync and Remote Hosts with Experimental
-  badges. The content pane shows the selected destination.
-- Return to the app shell and expect Plugins to remain an independent
-  sidebar-footer destination.
-- Drag the empty 46px top band over either the rail or content pane; the native
-  window moves while Back, search, and navigation remain clickable.
+### US-UI-24 Settings in the single in-app floating window
+ - Open Settings (footer profile → Settings).
+ - Expect a centered 1120x820 plate over the dimmed, inert chat shell (the app
+  sidebar and nav stay mounted behind it). The plate carries the Settings
+  accessible name with initial focus on the plate container; the destination's
+  own section title is the single visible title and the floating close control
+  is the first Tab stop. The rail has exactly General / AI /
+  Shortcuts / Instructions / Models / Skills / MCP / Subagents / Projects, Cloud
+  sync / Remote Hosts / Info in that order; packaged builds show both Cloud sync
+  and Remote Hosts with Experimental badges. The content pane shows the selected
+  destination.
+- Close the window and expect Plugins to remain an independent sidebar-footer
+  destination that toggles its own window.
+ - Drag the plate surface, its edges, and the scrim: the native window does not
+  move, and every control stays clickable; native window drag remains on the
+  titlebar outside the plate.
 
 ### US-UI-27 Dark destination pages
 - Force dark theme and open Plugins and Settings → Project archive.
@@ -11632,10 +11664,13 @@ This test plan spec is accepted when:
 
 ### US-UI-44 Settings compact directory + merged sections
 - Open Settings light theme at ~1200×690.
-- Full-page shell: rail ~260px on `#f3f3f3`, main `#fff`; Back to app at the
-  rail's top-left inside the drag band, carrying the entry focus ring because
-  opening Settings focuses it, and no page-local search field anywhere in the
-  rail; General active pill with icon.
+ - Floating window: a centered 1120x820 plate over the dimmed chat shell with no
+  title band — the section title is the single visible title, the floating
+  close control sits top-right, and initial focus lands on the plate container.
+  A 252px rail on `#f3f3f3` and content on `#fff`, chat visible behind it but
+  inert, and no page-local search field anywhere in the rail; General active
+  pill with icon.
+  pill with icon.
 - Rail order is exactly General / 常规 under muted Preferences / 偏好, then
   Chat / 对话, Models / 模型, Instructions / 指令, Skills / 技能, MCP,
   Subagents / 子智能体 under Agent / 智能体, Projects / 项目 under
@@ -17367,7 +17402,7 @@ plugin-form fixtures in an isolated temporary directory at runtime.
 
 #### E2E-LAYOUT-three-column-width-priority
 
-- **Preconditions**: A desktop session is open in a non-Settings route with a
+- **Preconditions**: A desktop session is open with a
   persisted preferred work-panel width, on a window wide enough for the three
   columns.
 - **Steps**:
@@ -17664,24 +17699,28 @@ plugin-form fixtures in an isolated temporary directory at runtime.
 - **Steps**:
   1. In dark/light palettes and darwin/win32/linux CSS branches, compare the
      home sidebar and Settings rail color, image layers, size and position.
-     Inspect transparent ancestors and opaque settings content/titlebar.
+     Inspect transparent ancestors and the opaque settings content/plate header.
   2. Before entering Settings, retain the current .chat-surface DOM node. While
-     Settings is open, verify the chat shell is hidden, inert, and still
-     contains that connected node. Return through Back to app and verify the
-     same node is revealed while tracing sidebar insertion, width and
-     animationstart events. Repeat quick round trips, a previously collapsed
-     sidebar, and settings navigation interrupting an entrance.
+     Settings is open, verify the chat shell is inert, not hidden, and still
+     contains that connected node with its transcript scroll and composer draft
+     intact. Close through the window's close control, the scrim, and Escape, and
+     verify the same node is revealed uninterrupted while tracing sidebar
+     insertion, width and animationstart events. Repeat quick destination
+     switches, a previously collapsed sidebar, and an external close caused by
+     opening a scheduled run into chat.
   3. Explicitly reopen a collapsed sidebar, then repeat settings return with
      reduced motion. Repeat material comparisons with legacy and canonical
      theme color overrides and a sidebar background image.
 - **Expected**: Both navigation surfaces share one material. Settings navigation
   and shell have no entrance animation; only a nested content-enter wrapper
   inside its opaque pane animates, and that motion is opacity-only so it cannot
-  trap `position: fixed` overlays. Settings dialogs cover the full window, including the rail. On macOS
+  trap `position: fixed` overlays. Settings dialogs cover the full app window,
+  including the rail inside the plate. On macOS
   all ancestors behind the rail are transparent, while right
-  content and titlebar stay opaque. Returning to an expanded sidebar starts and
-  stays at 275px without sidebar-in events; a collapsed sidebar stays absent.
-  A real reopen still produces sidebar-in and a width ramp. Legacy theme color
+  content and the plate header stay opaque. Closing the window produces no
+  sidebar-in or width-ramp events: an expanded sidebar stays at 275px and a
+  collapsed sidebar stays absent. A real reopen still produces sidebar-in and a
+  width ramp. Legacy theme color
   input remains supported for both rails, and a canonical override wins.
   Portaled layers owned by the hidden chat surface stay hidden while Settings is
   open; the shared app-level search, toast, and extension-prompt layers remain
@@ -18965,16 +19004,16 @@ the latest destination. These assertions measure work counts, not device FPS.
   Projects, Cloud sync, Remote hosts, and Info under the Preferences / Agent /
   Workspace / System groupings, with plugin destinations last under Extensions.
   There is no in-page search pill, no pinned footer action, no Voice row, and
-  no Shortcuts row: the back-to-app action sits at the rail's top-left above
-  the destination list, and General hosts the Live Voice and Keyboard shortcuts
-  cards below the appearance/storage/network/power sections.
+  no Shortcuts row: the window header carries the Settings title and close
+  control above the destination list, and General hosts the Live Voice and
+  Keyboard shortcuts cards below the appearance/storage/network/power sections.
 - Re-select the active destination and update settings without navigating:
   the content keeps its scroll position.
 - Repeat for built-in → plugin, plugin → plugin, and plugin → the previously
   selected built-in destination. Re-selecting a plugin keeps its position.
 - Follow a global search setting anchor into Chat from another destination,
-  from an open plugin destination, and within Chat: the plugin page is gone and
-  the target row is visible before the next paint. Consuming the anchor keeps
+  from an open plugin destination, and within Chat: the window content switches
+  off the plugin destination and the target row is visible before the next paint. Consuming the anchor keeps
   that position. An external tab change with no anchor also leaves the plugin
   and starts at the top. Entering Live Voice from the composer's prepare menu
   selects General and scrolls the merged Live voice card into view.

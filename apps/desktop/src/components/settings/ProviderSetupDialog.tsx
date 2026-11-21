@@ -54,6 +54,7 @@ import {
   resolveEndpointDraft,
 } from "./provider-endpoint-guidance";
 import { ProviderEndpointGuidance } from "./ProviderEndpointGuidance";
+import { useEscapeOwner, useSecondaryWindowActive } from "../../lib/secondary-window-context";
 
 function serviceIdFor(provider?: ProviderPublic | null): string {
   if (!provider) return "";
@@ -120,6 +121,8 @@ export function ProviderSetupDialog({
   pluginCatalogSetup = false,
   pluginCatalogPluginName,
 }: ProviderSetupDialogProps) {
+  const secondaryWindowActive = useSecondaryWindowActive();
+  useEscapeOwner(secondaryWindowActive);
   const { t } = useTranslation();
   const [imageModelDraft, setImageModelDraft] = useState<string[] | undefined>();
   const editing = !!provider;
@@ -252,6 +255,7 @@ export function ProviderSetupDialog({
   }, [named, discoveredBaseUrl, adoptedFrom]);
 
   useEffect(() => {
+    if (!secondaryWindowActive) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || saving) return;
       if (advancedOpen) {
@@ -266,9 +270,7 @@ export function ProviderSetupDialog({
       onClose();
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [advancedOpen, choosing, onClose, saving, service]);
-
+  }, [advancedOpen, choosing, onClose, saving, secondaryWindowActive, service]);
   const nameRef = useRef<HTMLInputElement>(null);
   const focusAfterServiceChange = (next: string) => {
     window.setTimeout(() => {

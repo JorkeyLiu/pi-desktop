@@ -34,6 +34,7 @@ import {
   type ContextMenuPoint,
 } from "../lib/context-menu";
 import { texClipboardPayload } from "../lib/selection-tex";
+import { useEscapeOwner, useSecondaryWindowActive } from "../lib/secondary-window-context";
 
 export type ContextMenuItem = {
   /** Stable identity for React keys and for tests naming a row. */
@@ -196,6 +197,14 @@ export function ContextMenu({
   state: ContextMenuState | null;
   onClose: () => void;
 }) {
+  /*
+    Only an actually open menu owns Escape. This host stays mounted while
+    closed (`state` null) in ordinary chat, and an unconditional claim would
+    pin the owner set non-empty forever, so no surrounding window could ever
+    close on Escape. A retained-but-hidden window claims nothing at all.
+  */
+  const secondaryWindowActive = useSecondaryWindowActive();
+  useEscapeOwner(secondaryWindowActive && state !== null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [placement, setPlacement] = useState<ContextMenuPlacement | null>(null);
 
@@ -260,7 +269,7 @@ export function ContextMenu({
   }, [state]);
 
   useEffect(() => {
-    if (!state) return;
+    if (!state || !secondaryWindowActive) return;
     const menu = menuRef.current;
     /*
       Capture phase on purpose: a nested surface that stops propagation on its
@@ -292,7 +301,7 @@ export function ContextMenu({
       window.removeEventListener("blur", onClose);
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [onClose, state]);
+  }, [onClose, secondaryWindowActive, state]);
 
   // Keyboard users land on the first item; Enter then runs it instead of
   // re-opening the menu.

@@ -21,7 +21,6 @@ import {
   IconBookOpen,
   IconBot,
   IconChat,
-  IconChevronLeft,
   IconFileText,
   IconGlobe,
   IconInfo,
@@ -81,7 +80,6 @@ export function SettingsPage() {
   const settingsAnchor = useAppStore((s) => s.settingsAnchor);
   const settingsTabNonce = useAppStore((s) => s.settingsTabNonce);
   const setSettingsAnchor = useAppStore((s) => s.setSettingsAnchor);
-  const setPage = useAppStore((s) => s.setPage);
   const settings = useAppStore((s) => s.settings);
   const version = useAppStore((s) => s.version);
   const refreshProviders = useAppStore((s) => s.refreshProviders);
@@ -116,15 +114,8 @@ export function SettingsPage() {
     if (activeExtension) setActiveExtension(null);
   }
   const contentRef = useRef<HTMLDivElement>(null);
-  const settingsBackRef = useRef<HTMLButtonElement>(null);
   const destination = activeExtension ? `extension:${activeExtension.ref}` : `builtin:${tab}`;
 
-  // Entering Settings moves focus to the rail's first control. The local
-  // search pill that used to own that focus is gone, and the back action is
-  // the rail's first stop, so keyboard users still land inside the page.
-  useLayoutEffect(() => {
-    settingsBackRef.current?.focus({ preventScroll: true });
-  }, []);
 
   useLayoutEffect(() => {
     // Reset before paint and before the search-anchor effect positions its row.
@@ -271,26 +262,9 @@ export function SettingsPage() {
   const tabNeedsSettings = ["general", "ai", "agent"].includes(tab);
 
   return (
-    <div className="settings-shell settings-shell-full">
-      <div className="settings-titlebar" aria-hidden="true" />
+    <div className="settings-shell settings-shell-full settings-shell-window">
       <aside className="settings-nav sidebar-surface" aria-label={t("settings.title")}>
-        {/* Back to app sits at the rail's top-left, in the same band that holds
-            the native drag strip; the control stays explicitly non-draggable. */}
-        <div className="settings-nav-top drag">
-          <button
-            ref={settingsBackRef}
-            type="button"
-            className="settings-back no-drag"
-            data-nav="back-to-app"
-            aria-label={t("settings.backToApp")}
-            onClick={() => setPage("chat")}
-          >
-            <IconChevronLeft size={15} />
-            <span>{t("settings.backToApp")}</span>
-          </button>
-        </div>
-
-        <div className="settings-nav-scroll no-drag">
+        <div className="settings-nav-scroll">
           {navGroups.map(({ id, items }) => (
             <div key={id} className="settings-nav-group">
               <div className="settings-nav-group-label">

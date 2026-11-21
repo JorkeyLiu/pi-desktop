@@ -26,6 +26,7 @@ import { OverlayBackdrop,
   portalOverlay,
 } from "../ui";
 import { IconLink, IconPlus } from "../icons";
+import { useEscapeOwner, useSecondaryWindowActive } from "../../lib/secondary-window-context";
 
 type AddMode = "ssh" | "pair";
 
@@ -66,6 +67,7 @@ const EMPTY_SSH_FORM: SshForm = {
 
 export function RemoteHostsPage() {
   const { t } = useTranslation();
+  const secondaryWindowActive = useSecondaryWindowActive();
   const { t: remoteT } = useTranslation("remote");
   const [reconnecting, setReconnecting] = useState<string | null>(null);
   const alive = useRef(true);
@@ -241,6 +243,7 @@ export function RemoteHostsPage() {
     [closeAddForm, sshForm, refresh, showToast, t],
   );
   const busy = installing || pairing;
+  useEscapeOwner(addMode !== null && !busy && secondaryWindowActive);
 
   useEffect(() => {
     if (addMode !== null || busy) return;
@@ -251,13 +254,13 @@ export function RemoteHostsPage() {
   }, [addMode, busy]);
 
   useEffect(() => {
-    if (addMode === null) return;
+    if (addMode === null || !secondaryWindowActive) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !busy) closeAddForm();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [addMode, busy, closeAddForm]);
+  }, [addMode, busy, closeAddForm, secondaryWindowActive]);
 
   const sshSubmitDisabled =
     installing ||

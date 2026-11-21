@@ -59,26 +59,14 @@ export function createInteractionSlice({
       }));
     },
 
-    setPage: (page, opts) => {
+    setPage: (page) => {
+      // `page` now names the one secondary window that is open, with `chat`
+      // meaning "no window". Opening, switching, or closing such a window is
+      // not a destination the user can go "back" to, so it never becomes a
+      // history entry: navigation history belongs to conversations alone.
       runtime.beginNavigationIntent();
-      const record = opts?.record !== false;
-      set((state) => {
-        if (!record) return { page };
-        const entry = {
-          page,
-          sessionId: page === "chat" ? state.activeSessionId : undefined,
-        };
-        const stack = state.navStack.slice(0, state.navIndex + 1);
-        const last = stack[stack.length - 1];
-        const same =
-          last?.page === entry.page && last?.sessionId === entry.sessionId;
-        const nextStack = same ? stack : [...stack, entry].slice(-50);
-        return {
-          page,
-          navStack: nextStack,
-          navIndex: nextStack.length - 1,
-        };
-      });
+      if (get().page === page) return;
+      set({ page });
     },
 
     setSettingsTab: (settingsTab) => {
@@ -93,13 +81,17 @@ export function createInteractionSlice({
     canNavForward: () => get().navIndex < get().navStack.length - 1,
 
     navBack: () => {
+      // A window covers the conversation; there is nothing to traverse until
+      // the reader is back on chat.
+      if (get().page !== "chat") return;
       const intent = runtime.beginNavigationIntent();
       const state = get();
       if (state.navIndex <= 0) return;
       const index = state.navIndex - 1;
       const entry = state.navStack[index];
-      set({ navIndex: index, page: entry.page });
-      if (entry.page === "chat" && entry.sessionId) {
+      if (entry.page !== "chat") return;
+      set({ navIndex: index });
+      if (entry.sessionId) {
         void get().selectSession(entry.sessionId, {
           record: false,
           navigationIntent: intent,
@@ -109,13 +101,15 @@ export function createInteractionSlice({
     },
 
     navForward: () => {
+      if (get().page !== "chat") return;
       const intent = runtime.beginNavigationIntent();
       const state = get();
       if (state.navIndex >= state.navStack.length - 1) return;
       const index = state.navIndex + 1;
       const entry = state.navStack[index];
-      set({ navIndex: index, page: entry.page });
-      if (entry.page === "chat" && entry.sessionId) {
+      if (entry.page !== "chat") return;
+      set({ navIndex: index });
+      if (entry.sessionId) {
         void get().selectSession(entry.sessionId, {
           record: false,
           navigationIntent: intent,

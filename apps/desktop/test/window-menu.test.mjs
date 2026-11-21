@@ -222,8 +222,12 @@ test("Windows and Linux use menu-free frameless chrome with window controls", ()
   assert.match(stylesSource, /--ds-window-controls-width:\s*120px;/);
   assert.match(
     stylesSource,
-    /:root\[data-platform="win32"\] \.main-titlebar,[\s\S]*:root\[data-platform="linux"\] \.settings-titlebar\s*\{[^}]*right:\s*var\(--ds-window-controls-width\);/,
+    /:root\[data-platform="win32"\] \.main-titlebar,\s*\n:root\[data-platform="linux"\] \.main-titlebar \{[^}]*right:\s*var\(--ds-window-controls-width\);/,
   );
+  // Settings has no titlebar band of its own any more, and a centered plate
+  // never reaches the native control band.
+  assert.doesNotMatch(stylesSource, /\.settings-titlebar/);
+  assert.doesNotMatch(stylesSource, /\.secondary-window[^{]*\{[^}]*app-region:/s);
   assert.match(
     stylesSource,
     /:root\[data-platform="win32"\] \.main-titlebar\.work-panel-open,[\s\S]*:root\[data-platform="linux"\] \.main-titlebar\.work-panel-open\s*\{[^}]*right:\s*0;/,
