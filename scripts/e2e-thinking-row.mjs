@@ -63,7 +63,12 @@ try {
   )
     .join("\n")
     .replace(/\s+/g, "");
-  for (const rule of [".thinking-preview{", ".thinking-preview.is-heading{"]) {
+  for (const rule of [
+    ".thinking-preview{",
+    ".thinking-preview.is-heading{",
+    ".tool-row.thinking.tool-row-icon{",
+    ".tool-row-icon:has(>[data-icon=read])",
+  ]) {
     assert(
       builtCss.includes(rule),
       `the built stylesheet is stale (missing ${rule}); build with pnpm build:js`,

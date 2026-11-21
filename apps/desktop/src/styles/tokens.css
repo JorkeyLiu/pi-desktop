@@ -162,6 +162,18 @@
   --ds-ansi-bright-white: #f0f6fc;
   --ds-info: var(--gray-300);
   --ds-purple: #c27aff;
+   /*
+    * Left activity-icon tints (transcript tool/thinking/hosted-search rows).
+    * Icon ink only: classification, names, summaries, status, and disclosure
+    * are untouched. Muted so the monochrome chrome keeps reading as neutral
+    * while rows still scan by kind.
+    */
+   --ds-activity-reasoning: #c2aef0;
+   --ds-activity-read: #93b8e5;
+   --ds-activity-search: #7fc6c0;
+   --ds-activity-edit: #d3b06a;
+   --ds-activity-run: #a3c48f;
+   --ds-activity-coordinate: #c99da8;
   --ds-shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.55);
   --ds-shadow-model-menu: var(--ds-shadow-dialog);
   /* Codex --elevation-prominent (same stroke+lift in dark and light) */
@@ -320,6 +332,13 @@
   --ds-ansi-bright-white: #424a53;
   --ds-info: #5d5d5d;
   --ds-purple: #7c3aed;
+   /* Deeper inks of the activity-icon tints for the white transcript plate. */
+   --ds-activity-reasoning: #6650a4;
+   --ds-activity-read: #2b6cb0;
+   --ds-activity-search: #0f766e;
+   --ds-activity-edit: #8a6d1b;
+   --ds-activity-run: #4d7c43;
+   --ds-activity-coordinate: #945d70;
   --ds-shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.12);
   /* Preserve the opaque light model menu's existing stroke and lift. */
   --ds-shadow-model-menu:

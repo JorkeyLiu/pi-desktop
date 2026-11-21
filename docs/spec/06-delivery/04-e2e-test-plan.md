@@ -4966,9 +4966,11 @@ window; opening a normal panel afterward must still work.
   `04-ux/07-ui-design-system.md`, `04-ux/08-component-spec.md`, ADR 0018
 - **Acceptance**: C (chat and stream), Quality
 - **Milestone**: M5
-- **Status**: Unit-covered (`thinking-ui.test.mjs`,
-  `thinking-row-preview.test.mjs`, agent-runtime event tests) and rendered
-  (`pnpm test:e2e:thinking-row`); full streaming scenario Draft
+ - **Status**: Unit-covered (`thinking-ui.test.mjs`,
+   `thinking-row-preview.test.mjs`, agent-runtime event tests) and rendered
+   (`pnpm test:e2e:thinking-row`, whose probe also asserts the six exhaustive
+   left activity-icon groups plus the neutral generic fallback by computed
+   color in dark and light themes); full streaming scenario Draft
 
 #### E2E-054: Stored thinking reloads losslessly
 

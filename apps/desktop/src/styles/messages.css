@@ -2270,18 +2270,18 @@
   bottom: 10px;
 }
 
-.subagent-task-avatar {
-  position: relative;
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-round);
-  background: var(--ds-bg-active);
-  color: var(--ds-text-secondary);
-}
+ .subagent-task-avatar {
+   position: relative;
+   display: inline-flex;
+   width: 28px;
+   height: 28px;
+   flex: none;
+   align-items: center;
+   justify-content: center;
+   border-radius: var(--radius-round);
+   background: var(--ds-bg-active);
+   color: var(--ds-activity-coordinate);
+ }
 
 .subagent-task-status-icon {
   position: absolute;
@@ -2703,12 +2703,61 @@
   color: var(--ds-text-muted);
 }
 
-/* A lifecycle row is a subagent row (D268): it carries the same accent the
-   child's `Task` card avatar uses, so scanning the transcript groups it with
-   the card it reports on rather than with the file tools around it. */
-.tool-row-icon.is-subagent {
-  color: var(--ds-accent);
-}
+ /* A lifecycle row is a subagent row (D268): it carries the coordination tint
+    the child's `Task` card avatar uses, so scanning the transcript groups it
+    with the card it reports on rather than with the file tools around it. */
+ .tool-row-icon.is-subagent {
+   color: var(--ds-activity-coordinate);
+ }
+
+ /*
+  * Left activity-icon tints. Icon ink only: the row name, summary, state dot,
+  * caret, and disclosure/animation behavior are untouched. Each tool selector
+  * matches the `.tool-row-icon` wrapper against the existing `ToolActionIcon`
+  * `data-icon` action hook (see getToolAction in lib/tool-display.ts) — no
+  * duplicate name-to-color mapping — so the tint lives on the wrapper and the
+  * glyph inherits it via currentColor. Thinking (full and compact) plus
+  * skill/context match by row class and hook into the same reasoning tint;
+  * provider-hosted search matches by row class into the discovery tint. Only
+  * the generic `use` action stays on the neutral `--ds-text-muted` ink, and
+  * the subagent lifecycle rule above keeps winning for delegate rows.
+  * Direct wrapper color beats header-hover inheritance, so hover, completed,
+  * expanded, compact, and preparing states all keep the tint.
+  */
+ .tool-row.thinking .tool-row-icon {
+   color: var(--ds-activity-reasoning);
+ }
+ .tool-row.hosted-search .tool-row-icon {
+   color: var(--ds-activity-search);
+ }
+ .tool-row-icon:has(> [data-icon="read"]),
+ .tool-row-icon:has(> [data-icon="list"]) {
+   color: var(--ds-activity-read);
+ }
+ .tool-row-icon:has(> [data-icon="search"]),
+ .tool-row-icon:has(> [data-icon="toolSearch"]),
+ .tool-row-icon:has(> [data-icon="fetch"]),
+ .tool-row-icon:has(> [data-icon="browser"]) {
+   color: var(--ds-activity-search);
+ }
+ .tool-row-icon:has(> [data-icon="write"]),
+ .tool-row-icon:has(> [data-icon="edit"]),
+ .tool-row-icon:has(> [data-icon="image"]) {
+   color: var(--ds-activity-edit);
+ }
+ .tool-row-icon:has(> [data-icon="run"]),
+ .tool-row-icon:has(> [data-icon="schedule"]) {
+   color: var(--ds-activity-run);
+ }
+ .tool-row-icon:has(> [data-icon="skill"]),
+ .tool-row-icon:has(> [data-icon="context"]) {
+   color: var(--ds-activity-reasoning);
+ }
+ .tool-row-icon:has(> [data-icon="todo"]),
+ .tool-row-icon:has(> [data-icon="mode"]),
+ .tool-row-icon:has(> [data-icon="fork"]) {
+   color: var(--ds-activity-coordinate);
+ }
 
 .tool-row-caret {
   display: inline-flex;

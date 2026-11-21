@@ -4,9 +4,12 @@ import { useState, type ReactNode } from "react";
 import { createInstance } from "i18next";
 import { I18nextProvider } from "react-i18next";
 import { catalogs } from "@pi-desktop/i18n";
-import type { AppSettings, UiMessage } from "@pi-desktop/shared";
+import type { AppSettings, HostedSearchRound, UiMessage } from "@pi-desktop/shared";
 import { AssistantTurn } from "../../apps/desktop/src/features/chat/transcript/AssistantTurn";
 import { ThinkingRow } from "../../apps/desktop/src/features/chat/transcript/shared";
+import { ToolRow } from "../../apps/desktop/src/features/chat/transcript/ToolRow";
+import { HostedSearchRow } from "../../apps/desktop/src/features/chat/transcript/HostedSearchRow";
+import { SubagentTaskCard } from "../../apps/desktop/src/features/chat/transcript/SubagentTaskCard";
 import { buildTranscriptEntries } from "../../apps/desktop/src/lib/assistant-turns";
 import { TranscriptDisclosureProvider } from "../../apps/desktop/src/features/chat/transcript/disclosure";
 import { useAppStore } from "../../apps/desktop/src/stores/app-store";
@@ -493,11 +496,307 @@ globalThis.thinkingRowProbe = async () => {
       useAppStore.setState({ settings: previousSettings ?? settings }),
     );
     await settle();
-    check(
-      "the rendered components raised no errors",
-      renderErrors.length === 0,
-      renderErrors,
-    );
+     // ── 10. Left activity icons carry muted category tints ──
+     // Production rows only: one completed row per built-in ToolAction value
+     // (all eighteen), the delegation lifecycle rows, a hosted search, the
+     // thinking rows above, and an actual Task card. The generic `use`
+     // action is the only neutral row. Every check compares rendered ink —
+     // never source text — in the dark theme first, then again under the
+     // light plate.
+     const tintTool = (
+       id: string,
+       toolName: string,
+       toolArgs: Record<string, unknown>,
+       resultDetails: Record<string, unknown> = {},
+     ): UiMessage =>
+       message(id, "", {
+         role: "tool",
+         toolName,
+         toolCallId: `${id}-call`,
+         toolStatus: "success",
+         toolArgs,
+         toolResult: { details: resultDetails },
+       });
+     const tintHost = mount(
+       wide,
+       <>
+         <ToolRow message={tintTool("tint-read", "Read", { path: "src/index.ts" })} />
+         <ToolRow message={tintTool("tint-list", "Glob", { pattern: "src/**/*.ts" })} />
+         <ToolRow message={tintTool("tint-search", "Grep", { pattern: "tool-row-icon" })} />
+         <ToolRow message={tintTool("tint-toolsearch", "ToolSearch", { query: "icon tint" })} />
+         <ToolRow message={tintTool("tint-fetch", "WebFetch", { url: "https://example.com" })} />
+         <ToolRow message={tintTool("tint-browser", "BrowserPreview", { path: "preview.html" })} />
+         <ToolRow message={tintTool("tint-write", "Write", { path: "src/notes.ts" })} />
+         <ToolRow message={tintTool("tint-edit", "Edit", { path: "src/notes.ts" })} />
+         <ToolRow
+           message={tintTool("tint-image", "GenerateImages", { prompt: "A muted icon study" })}
+         />
+         <ToolRow
+           message={tintTool("tint-run", "Bash", { command: "pnpm test", description: "Run tests" })}
+         />
+         <ToolRow
+           message={tintTool("tint-schedule", "ScheduledTaskCreate", { title: "Nightly tests" })}
+         />
+         <ToolRow message={tintTool("tint-skill", "Skill", { name: "code-review" })} />
+         <ToolRow message={tintTool("tint-context", "NewContext", {})} />
+         <ToolRow message={tintTool("tint-mode", "EnterPlanMode", {})} />
+         <ToolRow
+           message={tintTool(
+             "tint-todo",
+             "TodoWrite",
+             { todos: [{ content: "Tint the icons", status: "completed" }] },
+             {
+               text: "Checklist updated: 1/1 completed",
+               summary: { completed: 1, total: 1, inProgress: 0, cancelled: 0 },
+             },
+           )}
+         />
+         <ToolRow
+           message={tintTool("tint-fork", "ForkAgent", {
+             description: "Explore",
+             prompt: "Explore.",
+           })}
+         />
+         <ToolRow message={tintTool("tint-use", "Frobnicator", { widget: "sprocket" })} />
+         <ToolRow
+           message={tintTool("tint-delegate", "Task", {
+             description: "Summarize the thread",
+             prompt: "Summarize.",
+           })}
+         />
+         <ToolRow message={tintTool("tint-wait", "TaskWait", {})} />
+         <ToolRow message={tintTool("tint-tasklist", "TaskList", {})} />
+         <ToolRow message={tintTool("tint-stop", "TaskStop", {})} />
+         <SubagentTaskCard
+           message={tintTool("tint-card", "Task", {
+             description: "Summarize the thread",
+             prompt: "Summarize.",
+           })}
+         />
+         <HostedSearchRow
+           messageId="tint-hosted"
+           round={{
+             id: "tint-search-round",
+             status: "completed",
+             kind: "search",
+             query: "icon tint contrast",
+             sources: [{ url: "https://example.com/tints", title: "Tint notes" }],
+           } satisfies HostedSearchRound}
+           streaming={false}
+         />
+       </>,
+     );
+     await settle();
+     const tokenInk = (token: string) => {
+       const probe = document.createElement("span");
+       probe.style.cssText = "position:absolute;left:-9999px;top:0;";
+       probe.style.color = `var(${token})`;
+       document.body.append(probe);
+       const ink = getComputedStyle(probe).color;
+       probe.remove();
+       return ink;
+     };
+     const rowIconInk = (scope: ParentNode, rowSelector: string) => {
+       const icon = scope.querySelector(`${rowSelector} .tool-row-icon`);
+       return icon ? getComputedStyle(icon as HTMLElement).color : null;
+     };
+     const tintIconInk = (id: string) => rowIconInk(tintHost, `[data-message-id="${id}"]`);
+     const mutedInk = tokenInk("--ds-text-muted");
+     const coordInk = tokenInk("--ds-activity-coordinate");
+     const tintExpect: Record<string, string> = {
+       "tint-read": "--ds-activity-read",
+       "tint-list": "--ds-activity-read",
+       "tint-search": "--ds-activity-search",
+       "tint-toolsearch": "--ds-activity-search",
+       "tint-fetch": "--ds-activity-search",
+       "tint-browser": "--ds-activity-search",
+       "tint-write": "--ds-activity-edit",
+       "tint-edit": "--ds-activity-edit",
+       "tint-image": "--ds-activity-edit",
+       "tint-run": "--ds-activity-run",
+       "tint-schedule": "--ds-activity-run",
+       "tint-skill": "--ds-activity-reasoning",
+       "tint-context": "--ds-activity-reasoning",
+       "tint-todo": "--ds-activity-coordinate",
+       "tint-mode": "--ds-activity-coordinate",
+       "tint-fork": "--ds-activity-coordinate",
+       "tint-delegate": "--ds-activity-coordinate",
+       "tint-wait": "--ds-activity-coordinate",
+       "tint-tasklist": "--ds-activity-coordinate",
+       "tint-stop": "--ds-activity-coordinate",
+     };
+     for (const [id, token] of Object.entries(tintExpect)) {
+       const ink = tintIconInk(id);
+       check(`the ${id} icon wears its category tint`, ink === tokenInk(token), {
+         ink,
+         token,
+       });
+       check(`the ${id} icon leaves the neutral ink`, ink !== null && ink !== mutedInk, {
+         ink,
+         mutedInk,
+       });
+     }
+     const hostedInk = rowIconInk(tintHost, ".tool-row.hosted-search");
+     check(
+       "provider-hosted search wears the discovery tint",
+       hostedInk === tokenInk("--ds-activity-search"),
+       { hostedInk },
+     );
+     check("the generic use icon stays neutral", tintIconInk("tint-use") === mutedInk, {
+       ink: tintIconInk("tint-use"),
+       mutedInk,
+     });
+     check(
+       "delegate rows share the card avatar tint",
+       tintIconInk("tint-delegate") === coordInk,
+       { ink: tintIconInk("tint-delegate"), coordInk },
+     );
+     for (const action of ["read", "skill", "schedule", "todo", "delegate", "use"]) {
+       check(`the ${action} action hook reaches the rendered glyph`, tintHost.querySelector(`[data-icon="${action}"]`) !== null);
+     }
+     const skillGlyph = tintHost.querySelector('[data-icon="skill"]');
+     check(
+       "the skill glyph itself carries the reasoning tint",
+       skillGlyph !== null &&
+         getComputedStyle(skillGlyph as HTMLElement).color === tokenInk("--ds-activity-reasoning"),
+       skillGlyph ? getComputedStyle(skillGlyph as HTMLElement).color : null,
+     );
+     const avatarInk = (scope: ParentNode) => {
+       const avatar = scope.querySelector('[data-message-id="tint-card"] .subagent-task-avatar');
+       return avatar ? getComputedStyle(avatar as HTMLElement).color : null;
+     };
+     check("the Task card avatar wears the coordination tint", avatarInk(tintHost) === coordInk, {
+       ink: avatarInk(tintHost),
+       coordInk,
+     });
+     const cardOutcome = tintHost.querySelector('[data-message-id="tint-card"]')?.getAttribute("data-outcome");
+     check("the Task card settles completed", cardOutcome === "completed", { cardOutcome });
+     const badgeWash = (scope: ParentNode) => {
+       const badge = scope.querySelector('[data-message-id="tint-card"] .subagent-task-status-icon');
+       return badge ? getComputedStyle(badge as HTMLElement).backgroundColor : null;
+     };
+     check(
+       "the card status badge keeps its outcome wash",
+       badgeWash(tintHost) === tokenInk("--ds-success"),
+       { wash: badgeWash(tintHost) },
+     );
+     const darkReason = tokenInk("--ds-activity-reasoning");
+     const openThinkingIcon = wideHost.querySelector(".tool-row.thinking.open .tool-row-icon");
+     check("the open thinking icon wears the reasoning tint", openThinkingIcon !== null, null);
+     if (openThinkingIcon) {
+       check(
+         "an expanded row keeps its tint",
+         getComputedStyle(openThinkingIcon as HTMLElement).color === darkReason,
+         getComputedStyle(openThinkingIcon as HTMLElement).color,
+       );
+     }
+     // Compact mode was restored to the previous (detailed) preference above, so
+     // re-enter it to measure the compact thinking icon, then restore again.
+     flushSync(() =>
+       useAppStore.setState({
+         settings: { ...settings, thinkingDisplayMode: "compact" },
+       }),
+     );
+     await settle();
+     const compactIcon = compactHost.querySelector(
+       ".tool-row.thinking.thinking-compact .tool-row-icon",
+     );
+     check(
+       "compact thinking wears the same tint",
+       compactIcon !== null &&
+         getComputedStyle(compactIcon as HTMLElement).color === darkReason,
+       compactIcon ? getComputedStyle(compactIcon as HTMLElement).color : null,
+     );
+     flushSync(() =>
+       useAppStore.setState({ settings: previousSettings ?? settings }),
+     );
+     await settle();
+     const liveRunIcon = turnHost.querySelector(
+       '[data-message-id="live-call"] .tool-row-icon',
+     );
+     check(
+       "a running tool row keeps its category tint",
+       liveRunIcon !== null &&
+         getComputedStyle(liveRunIcon as HTMLElement).color === tokenInk("--ds-activity-run"),
+       liveRunIcon ? getComputedStyle(liveRunIcon as HTMLElement).color : null,
+     );
+     const readName = tintHost.querySelector('[data-message-id="tint-read"] .tool-row-name');
+     check("the tint stops at the icon: the name keeps its ink", readName !== null, null);
+     if (readName) {
+       check(
+         "the row name is not icon-tinted",
+         getComputedStyle(readName as HTMLElement).color !== tintIconInk("tint-read"),
+         {
+           name: getComputedStyle(readName as HTMLElement).color,
+           icon: tintIconInk("tint-read"),
+         },
+       );
+     }
+     const readSummary = tintHost.querySelector('[data-message-id="tint-read"] .tool-row-summary');
+     check("the tinted row renders its summary", readSummary !== null, null);
+     if (readSummary) {
+       check(
+         "the row summary is not icon-tinted",
+         getComputedStyle(readSummary as HTMLElement).color !== tintIconInk("tint-read"),
+         {
+           summary: getComputedStyle(readSummary as HTMLElement).color,
+           icon: tintIconInk("tint-read"),
+         },
+       );
+     }
+     document.documentElement.setAttribute("data-theme", "light");
+     await settle();
+     const lightReason = tokenInk("--ds-activity-reasoning");
+     check("the reasoning tint adapts to the light plate", lightReason !== darkReason, {
+       lightReason,
+       darkReason,
+     });
+     const lightMuted = tokenInk("--ds-text-muted");
+     for (const [id, token] of Object.entries(tintExpect)) {
+       const ink = tintIconInk(id);
+       check(`the light ${id} icon wears its category tint`, ink === tokenInk(token), {
+         ink,
+         token,
+       });
+       check(`the light ${id} icon leaves the neutral ink`, ink !== null && ink !== lightMuted, {
+         ink,
+         lightMuted,
+       });
+     }
+     check(
+       "light hosted search wears the discovery tint",
+       rowIconInk(tintHost, ".tool-row.hosted-search") === tokenInk("--ds-activity-search"),
+       { hosted: rowIconInk(tintHost, ".tool-row.hosted-search") },
+     );
+     check("light generic use stays neutral", tintIconInk("tint-use") === lightMuted, {
+       ink: tintIconInk("tint-use"),
+       lightMuted,
+     });
+     check(
+       "light thinking stays off the neutral ink",
+       rowIconInk(wideHost, ".tool-row.thinking.open") === lightReason &&
+         lightReason !== lightMuted,
+       { lightReason, lightMuted },
+     );
+     check("light card avatar wears the coordination tint", avatarInk(tintHost) === tokenInk("--ds-activity-coordinate"), {
+       ink: avatarInk(tintHost),
+     });
+     check(
+       "light badge keeps its outcome wash",
+       badgeWash(tintHost) === tokenInk("--ds-success"),
+       { wash: badgeWash(tintHost) },
+     );
+     document.documentElement.removeAttribute("data-theme");
+     await settle();
+     check("leaving light restores the dark tint", tokenInk("--ds-activity-reasoning") === darkReason, {
+       restored: tokenInk("--ds-activity-reasoning"),
+       darkReason,
+     });
+     check(
+       "the rendered components raised no errors",
+       renderErrors.length === 0,
+       renderErrors,
+     );
   } finally {
     globalThis.thinkingRowCollapseWide = () => {
       const header = thinkingHeaderOf(wide);

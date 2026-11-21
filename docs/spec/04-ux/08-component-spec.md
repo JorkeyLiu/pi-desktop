@@ -945,6 +945,18 @@ watching, and the reader's collapse choice for that row survives later streaming
 updates. Compact keeps all tool/search payloads closed and suppresses reasoning
 text and excerpts; only its active thinking indicator remains.
 
+  The leading icon of a tool, thinking, or hosted-search row carries a muted
+ category tint so rows scan by kind: lavender for reasoning (Thinking full and
+ compact, skill, context), muted blue for knowledge (read, list), muted teal
+ for discovery (search, toolSearch, fetch, browser, provider-hosted search),
+ warm gold for creation (write, edit, image), muted sage for execution (run,
+ schedule), and muted rose for coordination (todo, mode, fork, delegate rows
+ and the Task card avatar). The generic `use` action keeps the neutral muted
+ ink. Only the icon ink differs — names, summaries, state markers,
+ disclosure, and animation behavior are unchanged — and the tint holds across
+ completion, hover, expanded, compact, and preparing states via theme-aware
+ `--ds-activity-*` tokens with dark and light values.
+
 Parallel tool calls keep their announcement order from preparing through
 running to completion and across durable refreshes: a call announced second
 stays second even when it starts or finishes first. A durable page that
