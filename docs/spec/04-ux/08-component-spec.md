@@ -2174,15 +2174,18 @@ Single message render — either user (plaintext) or assistant (markdown streami
   space below the last turn — opens the selected-text menu, and only when a
   real selection is inside the right-clicked surface: Copy writes the exact
   selected text, Quote appends it to the composer draft as a blockquote and
-  focuses the composer. The pointer must land on the selected words
-  themselves: a right-click on unselected words of the same paragraph — or on
-  a button or empty background — cancels the old selection, browser-like, and
-  opens no menu at all, as does a collapsed caret or a selection outside the
-  right-clicked surface. Edit, Delete, Regenerate, Branch, and revision paging
-  stay on the hover toolbar and are never duplicated in the menu; Annotate
-  and Open side chat stay retired (ADR 0268). Copying from the
-  menu reports through the toast host because the surface closes as soon
-  as the item runs.
+  focuses the composer. An ordinary right-click never fabricates a selection:
+  with no prior selection the gesture leaves the text unselected (the
+  transcript claims the pointer gesture so the platform cannot apply its
+  right-click word selection) and opens no menu. The pointer must land on
+  the selected words themselves: a right-click on unselected words of the
+  same paragraph — or on a button or empty background — cancels the old
+  selection, browser-like, and opens no menu at all, as does a collapsed
+  caret or a selection outside the right-clicked surface. Edit, Delete,
+  Regenerate, Branch, and revision paging stay on the hover toolbar and are
+  never duplicated in the menu; Annotate and Open side chat stay retired
+  (ADR 0268). Copying from the menu reports through the toast host because
+  the surface closes as soon as the item runs.
   Fork creates and activates an independent session whose snapshot ends at the
   selected assistant response, requires an idle source, and leaves that
   source's transcript, live runtime, and provider cache state untouched (D134).

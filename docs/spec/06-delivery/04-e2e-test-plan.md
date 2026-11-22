@@ -5512,8 +5512,8 @@ window; opening a normal panel afterward must still work.
 
 - **Preconditions**: A session contains a completed user prompt and a
   completed assistant answer; the conversation pane is focused.
-- **Steps**: 1) Right-click the user plate with no selection: no menu
-  opens. 2) Select a phrase in the user plate, right-click that
+ - **Steps**: 1) Right-click the user plate with no selection: no menu
+  opens and no word is left selected. 2) Select a phrase in the user plate, right-click that
   plate: the menu lists Copy and Quote only. Right-click unselected words of
   the same paragraph instead: the old selection is cancelled and no menu
   opens. Choose Copy and confirm the
@@ -5532,7 +5532,8 @@ window; opening a normal panel afterward must still work.
   Copy writes the exact live selection captured when the menu opened; Quote
   appends that excerpt to the composer draft as a blockquote without
   replacing existing draft text. A collapsed caret or a selection outside
-  the right-clicked surface opens no menu at all. Copy
+  the right-clicked surface opens no menu at all; a real right-button press
+  with no prior selection leaves no word selected. Copy
   shows a toast. Escape and Tab dismiss the menu without
   running an item.
   A link still offers Open in default browser, Open in work panel, and
@@ -5542,7 +5543,9 @@ window; opening a normal panel afterward must still work.
   revision actions stay available once editing ends;
   the menu never carries them. Cancel preserves the original message.
   Automated Chromium component checks:
-  `node scripts/e2e-message-edit-copy.mjs`, `node scripts/e2e-transcript-render.mjs`.
+  `node scripts/e2e-message-edit-copy.mjs`,
+  `node scripts/e2e-chat-selection-right-click.mjs`,
+  `node scripts/e2e-transcript-render.mjs`.
 - **Specs linked**: `04-ux/08-component-spec.md` §8.3 / §8.5,
   `04-ux/09-interaction-patterns.md` (floating dropdown surfaces),
   ADR 0268

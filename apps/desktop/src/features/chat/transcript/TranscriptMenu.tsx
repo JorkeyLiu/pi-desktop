@@ -41,10 +41,19 @@ import { selectedTextMenuItems } from "./menu-items";
 
 /**
  * Opens the selected-text menu, or nothing when no text is selected in the
- * right-clicked surface. Never prevent-defaults on the way out: with no
- * selection there is no custom menu, and the platform keeps its behavior.
+ * right-clicked surface. A pointer gesture on non-editable transcript text is
+ * always claimed, even when no menu opens, so Chromium cannot apply its
+ * right-click word selection afterwards; editables keep the platform menu.
  */
 export type OpenTranscriptMenu = (event: ReactMouseEvent<HTMLElement>) => void;
+// Text fields and editable prose keep the platform's own context menu: they
+// own caret placement and spellcheck, so the transcript never claims theirs.
+function isEditableContextMenuTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    !!target.closest("input, textarea, [contenteditable=''], [contenteditable='true']")
+  );
+}
 
 /**
  * A row rendered outside the provider (tests, a focused single-row view) keeps
@@ -62,6 +71,19 @@ export function TranscriptMenuProvider({ children }: { children: ReactNode }) {
   const { copyText, quoteText } = useChatTextActions();
   const openSelectedTextMenu = useCallback(
     (event: ReactMouseEvent<HTMLElement>) => {
+      const point: ContextMenuClickPoint =
+        event.clientX === 0 && event.clientY === 0
+          ? null
+          : { x: event.clientX, y: event.clientY };
+      // Claim a pointer gesture on non-editable transcript text before reading
+      // anything: Chromium applies its right-click word selection as the
+      // contextmenu default action, after dispatch, so the live selection here
+      // is still the user's own. Without this, an ordinary right-click with no
+      // prior selection leaves a stray word selected even though no menu opens.
+      // A keyboard menu carries no coordinates and keeps the existing behavior.
+      if (point && !isEditableContextMenuTarget(event.target)) {
+        event.preventDefault();
+      }
       // Gate before the open, on the same reading the menu snapshot takes:
       // without a selection there is no custom menu at all.
       if (!readContextMenuSelection(event.currentTarget)) return;
@@ -69,12 +91,7 @@ export function TranscriptMenuProvider({ children }: { children: ReactNode }) {
       // the old selection when right-clicking elsewhere in the same paragraph,
       // so containment alone would offer Copy for text the pointer never
       // touched. A click outside the selection cancels it, browser-like, and
-      // opens nothing. A keyboard menu carries no coordinates and keeps the
-      // existing behavior.
-      const point: ContextMenuClickPoint =
-        event.clientX === 0 && event.clientY === 0
-          ? null
-          : { x: event.clientX, y: event.clientY };
+      // opens nothing.
       if (!contextMenuClickHitsSelection(event.currentTarget, point)) {
         if (point) clearChatSelection(event.currentTarget);
         return;
