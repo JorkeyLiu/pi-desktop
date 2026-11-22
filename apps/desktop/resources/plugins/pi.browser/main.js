@@ -27,12 +27,12 @@ export async function onLoad() {
   await pi.agent.registerTool({
     name: "Browser",
     description: [
-      "Drive PI-Desktop's work-panel browser via CDP.",
+      "Drive PI-Desktop's work-panel browser via CDP on the calling session's own page.",
       'Call ToolSearch for "browser" or "cdp" to load this tool.',
-      "Browser operations automatically reveal the work-panel view for this session and wait until it is ready.",
-      "Keep the panel visible while working.",
-      "For a workspace HTML file, call BrowserPreview first; it opens and reveals a live-reloading Browser tab.",
-      "Do not ask the user to open Browser manually. If this session is in the background, ask them to switch to it and retry.",
+      "Browser actions run in the background on the caller's page without revealing",
+      "the panel or stealing focus; the visible foreground session is never disturbed.",
+      "For a workspace HTML file, call BrowserPreview first; it prepares a live-reloading Browser tab.",
+      "Use reveal only when the user explicitly asks to see the page.",
       "Then snapshot the accessibility tree, click/fill by uid, take screenshots, evaluate JavaScript,",
       "read console output, or send an allowlisted raw CDP method.",
     ].join(" "),
@@ -44,7 +44,7 @@ export async function onLoad() {
         action: {
           type: "string",
           enum: ACTIONS,
-          description: "The Browser view opens automatically for the calling session before this action runs.",
+          description: "The action runs in the background on the calling session's own page.",
         },
         url: { type: "string", description: "http(s) URL for action=navigate." },
         path: {
@@ -84,7 +84,6 @@ export async function onLoad() {
           error: `unknown action "${action}"; use ${ACTIONS.join(", ")}`,
         };
       }
-      await pi.browser.reveal();
       switch (action) {
         case "navigate": {
           const state = await pi.browser.navigate({

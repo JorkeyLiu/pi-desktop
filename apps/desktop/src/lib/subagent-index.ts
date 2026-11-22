@@ -17,6 +17,7 @@ import {
 } from "./subagent-metrics-values";
 import { isAcceptedSubagentCall } from "./assistant-turns";
 import {
+  delegateTaskAgent,
   delegateTaskTitle,
   resumeArgOf,
   resumeTarget,
@@ -95,6 +96,8 @@ export type SubagentTranscriptIndex = {
   metrics: (delegationId: string) => SubagentMetrics | null;
   /** Every `Task` call's title, keyed by the identity its row is keyed by. */
   titles: ReadonlyMap<string, string>;
+  /** Every delegation's requested agent, keyed by the same identity as `titles`. */
+  agents: ReadonlyMap<string, string>;
   /** Every identity's chain key: the call id its component starts at. */
   chainKeys: ReadonlyMap<string, string>;
   /** Every segment's folded figures, keyed by `Task` call id. */
@@ -344,7 +347,7 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
     return earliest?.title ?? "";
   };
 
-  const { titles, chainKeys } = batchMaps(delegationCalls, resumeLink);
+  const { titles, chainKeys, agents } = batchMaps(delegationCalls, resumeLink);
 
   // One fold per chain, published under every call id the chain holds, so a card
   // of any segment reads the figures of the work it belongs to.
@@ -374,6 +377,7 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
     title,
     metrics: metricsOf,
     titles,
+    agents,
     chainKeys,
     metricsByCallId,
   };
@@ -401,20 +405,26 @@ function collectRosterMetrics(
 
 /**
  * The batch maps the transcript providers hand down: every `Task` call's title
- * keyed by the identity its row is keyed by, and every identity's chain key.
+ * and requested agent, each keyed by the identity its row is keyed by, and
+ * every identity's chain key.
  *
- * One chain is one child session however many `Task` rows opened it, so both
- * maps name a chain by its earliest call: the resume edges point a continuation
- * at the call it continues, and walking to the earliest ancestor names the
- * component without re-reading the conversation once per call.
+ * One chain is one child session however many `Task` rows opened it, so all
+ * three maps name a chain by its earliest call: the resume edges point a
+ * continuation at the call it continues, and walking to the earliest ancestor
+ * names the component without re-reading the conversation once per call.
  */
 function batchMaps(
   calls: readonly CallRow[],
   resumeLink: ReadonlyMap<string, string>,
-): { titles: ReadonlyMap<string, string>; chainKeys: ReadonlyMap<string, string> } {
+): {
+  titles: ReadonlyMap<string, string>;
+  agents: ReadonlyMap<string, string>;
+  chainKeys: ReadonlyMap<string, string>;
+} {
   const titles = new Map<string, string>();
+  const agents = new Map<string, string>();
   const chainKeys = new Map<string, string>();
-  if (calls.length === 0) return { titles, chainKeys };
+  if (calls.length === 0) return { titles, agents, chainKeys };
   const parentOf = new Map<string, string>();
   for (const [prior, next] of resumeLink) {
     if (!parentOf.has(next)) parentOf.set(next, prior);
@@ -429,19 +439,27 @@ function batchMaps(
     return root;
   };
   // Session order decides: the chain's first description is its title, and a
-  // continuation's own description never replaces it.
+  // continuation's own description never replaces it. The requested agent
+  // follows the same rule: the chain's earliest named role is the delegation.
   const titleByRoot = new Map<string, string>();
+  const agentByRoot = new Map<string, string>();
   for (const call of calls) {
     const root = rootOf(call.callId);
-    if (titleByRoot.has(root)) continue;
-    const dispatchTitle = delegateTaskTitle(call.message);
-    if (dispatchTitle) titleByRoot.set(root, dispatchTitle);
+    if (!titleByRoot.has(root)) {
+      const dispatchTitle = delegateTaskTitle(call.message);
+      if (dispatchTitle) titleByRoot.set(root, dispatchTitle);
+    }
+    if (!agentByRoot.has(root)) {
+      const dispatchAgent = delegateTaskAgent(call.message);
+      if (dispatchAgent) agentByRoot.set(root, dispatchAgent);
+    }
   }
   for (const call of calls) {
     const key = rootOf(call.callId);
     chainKeys.set(call.callId, key);
     if (!chainKeys.has(call.delegationId)) chainKeys.set(call.delegationId, key);
     titles.set(call.delegationId, titleByRoot.get(key) ?? "");
+    agents.set(call.delegationId, agentByRoot.get(key) ?? "");
   }
-  return { titles, chainKeys };
+  return { titles, agents, chainKeys };
 }

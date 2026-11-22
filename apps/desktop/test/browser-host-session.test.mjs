@@ -73,35 +73,25 @@ test("background navigation targets that session's last selected tab", async () 
   const h = harness(); await open(h, "A", "a", "A.html");
   await open(h, "B", "b", "B.html");
   h.host.setChromeSession("A", "a");
-  await h.host.navigate({ url: "https://fixture.invalid/new-b" }, "B");
-  h.loads[1].finish(); // A late native state update cannot overwrite the queued URL.
-  assert.equal(h.host.getState().url, "A.html");
-  assert.equal(h.loads.length, 2);
-  h.host.setChromeSession("B", "b", "B.html");
-  h.roots.at(-1).resolve("/projects/B"); await settled();
-  assert.equal(h.loads.at(-1).target, "https://fixture.invalid/new-b");
-  h.loads.at(-1).finish(); await settled();
+  // B navigates while A stays visible: the call binds B's own selected tab.
+  const pending = h.host.navigate({ url: "https://fixture.invalid/new-b" }, "B");
+  h.roots.at(-1).resolve("/projects/B");
+  await settled();
+  h.loads.at(-1).finish();
+  await pending;
+  assert.equal(h.host.getState().url, "A.html", "background navigation must not move the visible page");
+  assert.deepEqual(h.reveals, [], "execution must not request a reveal");
+  h.host.setChromeSession("B", "b");
   assert.equal(h.host.getState().url, "https://fixture.invalid/new-b");
-  h.host.setChromeSession("D", "d", "old-d.html");
-  h.roots.at(-1).resolve("/projects/D"); await settled();
-  const pendingLoad = h.loads.at(-1);
-  h.host.setChromeSession("A", "a");
-  await h.host.navigate({ url: "https://fixture.invalid/new-d" }, "D");
-  pendingLoad.finish(); await settled();
-  h.host.setChromeSession("D", "d");
-  h.roots.at(-1).resolve("/projects/D"); await settled();
-  assert.equal(h.loads.at(-1).target, "https://fixture.invalid/new-d");
-  h.loads.at(-1).finish(); await settled();
-  await h.host.navigate({ url: "https://fixture.invalid/queued" }, "C");
-  await open(h, "C", "c", "old.html");
-  assert.equal(h.host.getState().url, "https://fixture.invalid/queued");
-  h.host.setChromeSession("E"); // A session may exist without a concrete resource tab.
-  h.host.setChromeSession("A", "a");
-  await h.host.navigate({ url: "https://fixture.invalid/first-e" }, "E");
-  await open(h, "E", "e", "old-e.html");
-  assert.equal(h.host.getState().url, "https://fixture.invalid/first-e");
-  h.host.setChromeSession("C", "blank");
-  assert.equal(h.host.getState(), null);
+  // A session without a page yet lazily binds its own page; the foreground is untouched.
+  const fresh = h.host.navigate({ url: "https://fixture.invalid/new-c" }, "C");
+  await settled();
+  h.roots.at(-1).resolve("/projects/C");
+  await settled();
+  h.loads.at(-1).finish();
+  await fresh;
+  assert.equal(h.host.getContext().sessionId, "B");
+  assert.equal(h.host.getStateForPlugin("C").url, "https://fixture.invalid/new-c");
 });
 
 test("a temporary preview uses its own scratch even while a project session is visible", async () => {
@@ -221,29 +211,27 @@ test("Browser reveal never steals focus from a different session", async () => {
   await assert.rejects(reveal, (error) => error?.code === "UNAVAILABLE");
 });
 
-test("plugin browser operations remain unavailable until the Browser view is visible", async () => {
+test("plugin browser operations run on the caller's page without a visible view", async () => {
   const h = harness(); await open(h, "A", "a", "A.html");
-  assert.equal(h.host.getStateForPlugin().url, "A.html");
-  const pendingNavigation = h.host.navigate({ url: "https://fixture.invalid/hidden" });
+  assert.equal(h.host.getStateForPlugin("A").url, "A.html");
+  // The work panel is hidden, yet the caller's session still executes.
   h.surface(false);
+  const pending = h.host.navigate({ url: "https://fixture.invalid/hidden" }, "A");
   h.roots.at(-1).resolve("/projects/A");
-  await assert.rejects(pendingNavigation, (error) => error?.code === "UNAVAILABLE");
-  h.surface(false);
-  const unavailable = (error) => error?.code === "UNAVAILABLE";
-
-  assert.equal(h.host.getState().url, "A.html", "host UI state remains readable");
-  assert.throws(() => h.host.getStateForPlugin(), unavailable);
-  assert.throws(() => h.host.action("reload"), unavailable);
-  assert.throws(() => h.host.openExternal(), unavailable);
-  assert.throws(() => h.host.console(), unavailable);
-  await assert.rejects(h.host.navigate({ url: "https://fixture.invalid/hidden" }), unavailable);
-  await assert.rejects(h.host.snapshot(), unavailable);
-  await assert.rejects(h.host.screenshot(), unavailable);
-  await assert.rejects(h.host.click("uid"), unavailable);
-  await assert.rejects(h.host.fill("uid", "text"), unavailable);
-  await assert.rejects(h.host.evaluate("document.title"), unavailable);
-  await assert.rejects(h.host.cdpCommand("Page.enable"), unavailable);
-  assert.equal(h.loads.length, 1, "hidden navigation must not reach the page");
+  await settled();
+  h.loads.at(-1).finish();
+  await pending;
+  assert.equal(h.host.getStateForPlugin("A").url, "https://fixture.invalid/hidden");
+  assert.equal(h.host.getState().url, "https://fixture.invalid/hidden");
+  assert.deepEqual(h.reveals, [], "execution must not request a reveal");
+  // Read-only state for a session without a page is null instead of throwing.
+  assert.equal(h.host.getStateForPlugin("ghost"), null);
+  // A session that never navigated has no started page to drive.
+  await assert.rejects(h.host.snapshot("ghost"), (error) => error?.code === "UNAVAILABLE");
+  // Calls with neither runtime session nor chrome context fail clearly.
+  h.host.disposeGuest();
+  await assert.rejects(h.host.navigate({ url: "https://fixture.invalid/nowhere" }), (error) => error?.code === "UNAVAILABLE");
+  assert.equal(h.host.getState(), null);
 });
 
 test("closing a tab and disposing the host cancel pending ownership and release pages", async () => {

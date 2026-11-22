@@ -276,6 +276,7 @@ export type ToolIdentityKey =
   | "chat.toolIdentityMode"
   | "chat.toolIdentityContext"
   | "chat.toolIdentityBrowser"
+  | "chat.toolBrowser"
   | "chat.toolIdentityImage"
   | "chat.toolIdentitySchedule"
   | "chat.toolIdentityAskTool"
@@ -321,6 +322,13 @@ export function getToolIdentityKey(toolName?: string): ToolIdentityKey | null {
   if (isSubagentHandoffTool(toolName)) {
     return "chat.toolIdentitySubagentHandoff";
   }
+  // The shipped Browser plugin is an exact built-in for its displayed
+  // identity only: its action stays `fetch` (globe icon, suffix behavior),
+  // while its name reads as the catalog word, never the formatted protocol
+  // name. Any other tool whose name merely ends in `Browser` keeps its own.
+  // The literal is spelled out here to keep this leaf module free of runtime
+  // imports; `browser-tool-presentation` owns the same value for the row body.
+  if (toolName === "plugin_pi_browser_Browser") return "chat.toolBrowser";
   const action = exactBuiltinAction(toolName);
   return action ? TOOL_IDENTITY_KEYS[action] : null;
 }

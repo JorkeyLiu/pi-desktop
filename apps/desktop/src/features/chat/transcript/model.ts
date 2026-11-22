@@ -48,3 +48,15 @@ export function delegateThinkingLevel(message: UiMessage): ThinkingLevel | undef
  * Copies a run row's command from its head. The expanded body holds only the
  * output, so this is the one place the command can be taken from (D226).
  */
+
+/**
+ * The delegation a `TaskSteer` row targets: the `delegationId` the model sent,
+ * trimmed. A steer call carries only `delegationId` and `message` — never the
+ * target's title or agent — so anything else on the row is not a target.
+ */
+export function steerTargetDelegationId(message: UiMessage): string {
+  const args = message.toolArgs;
+  if (!args || typeof args !== "object" || Array.isArray(args)) return "";
+  const delegationId = (args as { delegationId?: unknown }).delegationId;
+  return typeof delegationId === "string" ? delegationId.trim() : "";
+}
