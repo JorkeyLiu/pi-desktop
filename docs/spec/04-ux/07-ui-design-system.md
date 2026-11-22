@@ -257,7 +257,7 @@ token rather than introducing a decorative palette:
 | State | Semantic color | Shape / motion | Meaning |
 |---|---|---|---|
 | Idle (manual toggle, unpressed) | neutral accent | hollow outlined ring, static, on the selected idle conversation only | no live state; the row is not marked pending. Unselected unmarked rows show no mark and leave the gutter empty |
-| Pending (manual toggle, pressed) | warning orange | filled dot, static — no halo, no animation | the user marked the row as still needing them |
+| Pending (manual toggle, pressed) | pending yellow | filled dot, static — no halo, no animation | the user marked the row as still needing them |
 | In progress | warning orange | filled dot plus a halo ring that animates only while the turn runs; static halo under reduced motion | agent is producing or executing |
 | Permission | purple | dot with two pulse cycles, then steady | the session waits on a tool approval |
 | Completed | success green | check mark | latest unread task turn completed |
@@ -294,7 +294,7 @@ The running halo in a task row is the sidebar's one continuous animation: it
 exists only while that turn is actually in flight and stops as soon as the
 turn settles, so an idle window never keeps submitting frames for it.
 Reduced-motion mode stops the halo and keeps its static ring, so running is
-still distinguishable from the plain orange manual fill by shape, not motion.
+still distinguishable from the plain yellow manual fill by shape, not motion.
 The related-session hover card keeps its bounded two-cycle running mark.
 
 The same bound covers every other idle-reachable status indicator, because any

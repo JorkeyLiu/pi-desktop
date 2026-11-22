@@ -394,7 +394,7 @@
   content: "";
 }
 
-/* Manual pending: a filled orange dot on the selected or an unselected row,
+/* Manual pending: a filled yellow dot on the selected or an unselected row,
    deliberately still — no halo, no animation. Work in flight outranks it
    visually without clearing the stored mark. */
 .thread-item-status.pending::before {
@@ -404,7 +404,7 @@
   width: 9px;
   height: 9px;
   border-radius: var(--radius-full);
-  background: var(--ds-warning);
+  background: var(--ds-pending);
   content: "";
 }
 

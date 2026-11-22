@@ -446,7 +446,7 @@ visually distinct from list content.
 | Active session | Active row background; the selected idle conversation carries the hollow idle mark, while manual, running, and outcome marks show on selected and unselected rows |
 | Selecting session | Destination row receives the active treatment immediately while transcript/workspace resolution continues |
 | Session idle | Hollow accent outlined mark on the selected idle conversation only; it is the manual pending toggle at rest. An unselected unmarked row shows no mark and leaves the 24px gutter empty |
-| Session pending (manual) | Static orange filled mark after the user marks the row, shown whether or not that row is selected; no halo, no animation; device-local preference that survives a run, opening the session, refresh, and relaunch |
+| Session pending (manual) | Static yellow filled mark after the user marks the row, shown whether or not that row is selected; no halo, no animation; device-local preference that survives a run, opening the session, refresh, and relaunch |
 | Session in progress | Orange filled dot with an externally visible halo that animates only while the turn runs; the static halo remains under reduced motion; running outranks the manual mark without clearing it |
 | Session completed | Green check mark from the latest unread task notification, also on the selected row |
 | Session failed | Red circled alert mark from the latest unread task notification, also on the selected row |
@@ -474,7 +474,7 @@ visually distinct from list content.
   disclosure hit area): activate its path when necessary, then toggle only
   that project's conversation group; retain the other project groups
 - Click the session status mark: the hollow mark on the selected idle conversation
-  and the orange marked state on any row toggle the device-local manual pending
+  and the yellow marked state on any row toggle the device-local manual pending
   mark, with `aria-pressed`, a localized accessible name, and Enter/Space
   activation. It never selects the row and never starts a row drag. An
   unselected unmarked row renders no status element, so a click in its gutter
