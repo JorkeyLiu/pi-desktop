@@ -254,7 +254,7 @@ export type AppState = {
     isolated?: boolean;
   }) => Promise<void>;
   forkSession: (id: string) => Promise<void>;
-  forkAssistantMessage: (messageId: string) => Promise<void>;
+  forkAssistantMessage: (messageId: string, sourceSessionId?: string) => Promise<void>;
   configureActiveSession: (config: {
     mode: Mode;
     providerId?: string;

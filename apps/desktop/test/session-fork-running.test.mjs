@@ -14,6 +14,7 @@ function harness(t) {
     activeSessionId: "parent", isRunning: true, runningSessions: { parent: true },
     messages: [old, live], sessions: [{ id: "parent", title: "Source", mode: "agent" }],
     sessionHistory: { parent: { hasMoreBefore: true, contentLimited: true } },
+    transcriptViews: {},
     sessionMeta: {}, sessionCompactions: {}, planningStates: {},
     retainedSessionIds: ["parent"], retainedTranscripts: { parent: [old, live] },
     workPanelContexts: {}, workPanelTabs: [], workPanelOpen: false,

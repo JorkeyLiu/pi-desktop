@@ -303,7 +303,7 @@ export const AssistantTurn = memo(function AssistantTurn({
           if (actionMessage) void retryAssistantMessage(actionMessage.id);
         },
         onBranch: () => {
-          if (actionMessage) void forkAssistantMessage(actionMessage.id);
+          if (actionMessage) void forkAssistantMessage(actionMessage.id, paneSessionId || undefined);
         },
       }),
     });
@@ -389,7 +389,7 @@ export const AssistantTurn = memo(function AssistantTurn({
               className="copy-btn icon"
               tooltip={t("chat.forkResponse")}
               ariaLabel={t("chat.forkResponse")}
-              onClick={() => void forkAssistantMessage(actionMessage.id)}
+              onClick={() => void forkAssistantMessage(actionMessage.id, paneSessionId || undefined)}
             >
               <IconBranch size={13} />
             </TooltipButton> : null}

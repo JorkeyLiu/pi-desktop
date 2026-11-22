@@ -6351,14 +6351,21 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   whose history stops at the selected response; later source turns are absent.
   Source text, version history, token metadata, later turns, runtime, and cache
   state remain unchanged. Continuing the child affects only that child and
-  reseeds from its own remapped transcript.
+  reseeds from its own remapped transcript. The fork targets the reply's own
+  session transcript — the rows the transcript actually renders for that
+  session, including a historical reply its reading view still holds above the
+  loaded window — and never a later-activated session. A reply whose anchor
+  left every rendered snapshot reports through the existing history-unreadable
+  error toast instead of silently doing nothing.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md`,
   `03-runtime/04-data-storage.md`, `03-runtime/06-host-rpc-protocol.md`,
   `04-ux/08-component-spec.md`, `08-meta/decisions-log.md` (D134, D137)
 - **Acceptance**: C (chat stream/sessions), F (persistence), Quality
 - **Milestone**: M5
 - **Status**: Unit-covered (`sessions::tests::message_scoped_fork_stops_at_selected_assistant_response`,
-  `session-fork.test.mjs`, `transcript-style.test.mjs`); full restart UI scenario Draft
+  `session-fork.test.mjs`, `session-fork-source.test.mjs` (reply
+  source/reading-view ownership), `transcript-style.test.mjs`); full restart
+  UI scenario Draft
 
 #### E2E-071b: Forked session retains messages after the first AI turn completes
 
