@@ -2169,21 +2169,18 @@ Single message render — either user (plaintext) or assistant (markdown streami
   and owns the pager whenever `revisionCount > 1`; replacing the assistant/tool
   tail must not move or detach that pager from the user bubble. The pager is
   part of the message action toolbar: hidden by default and revealed together
-  with Copy on row hover or keyboard focus. Right-clicking a user message or
-  an assistant turn opens the same action vocabulary as a body-level
-  pointer-anchored menu (Copy, Select text, and the row's own Edit / Delete /
-  Regenerate / Branch / revision items). Right-clicking empty transcript
-  space, a system row, or a permission/outcome card opens a conversation
-  menu: Copy conversation, Select conversation text, Scroll to top, Jump to
-  latest. Quote, Annotate, and Open side chat stay retired (ADR 0268). A
-  streaming or empty assistant turn that would produce no items opens
-  nothing. Copy on a speaking-turn menu writes the live selection in that
-  turn captured when the menu opened; a collapsed caret, or a selection
-  outside the row, falls back to the whole turn.
-  Copy conversation reads the complete session on demand, including unloaded
-  history and untruncated message text, and preserves the visible in-flight
-  tail. It does not change the reading window or scroll position. A failed
-  read reports an error without copying partial history. Copying from the
+  with Copy on row hover or keyboard focus. Right-clicking anywhere in the
+  transcript — a user message, an assistant turn, tool output, or the empty
+  space below the last turn — opens the selected-text menu, and only when a
+  real selection is inside the right-clicked surface: Copy writes the exact
+  selected text, Quote appends it to the composer draft as a blockquote and
+  focuses the composer. The pointer must land on the selected words
+  themselves: a right-click on unselected words of the same paragraph — or on
+  a button or empty background — cancels the old selection, browser-like, and
+  opens no menu at all, as does a collapsed caret or a selection outside the
+  right-clicked surface. Edit, Delete, Regenerate, Branch, and revision paging
+  stay on the hover toolbar and are never duplicated in the menu; Annotate
+  and Open side chat stay retired (ADR 0268). Copying from the
   menu reports through the toast host because the surface closes as soon
   as the item runs.
   Fork creates and activates an independent session whose snapshot ends at the
@@ -2381,12 +2378,11 @@ replaced.
 - Timestamps: `aria-label` with full time string, visual shows relative time
 - Right-click menus are `role="menu"` with `role="menuitem"` rows, arrow /
   Home / End navigation, Escape / Tab / outside-press / scroll-behind
-  dismissal, and an accessible name (`chat.messageMenu` or
-  `chat.conversationMenu`). Focus returns to whatever the right-click
-  interrupted. While editing a user message, Copy uses the selected draft text
-  (or the whole draft if the caret is collapsed), and Select message text selects
-  the draft. Saved-message Edit, Delete, and revision actions are not offered
-  until editing ends.
+  dismissal, and an accessible name (`chat.messageMenu`). Focus returns to
+  whatever the right-click interrupted. While editing a user message, Copy
+  and Quote act on the selected draft text; a collapsed draft caret opens no
+  menu. Saved-message Edit, Delete, and revision actions stay on the toolbar
+  and are reachable once editing ends.
 
 ### 8.6 MVP constraints
 

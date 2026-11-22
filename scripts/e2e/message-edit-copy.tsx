@@ -19,10 +19,47 @@ const click = async (selector: string) => {
   flushSync(() => find(selector).click());
   await settle();
 };
-const menu = async (node: HTMLElement) => {
-  flushSync(() => node.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })));
+// Real Chromium selection, as the transcript gate reads it: a collapsed caret
+// or a selection outside the row opens no menu at all. Offsets run over the
+// bubble's concatenated text, whatever elements the renderer splits it into.
+const selectBubbleText = (start: number, end: number) => {
+  const bubble = find(".message-bubble");
+  const walker = document.createTreeWalker(bubble, NodeFilter.SHOW_TEXT);
+  const nodes: Text[] = [];
+  let next: Node | null = null;
+  while ((next = walker.nextNode())) nodes.push(next as Text);
+  if (!nodes.length) throw new Error("Missing bubble text");
+  let startNode = nodes[0];
+  let endNode = nodes[nodes.length - 1];
+  let startOffset = 0;
+  let endOffset = endNode.data.length;
+  let acc = 0;
+  for (const text of nodes) {
+    const stop = acc + text.data.length;
+    if (acc <= start && start <= stop) { startNode = text; startOffset = start - acc; }
+    if (acc <= end && end <= stop) { endNode = text; endOffset = end - acc; }
+    acc = stop;
+  }
+  const range = document.createRange();
+  range.setStart(startNode, startOffset);
+  range.setEnd(endNode, endOffset);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+};
+const collapseSelection = () => window.getSelection()?.removeAllRanges();
+const menu = async (node: HTMLElement, x = 10, y = 10) => {
+  flushSync(() => node.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: x, clientY: y })));
   await settle();
 };
+// Viewport coordinates of a point inside the live selection (first line box),
+// or of unselected words later in the same paragraph.
+const selectionPoint = () => {
+  const rect = window.getSelection()?.getRangeAt(0).getClientRects()[0];
+  if (!rect) throw new Error("Missing selection rect");
+  return { x: rect.left + Math.min(2, rect.width / 2), y: rect.top + rect.height / 2 };
+};
+const selectionText = () => window.getSelection()?.toString() ?? "";
 // Editing now reloads the saved message before the editor opens, so the probe
 // has to wait for the editor instead of reading it in the same tick.
 const waitForTextarea = async () => {
@@ -39,8 +76,10 @@ Object.assign(globalThis, { messageEditCopyProbe: async () => {
   let copied = "";
   // `prepareUserMessageEdit` reads the active session's stored message; this
   // row-level fixture has no session, so stub that round trip with the message
-  // it renders and keep the probe offline.
+  // it renders and keep the probe offline. The quote path addresses the
+  // composer prefill of the active session, so the probe owns one.
   useAppStore.setState({
+    activeSessionId: "probe-session",
     prepareUserMessageEdit: async () => ({
       id: "message",
       role: "user",
@@ -56,36 +95,68 @@ Object.assign(globalThis, { messageEditCopyProbe: async () => {
   flushSync(() => root.render(<I18nextProvider i18n={i18n}><TranscriptMenuProvider>
     <MessageRow message={{ id: "message", role: "user", content: "Original saved message", createdAt: "2026-09-21T00:00:00Z" }} isRunning={false} />
   </TranscriptMenuProvider></I18nextProvider>));
-  await menu(find('[role="article"]'));
-  await click('[data-context-menu-item="edit"]');
+  const article = find('[role="article"]');
+  // Without a selection no surface fabricates a menu — not the row, and not
+  // the buttons or background around it.
+  await menu(article);
+  check(!document.querySelector('[role="menu"]'), "Row without selection opened a menu");
+  // A right-click inside the selected words preserves the selection and offers
+  // exactly Copy and Quote, nothing else.
+  selectBubbleText(9, 22);
+  const inside = selectionPoint();
+  await menu(article, inside.x, inside.y);
+  check(selectionText() === "saved message", `Menu open changed the selection to ${JSON.stringify(selectionText())}`);
+  const items = [...document.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent);
+  check(items.join("|") === "Copy|Quote", `Selected-text menu offered ${JSON.stringify(items)}`);
+  await click('[data-context-menu-item="copy"]');
+  check(copied === "saved message", `Selected copy returned ${JSON.stringify(copied)}`);
+  // A right-click on unselected words of the same paragraph cancels the old
+  // selection, browser-like, and opens no menu — even though both range ends
+  // stay inside the same row.
+  selectBubbleText(16, 22);
+  const probeRect = window.getSelection()?.getRangeAt(0).getClientRects()[0];
+  if (!probeRect) throw new Error("Missing probe rect");
+  const outside = { x: probeRect.left + probeRect.width / 2, y: probeRect.top + probeRect.height / 2 };
+  const bubbleRect = find(".message-bubble").getBoundingClientRect();
+  check(outside.x > bubbleRect.left && outside.x < bubbleRect.right, "Outside point left the paragraph");
+  selectBubbleText(0, 8);
+  await menu(article, outside.x, outside.y);
+  check(!document.querySelector('[role="menu"]'), "Outside click opened a menu");
+  check(selectionText() === "", `Outside click kept ${JSON.stringify(selectionText())}`);
+  // A right-click on a toolbar button clears a row selection and opens nothing.
+  selectBubbleText(0, 8);
+  const editButton = find('[aria-label="Edit and resend"]').getBoundingClientRect();
+  await menu(article, editButton.left + editButton.width / 2, editButton.top + editButton.height / 2);
+  check(!document.querySelector('[role="menu"]'), "Button click opened a menu");
+  check(selectionText() === "", `Button click kept ${JSON.stringify(selectionText())}`);
+  // Quote carries the exact excerpt into the active session's composer prefill.
+  selectBubbleText(0, 8);
+  const quotePoint = selectionPoint();
+  await menu(article, quotePoint.x, quotePoint.y);
+  await click('[data-context-menu-item="quote"]');
+  check(useAppStore.getState().composerPrefill?.text === "> Original",
+    `Quote prefill was ${JSON.stringify(useAppStore.getState().composerPrefill?.text)}`);
+  check(useAppStore.getState().composerPrefill?.sessionId === "probe-session",
+    "Quote prefill addressed the wrong session");
+  // Collapsing the caret closes the menu path again.
+  selectBubbleText(0, 8);
+  collapseSelection();
+  await menu(article);
+  check(!document.querySelector('[role="menu"]'), "Collapsed caret opened a menu");
+  // Toolbar editing still works: the excerpt selection inside the edit draft
+  // copies exactly, and a collapsed draft caret opens nothing.
+  await click('[aria-label="Edit and resend"]');
   const editor = await waitForTextarea();
   editor.focus();
-  editor.select();
-  document.execCommand("insertText", false, "Fresh draft: ORANGE-927");
-  await settle();
-  editor.setSelectionRange(13, 23);
-  await menu(editor);
+  editor.setSelectionRange(0, 8);
+  const editorRect = editor.getBoundingClientRect();
+  await menu(editor, editorRect.left + editorRect.width / 2, editorRect.top + editorRect.height / 2);
   await click('[data-context-menu-item="copy"]');
-  check(copied === "ORANGE-927", `Selected draft copy returned ${JSON.stringify(copied)}`);
+  check(copied === "Original", `Draft copy returned ${JSON.stringify(copied)}`);
   editor.focus();
   editor.setSelectionRange(0, 0);
   await menu(editor);
-  check(!document.querySelector('[data-context-menu-item="edit"]'), "Editing menu can reset the unsaved draft");
-  check(!document.querySelector('[data-context-menu-item="delete"]'), "Editing menu exposes saved-message deletion");
-  await click('[data-context-menu-item="copy"]');
-  check(copied === editor.value, "Collapsed selection copied the saved message instead of the draft");
-  await menu(editor);
-  await click('[data-context-menu-item="select-text"]');
-  check(editor.selectionStart === 0 && editor.selectionEnd === editor.value.length, "Select text did not select the draft");
-  await menu(editor);
-  await click('[data-context-menu-item="copy"]');
-  check(copied === "Fresh draft: ORANGE-927", "Select text then Copy lost draft content");
-  await click(".message-edit-cancel");
-  await menu(find('[role="article"]'));
-  check(!!document.querySelector('[data-context-menu-item="edit"]'), "Normal message lost Edit");
-  check(!!document.querySelector('[data-context-menu-item="delete"]'), "Normal message lost Delete");
-  await click('[data-context-menu-item="copy"]');
-  check(copied === "Original saved message", "Cancel changed the saved message");
+  check(!document.querySelector('[role="menu"]'), "Collapsed draft caret opened a menu");
   root.unmount();
-  return "PASS: partial draft copy, whole draft copy, select text, editing actions, cancel and saved-message copy";
+  return "PASS: inside-click menu with exact copy/quote, outside-click clears selection with no menu, collapsed caret, draft excerpt copy";
 } });

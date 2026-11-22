@@ -48,6 +48,7 @@ import {
   mergeLiveSessionMessages,
 } from "../../lib/session-transcript";
 import { sessionReadLooksEmpty } from "../../lib/session-transcript-read";
+import { transcriptViewMessages } from "../../lib/transcript-reading";
 import type {
   AppState,
   DraftSessionConfiguration,
@@ -772,16 +773,31 @@ export function createSessionSlice({
       });
     },
 
-    forkAssistantMessage: async (messageId) => {
+    forkAssistantMessage: async (messageId, sourceSessionId) => {
       const intent = runtime.beginNavigationIntent();
       // Fork needs only the anchor id: the host reads the canonical prefix.
       // Hydrating the source here would overwrite its concurrently streaming tail.
       const state = get();
-      const sessionId = state.activeSessionId;
+      const sessionId = sourceSessionId || state.activeSessionId;
       if (!sessionId || state.selectingSessionId) return;
-      const message = state.messages.find((candidate) => candidate.id === messageId);
+      // The click acts on what the transcript actually renders. A retained
+      // pane keeps painting after another session takes over (and its menu
+      // outlives that activation), and a reading view can hold a historical
+      // reply the live rows no longer carry: resolve the anchor through the
+      // session's own rendered transcript, never by silently looking up an
+      // unrelated active transcript.
+      const live = sessionId === state.activeSessionId
+        ? state.messages
+        : (state.retainedTranscripts[sessionId] ?? []);
+      const transcript = transcriptViewMessages(live, state.transcriptViews[sessionId]);
+      const message = transcript.find((candidate) => candidate.id === messageId);
       const source = state.sessions.find((session) => session.id === sessionId);
-      if (!message || message.role !== "assistant" || !source) return;
+      if (!message || message.role !== "assistant" || !source) {
+        if (sourceSessionId !== undefined) {
+          get().showToast(i18n.t("chat.sessionTranscriptEmpty"), { variant: "error" });
+        }
+        return;
+      }
       if (!sessionAllows(source, "canEditMessages")) return;
 
       try {
