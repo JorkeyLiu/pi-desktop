@@ -6,7 +6,7 @@ export const trEntries: ChangelogEntry[] = [
     "date": "2026-10-13",
     "highlights": [
       "Tarayıcı araç satırları artık çalıştırılan eylemi adlandırır — sayfa açma, anlık görüntü, ekran görüntüsü ve daha fazlası — ve üretilen sayfayı ya da sonucu gösterir; hatalarda ham ayrıntılar yerine yalnızca neden yazılır.",
-      "Bir alt aracıya yönlendirme iletisi, hedef görevi ve gönderildi durumuyla tek satırda görünür ve açıldığında yönlendirme metninin kendisini gösterir.",
+      "Bir alt aracıya yönlendirme iletisi, aynı görevin bekleme satırıyla aynı görünür — aracı, hedef görev ve gönderildi durumu — ve açıldığında yönlendirme metninin kendisini gösterir.",
       "Yeniden başlatma, çalışma panelini bıraktığınız gibi geri getirir: açık veya daraltılmış, aynı genişlikte, her sohbetin sekmeleri sırasıyla, seçili sekme ve en son gösterilen dosya önizlemesi ya da tarayıcı sayfasıyla.",
       "Yeniden başlatma, en son okuduğunuz projeyi ve sohbeti dökümüyle birlikte açar; açıkça temizlediğiniz bir proje geri gelmez.",
       "Uzun bir sohbette yukarı okurken konumunuz korunur: daha eski sayfalar ve yeni bağlanan geçmiş, okuduğunuz mesajları artık kaydırmaz.",

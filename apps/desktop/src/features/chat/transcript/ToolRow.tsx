@@ -103,6 +103,7 @@ import {
 import { delegateAgentName, steerTargetDelegationId } from "./model";
 import { PluginToolCard } from "./PluginToolCard";
 import { useSlotEntryForKey } from "../../../plugins/renderer-slots/use-slots";
+import { TaskTargetCluster } from "./TaskHeader";
 
 type ToolRowProps = {
   message: UiMessage;
@@ -310,7 +311,12 @@ function HostToolRow({
     isTaskSteerTool(message.toolName) && message.toolStatus !== "preparing"
       ? (conversationAgents?.get(steerTargetDelegationId(message)) ?? "")
       : "";
-  const steerSummary = steerTarget || steerText;
+  // A steer that resolved its target reuses the delivered-wait header: the
+  // left summary is the plain recorded agent (the wait's roster slot), and the
+  // target title moves to the shared right tile. Without a resolved target
+  // the row keeps its guidance-text fallback, never the routing id.
+  const steerTargeted = steerTarget !== "";
+  const steerSummary = steerTargeted ? steerAgent || steerText : steerTarget || steerText;
   const argSummary = browserSpec ? browserSpec.text : steerSummary || getToolSummary(message.toolName, message.toolArgs);
   // A path stays whole in `title`, in the copy menu and in its preview target;
   // only what the row prints omits its middle.
@@ -598,7 +604,7 @@ function HostToolRow({
             <span className="tool-row-name" title={waitTitle}>
               {rawName}
             </span>
-            {agentName || steerAgent ? (
+            {!steerTargeted && (agentName || steerAgent) ? (
               <span className="tool-row-agent" title={t("chat.subagentAgent")}>
                 {agentName || steerAgent}
               </span>
@@ -657,15 +663,12 @@ function HostToolRow({
             {evidence ? <ReviewChangeCounts change={evidence} /> : null}
              {deliveredRoster ? (
                deliveredSummary ? (
-                 <span className="tool-row-lifecycle">
-                   <span className="tool-row-agent is-delivered" title={deliveredSummary}>
-                     {deliveredSummary}
-                   </span>
-                   {statusBadge}
-                 </span>
+                 <TaskTargetCluster title={deliveredSummary}>{statusBadge}</TaskTargetCluster>
                ) : (
                  statusBadge
                )
+             ) : steerTargeted ? (
+               <TaskTargetCluster title={steerTarget}>{statusBadge}</TaskTargetCluster>
              ) : lifecycle && roster.length > 0 ? (
                <span className="tool-row-lifecycle">
                  <span className="tool-row-agent is-count">

@@ -94,7 +94,7 @@ test("a resume continuation never renames the delegation it continues", async (t
   assert.equal(titles.get("dlg-b"), "修复分页窗口合并");
 });
 
-test("the collapsed head badges the recorded agent beside the TaskSteer identity", async (t) => {
+test("the collapsed head reads the recorded agent plainly and tiles the target task", async (t) => {
   const ssr = await slotSsr(t);
   const { ToolRow } = await ssr.load("/src/features/chat/transcript/ToolRow.tsx");
   const { SubagentTitleProvider } = await ssr.load("/src/lib/subagent-title-provider.tsx");
@@ -106,11 +106,18 @@ test("the collapsed head badges the recorded agent beside the TaskSteer identity
     ),
   );
   assert.ok(host.includes('data-tool-name="TaskSteer"'), "the row keeps its TaskSteer identity");
+  // Unified task header: no generic agent pill. The recorded agent reads as
+  // plain summary text while the target title sits in the shared right tile.
+  assert.doesNotMatch(host, /<span class="tool-row-agent"(?! is-)/, "no generic agent pill");
   assert.ok(
-    host.includes('<span class="tool-row-agent"') && host.includes(">manifestor</span>"),
-    "the head badges the target's recorded agent",
+    host.includes('<span class="tool-row-summary"') && host.includes(">manifestor</span>"),
+    "the head names the target's recorded agent as plain text",
   );
-  assert.ok(host.includes("修复分页窗口合并"), "the head names the target task");
+  assert.ok(
+    host.includes('<span class="tool-row-agent is-delivered"') &&
+      host.includes("修复分页窗口合并"),
+    "the head tiles the target task in the shared right cluster",
+  );
 });
 
 test("an unknown target renders no badge, never the routing id", async (t) => {

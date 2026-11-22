@@ -6,7 +6,7 @@ export const ptBREntries: ChangelogEntry[] = [
     "date": "2026-10-13",
     "highlights": [
       "As linhas da ferramenta do navegador agora nomeiam a ação executada — abrir página, instantâneo, captura e mais — e mostram a página ou o resultado obtido; falhas indicam apenas o motivo, sem detalhes brutos.",
-      "Uma mensagem de orientação a um subagente aparece como uma linha com a tarefa de destino e o estado enviado, e se abre sobre o próprio texto de orientação.",
+      "Uma mensagem de orientação a um subagente se lê como a linha de espera da mesma tarefa — agente, tarefa de destino e estado enviado — e se abre sobre o próprio texto de orientação.",
       "Ao reiniciar, o painel de trabalho volta como você o deixou: aberto ou recolhido, com a mesma largura, as abas de cada conversa na mesma ordem, a aba selecionada e a prévia do arquivo ou a página do navegador que ele mostrava.",
       "Ao reiniciar, o último projeto e a última conversa que você estava lendo reabrem com o histórico; um projeto limpo explicitamente não volta.",
       "Ao ler para cima em uma conversa longa, sua posição é mantida: páginas mais antigas e o histórico recém-montado não deslocam mais as mensagens que você está lendo.",

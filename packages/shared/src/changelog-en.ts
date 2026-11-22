@@ -6,7 +6,7 @@ export const enEntries: ChangelogEntry[] = [
     date: "2026-10-13",
     highlights: [
       "Browser tool rows now name the action they ran — open page, snapshot, screenshot, and more — and show the page or result they produced; a failure states its reason alone instead of raw details.",
-      "A steering message to a subagent reads as one row with its target task and a sent state, and opens on the guidance text itself.",
+      "A steering message to a subagent reads like the wait row for the same task — agent, target task, and sent state — and opens on the guidance text itself.",
       "Relaunching reopens the work panel the way you left it: open or collapsed, at the same width, with each conversation's tabs in order, the selected tab, and the file preview or browser page it was showing.",
       "Relaunching reopens the project and conversation you were last reading, with its transcript; a project you clear explicitly stays cleared.",
       "Reading upward through a long conversation holds your place: an older page or newly mounted history no longer shifts the messages you are reading.",

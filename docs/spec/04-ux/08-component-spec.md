@@ -3090,7 +3090,12 @@ they are not child cards and must not inflate the delegation count — but they
 are presented as subagent rows rather than as generic tool calls (D269).
 `TaskSteer` shares that subagent presentation with its own fixed identity
 (`Task steer`) but is not a lifecycle row: it names the one live delegation it
-queued a message into, never a roster rollup (ADR 0337). A
+queued a message into, never a roster rollup (ADR 0337). A targeted steer
+reuses the delivered-wait header in the shared task cluster: the fixed
+identity, the recorded agent as plain summary text, the target task's own
+title in the right title tile, and the `Sent` state — never a generic agent
+pill beside a text summary. Without a resolvable target the row keeps its
+guidance-text fallback, never the routing id. A
 lifecycle row is called with delegation ids, which read as bare UUIDs, so it
 never summarizes from its own arguments:
 

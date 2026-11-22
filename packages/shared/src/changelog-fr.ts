@@ -6,7 +6,7 @@ export const frEntries: ChangelogEntry[] = [
     "date": "2026-10-13",
     "highlights": [
       "Les lignes de l'outil navigateur nomment désormais l'action exécutée — ouvrir la page, instantané, capture et plus — et montrent la page ou le résultat obtenu ; les échecs n'indiquent que le motif, sans détails bruts.",
-      "Un message d'orientation vers un sous-agent s'affiche sur une ligne avec sa tâche cible et l'état envoyé, et s'ouvre sur le texte de guidage lui-même.",
+      "Un message d'orientation vers un sous-agent se lit comme la ligne d'attente de la même tâche — agent, tâche cible et état envoyé — et s'ouvre sur le texte de guidage lui-même.",
       "Un redémarrage rouvre le panneau de travail tel que vous l'avez laissé : ouvert ou replié, à la même largeur, avec les onglets de chaque conversation dans leur ordre, l'onglet sélectionné et l'aperçu de fichier ou la page du navigateur qu'il affichait.",
       "Un redémarrage rouvre le dernier projet et la dernière conversation que vous lisiez, avec son historique ; un projet effacé explicitement ne revient pas.",
       "En remontant une longue conversation, votre position de lecture est conservée : les pages plus anciennes et l'historique nouvellement monté ne déplacent plus les messages que vous lisez.",

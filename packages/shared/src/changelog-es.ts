@@ -6,7 +6,7 @@ export const esEntries: ChangelogEntry[] = [
     "date": "2026-10-13",
     "highlights": [
       "Las filas de la herramienta del navegador ahora nombran la acción ejecutada —abrir página, instantánea, captura y más— y muestran la página o el resultado obtenido; los errores solo indican el motivo, sin detalles sin procesar.",
-      "Un mensaje de dirección a un subagente se muestra como una fila con su tarea destino y el estado enviado, y se abre sobre el propio texto de guía.",
+      "Un mensaje de dirección a un subagente se lee como la fila de espera de la misma tarea — agente, tarea destino y estado enviado — y se abre sobre el propio texto de guía.",
       "Al reiniciar, el panel de trabajo vuelve tal como lo dejaste: abierto o contraído, con el mismo ancho, las pestañas de cada conversación en su orden, la pestaña seleccionada y la vista previa del archivo o la página del navegador que mostraba.",
       "Al reiniciar se reabren el último proyecto y la última conversación que estabas leyendo, con su historial; un proyecto que borras explícitamente no vuelve.",
       "Al desplazarte hacia arriba en una conversación larga se mantiene tu posición: las páginas antiguas y el historial recién montado ya no desplazan los mensajes que estás leyendo.",

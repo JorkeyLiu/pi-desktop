@@ -536,14 +536,20 @@
 - **Preconditions:** No live provider is required; the fixture seeds production
   `ToolRow` cards over scripted `TaskSteer` records through the real store and
   mounts them in a real renderer.
-- **Expected:** A collapsed row names the tool identity, the delegate's agent
-  badge, and the one live delegation's conversation title as its summary with a
-  standard `Sent` state — never a delegation id. An expanded row shows exactly
-  one `Output` block with the sent guidance text: no target field, no receipt,
-  no status, no raw. A failed or denied row shows exactly one error note.
-- **Status:** Automated in `node scripts/e2e-tool-cards.mjs`, which mounts the
-  production transcript `ToolRow` in a real renderer and drives the collapsed
-  and expanded steer states.
+- **Expected:** A collapsed row names the tool identity, the recorded agent as
+  plain summary text, and the one live delegation's conversation title in the
+  shared right title tile with a standard `Sent` state — the delivered-wait
+  header, never a generic agent pill, and never a delegation id. An expanded
+  row shows exactly one `Output` block with the sent guidance text: no target
+  field, no receipt, no status, no raw. A failed or denied row shows exactly
+  one error note.
+- **Status:** Automated in `node scripts/e2e-tool-browser-presentation.mjs`
+  (header slots and expanded steer states) and
+  `node scripts/e2e-task-header-presentation.mjs`, which mounts the production
+  transcript `ToolRow` in a real renderer side by side with the delivered
+  `TaskWait` for the same target and asserts the shared slots, tile geometry
+  and ellipsis at wide and narrow widths, independent expand/collapse, and
+  the running/failed/unknown-target states.
 
 ### E2E-ASKTOOL-compact-card-interaction
 

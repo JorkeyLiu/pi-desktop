@@ -412,6 +412,24 @@ globalThis.toolBrowserProbe = async () => {
       !steerTargetHead.includes("收敛分页窗口合并逻辑"),
     steerTargetHead,
   );
+  // Unified task header: the agent reads as plain summary text (the wait
+  // roster slot) while the target title sits in the shared right tile —
+  // never a generic agent pill beside a text summary.
+  const steerTargetHeadHtml =
+    hosts.get("steerTarget")?.querySelector(".tool-row-header")?.outerHTML ?? "";
+  const steerAgentTile =
+    hosts.get("steerTarget")?.querySelector(".tool-row-lifecycle > .tool-row-agent.is-delivered")
+      ?.textContent ?? null;
+  check(
+    "steer reuses the wait header slots, not the generic agent pill",
+    !/<span class="tool-row-agent"(?! is-)/.test(steerTargetHeadHtml) &&
+      (hosts
+        .get("steerTarget")
+        ?.querySelector(".tool-row-header > .tool-row-summary")?.textContent ?? null) ===
+        "manifestor" &&
+      steerAgentTile === "修复分页窗口合并",
+    steerTargetHeadHtml.slice(0, 600),
+  );
   check(
     "steer with a seeded task shows only the sent guidance as output",
     steerTargetBody.includes("Output") &&

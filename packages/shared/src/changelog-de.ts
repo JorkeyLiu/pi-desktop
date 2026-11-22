@@ -6,7 +6,7 @@ export const deEntries: ChangelogEntry[] = [
     "date": "2026-10-13",
     "highlights": [
       "Browser-Werkzeugzeilen nennen jetzt die ausgeführte Aktion – Seite öffnen, Schnappschuss, Bildschirmfoto und mehr – und zeigen die erzeugte Seite oder das Ergebnis; ein Fehler nennt nur den Grund statt roher Details.",
-      "Eine Lenkungsnachricht an einen Subagenten erscheint als eine Zeile mit Zielaufgabe und Gesendet-Status und öffnet den Hinweistext selbst.",
+      "Eine Lenkungsnachricht an einen Subagenten liest sich wie die Wartezeile derselben Aufgabe — Agent, Zielaufgabe und Gesendet-Status — und öffnet den Hinweistext selbst.",
       "Ein Neustart öffnet das Arbeitsfenster so, wie Sie es verlassen haben: geöffnet oder eingeklappt, in derselben Breite, mit den Tabs jeder Unterhaltung in ihrer Reihenfolge, dem ausgewählten Tab und der zuletzt gezeigten Dateivorschau oder Browserseite.",
       "Ein Neustart öffnet das zuletzt gelesene Projekt und die Unterhaltung samt Verlauf erneut; ein ausdrücklich geleertes Projekt kommt nicht zurück.",
       "Beim Hochscrollen in einer langen Unterhaltung bleibt die Leseposition stehen: ältere Seiten und neu eingeblendete Historie verschieben die gelesenen Nachrichten nicht mehr.",
