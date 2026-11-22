@@ -126,6 +126,41 @@ function consoleText(args: unknown): string {
 }
 
 /**
+ * In-page activation sequence for `BrowserCdp.click`, sent as the body of
+ * `Runtime.callFunctionOn` with a user gesture (see below). Native pointer
+ * injection (`Input.dispatchMouseEvent`) is acknowledged by CDP even for a
+ * guest without a composited view, but the renderer drops the input there,
+ * so a background click returned success while the DOM handler never ran.
+ * This sequence runs inside the page instead, so handlers and the element's
+ * activation behavior execute whether or not the page is presented. The
+ * event objects are synthetic (`isTrusted === false`), and targeting is
+ * uid-based: an overlapping element at the point does not intercept the
+ * activation the way point hit-testing would.
+ */
+const BROWSER_CLICK_FUNCTION = `function () {
+  const target = this;
+  const rect = typeof target.getBoundingClientRect === "function"
+    ? target.getBoundingClientRect()
+    : null;
+  const clientX = rect ? rect.left + rect.width / 2 : 0;
+  const clientY = rect ? rect.top + rect.height / 2 : 0;
+  const press = { bubbles: true, cancelable: true, composed: true, clientX, clientY, button: 0, buttons: 1 };
+  const hover = { bubbles: true, cancelable: true, composed: true, clientX, clientY, button: 0, buttons: 0 };
+  target.dispatchEvent(new PointerEvent("pointerover", hover));
+  target.dispatchEvent(new MouseEvent("mouseover", hover));
+  target.dispatchEvent(new PointerEvent("pointerenter", hover));
+  target.dispatchEvent(new MouseEvent("mouseenter", hover));
+  target.dispatchEvent(new PointerEvent("pointerdown", press));
+  target.dispatchEvent(new MouseEvent("mousedown", press));
+  if (target && typeof target.focus === "function") {
+    try { target.focus({ preventScroll: true }); } catch { /* keep the activation going */ }
+  }
+  target.dispatchEvent(new PointerEvent("pointerup", hover));
+  target.dispatchEvent(new MouseEvent("mouseup", hover));
+  if (typeof target.click === "function") target.click();
+  else target.dispatchEvent(new MouseEvent("click", hover));
+}`;
+/**
  * CDP session bound to one guest WebContents. Re-attaches when the view is
  * recreated. Snapshot uids are valid only until the next snapshot.
  */
@@ -255,6 +290,22 @@ export class BrowserCdp {
     return { mimeType: "image/jpeg", data: result.data };
   }
 
+  /**
+   * Activate the snapshotted element.
+   *
+   * The uid resolves to the same backend node the snapshot exposed, so an
+   * unknown or stale uid fails before touching any page; the element is
+   * scrolled into view and must still have a layout box. Activation itself
+   * runs in-page with a user gesture: a hover/press/release pointer
+   * sequence followed by the element's activation behavior (the
+   * `HTMLElement.click()` step, which fires the click event and performs
+   * default actions such as link navigation, checkbox toggle, or form
+   * submit). Native CDP pointer injection is not used: it returns success
+   * for a guest without a composited view while the renderer drops the
+   * input, so background clicks silently did nothing. This path is
+   * identical for visible and hidden pages; it never reveals, focuses, or
+   * attaches any page.
+   */
   async click(wc: WebContents, uid: string): Promise<void> {
     const backendNodeId = this.requireUid(uid);
     await this.attach(wc);
@@ -266,21 +317,17 @@ export class BrowserCdp {
     if (!Array.isArray(quad) || quad.length < 8) {
       throw Object.assign(new Error(`no box model for ${uid}`), { code: "NOT_FOUND" });
     }
-    const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
-    const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
-    await wc.debugger.sendCommand("Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      x,
-      y,
-      button: "left",
-      clickCount: 1,
-    });
-    await wc.debugger.sendCommand("Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      x,
-      y,
-      button: "left",
-      clickCount: 1,
+    const resolved = (await wc.debugger.sendCommand("DOM.resolveNode", { backendNodeId })) as {
+      object?: { objectId?: string };
+    };
+    const objectId = resolved.object?.objectId;
+    if (!objectId) {
+      throw Object.assign(new Error(`could not resolve ${uid}`), { code: "NOT_FOUND" });
+    }
+    await wc.debugger.sendCommand("Runtime.callFunctionOn", {
+      objectId,
+      functionDeclaration: BROWSER_CLICK_FUNCTION,
+      userGesture: true,
     });
   }
 

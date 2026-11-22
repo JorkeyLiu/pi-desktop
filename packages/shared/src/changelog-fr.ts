@@ -5,6 +5,8 @@ export const frEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
+      "Les lignes de l'outil navigateur nomment désormais l'action exécutée — ouvrir la page, instantané, capture et plus — et montrent la page ou le résultat obtenu ; les échecs n'indiquent que le motif, sans détails bruts.",
+      "Un message d'orientation vers un sous-agent s'affiche sur une ligne avec sa tâche cible et l'état envoyé, et s'ouvre sur le texte de guidage lui-même.",
       "Un redémarrage rouvre le panneau de travail tel que vous l'avez laissé : ouvert ou replié, à la même largeur, avec les onglets de chaque conversation dans leur ordre, l'onglet sélectionné et l'aperçu de fichier ou la page du navigateur qu'il affichait.",
       "Un redémarrage rouvre le dernier projet et la dernière conversation que vous lisiez, avec son historique ; un projet effacé explicitement ne revient pas.",
       "En remontant une longue conversation, votre position de lecture est conservée : les pages plus anciennes et l'historique nouvellement monté ne déplacent plus les messages que vous lisez.",
@@ -32,7 +34,8 @@ export const frEntries: ChangelogEntry[] = [
       "Le rapport d'un sous-agent n'est considéré comme livré qu'une fois réellement parvenu dans la conversation de l'agent principal : si la remise est refusée ou remplacée avant, le rapport reste en attente, arrive à la prochaine attente ou reprise et n'est jamais envoyé deux fois.",
       "Le transfert de contexte d'un sous-agent et la suite que vous lui envoyez acceptent désormais un texte de n'importe quelle longueur : les continuations longues parviennent intégralement au délégué au lieu d'être refusées par un plafond de caractères fixe.",
       "La sortie stdio des plugins et serveurs MCP est désormais mesurée trame par trame dans les octets UTF-8 que chaque trame transporte réellement : une trame contenant du texte multioctet compte les octets qu'elle contient vraiment, et plusieurs petites trames arrivant dans une seule lecture sont mesurées séparément au lieu d'additionner leurs tailles.",
-      "Les fichiers modifiés affichent la même différence ligne par ligne dans le projet, dans les copies temporaires et dans les dossiers externes approuvés, chacun avec son badge d'emplacement.",
+      "Les fichiers modifiés affichent la même différence ligne par ligne dans le projet, dans les copies temporaires et dans les dossiers externes approuvés.",
+      "Les lignes d'outil réduites n'affichent plus de badge d'emplacement : la ligne d'un fichier garde son nom et ses compteurs de modifications, et seul le nom du fichier ouvre l'aperçu.",
     ],
   },
   {

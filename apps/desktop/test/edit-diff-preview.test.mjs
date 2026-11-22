@@ -9,10 +9,11 @@ import {
 /*
  * Unified per-call Edit diffs: a successful Edit on workspace, scratch, or a
  * permission-authorized external path carries the same actual before/after
- * counts and expanded hunks, independent of Git tracking. Scratch keeps its
- * localized badge and external paths gain their own; both coexist with the
- * counts and the diff. Workspace-only rollback and review.files totals are
- * untouched: no durable review snapshot is synthesized for scratch/external,
+ * counts and expanded hunks, independent of Git tracking. The producer still
+ * records each call's own root, but the collapsed head prints the file and
+ * its counts with no directory badge. Workspace-only rollback and
+ * review.files totals are untouched: no durable review snapshot is
+ * synthesized for scratch/external,
  * and only the durable workspace record drives rollback.
  */
 
@@ -137,18 +138,27 @@ test("an uncounted preview omits counts instead of reporting zero", () => {
   assert.equal(parsed.truncated, true);
   assert.equal(parsed.reason, "fileTooLarge");
 });
-
-test("scratch and external badges coexist with the preview counts", async (t) => {
+test("scratch and external roots stay in the payload while the head shows no directory badge", async (t) => {
   const ssr = await slotSsr(t);
-  const { toolResultChips } = await ssr.load("/src/lib/tool-presentation.ts");
+  const { headerToolChips, toolResultChips } = await ssr.load("/src/lib/tool-presentation.ts");
   const scratchChips = toolResultChips(message({ root: "scratch", editDiff: preview() }));
-  assert(scratchChips.some((chip) => chip.role === "scratch"), "scratch badge stays");
+  assert(scratchChips.some((chip) => chip.role === "scratch"), "the producer keeps the scratch root");
   assert(!scratchChips.some((chip) => chip.role === "external"));
   const externalChips = toolResultChips(
     message({ root: "external", editDiff: preview({ root: "external" }) }),
   );
-  assert(externalChips.some((chip) => chip.role === "external"), "external badge shows");
+  assert(externalChips.some((chip) => chip.role === "external"), "the producer keeps the external root");
   assert(!externalChips.some((chip) => chip.role === "scratch"));
+  assert.deepEqual(
+    headerToolChips(message({ root: "scratch", editDiff: preview() })),
+    [],
+    "the collapsed head carries no directory badge",
+  );
+  assert.deepEqual(
+    headerToolChips(message({ root: "external", editDiff: preview({ root: "external" }) })),
+    [],
+    "the collapsed head carries no directory badge",
+  );
 });
 
 test("a valid preview suppresses the raw ops echo and hides preview metadata", async (t) => {

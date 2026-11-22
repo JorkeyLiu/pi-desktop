@@ -2745,8 +2745,18 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
   pulse. A delegate control row (`TaskWait`, `TaskList`, `TaskStop`) keeps its
   own fixed name and puts the subagent count and its wait outcome on the right,
   the backend-owned outcome outranking the generic lifecycle label. `TaskSteer`
-  keeps the same fixed-identity rule with its own label (`Task steer`): one queued
-  message into one live delegation, never a roster count (ADR 0337).
+  keeps the same fixed-identity rule with its own label (`Task steer`) and a
+  standard `Sent` state: the head names the tool identity, the delegate's agent
+  badge, and the one live delegation's conversation title as its summary —
+  never a delegation id and never a roster count (ADR 0337).
+- The built-in Browser plugin tool (`plugin_pi_browser_Browser`) is the one row
+  whose head names its action: `Browser` plus the per-action label (`Open page`,
+  `Read page`, `Screenshot`, `Click`, `Fill`, `Run script`, `Console`, `CDP`),
+  never the raw plugin name. An unknown action falls back to the plain `Browser`
+  identity, and any other tool whose name ends in `Browser` keeps the generic
+  formatted-name presentation. The collapsed summary is per-action and bounded —
+  a running call reads only its arguments, never scripts, typed text or session
+  ids.
 - A provider-hosted search round follows the same identity rule: the globe and
   the kind's own name (`Web search`, `Open page`, `Find in page`) hold for the
   whole round, the right edge states `Searching the web` while it searches or
@@ -2785,11 +2795,13 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
   paths remain monospace.
 - Result chips follow the hint: exit code (error hue), match/file counts,
   replacement count, Write byte size, Read line count plus its 1-based closed
-  line range (`{lineCount},L{offset+1}-L{offset+lineCount}`), `truncated`, and
-  `scratch`. Read uses `offset` and `lineCount` from the returned window rather
-  than `fileBytes`; if those fields are unavailable, it omits the read-size
-  chip instead of presenting the whole-file size as the amount read. A
-  successful exit earns no chip.
+  line range (`{lineCount},L{offset+1}-L{offset+lineCount}`), and `truncated`.
+  The collapsed head carries no location badge: a scratch or external read
+  still names the file and keeps its counts, and the location stays in the
+  expanded body and the preview target. Read uses `offset` and `lineCount`
+  from the returned window rather than `fileBytes`; if those fields are
+  unavailable, it omits the read-size chip instead of presenting the
+  whole-file size as the amount read. A successful exit earns no chip.
   The `truncated` chip follows `details.truncated` and appears only when this
   result was cut short, not when a Read window of a longer file was filled
   (D306).
@@ -2810,13 +2822,17 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
   what a reader matches on. A name too long for the row ellipsizes at the row's
   own right edge instead of being clipped away or rewritten, and a value that
   ends in a separator prints its last segment with that separator, so a
-  directory never reads as a file. The whole value stays in the row's `title`,
-  its file menu, its preview target and the row's screen-reader description, so
-  hovering the hint still offers the raw absolute or relative spelling with its
-  own separators. Nothing is measured to paint the hint: it is the same text at
-  every column width, which is why a transcript of many file rows costs one line
-  of text per row. A non-path hint is printed whole (clamped like every other
-  hint) and is never reduced to a name.
+  directory never reads as a file. The whole value stays the rendered file
+  name's own `title`, its file menu, its preview target and the row's
+  screen-reader description, so hovering the file name still offers the raw
+  absolute or relative spelling with its own separators. Only the rendered
+  file name preview-opens: the stretching summary span around it carries no
+  hover text and no click of its own, so the blank summary area and every
+  other header cell keep the row's toggle. Nothing is measured to paint the
+  hint: it is the same text at every column width, which is why a transcript
+  of many file rows costs one line of text per row. A non-path hint is
+  printed whole (clamped like every other hint) and is never reduced to a
+  name.
 - Live activity remains in the processing group, its latest row, or the
   dedicated runtime indicator; no additional status capsule is rendered.
 - A workspace mutation's row ends with its own `+a/−d` pair, which is where the
@@ -2855,7 +2871,7 @@ the record it came with.
 |---|---|
 | Read | `File content` — syntax highlighted from the file extension |
 | Write | `Written content` — highlighted from the target extension |
-| Edit | when a ReviewChangeCard owns the change (every workspace mutation, including `MV` and `REM`), the body is that record and nothing else: the card's +a/−d, its diff and its rollback, beside any `Note` the host reported as a warning. The record's own `path`, `root`, `tag`, `deleted` and echoed `ops` are not printed as fields and no `Raw` disclosure is offered, because they restate the change at lower fidelity. A scratch or permission-authorized external edit carries no durable record, so the body is the call's own `editDiff` preview instead: the same +a/−d and the same diff view, behind the localized scratch or external-directory root badge that coexists with the counts, plus any host warning — and no rollback, which stays owned by the durable workspace record. An edit with neither record nor preview falls back to its stated `ops` as `Input`; a failed edit keeps its `Error` plus those `ops`, never a fabricated diff |
+| Edit | when a ReviewChangeCard owns the change (every workspace mutation, including `MV` and `REM`), the body is that record and nothing else: the card's +a/−d, its diff and its rollback, beside any `Note` the host reported as a warning. The record's own `path`, `root`, `tag`, `deleted` and echoed `ops` are not printed as fields and no `Raw` disclosure is offered, because they restate the change at lower fidelity. A scratch or permission-authorized external edit carries no durable record, so the body is the call's own `editDiff` preview instead: the same +a/−d and the same diff view, with no location badge in the collapsed head beside the counts, plus any host warning — and no rollback, which stays owned by the durable workspace record. An edit with neither record nor preview falls back to its stated `ops` as `Input`; a failed edit keeps its `Error` plus those `ops`, never a fabricated diff |
 | Bash | `Command` (shell, highlighted) beside `Output` and `Errors` (error hue) as terminal panes (D226 follow-up, §9.10); each pane is labelled and copies its own bytes, and an empty channel is omitted rather than shown as an empty pane |
 | Glob | `Files` — clickable workspace paths; a pattern that matched nothing states `No files matched` instead of a heading over an empty list |
 | Grep | `Matches` — grouped by file with a `line` gutter and clickable path headings for `outputMode: content`; a clickable path list for `filesWithMatches`; `path` → hit count fields for `count`. An empty array in any of the three modes states `No matches` (or `No files matched`) as the answer: the payload's `count` and `truncated` are never printed in place of a body, and an empty-only list carries no heading above that sentence |
@@ -2866,6 +2882,8 @@ the record it came with.
 | ToolSearch, EnterPlanMode/SubmitPlan, NewContext, BrowserPreview, GenerateImages | the names they activated or matched, each name set listed once and read in the session language (the legacy `addedToolNames` carrier is used only when the row reports no `activated` list), the mode the tool's own name states (`Plan`, `Goal`), or the prompts and written images the call carried |
 | any host `notice` | `Note` — an error, warning or truncation notice stays visible after the blocks it qualifies; a routine informational notice is not printed in a successful row's body |
 | any failure | `Error` — message plus code, listed first. A failure explains itself with the envelope's own sentence when `details` does not restate it; a text block that merely re-serializes `details` is never printed as a reason. The record it came with is listed beside its `Raw` disclosure — except when that record is only the refusal verdict the sentence already states (an all-false `accepted`/`success`/`ok`, nothing else): then the sentence is the whole body, and no verdict field or payload is drawn. A failed `SubagentHandoff` always keeps just that sentence, even when its record carries further diagnostics: for that built-in alone no field, reason code or payload is ever drawn. A failure that recorded no result states the `code` and `message` the row carries, or — recording neither — one localized sentence saying no reason was reported: it never opens on an empty body |
+| Browser plugin (`plugin_pi_browser_Browser` only) | the curated per-action result: `navigate` title/address fields, `snapshot` page tree, `screenshot` captured image, `click`/`fill` target, `evaluate`/`cdp` returned value (`null`/`false`/`0`/`""` preserved), `console` entries — beside one closed `Raw` disclosure of the untouched payload on success (skipped past the size bound). A failed or denied call prints only its `Error` note: never input, state, result, raw or images, even when the record echoes arguments |
+| TaskSteer | exactly one `Output` block with the sent guidance text — no target field, no receipt, no status, no raw. A failed or denied call prints only its `Error` note |
 | TaskWait/List/Stop roster | one table per roster group the runtime returned: `Subagents` for `delegations`, then `Stopped`, `Stop requested — still running` and `Already finished` as the runtime's own `stopped` / `stopPending` / `settled` groups. Each group keeps its heading so a worker whose cancellation was only requested never reads as stopped |
 | Task counters | `Stats` — the delegate's turns, tool calls and usage, after its brief and report |
 | unmapped payload | scalar entries as label/value fields; long or multi-line strings as their own labeled block; nested objects as JSON, all of it beside one explicit `Raw` disclosure of the untouched payload. The disclosure names itself in its own summary, so no second `Details` heading is drawn above it |

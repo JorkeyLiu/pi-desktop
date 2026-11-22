@@ -25,6 +25,7 @@ const electron = `data:text/javascript,${encodeURIComponent(`
   export class WebContentsView {
     static instances = [];
     constructor() {
+      this.boundsSet = [];
       this.webContents = Object.assign(new EventEmitter(), {
         url: "https://fixture.invalid/previous",
         mainFrame: { processId: 7, routingId: 11 },
@@ -45,6 +46,7 @@ const electron = `data:text/javascript,${encodeURIComponent(`
       });
       WebContentsView.instances.push(this);
     }
+    setBounds(bounds) { this.boundsSet.push({ ...bounds }); }
   }
 `)}`;
 registerHooks({ resolve(specifier, context, next) {
@@ -298,4 +300,22 @@ test("in-page completion cannot republish an invalidated session", async () => {
   wc.emit("did-navigate-in-page", {}, wc.url, true, 7, 11);
   wc.emit("did-stop-loading");
   assert.deepEqual(published, []);
+});
+
+test("a detached guest is sized from stored bounds without attaching", async () => {
+  const pane = new BrowserPane(() => {});
+  pane.setBounds({ x: 10, y: 20, width: 400, height: 300 });
+  const request = pane.navigateAndWait("https://fixture.invalid/new", null);
+  const view = WebContentsView.instances.at(-1);
+  // ensureView applies the stored bounds at creation even though the pane is
+  // never made visible or attached to a window.
+  assert.deepEqual(view.boundsSet.at(-1), { x: 0, y: 0, width: 400, height: 300 });
+  // Later viewport updates resize the detached view without attaching it.
+  pane.setBounds({ x: 0, y: 0, width: 1280, height: 800 });
+  assert.deepEqual(view.boundsSet.at(-1), { x: 0, y: 0, width: 1280, height: 800 });
+  const wc = view.webContents;
+  wc.url = "https://fixture.invalid/new";
+  wc.pendingLoads.shift().resolve();
+  assert.equal((await request).url, "https://fixture.invalid/new");
+  pane.dispose();
 });

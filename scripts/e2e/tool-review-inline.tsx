@@ -265,8 +265,8 @@ globalThis.toolReviewProbe = async (payloads: ToolReviewPayloads) => {
     }
     // ── 1b. Scratch and external edits carry the same per-call diff ──
     // No durable record exists for these roots, so the row reads the
-    // preview: the same +a/−d and expanded hunks, the root's own badge, and
-    // no rollback handle.
+    // preview: the same +a/−d and expanded hunks, the file name with no
+    // directory badge beside the counts, and no rollback handle.
     const rootBadgedRows: Array<{
       id: string;
       label: string;
@@ -302,8 +302,8 @@ globalThis.toolReviewProbe = async (payloads: ToolReviewPayloads) => {
         (chip) => chip.textContent ?? "",
       );
       check(
-        `the real ${entry.label} Edit row keeps its ${entry.badge} badge`,
-        chips.some((text) => text.includes(entry.badge)),
+        `the real ${entry.label} Edit row shows no ${entry.badge} directory badge`,
+        !chips.some((text) => text.includes(entry.badge)),
         chips,
       );
       await expand(host);

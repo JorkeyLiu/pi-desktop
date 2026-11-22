@@ -5,9 +5,21 @@ import {
   getToolSummaryKey,
   isAskToolName,
   isSubagentHandoffTool,
+  isTaskSteerTool,
   type ToolAction,
 } from "./tool-display";
 import { editDiffFromMessage, reviewChangeFromMessage } from "./workspace-review";
+import {
+  browserFailureBlock,
+  browserFailed,
+  browserSuccessBlocks,
+  isBrowserPluginTool,
+} from "./browser-tool-presentation";
+import {
+  taskSteerFailed,
+  taskSteerFailureBlock,
+  taskSteerReceiptBlocks,
+} from "./task-steer-presentation";
 import { isWithinHighlightLimits } from "./render-content-limits";
 
 /*
@@ -164,6 +176,15 @@ export type ToolBlock =
       body: string;
     })
   | (BlockBase & { kind: "raw"; text: string })
+  | (BlockBase & {
+       kind: "image";
+       /** Data-URL source for the captured page shot. */
+       src: string;
+       /** Human-readable shot label (saved path or capture description). */
+       alt: string;
+       /** Bytes the block's copy control hands back (path or label, never pixels). */
+       copy: string;
+     })
   | (BlockBase & { kind: "empty"; scope: "files" | "matches" })
   | (BlockBase & { kind: "note"; text: string; code?: string });
 
@@ -1028,6 +1049,18 @@ export function toolResultChips(message: ToolPresentationMessage): ToolChip[] {
   if (details.root === "external") chips.push({ role: "external" });
   return chips;
 }
+/**
+ * The chips the collapsed `ToolRow` head prints: the producer's counts, kept
+ * whole, without the directory the change belongs to. A collapsed row names
+ * its file and states its outcome; where that file lives stays in the result
+ * payload (`details.root`), the row's preview target and its file menu, so no
+ * second row and no badge restate it in the head.
+ */
+export function headerToolChips(message: ToolPresentationMessage): ToolChip[] {
+  return toolResultChips(message).filter(
+    (chip) => chip.role !== "scratch" && chip.role !== "external",
+  );
+}
 
 /**
  * Whether the row has anything to expand. Kept property-read cheap: streaming
@@ -1468,6 +1501,26 @@ export function buildToolPresentation(
   // sounds similar keeps the ordinary failure presentation.
   if (isSubagentHandoffTool(message.toolName) && resultFailed(message)) {
     return handoffFailureBlock(message, options);
+  }
+
+  // The shipped Browser plugin owns its own row: a failure states only its
+  // reason (never echoed arguments or raw state), and a known action renders
+  // its own curated body. Anything else falls through to the generic mapping
+  // rather than losing data. Only the exact tool takes this path; any other
+  // tool whose name merely ends in `Browser` keeps the ordinary presentation.
+  if (isBrowserPluginTool(message.toolName)) {
+    if (browserFailed(message)) return browserFailureBlock(message, options);
+    const curated = browserSuccessBlocks(message);
+    if (curated) return curated;
+  }
+  // An accepted steer names only its human target task and the guidance text
+  // actually sent — no receipt sentence, no status/result section, no raw
+  // payload. Any other outcome keeps the accurate generic mapping, and only
+  // the exact built-in takes this path.
+  if (isTaskSteerTool(message.toolName)) {
+    if (taskSteerFailed(message)) return taskSteerFailureBlock(message, options);
+    const receipt = taskSteerReceiptBlocks(message, options);
+    if (receipt) return receipt;
   }
 
   const action = getToolAction(message.toolName);

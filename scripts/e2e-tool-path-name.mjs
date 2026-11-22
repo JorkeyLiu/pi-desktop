@@ -69,6 +69,7 @@ try {
     .replace(/\s+/g, "");
   for (const rule of [
     ".tool-row-summary.is-path{",
+    ".tool-row-file-name.linked{",
     ".subagent-transcript-scroll{",
     ".subagent-transcript-list{",
   ]) {

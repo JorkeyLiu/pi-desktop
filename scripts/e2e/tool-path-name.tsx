@@ -8,16 +8,19 @@ import { IPC, type UiMessage } from "@pi-desktop/shared";
 import { SubagentTranscriptTab } from "../../apps/desktop/src/components/workpanel/SubagentTranscriptTab";
 import { useAppStore } from "../../apps/desktop/src/stores/app-store";
 
-/*
- * A path-heavy child transcript in the work panel, in a real Chromium renderer
- * with the application's own built stylesheet.
- *
- * The claim is the row's hint: a file row prints the file's own name and nothing
- * else, so the whole path is offered on hover and to a screen reader, and no
- * element in the row exists to measure path candidates. The same tab is opened,
- * closed and switched between sessions — the shape of opening a subagent tab
- * whose delegate read a lot of files — and the hint is checked in every state.
- */
+ /*
+  * A path-heavy child transcript in the work panel, in a real Chromium renderer
+  * with the application's own built stylesheet.
+  *
+  * The claim is the row's hint: a file row prints the file's own name and nothing
+  * else, so the whole path is the file name's own hover and screen-reader
+  * description, and no element in the row exists to measure path candidates.
+  * The click is split too: only the rendered file name preview-opens, while
+  * the blank summary area, the tool name and the disclosure keep the toggle.
+  * The same tab is opened, closed and switched between sessions — the shape of
+  * opening a subagent tab whose delegate read a lot of files — and the hint is
+  * checked in every state.
+  */
 
 declare global {
   var toolPathNameRun: (options: {
@@ -116,6 +119,14 @@ void i18n.init({
 function seed(session: string, rows: number) {
   useAppStore.setState({
     activeSessionId: session,
+    workspace: {
+      path: "/Users/jorkeyliu/workspace/repos/pi-desktop-mw",
+      name: "pi-desktop-mw",
+    },
+    // The delegate tab reads the scoped history entry, never the live window
+    // alone: a previous phase's entry would otherwise survive a reseed and the
+    // probe would measure stale rows instead of the rows it just seeded.
+    subagentHistory: {},
     sessions: [
       {
         id: session,
@@ -232,6 +243,9 @@ function readPane(rows: number, width: number) {
   }
   let shortened = 0;
   let longNameClipped = false;
+  // The scrollport keeps its offset across the open/narrow/switch/close
+  // sequence, so start every measurement from the top.
+  scroller()?.scrollTo(0, 0);
   for (let index = 0; index < painted.length; index += 1) {
     const summary = painted[index];
     const path = pathAt(index);
@@ -244,8 +258,25 @@ function readPane(rows: number, width: number) {
     if (summary.textContent?.includes("/") || summary.textContent?.includes("\\")) {
       failures.push(`${width}px row ${index}: the hint still prints a directory`);
     }
-    if (summary.title !== path) {
-      failures.push(`${width}px row ${index}: the hover text is not the whole path`);
+    // The tooltip moved with the click: only the rendered file name carries
+    // the whole path now, never the stretching layout span around it.
+    const names = summary.querySelectorAll<HTMLElement>(".tool-row-file-name");
+    if (names.length !== 1) {
+      failures.push(`${width}px row ${index}: the hint holds ${names.length} file names, 1 expected`);
+      continue;
+    }
+    const file = names[0];
+    if (file.textContent !== name) {
+      failures.push(`${width}px row ${index}: the file name prints ${JSON.stringify(file.textContent)}`);
+    }
+    if (file.title !== path) {
+      failures.push(`${width}px row ${index}: the file name hover is not the whole path`);
+    }
+    if (summary.title) {
+      failures.push(`${width}px row ${index}: the layout span keeps its own hover text`);
+    }
+    if (summary.classList.contains("linked")) {
+      failures.push(`${width}px row ${index}: the blank layout area still links`);
     }
     const row = summary.closest<HTMLElement>(".tool-row, [data-message-id]");
     const described = row ? hiddenPath(row) : null;
@@ -253,13 +284,23 @@ function readPane(rows: number, width: number) {
       failures.push(`${width}px row ${index}: the row does not describe the whole path`);
     }
     const box = summary.getBoundingClientRect();
+    const fileBox = file.getBoundingClientRect();
     const rowBox = (row ?? summary).getBoundingClientRect();
+    if (fileBox.width > box.width + 0.5) {
+      failures.push(`${width}px row ${index}: the name is drawn past its hint`);
+    }
     if (box.right > rowBox.right + 0.5) {
       failures.push(`${width}px row ${index}: the name is drawn past its row`);
     }
-    if (summary.scrollWidth > summary.clientWidth + 1) {
+    // Only the rendered file name may clip: it carries its own ellipsis
+    // clamped to the summary, while the stretching layout span never does.
+    const fileClipped = file.scrollWidth > file.clientWidth + 1;
+    if (summary.scrollWidth > summary.clientWidth + 1 && !fileClipped) {
+      failures.push(`${width}px row ${index}: the layout span clips past the name`);
+    }
+    if (fileClipped) {
       shortened += 1;
-      if (getComputedStyle(summary).textOverflow !== "ellipsis") {
+      if (getComputedStyle(file).textOverflow !== "ellipsis") {
         failures.push(`${width}px row ${index}: a clipped name has no ellipsis`);
       }
       if (name.length > 40) longNameClipped = true;
@@ -272,6 +313,134 @@ async function settle(input: { session: string; rows: number; width: number; ope
   if (input.open) seed(input.session, input.rows);
   flushSync(() => apply?.(input));
   await frames(4);
+}
+/**
+ * The split click contract on one linked file row, through real hit-testing:
+ * the rendered file name preview-opens exactly once per click and never
+ * toggles, while the blank summary area, the tool name and the disclosure
+ * keep the toggle and never preview. Preview attempts are the file-reference
+ * resolutions the click actually requests.
+ */
+async function readHitbox(width: number) {
+  const failures: string[] = [];
+  const resolveChannel = String(IPC.invoke.fsResolveRef);
+  const invokeRecord: Array<{ channel: string }> = [];
+  const desktop = window.piDesktop as unknown as {
+    invoke: (...args: never[]) => Promise<unknown>;
+  };
+  const innerInvoke = desktop.invoke;
+  desktop.invoke = (async (...args: never[]) => {
+    invokeRecord.push({ channel: String(args[0]) });
+    return innerInvoke(...args);
+  }) as never;
+  try {
+    await settle({ session: SESSIONS[0], rows: 3, width, open: true });
+    const row = document.querySelector<HTMLElement>(
+      '.tool-row[data-message-id="r0"]',
+    );
+    const summary = row?.querySelector<HTMLElement>(".tool-row-summary.is-path");
+    const file = summary?.querySelector<HTMLElement>(".tool-row-file-name");
+    const header = row?.querySelector<HTMLElement>(".tool-row-header");
+    if (!row || !summary || !file || !header) {
+      return { failures: ["no linked file row mounted for the hitbox probe"], facts: {} };
+    }
+    if (!file.classList.contains("linked")) {
+      return { failures: ["row r0 is not previewable; the hitbox probe needs a linked row"], facts: {} };
+    }
+    // The probe clicks through the same hit-testing a pointer uses, so the
+    // target row itself must be laid out in view: centering it (not just the
+    // scrollport top) keeps every measured point inside the viewport, where
+    // elementFromPoint can resolve it instead of returning null.
+    scroller()?.scrollTo(0, 0);
+    row.scrollIntoView({ block: "center" });
+    await frames(4);
+    const resolves = () =>
+      invokeRecord.filter((entry) => entry.channel === resolveChannel).length;
+    const expanded = () =>
+      header.getAttribute("aria-expanded") === "true" &&
+      row.querySelector(".tool-row-body") !== null;
+    const describe = (element: Element | null) => {
+      if (element === null) return "null";
+      const classes =
+        typeof element.className === "string" ? element.className : "";
+      return `${element.tagName.toLowerCase()}.${classes.split(/\s+/).slice(0, 3).join(".")}`;
+    };
+    const clickAt = async (x: number, y: number) => {
+      const hit = document.elementFromPoint(x, y) as HTMLElement | null;
+      hits.push(describe(hit));
+      hit?.click();
+      syncResolves.push(resolves());
+      await frames(3);
+    };
+    const hits: string[] = [];
+    const syncResolves: number[] = [];
+    // Geometry: the name shrinks to its text while the layout span stretches.
+    const box = summary.getBoundingClientRect();
+    const fileBox = file.getBoundingClientRect();
+    const renderedName = file.textContent ?? "";
+    facts_check_geometry: {
+      if (fileBox.width > box.width - 8) {
+        failures.push(
+          `the ${renderedName} row leaves no blank summary area (${fileBox.width.toFixed(1)}/${box.width.toFixed(1)})`,
+        );
+        break facts_check_geometry;
+      }
+      if (Math.abs(fileBox.left - box.left) > 6) {
+        failures.push("the file name does not start where its hint starts");
+      }
+    }
+    // A click on the rendered name only: one preview, no toggle.
+    const before = resolves();
+    await clickAt(fileBox.left + fileBox.width / 2, fileBox.top + fileBox.height / 2);
+    if (expanded()) failures.push("clicking the file name toggled the row");
+    if (resolves() !== before + 1) {
+      failures.push(`clicking the file name requested ${resolves() - before} previews, 1 expected`);
+    }
+    // A second click on the name: one more preview, still no toggle.
+    await clickAt(fileBox.left + fileBox.width / 2, fileBox.top + fileBox.height / 2);
+    if (expanded()) failures.push("clicking the file name twice toggled the row");
+    if (resolves() !== before + 2) {
+      failures.push(`two file name clicks requested ${resolves() - before} previews, 2 expected`);
+    }
+    // A click on the blank summary area: toggle, never a preview.
+    const blankX = box.right - 4;
+    if (blankX <= fileBox.right + 2) {
+      failures.push("no clickable blank area left beside the file name");
+    } else {
+      await clickAt(blankX, box.top + box.height / 2);
+      if (!expanded()) failures.push("clicking the blank summary area did not toggle the row");
+      if (resolves() !== before + 2) {
+        failures.push("clicking the blank summary area requested a preview");
+      }
+      // The tool name keeps the same toggle, still without a preview.
+      const nameCell = row.querySelector<HTMLElement>(".tool-row-name");
+      const nameBox = nameCell?.getBoundingClientRect();
+      if (!nameCell || !nameBox) {
+        failures.push("the tool name cell is missing");
+      } else {
+        await clickAt(nameBox.left + nameBox.width / 2, nameBox.top + nameBox.height / 2);
+        if (expanded()) failures.push("clicking the tool name did not collapse the row");
+        if (resolves() !== before + 2) {
+          failures.push("clicking the tool name requested a preview");
+        }
+      }
+    }
+    return {
+      failures,
+      facts: {
+        fileWidth: Math.round(fileBox.width),
+        summaryWidth: Math.round(box.width),
+        previews: resolves() - before,
+        hits,
+        syncResolves,
+        channels: invokeRecord.map((entry) => entry.channel).slice(-8),
+        ariaAfterBlank: header.getAttribute("aria-expanded"),
+        bodyAfterBlank: row.querySelector(".tool-row-body") !== null,
+      },
+    };
+  } finally {
+    desktop.invoke = innerInvoke;
+  }
 }
 
 globalThis.toolPathNameRun = async ({ rowCount, widths }) => {
@@ -309,6 +478,13 @@ globalThis.toolPathNameRun = async ({ rowCount, widths }) => {
   const reopened = readPane(rowCount, widths[0]);
   failures.push(...reopened.failures.map((failure) => `reopened: ${failure}`));
   facts.reopened = { pathRows: reopened.pathRows, shortened: reopened.shortened };
+
+  // The split click through real hit-testing, at the wide width: the name
+  // preview-opens exactly once per click without toggling, while the blank
+  // summary area and the tool name toggle without previewing.
+  const hitbox = await readHitbox(widths[1]);
+  failures.push(...hitbox.failures.map((failure) => `hitbox: ${failure}`));
+  facts.hitbox = hitbox.facts;
 
   return { ok: failures.length === 0, failures, facts };
 };

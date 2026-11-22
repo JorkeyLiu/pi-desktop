@@ -340,7 +340,11 @@ export class BrowserPane {
     // pins its capture-time viewport. A pending screenshot must not leave the
     // guest over the conversation when the window or work panel moves.
     this.surface?.setBounds(this.bounds);
-    if (this.view && this.visible && !this.capturing && this.getWebContents()) {
+    // A detached background page is never attached to the window, but it still
+    // needs a stable layout viewport: snapshot geometry and CDP input
+    // coordinates are meaningless while the view keeps its zero-size default.
+    // Visibility only controls attachment, never the view's own size.
+    if (this.view && !this.capturing && this.getWebContents()) {
       this.view.setBounds({ x: 0, y: 0, width: this.bounds.width, height: this.bounds.height });
     }
   }
@@ -537,6 +541,10 @@ export class BrowserPane {
       },
     );
     this.view = view;
+    // A view created for a background page never passes through attach():
+    // size it from the stored bounds (the detached viewport) immediately so
+    // layout and CDP input coordinates are sane before first paint.
+    this.applyBounds();
     return view;
   }
 

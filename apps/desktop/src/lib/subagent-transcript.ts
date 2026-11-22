@@ -3,6 +3,7 @@ import type { MessageAttachment, UiMessage } from "@pi-desktop/shared";
 import { isUserOriginTaskMarker } from "./subagent-actions";
 import { isDelegationStartTool } from "./tool-display";
 import { subagentChainCallIds } from "./subagent-chain";
+import { delegateTaskAgent } from "./subagent-task-call";
 
 /**
  * One user/assistant exchange of a delegate session.
@@ -34,10 +35,7 @@ function delegateTaskDescription(call: UiMessage): string {
 }
 
 function requestedAgentName(call: UiMessage): string {
-  const args = call.toolArgs;
-  if (!args || typeof args !== "object" || Array.isArray(args)) return "";
-  const agent = (args as { agent?: unknown }).agent;
-  return typeof agent === "string" ? agent : "";
+  return delegateTaskAgent(call);
 }
 
 /** Chain membership shared with metrics so both views agree (F4). */

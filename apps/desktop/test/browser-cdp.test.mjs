@@ -137,3 +137,18 @@ test("legacy renderer browser IPC cannot place an unclamped guest", () => {
   assert.match(visibleBody, /plugins\.getLoaded\(BROWSER_PLUGIN_ID\)/);
   assert.doesNotMatch(visibleBody, /browserPane\.setVisible/);
 });
+
+test("click activates the snapshotted element in-page with a user gesture", () => {
+  const clickBlock = cdpSource.slice(cdpSource.indexOf("async click("), cdpSource.indexOf("async fill("));
+  assert.match(clickBlock, /requireUid/);
+  assert.match(clickBlock, /scrollIntoViewIfNeeded/);
+  assert.match(clickBlock, /getBoxModel/);
+  assert.match(clickBlock, /no box model for/);
+  assert.match(clickBlock, /DOM\.resolveNode/);
+  assert.match(clickBlock, /Runtime\.callFunctionOn/);
+  assert.match(clickBlock, /userGesture:\s*true/);
+  assert.doesNotMatch(clickBlock, /dispatchMouseEvent/);
+  assert.match(cdpSource, /BROWSER_CLICK_FUNCTION/);
+  assert.match(cdpSource, /pointerdown/);
+  assert.match(cdpSource, /activation behavior/);
+});

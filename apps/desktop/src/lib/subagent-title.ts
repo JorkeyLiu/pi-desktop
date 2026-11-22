@@ -46,3 +46,18 @@ export function subagentTaskTitles(
 ): ReadonlyMap<string, string> {
   return subagentTranscriptIndex(messages).titles;
 }
+
+/**
+ * The requested agent of every `Task` call in `messages`, keyed by the
+ * delegation identity a transcript row is keyed by.
+ *
+ * A steer row names no agent itself — the runtime only sends `delegationId`
+ * and `message` — so it reads the target's recorded role here, resolved with
+ * the same chain-earliest rule as the titles: one chain is one delegation,
+ * whatever its continuations asked for.
+ */
+export function subagentTaskAgents(
+  messages: readonly UiMessage[],
+): ReadonlyMap<string, string> {
+  return subagentTranscriptIndex(messages).agents;
+}

@@ -497,17 +497,53 @@
   whose own tab is open, close the tab, then open it again.
 - **Expected:** A collapsed file row prints the file's own name only — never the
   directory and never an omission the row composed — at every width. The whole
-  raw path stays in the row's hover text and in the row's screen-reader
+  raw path stays in the file name's own hover text and in the row's screen-reader
   description, the name a file's row cannot fit is ellipsized inside the row
   instead of overflowing it, a directory value prints its last segment, and no
-  element exists in a row to measure path candidates. The chips and the
-  `+a/−d` pair keep their place.
+  element exists in a row to measure path candidates. Only the rendered file
+  name preview-opens: clicking it opens the preview exactly once without
+  toggling, while the blank summary area, the tool name and the disclosure
+  keep the toggle. The chips and the `+a/−d` pair keep their place.
 - **Status:** Automated in `pnpm test:e2e:tool-path-name`, which drives the
   rendered tab through the open, narrow, switch, close and reopen sequence.
   `node scripts/e2e-tool-cards.mjs` covers the same hint at 280/340/700 px
   together with the rest of the tool-row cards, and
   `apps/desktop/test/tool-path-display.test.mjs` covers the name for every
   path spelling.
+### E2E-TOOL-ROW-browser-presentation
+
+- **Preconditions:** No live provider, page or network is required; the fixture
+  seeds production `ToolRow` cards over scripted `plugin_pi_browser_Browser`
+  records through the real store and mounts them in a real renderer.
+- **Expected:** A collapsed browser row heads `Browser` plus its per-action label
+  (`Open page`, `Read page`, `Screenshot`, `Click`, `Fill`, `Run script`,
+  `Console`, `CDP`) — never the raw plugin name — with a bounded per-action
+  summary; running calls read arguments only, never scripts, typed text or
+  session ids. An expanded success shows the curated result (page title/address,
+  snapshot tree, screenshot image, click/fill target, evaluate/CDP value with
+  `null`/`false`/`0`/`""` preserved, console entries) beside one closed `Raw`
+  disclosure, and never repeats arguments or raw state as first-level content.
+  A failed or denied row shows exactly one error note — no input, state, result,
+  raw or images — even when the record echoes arguments. A third-party tool
+  whose name ends in `Browser` keeps the generic presentation.
+- **Status:** Automated in `node scripts/e2e-tool-browser-presentation.mjs`,
+  which mounts the production transcript `ToolRow` in a real Electron renderer
+  and asserts the header, expanded successes (navigate, evaluate, screenshot)
+  and the error-only failure with no script text and a closed raw disclosure.
+
+### E2E-TOOL-ROW-tasksteer-row
+
+- **Preconditions:** No live provider is required; the fixture seeds production
+  `ToolRow` cards over scripted `TaskSteer` records through the real store and
+  mounts them in a real renderer.
+- **Expected:** A collapsed row names the tool identity, the delegate's agent
+  badge, and the one live delegation's conversation title as its summary with a
+  standard `Sent` state — never a delegation id. An expanded row shows exactly
+  one `Output` block with the sent guidance text: no target field, no receipt,
+  no status, no raw. A failed or denied row shows exactly one error note.
+- **Status:** Automated in `node scripts/e2e-tool-cards.mjs`, which mounts the
+  production transcript `ToolRow` in a real renderer and drives the collapsed
+  and expanded steer states.
 
 ### E2E-ASKTOOL-compact-card-interaction
 
@@ -5218,7 +5254,7 @@ window; opening a normal panel afterward must still work.
   its warning — with no `Raw` disclosure, no field dump and no `ops` text. The
   same scenario drives a real scratch edit and a real permission-authorized
   external edit and asserts each shows its own `editDiff` +1/−1 counts, the
-  expanded one-add/one-delete diff, the localized root badge beside the counts,
+  expanded one-add/one-delete diff, no directory badge in the collapsed head beside the counts,
   no raw `ops` text, and no review rollback affordance — while the existing
   workspace assertions (rollback, aggregate totals) keep passing unchanged.
   Full UI journey Draft.
@@ -19553,10 +19589,10 @@ host-created files. The full app's file-preview viewer is covered separately.
 - **Specs linked**: 03-runtime/02-agent-runtime.md §5f TaskSteer; ADR 0337.
 - **Acceptance**: C, E, Quality. **Milestone**: Maintenance.
 - **Status**: Automated via `packages/agent-runtime/src/task-steer-loop.test.ts`
-  (vitest, agent-runtime package) against the localhost fixture. No Electron
-  run: the render path is unchanged — `TaskSteer` reuses the existing
-  delegation presentation with its own fixed identity, covered by
-  `apps/desktop/test/tool-display.test.mjs`.
+  (vitest, agent-runtime package) against the localhost fixture. The row
+  presentation — fixed identity plus agent badge, target delegation title and
+  `Sent` head, exactly one `Output` block with the guidance text — is covered
+  by `apps/desktop/test/tool-display.test.mjs` and E2E-TOOL-ROW-tasksteer-row.
 
 ## BOM-marked UTF-16 text tools
 

@@ -5,6 +5,8 @@ export const deEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
+      "Browser-Werkzeugzeilen nennen jetzt die ausgeführte Aktion – Seite öffnen, Schnappschuss, Bildschirmfoto und mehr – und zeigen die erzeugte Seite oder das Ergebnis; ein Fehler nennt nur den Grund statt roher Details.",
+      "Eine Lenkungsnachricht an einen Subagenten erscheint als eine Zeile mit Zielaufgabe und Gesendet-Status und öffnet den Hinweistext selbst.",
       "Ein Neustart öffnet das Arbeitsfenster so, wie Sie es verlassen haben: geöffnet oder eingeklappt, in derselben Breite, mit den Tabs jeder Unterhaltung in ihrer Reihenfolge, dem ausgewählten Tab und der zuletzt gezeigten Dateivorschau oder Browserseite.",
       "Ein Neustart öffnet das zuletzt gelesene Projekt und die Unterhaltung samt Verlauf erneut; ein ausdrücklich geleertes Projekt kommt nicht zurück.",
       "Beim Hochscrollen in einer langen Unterhaltung bleibt die Leseposition stehen: ältere Seiten und neu eingeblendete Historie verschieben die gelesenen Nachrichten nicht mehr.",
@@ -32,7 +34,8 @@ export const deEntries: ChangelogEntry[] = [
       "Ein Bericht eines Subagenten gilt erst als zugestellt, wenn er tatsächlich im Gespräch des Hauptagenten ankommt: Wird die Übergabe vorher abgelehnt oder ersetzt, wartet der Bericht weiter, kommt bei der nächsten Wartezeit oder Fortsetzung an und wird nie zweimal gesendet.",
       "Der eigene Kontext-Handoff eines Subagenten und ein Nachtrag, den Sie ihm senden, nehmen jetzt Text beliebiger Länge an: lange Fortsetzungen erreichen den Delegierten vollständig, statt an einer festen Zeichenzahl abgelehnt zu werden.",
       "Die stdio-Ausgabe von Plugin- und MCP-Servern wird jetzt Rahmen für Rahmen in den tatsächlich übertragenen UTF-8-Bytes gemessen: Ein Rahmen mit mehrbytigem Text zählt die Bytes, die er wirklich hat, und mehrere kleine Rahmen, die in einem Lesevorgang ankommen, werden einzeln gemessen, statt ihre Größen zu addieren.",
-      "Bearbeitete Dateien zeigen überall denselben Zeilendiff: im Projekt, in temporären Kopien und in freigegebenen externen Ordnern, jeweils mit eigener Ortsmarkierung.",
+      "Bearbeitete Dateien zeigen überall denselben Zeilendiff: im Projekt, in temporären Kopien und in freigegebenen externen Ordnern.",
+      "Reduzierte Werkzeugzeilen tragen keine Ortsmarkierung mehr: Eine Dateizeile behält ihren Namen und ihre Änderungszähler, und nur der Dateiname selbst öffnet die Vorschau.",
     ],
   },
   {

@@ -5,6 +5,8 @@ export const ptBREntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
+      "As linhas da ferramenta do navegador agora nomeiam a ação executada — abrir página, instantâneo, captura e mais — e mostram a página ou o resultado obtido; falhas indicam apenas o motivo, sem detalhes brutos.",
+      "Uma mensagem de orientação a um subagente aparece como uma linha com a tarefa de destino e o estado enviado, e se abre sobre o próprio texto de orientação.",
       "Ao reiniciar, o painel de trabalho volta como você o deixou: aberto ou recolhido, com a mesma largura, as abas de cada conversa na mesma ordem, a aba selecionada e a prévia do arquivo ou a página do navegador que ele mostrava.",
       "Ao reiniciar, o último projeto e a última conversa que você estava lendo reabrem com o histórico; um projeto limpo explicitamente não volta.",
       "Ao ler para cima em uma conversa longa, sua posição é mantida: páginas mais antigas e o histórico recém-montado não deslocam mais as mensagens que você está lendo.",
@@ -32,7 +34,8 @@ export const ptBREntries: ChangelogEntry[] = [
       "O relatório de um subagente só conta como entregue quando chega de fato à conversa do agente principal: se a entrega for recusada ou substituída antes, o relatório continua aguardando, chega na próxima espera ou retomada e nunca é enviado duas vezes.",
       "A passagem de contexto de um subagente e o acompanhamento que você envia a ele agora aceitam texto de qualquer comprimento: continuações longas chegam inteiras ao delegado em vez de serem recusadas por um limite fixo de caracteres.",
       "A saída stdio de plugins e servidores MCP agora é medida quadro a quadro nos bytes UTF-8 que cada quadro realmente transporta: um quadro com texto multibyte conta os bytes que de fato tem, e vários quadros pequenos que chegam em uma só leitura são medidos separadamente em vez de somar seus tamanhos.",
-      "Arquivos editados mostram a mesma diferença linha por linha no projeto, em cópias temporárias e em pastas externas aprovadas, cada um com seu selo de local.",
+      "Arquivos editados mostram a mesma diferença linha por linha no projeto, em cópias temporárias e em pastas externas aprovadas.",
+      "Linhas de ferramentas recolhidas não trazem mais selo de local: a linha de um arquivo mantém seu nome e suas contagens de alterações, e só o próprio nome do arquivo abre a visualização.",
     ],
   },
   {

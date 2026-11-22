@@ -27,6 +27,13 @@ export function delegateTaskTitle(call: UiMessage): string {
   if (typeof description !== "string") return "";
   return description.replace(/\s+/g, " ").trim();
 }
+/** The agent role one `Task` call asked for: the `agent` it was dispatched with. */
+export function delegateTaskAgent(call: UiMessage): string {
+  const args = call.toolArgs;
+  if (!args || typeof args !== "object" || Array.isArray(args)) return "";
+  const agent = (args as { agent?: unknown }).agent;
+  return typeof agent === "string" ? agent : "";
+}
 
 /** The `resume` argument a `Task(resume …)` call sends, unread if absent. */
 export function resumeArgOf(message: UiMessage): unknown {
