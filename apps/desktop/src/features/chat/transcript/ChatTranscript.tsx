@@ -23,15 +23,10 @@ import type { TranscriptSearchTarget } from "../../../lib/transcript-reading";
 import type { RestoreTranscriptReading } from "../../../hooks/use-transcript-reading-position";
 import { TranscriptSearchContext } from "../../../lib/transcript-search-context";
 import { DisclosureAnchorContext } from "../../../lib/disclosure-anchor-context";
-import { api } from "../../../lib/api";
-import { mergeLiveSessionMessages } from "../../../lib/session-transcript";
-import { conversationPlainText } from "../../../lib/chat-transcript-text";
 import {
   TranscriptMenuProvider,
-  useChatTextActions,
   useTranscriptMenu,
 } from "./TranscriptMenu";
-import { conversationMenuItems } from "./menu-items";
 import { SlotSessionProvider } from "../../../plugins/renderer-slots/use-slots";
 import { SubagentTitleProvider } from "../../../lib/subagent-title-provider";
 import { SubagentChainMetricsProvider } from "../../../lib/subagent-metrics-provider";
@@ -104,9 +99,7 @@ function TranscriptBody({
   navigationLoading = false,
 }: ChatTranscriptProps) {
   const { t } = useTranslation();
-  const openTranscriptMenu = useTranscriptMenu();
-  const { copyText, selectText } = useChatTextActions();
-  const showToast = useAppStore((state) => state.showToast);
+  const openSelectedTextMenu = useTranscriptMenu();
   const transcriptRunning = isRunning && !readingWindow;
   const latestTurnResult = useAppStore((state) =>
     sessionId ? state.latestTurnResults[sessionId] : undefined,
@@ -207,44 +200,13 @@ function TranscriptBody({
   const runtimeStatusLane = transcriptRunning;
 
   /*
-    The background menu answers the right-clicks no row claimed: the space below
-    the last turn, a system row, a permission or outcome card. It reads the
-    conversation rather than one message, so it is the only surface that can
-    copy the whole thread.
+    The background opens the same selected-text menu no row claimed: the space
+    below the last turn, a system row, a permission or outcome card. A selection
+    dragged across rows still belongs to it, and anything else opens nothing —
+    there is no conversation-wide menu anymore.
   */
-  const copyConversation = async () => {
-    if (!sessionId) return;
-    try {
-      // Explicit copy reads the full session without changing the reading window.
-      const { session } = await api.getSession(sessionId);
-      if (!session) throw new Error("Session unavailable");
-      await copyText(conversationPlainText(
-        mergeLiveSessionMessages(session.messages ?? [], messages),
-        { user: t("chat.speakerYou"), assistant: t("chat.speakerAssistant") },
-      ));
-    } catch {
-      showToast(t("chat.copyFailed"), { variant: "error" });
-    }
-  };
-
   const onContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
-    openTranscriptMenu(event, {
-      label: t("chat.conversationMenu"),
-      items: conversationMenuItems({
-        t,
-        canCopy: Boolean(sessionId) && (hasMoreBefore || hasMoreAfter || messages.some(
-          (message) => (message.role === "user" || message.role === "assistant") && message.content.trim(),
-        )),
-        onCopyConversation: () => void copyConversation(),
-        scrollRef,
-        contentRef,
-        actions: { copyText, selectText },
-        onReturnToLatest: () => {
-          onReturnToLatest?.();
-          jumpToLatest();
-        },
-      }),
-    });
+    openSelectedTextMenu(event);
   };
 
   return (

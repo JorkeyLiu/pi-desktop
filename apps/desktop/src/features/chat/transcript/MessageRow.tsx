@@ -22,7 +22,6 @@ import {
   IconTrash,
 } from "../../../components/icons";
 import { TooltipButton } from "../../../components/ui";
-import { userMessageMenuItems } from "./menu-items";
 import { ActionSlotSide } from "./ActionBarSlots";
 import { slotMessage } from "../../../plugins/renderer-slots/slot-message";
 import { SessionMessageOrigin } from "./SessionMessageOrigin";
@@ -33,10 +32,7 @@ import {
   MessageAttachmentImage,
   MessageTimestamp,
 } from "./shared";
-import {
-  useChatTextActions,
-  useTranscriptMenu,
-} from "./TranscriptMenu";
+import { useTranscriptMenu } from "./TranscriptMenu";
 import { getExtraMessageAttachments } from "./extra-attachments";
 
 function SkillInvocationText({ message }: { message: UiMessage }) {
@@ -78,8 +74,7 @@ export const MessageRow = memo(function MessageRow({
   isRunning: boolean;
 }) {
   const { t } = useTranslation();
-  const openTranscriptMenu = useTranscriptMenu();
-  const { copyText, selectText } = useChatTextActions();
+  const openSelectedTextMenu = useTranscriptMenu();
   const prepareUserMessageEdit = useAppStore((s) => s.prepareUserMessageEdit);
   const editUserMessage = useAppStore((s) => s.editUserMessage);
   const activateMessageRevision = useAppStore((s) => s.activateMessageRevision);
@@ -218,33 +213,15 @@ export const MessageRow = memo(function MessageRow({
     if (saved) setEditing(false);
   };
   /*
-    The pointer path to the actions the hover row already offers. Only a human
-    turn is owned here: an assistant answer belongs to its turn, so this row
-    must not answer for one — it would offer Copy without the Regenerate and
-    Branch items that live on the turn.
+    A human turn opens the shared selected-text menu: a selection in the bubble
+    — or in the edit draft while editing — offers Copy and Quote, and anything
+    else opens nothing. An assistant answer belongs to its turn, so this row
+    keeps answering for user turns only. Edit, Delete, and revision paging
+    stay on the toolbar.
   */
   const onContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (!isUser) return;
-    openTranscriptMenu(event, {
-      label: t("chat.messageMenu"),
-      items: userMessageMenuItems({
-        t,
-        text: editing ? editValue : message.content || "",
-        selectTarget: event.currentTarget.querySelector<HTMLElement>(
-          editing ? ".message-edit-input" : ".message-bubble",
-        ),
-        editable: editableUserMessage && !editing && !loadingEdit,
-        running: isRunning,
-        revision: !editing && showRevisionPager
-          ? { count: revisionCount, active: activeRevision }
-          : null,
-        actions: { copyText, selectText },
-        onEdit: () => void beginEdit(),
-        onDelete: () => void deleteMessage(message.id),
-        onActivateRevision: (index) =>
-          void activateMessageRevision(message.id, index),
-      }),
-    });
+    openSelectedTextMenu(event);
   };
   return (
     <div

@@ -159,14 +159,38 @@ export async function transcriptStatusProbe() {
           `${mode}/${width}: copy receives keyboard focus and pointer hit`);
       }
       host.style.width = "";
-      for (const [target, label] of [
-        [host.querySelector(".transcript-runtime-status"), "chat.conversationMenu"],
-        [host.querySelector(".message-row.user .message-bubble"), "chat.messageMenu"],
-      ] as const) {
+      // Without a selection no surface opens its own menu: the background and
+      // buttons must not fabricate one.
+      for (const target of [
+        host.querySelector(".transcript-runtime-status"),
+        host.querySelector(".message-row.user .message-bubble"),
+      ]) {
         flushSync(() => target?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 80, clientY: 160 })));
-        check(document.querySelector('[role="menu"]')?.getAttribute("aria-label") === i18n.t(label),
-          `${mode}: ${label} retains context menu ownership`);
+        check(!document.querySelector('[role="menu"]'),
+          `${mode}: no selection opens no transcript menu`);
+      }
+      // A real selection in the bubble opens the selected-text menu; collapsing
+      // it and right-clicking again opens nothing.
+      const bubble = host.querySelector(".message-row.user .message-bubble");
+      const selection = window.getSelection();
+      if (bubble && selection) {
+        const range = document.createRange();
+        range.selectNodeContents(bubble);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        flushSync(() => bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 80, clientY: 160 })));
+        check(document.querySelector('[role="menu"]')?.getAttribute("aria-label") === i18n.t("chat.messageMenu"),
+          `${mode}: chat.messageMenu retains selected-text menu ownership`);
+        const items = [...document.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent);
+        check(items.join("|") === [i18n.t("chat.copy"), i18n.t("chat.quote")].join("|"),
+          `${mode}: selected-text menu offers only Copy and Quote`);
         flushSync(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+        selection.removeAllRanges();
+        flushSync(() => bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 80, clientY: 160 })));
+        check(!document.querySelector('[role="menu"]'),
+          `${mode}: collapsed caret opens no transcript menu`);
+      } else {
+        check(false, `${mode}: bubble selection setup`);
       }
       activity({ phase: "waiting-model", since: Date.now() });
       oneStatus("run-activity-indicator", `${mode}: first wait receives phase changes`);

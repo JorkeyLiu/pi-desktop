@@ -104,7 +104,14 @@ function pointForEvent(event: ContextMenuTrigger): ContextMenuPoint {
  * not mirror this gate onto the copy listener — it rejects every range built
  * with `selectNodeContents`, this row's Copy item included.
  */
-function snapshotSelection(root: EventTarget): string {
+ /**
+  * The live selection owned by `root`, read for a chat surface before it opens
+  * its menu. Exported so the transcript gate and the menu snapshot read the
+  * same value: the gate decides *whether* a menu opens, the snapshot captures
+  * *what* its items act on, and two different readings would offer a menu for
+  * text its Copy then does not carry.
+  */
+ export function readContextMenuSelection(root: EventTarget): string {
   // Textarea ranges are not represented by the document Selection.
   const editor = document.activeElement;
   if (
@@ -178,11 +185,11 @@ export function useContextMenu() {
       event.stopPropagation();
       /*
         Snapshot the live selection before the menu takes focus: focusing a
-        menuitem collapses the range, and Copy would then only see the whole
-        turn. A collapsed caret, or a selection that lives outside this
-        target, is stored as empty so Copy still falls back.
+        menuitem collapses the range, and an item reading it later would see
+        nothing. A collapsed caret, or a selection that lives outside this
+        target, is stored as empty for the items to interpret.
       */
-      const selection = snapshotSelection(event.currentTarget);
+      const selection = readContextMenuSelection(event.currentTarget);
       setState({ ...request, point: pointForEvent(event), selection });
     },
     [],

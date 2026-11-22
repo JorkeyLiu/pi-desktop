@@ -5476,38 +5476,43 @@ window; opening a normal panel afterward must still work.
 
 - **Preconditions**: A session contains a completed user prompt and a
   completed assistant answer; the conversation pane is focused.
-- **Steps**: 1) Right-click the user plate. 2) Choose Copy, then Select
-  message text. 3) Select a phrase in the user plate, right-click that
-  plate, and choose Copy; collapse the caret, right-click again, and
-  choose Copy. 4) Right-click the assistant turn and choose Copy.
-  5) Right-click empty space below the last turn and choose Copy
-  conversation. 6) Press Escape on an open menu, then Tab. 7) Right-click
-  a markdown link in the answer. 8) Edit the user message, replace its content,
-  select a phrase, and right-click Copy. Repeat with a collapsed caret and
-  Select message text, then cancel editing and copy the saved message.
-- **Expected**: The user menu lists Copy, Select message text, Edit, and
-  a separated Delete; the assistant menu lists Copy, Select message text,
-  Regenerate, and Branch. Copy writes the live selection in the
-  right-clicked turn when the menu opened over one; a collapsed caret
-  or a selection outside that row falls back to the whole turn. Copy
-  conversation writes the labelled thread. Both show a toast. Select
-  text highlights the bubble. Escape and Tab dismiss the menu without
+- **Steps**: 1) Right-click the user plate with no selection: no menu
+  opens. 2) Select a phrase in the user plate, right-click that
+  plate: the menu lists Copy and Quote only. Choose Copy and confirm the
+  exact selection lands on the clipboard. 3) Select a phrase, right-click,
+  and choose Quote: the composer draft gains the excerpt as a blockquote
+  and the composer takes focus. 4) Collapse the caret and right-click
+  again: no menu opens. 5) Select text spanning into tool output and
+  right-click: Copy and Quote act on the same selection. 6) Press Escape
+  on an open menu, then Tab. 7) Right-click
+  a markdown link in the answer. 8) Edit the user message via its toolbar,
+  select a phrase in the draft, and right-click Copy; collapse the draft
+  caret and right-click again for no menu. Cancel editing and confirm the
+  saved message is unchanged.
+- **Expected**: The selected-text menu lists Copy and Quote only — never
+  Edit, Delete, Regenerate, Branch, Select text, or conversation actions.
+  Copy writes the exact live selection captured when the menu opened; Quote
+  appends that excerpt to the composer draft as a blockquote without
+  replacing existing draft text. A collapsed caret or a selection outside
+  the right-clicked surface opens no menu at all. Copy
+  shows a toast. Escape and Tab dismiss the menu without
   running an item.
   A link still offers Open in default browser, Open in work panel, and
-  Copy link address. Quote, Annotate, and Open side chat are absent
+  Copy link address. Annotate and Open side chat stay absent
   (ADR 0268). The surface is a viewport-fixed body-level layer and does
-  not resize the transcript. During editing, Copy uses the selected draft text
-  or the full draft with a collapsed caret; Select message text selects the
-  draft. Edit, Delete, and revision actions are absent until editing ends.
-  Cancel preserves the original message. Automated Chromium component check:
-  `node scripts/e2e-message-edit-copy.mjs`.
+  not resize the transcript. During editing, the toolbar Edit/Delete and
+  revision actions stay available once editing ends;
+  the menu never carries them. Cancel preserves the original message.
+  Automated Chromium component checks:
+  `node scripts/e2e-message-edit-copy.mjs`, `node scripts/e2e-transcript-render.mjs`.
 - **Specs linked**: `04-ux/08-component-spec.md` §8.3 / §8.5,
   `04-ux/09-interaction-patterns.md` (floating dropdown surfaces),
   ADR 0268
 - **Acceptance**: C (chat stream), Quality
 - **Milestone**: M5
 - **Status**: Unit-covered (`chat-context-menu.test.mjs`,
-  `chat-context-menu-items.test.mjs`, `chat-context-menu-surface.test.mjs`);
+  `chat-context-menu-items.test.mjs`, `chat-context-menu-surface.test.mjs`,
+  `chat-quote.test.mjs`);
   full UI scenario Draft
 
 ### E2E-CHAT-delete-turn-preserves-other-live-outputs

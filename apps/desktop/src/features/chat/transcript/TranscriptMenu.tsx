@@ -9,9 +9,11 @@
  * and `DisclosureAnchorContext` use) and the provider renders exactly one
  * `<ContextMenu>`.
  *
- * The item vocabulary is the one the hover action rows already ship — Copy,
- * Edit, Delete, Regenerate, Branch, versions — now also reachable from the
- * keyboard-visible pointer path instead of hover only.
+ * The transcript offers exactly one menu, over selected text only: Copy the
+ * exact selection, or Quote it into the composer as a blockquote. A collapsed
+ * caret, a selection outside the right-clicked surface, or a right-click on a
+ * button or empty background opens nothing — the toolbar rows already own
+ * every other action, and they are never duplicated here.
  */
 import {
   createContext,
@@ -23,16 +25,23 @@ import {
 import { useTranslation } from "react-i18next";
 import {
   ContextMenu,
+  readContextMenuSelection,
   useContextMenu,
-  type ContextMenuRequest,
 } from "../../../components/ContextMenu";
 import { useAppStore } from "../../../stores/app-store";
-import { copySelectionOrFallback } from "../../../lib/chat-transcript-text";
+import { appendQuoteToDraft, buildQuoteText } from "../../../lib/chat-quotes";
+import {
+  draftKeyForSession,
+  readComposerDraft,
+} from "../../../lib/composer-draft-cache";
+import { selectedTextMenuItems } from "./menu-items";
 
-export type OpenTranscriptMenu = (
-  event: ReactMouseEvent<HTMLElement>,
-  request: ContextMenuRequest,
-) => void;
+/**
+ * Opens the selected-text menu, or nothing when no text is selected in the
+ * right-clicked surface. Never prevent-defaults on the way out: with no
+ * selection there is no custom menu, and the platform keeps its behavior.
+ */
+export type OpenTranscriptMenu = (event: ReactMouseEvent<HTMLElement>) => void;
 
 /**
  * A row rendered outside the provider (tests, a focused single-row view) keeps
@@ -45,9 +54,23 @@ export function useTranscriptMenu(): OpenTranscriptMenu {
 }
 
 export function TranscriptMenuProvider({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   const { contextMenu, openContextMenu, closeContextMenu } = useContextMenu();
+  const { copyText, quoteText } = useChatTextActions();
+  const openSelectedTextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => {
+      // Gate before the open, on the same reading the menu snapshot takes:
+      // without a selection there is no custom menu at all.
+      if (!readContextMenuSelection(event.currentTarget)) return;
+      openContextMenu(event, {
+        label: t("chat.messageMenu"),
+        items: selectedTextMenuItems({ t, actions: { copyText, quoteText } }),
+      });
+    },
+    [copyText, openContextMenu, quoteText, t],
+  );
   return (
-    <TranscriptMenuContext.Provider value={openContextMenu}>
+    <TranscriptMenuContext.Provider value={openSelectedTextMenu}>
       {children}
       <ContextMenu state={contextMenu} onClose={closeContextMenu} />
     </TranscriptMenuContext.Provider>
@@ -55,22 +78,25 @@ export function TranscriptMenuProvider({ children }: { children: ReactNode }) {
 }
 
 /**
- * The clipboard and selection half of a menu item.
+ * The clipboard and composer half of the selected-text menu.
  *
  * A menu disappears the moment an item runs, so an item cannot report its
  * outcome through its own state the way the hover copy chips do (see `useCopy`);
- * the toast host carries the outcome instead.
+ * the toast host carries the copy outcome instead. A quote lands in the
+ * composer through the same prefill the smart-Stop restore path uses, so the
+ * composer applies it, keeps the existing draft around it, and takes focus —
+ * this action only addresses it.
  */
 export function useChatTextActions() {
   const { t } = useTranslation();
   const showToast = useAppStore((state) => state.showToast);
+  const activeSessionId = useAppStore((state) => state.activeSessionId);
 
   const copyText = useCallback(
-    async (text: string, selection?: string) => {
-      const payload = copySelectionOrFallback(selection, text);
-      if (!payload) return;
+    async (selection: string) => {
+      if (!selection) return;
       try {
-        await navigator.clipboard.writeText(payload);
+        await navigator.clipboard.writeText(selection);
         showToast(t("chat.copied"), { variant: "success" });
       } catch {
         showToast(t("chat.copyFailed"), { variant: "error" });
@@ -79,24 +105,25 @@ export function useChatTextActions() {
     [showToast, t],
   );
 
-  /*
-    Selecting the row's rendered text hands a partial copy back to the platform:
-    dragging across a long answer is the only way to take a sentence out of it,
-    and the row is already on screen, so nothing needs measuring.
-  */
-  const selectText = useCallback((element: HTMLElement | null) => {
-    if (element instanceof HTMLTextAreaElement) {
-      element.focus();
-      element.select();
-      return;
-    }
-    const selection = window.getSelection();
-    if (!element || !selection) return;
-    const range = document.createRange();
-    range.selectNodeContents(element);
-    selection.removeAllRanges();
-    selection.addRange(range);
-  }, []);
+  const quoteText = useCallback(
+    (selection: string) => {
+      if (!selection || !activeSessionId) return;
+      const quote = buildQuoteText(selection);
+      if (!quote) return;
+      // Read the live draft so a quote adds to what the user already typed.
+      // The composer applies this prefill for its own session and then clears
+      // it, focusing the composer as part of applying.
+      const draft = readComposerDraft(draftKeyForSession(activeSessionId));
+      useAppStore.setState({
+        composerPrefill: {
+          sessionId: activeSessionId,
+          text: appendQuoteToDraft(draft?.text ?? "", quote),
+          fileReferences: draft?.fileReferences ?? [],
+        },
+      });
+    },
+    [activeSessionId],
+  );
 
-  return { copyText, selectText };
+  return { copyText, quoteText };
 }
