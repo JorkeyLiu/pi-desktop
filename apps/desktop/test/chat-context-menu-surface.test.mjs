@@ -63,6 +63,13 @@ test("the transcript gate opens nothing without a selection", () => {
   assert.doesNotMatch(assistantTurnSource, /select-text/);
 });
 
+test("the transcript gate requires the pointer to hit the selected text", () => {
+  assert.match(menuSource, /export function contextMenuClickHitsSelection\(/);
+  assert.match(menuSource, /export function clearChatSelection\(/);
+  assert.match(menuSource, /getClientRects\(\)/);
+  assert.match(transcriptMenuSource, /contextMenuClickHitsSelection\(event\.currentTarget, point\)/);
+  assert.match(transcriptMenuSource, /clearChatSelection\(event\.currentTarget\)/);
+});
 test("the context-menu surface is a measured fixed layer", () => {
   const rule = styles.match(/\.context-menu\s*\{[\s\S]*?\}/)?.[0] ?? "";
   assert.match(rule, /position:\s*fixed/);
