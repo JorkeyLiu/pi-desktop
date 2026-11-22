@@ -2174,9 +2174,11 @@ Single message render — either user (plaintext) or assistant (markdown streami
   space below the last turn — opens the selected-text menu, and only when a
   real selection is inside the right-clicked surface: Copy writes the exact
   selected text, Quote appends it to the composer draft as a blockquote and
-  focuses the composer. A collapsed caret, a selection outside the
-  right-clicked surface, or a right-click on a button or empty background
-  opens no menu at all. Edit, Delete, Regenerate, Branch, and revision paging
+  focuses the composer. The pointer must land on the selected words
+  themselves: a right-click on unselected words of the same paragraph — or on
+  a button or empty background — cancels the old selection, browser-like, and
+  opens no menu at all, as does a collapsed caret or a selection outside the
+  right-clicked surface. Edit, Delete, Regenerate, Branch, and revision paging
   stay on the hover toolbar and are never duplicated in the menu; Annotate
   and Open side chat stay retired (ADR 0268). Copying from the
   menu reports through the toast host because the surface closes as soon

@@ -24,9 +24,12 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  clearChatSelection,
   ContextMenu,
+  contextMenuClickHitsSelection,
   readContextMenuSelection,
   useContextMenu,
+  type ContextMenuClickPoint,
 } from "../../../components/ContextMenu";
 import { useAppStore } from "../../../stores/app-store";
 import { appendQuoteToDraft, buildQuoteText } from "../../../lib/chat-quotes";
@@ -62,6 +65,20 @@ export function TranscriptMenuProvider({ children }: { children: ReactNode }) {
       // Gate before the open, on the same reading the menu snapshot takes:
       // without a selection there is no custom menu at all.
       if (!readContextMenuSelection(event.currentTarget)) return;
+      // The pointer must land on the selected words themselves: Chromium keeps
+      // the old selection when right-clicking elsewhere in the same paragraph,
+      // so containment alone would offer Copy for text the pointer never
+      // touched. A click outside the selection cancels it, browser-like, and
+      // opens nothing. A keyboard menu carries no coordinates and keeps the
+      // existing behavior.
+      const point: ContextMenuClickPoint =
+        event.clientX === 0 && event.clientY === 0
+          ? null
+          : { x: event.clientX, y: event.clientY };
+      if (!contextMenuClickHitsSelection(event.currentTarget, point)) {
+        if (point) clearChatSelection(event.currentTarget);
+        return;
+      }
       openContextMenu(event, {
         label: t("chat.messageMenu"),
         items: selectedTextMenuItems({ t, actions: { copyText, quoteText } }),

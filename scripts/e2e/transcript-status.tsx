@@ -178,7 +178,13 @@ export async function transcriptStatusProbe() {
         range.selectNodeContents(bubble);
         selection.removeAllRanges();
         selection.addRange(range);
-        flushSync(() => bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 80, clientY: 160 })));
+        // Click inside the selected words themselves: the transcript gate
+        // requires the pointer to hit the selection geometry.
+        const firstRect = selection.getRangeAt(0).getClientRects()[0];
+        const point = firstRect
+          ? { x: firstRect.left + Math.min(2, firstRect.width / 2), y: firstRect.top + firstRect.height / 2 }
+          : { x: 80, y: 160 };
+        flushSync(() => bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: point.x, clientY: point.y })));
         check(document.querySelector('[role="menu"]')?.getAttribute("aria-label") === i18n.t("chat.messageMenu"),
           `${mode}: chat.messageMenu retains selected-text menu ownership`);
         const items = [...document.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent);

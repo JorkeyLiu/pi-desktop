@@ -5478,7 +5478,9 @@ window; opening a normal panel afterward must still work.
   completed assistant answer; the conversation pane is focused.
 - **Steps**: 1) Right-click the user plate with no selection: no menu
   opens. 2) Select a phrase in the user plate, right-click that
-  plate: the menu lists Copy and Quote only. Choose Copy and confirm the
+  plate: the menu lists Copy and Quote only. Right-click unselected words of
+  the same paragraph instead: the old selection is cancelled and no menu
+  opens. Choose Copy and confirm the
   exact selection lands on the clipboard. 3) Select a phrase, right-click,
   and choose Quote: the composer draft gains the excerpt as a blockquote
   and the composer takes focus. 4) Collapse the caret and right-click

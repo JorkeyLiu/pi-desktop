@@ -170,6 +170,82 @@ function pointForEvent(event: ContextMenuTrigger): ContextMenuPoint {
   return texClipboardPayload(live) ?? live.toString();
 }
 
+/**
+ * A pointer the keyboard did not send, or null for a keyboard-opened menu
+ * (Shift+F10, the context-menu key), which reports no coordinates.
+ */
+export type ContextMenuClickPoint = { x: number; y: number } | null;
+
+/**
+ * Whether a right-click landed on the selected text itself.
+ *
+ * Containment in the row is not enough: a click on unselected words of the
+ * same paragraph still has both range ends inside the row, so the gate would
+ * offer Copy for text the pointer never touched. The click must hit the
+ * selection's own geometry — one client rect per line box, which is also
+ * what makes a multiline selection keep its menu on every line. A keyboard
+ * menu has no pointer to test and keeps the existing behavior.
+ *
+ * Chat-boundary only: the transcript gate calls this, and no generic caller
+ * does, so markdown-link, file-reference, and work-panel menus never change.
+ */
+export function contextMenuClickHitsSelection(
+  root: EventTarget,
+  point: ContextMenuClickPoint,
+): boolean {
+  if (!point) return true;
+  const editor = document.activeElement;
+  if (
+    root instanceof Node &&
+    editor instanceof HTMLTextAreaElement &&
+    root.contains(editor) &&
+    editor.selectionStart !== editor.selectionEnd
+  ) {
+    const rect = editor.getBoundingClientRect();
+    return (
+      point.x >= rect.left &&
+      point.x <= rect.right &&
+      point.y >= rect.top &&
+      point.y <= rect.bottom
+    );
+  }
+  const live = window.getSelection();
+  if (!live || live.rangeCount === 0 || live.isCollapsed) return false;
+  const rects = live.getRangeAt(0).getClientRects();
+  for (const rect of rects) {
+    if (
+      point.x >= rect.left &&
+      point.x <= rect.right &&
+      point.y >= rect.top &&
+      point.y <= rect.bottom
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Cancel a selection the right-clicked surface owns, browser-like: a
+ * right-click outside the selected words clears the old selection instead of
+ * leaving it behind. Never touches a selection that lives outside `root`.
+ */
+export function clearChatSelection(root: EventTarget): void {
+  if (!(root instanceof Node)) return;
+  const editor = document.activeElement;
+  if (editor instanceof HTMLTextAreaElement && root.contains(editor)) {
+    editor.setSelectionRange(editor.selectionEnd, editor.selectionEnd);
+    return;
+  }
+  const live = window.getSelection();
+  if (!live || live.rangeCount === 0) return;
+  const { anchorNode, focusNode } = live;
+  const inside =
+    (anchorNode && root.contains(anchorNode)) ||
+    (focusNode && root.contains(focusNode));
+  if (inside) live.removeAllRanges();
+}
+
 export function useContextMenu() {
   const [state, setState] = useState<ContextMenuState | null>(null);
   const closeContextMenu = useCallback(() => setState(null), []);

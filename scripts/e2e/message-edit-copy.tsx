@@ -48,10 +48,18 @@ const selectBubbleText = (start: number, end: number) => {
   selection?.addRange(range);
 };
 const collapseSelection = () => window.getSelection()?.removeAllRanges();
-const menu = async (node: HTMLElement) => {
-  flushSync(() => node.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })));
+const menu = async (node: HTMLElement, x = 10, y = 10) => {
+  flushSync(() => node.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: x, clientY: y })));
   await settle();
 };
+// Viewport coordinates of a point inside the live selection (first line box),
+// or of unselected words later in the same paragraph.
+const selectionPoint = () => {
+  const rect = window.getSelection()?.getRangeAt(0).getClientRects()[0];
+  if (!rect) throw new Error("Missing selection rect");
+  return { x: rect.left + Math.min(2, rect.width / 2), y: rect.top + rect.height / 2 };
+};
+const selectionText = () => window.getSelection()?.toString() ?? "";
 // Editing now reloads the saved message before the editor opens, so the probe
 // has to wait for the editor instead of reading it in the same tick.
 const waitForTextarea = async () => {
@@ -92,16 +100,39 @@ Object.assign(globalThis, { messageEditCopyProbe: async () => {
   // the buttons or background around it.
   await menu(article);
   check(!document.querySelector('[role="menu"]'), "Row without selection opened a menu");
-  // A real selection offers exactly Copy and Quote, nothing else.
+  // A right-click inside the selected words preserves the selection and offers
+  // exactly Copy and Quote, nothing else.
   selectBubbleText(9, 22);
-  await menu(article);
+  const inside = selectionPoint();
+  await menu(article, inside.x, inside.y);
+  check(selectionText() === "saved message", `Menu open changed the selection to ${JSON.stringify(selectionText())}`);
   const items = [...document.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent);
   check(items.join("|") === "Copy|Quote", `Selected-text menu offered ${JSON.stringify(items)}`);
   await click('[data-context-menu-item="copy"]');
   check(copied === "saved message", `Selected copy returned ${JSON.stringify(copied)}`);
+  // A right-click on unselected words of the same paragraph cancels the old
+  // selection, browser-like, and opens no menu — even though both range ends
+  // stay inside the same row.
+  selectBubbleText(16, 22);
+  const probeRect = window.getSelection()?.getRangeAt(0).getClientRects()[0];
+  if (!probeRect) throw new Error("Missing probe rect");
+  const outside = { x: probeRect.left + probeRect.width / 2, y: probeRect.top + probeRect.height / 2 };
+  const bubbleRect = find(".message-bubble").getBoundingClientRect();
+  check(outside.x > bubbleRect.left && outside.x < bubbleRect.right, "Outside point left the paragraph");
+  selectBubbleText(0, 8);
+  await menu(article, outside.x, outside.y);
+  check(!document.querySelector('[role="menu"]'), "Outside click opened a menu");
+  check(selectionText() === "", `Outside click kept ${JSON.stringify(selectionText())}`);
+  // A right-click on a toolbar button clears a row selection and opens nothing.
+  selectBubbleText(0, 8);
+  const editButton = find('[aria-label="Edit and resend"]').getBoundingClientRect();
+  await menu(article, editButton.left + editButton.width / 2, editButton.top + editButton.height / 2);
+  check(!document.querySelector('[role="menu"]'), "Button click opened a menu");
+  check(selectionText() === "", `Button click kept ${JSON.stringify(selectionText())}`);
   // Quote carries the exact excerpt into the active session's composer prefill.
   selectBubbleText(0, 8);
-  await menu(article);
+  const quotePoint = selectionPoint();
+  await menu(article, quotePoint.x, quotePoint.y);
   await click('[data-context-menu-item="quote"]');
   check(useAppStore.getState().composerPrefill?.text === "> Original",
     `Quote prefill was ${JSON.stringify(useAppStore.getState().composerPrefill?.text)}`);
@@ -118,7 +149,8 @@ Object.assign(globalThis, { messageEditCopyProbe: async () => {
   const editor = await waitForTextarea();
   editor.focus();
   editor.setSelectionRange(0, 8);
-  await menu(editor);
+  const editorRect = editor.getBoundingClientRect();
+  await menu(editor, editorRect.left + editorRect.width / 2, editorRect.top + editorRect.height / 2);
   await click('[data-context-menu-item="copy"]');
   check(copied === "Original", `Draft copy returned ${JSON.stringify(copied)}`);
   editor.focus();
@@ -126,5 +158,5 @@ Object.assign(globalThis, { messageEditCopyProbe: async () => {
   await menu(editor);
   check(!document.querySelector('[role="menu"]'), "Collapsed draft caret opened a menu");
   root.unmount();
-  return "PASS: no menu without selection, copy exact excerpt, quote to composer prefill, collapsed caret, draft excerpt copy";
+  return "PASS: inside-click menu with exact copy/quote, outside-click clears selection with no menu, collapsed caret, draft excerpt copy";
 } });
