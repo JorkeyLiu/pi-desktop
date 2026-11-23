@@ -248,6 +248,7 @@ import {
   type DelegationWaitHost,
 } from "./subagent-progress.js";
 import { createThinkingPhaseTracker } from "./thinking-phase.js";
+import { GenerationThroughputSampler } from "./generation-throughput.js";
 import {
   applyDelegationActivity,
   applyValidatedSteer,
@@ -1932,6 +1933,14 @@ export class DesktopAgentRuntime {
    * which is the correct anchor: the request goes out once all have resolved. */
   private requestStartedAt?: number;
   private streamStartedAt?: number;
+  /**
+   * One monotonic generation-throughput sampler for the whole parent
+   * session. The same collector the child runs use, so both sessions measure
+   * the identical figure: settled-only, exact provider output over
+   * first-content-to-end spans. Attempt-scoped (`resetAttempt` on every
+   * `message_start`), consumed single-shot by a settled complete `message_end`.
+   */
+  private readonly generationThroughput = new GenerationThroughputSampler();
   private agentActivity?: AgentActivity;
   /** Targets of the in-flight parent wait; live snapshots refresh this set. */
   private delegationWaitTargets?: DelegationRecord[];
@@ -5241,6 +5250,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       turns: record.result?.turns ?? record.turns,
       toolCalls: record.result?.toolCalls ?? record.toolCalls,
       ...(record.usage ? { usage: record.usage } : {}),
+      ...(record.result?.throughput ? { throughput: record.result.throughput } : {}),
       ...(record.contextTokens !== undefined
         ? { contextTokens: record.contextTokens }
         : {}),
@@ -8465,6 +8475,10 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         if (event.message.role === "assistant") {
           this.clearAgentActivity();
           this.streamStartedAt = Date.now();
+          // A new provider attempt starts: a retry, overflow/silent/progress
+          // re-run, or fresh turn never inherits the previous attempt's stamp,
+          // so only the final attempt's span pairs with the settled usage.
+          this.generationThroughput.resetAttempt();
           const content = assistantContent((event.message as any).content);
           const retryingAssistant =
             this.providerRetryInProgress ||
@@ -8543,6 +8557,10 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           this.applyHostedSearch(event.message);
           const content = assistantContent((event.message as any).content);
           const typed = event.assistantMessageEvent;
+          // Stamp this attempt's first nonempty model-generated event on the
+          // raw frame, before the emission gate: the same synchronous hook the
+          // child runs use, so both sessions measure the identical span.
+          this.generationThroughput.noteEvent(typed);
           const previousText = this.currentAssistant.content;
           const previousThinking = this.currentAssistant.thinking ?? "";
           const nextText = content.hasText ? content.text : previousText;
@@ -8918,6 +8936,16 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
                   thinking: nextThinking,
                 })
               : undefined;
+          // Settle-only generation throughput: a completed turn commits one
+          // sample from its first generated content to this end. Failed,
+          // aborted, and retried attempts never contribute — the early-break
+          // re-run paths above return before this terminal block, and the
+          // attempt stamp is consumed single-shot here. Shares the child's
+          // collector, so both sessions measure the identical figure.
+          const throughput =
+            !failed && !aborted
+              ? this.generationThroughput.commitRowSample(usage?.outputTokens)
+              : undefined;
           // The stream settles here with or without a thinking_end frame:
           // still-open thinking completes at this terminal boundary.
           const terminalThinking = this.thinkingPhase.finish();
@@ -8945,6 +8973,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             ...(responseOutputTokens !== undefined
               ? { responseOutputTokens }
               : {}),
+            ...(throughput ? { throughput } : {}),
             ...(classifiedError
               ? { error: classifiedError, isError: true }
               : {}),

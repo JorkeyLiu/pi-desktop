@@ -8,6 +8,10 @@ import {
 } from "../../lib/subagent-topology";
 import { aggregateChainMetricsFromMessages } from "../../lib/subagent-metrics";
 import {
+  formatThroughputRate,
+  throughputPerSecond,
+} from "../../lib/generation-throughput";
+import {
   captureContinueIdentity,
   captureSteerIdentity,
   shouldClearSteerDraft,
@@ -17,10 +21,8 @@ import {
 import {
   subagentChainInstantiated,
   subagentChainLatestDelegationId,
-  subagentChainCallIds,
 } from "../../lib/subagent-chain";
 import { sessionAllows } from "../../lib/remote-session-safety";
-import { aggregateSubagentThroughput } from "../../lib/subagent-throughput";
 import { api } from "../../lib/api";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -136,16 +138,6 @@ function SubagentUserAttachments({ attachments }: { attachments?: MessageAttachm
   );
 }
 
-
-function formatRate(value: number, language: string): string {
-  try {
-    return new Intl.NumberFormat(language || undefined, {
-      maximumFractionDigits: 1,
-    }).format(value);
-  } catch {
-    return `${Math.round(value * 10) / 10}`;
-  }
-}
 
 function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
   const { t, i18n } = useTranslation();
@@ -263,10 +255,11 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     () => aggregateChainMetricsFromMessages(messages, activeDelegationId),
     [messages, activeDelegationId],
   );
-  const throughput = useMemo(
-    () => aggregateSubagentThroughput(messages, subagentChainCallIds(messages, activeDelegationId)),
-    [messages, activeDelegationId],
-  );
+  // One session average from the chain's canonical per-run totals: exact
+  // provider output over summed first-content-to-end spans. Failed, aborted,
+  // in-flight, and usage-less turns never contributed; `—` when the chain
+  // reported no usable figure.
+  const throughputRate = throughputPerSecond(chainMetrics?.throughput);
   // A backend instance exists once a `Task` call of the chain carries a
   // delegationId. Every instantiated settled child continues regardless of how
   // it ended — a child stopped before its first transcript event included —
@@ -680,15 +673,12 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
               <span
                 className="subagent-transcript-metric"
                 data-testid="subagent-metrics-throughput"
-                title={t("chat.subagentThroughputHelp", { samples: throughput.samples })}
               >
                 <span className="subagent-transcript-metric-label">
                   {t("chat.subagentThroughputLabel")}
                 </span>
                 <span className="subagent-transcript-metric-value">
-                  {throughput.tokensPerSecond === null
-                    ? "—"
-                    : `${throughput.estimated ? "≈" : ""}${formatRate(throughput.tokensPerSecond, language)}`}
+                  {throughputRate === null ? "—" : formatThroughputRate(throughputRate, language)}
                 </span>
               </span>
             </div>

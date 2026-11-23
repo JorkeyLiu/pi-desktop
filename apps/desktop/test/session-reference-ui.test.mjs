@@ -101,7 +101,6 @@ const shared = load(new URL("../src/features/chat/transcript/shared.tsx", import
   "../../../lib/thinking-preview": { thinkingPreview: () => null },
   "../../../lib/use-referenced-image-data-url": { useReferencedImageDataUrl: () => undefined },
   "../../../lib/chat-links": { isHtmlFilePath: () => false },
-  "../../../lib/context-usage": { calculateTokenRate: () => 0 },
   "../../../stores/app-store": { useAppStore },
 });
 

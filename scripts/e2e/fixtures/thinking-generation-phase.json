@@ -83,6 +83,10 @@
         "totalTokens": 15,
         "usageOrigin": "pi",
         "costStatus": "unknown"
+      },
+      "throughput": {
+        "tokens": 5,
+        "samples": 1
       }
     }
   }

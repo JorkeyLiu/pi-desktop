@@ -37,6 +37,7 @@ import type {
   ImageContent,
   UserMessage,
 } from "@earendil-works/pi-ai";
+import { GenerationThroughputSampler } from "./generation-throughput.js";
 import {
   addUsage,
   cumulativeDelta,
@@ -51,6 +52,7 @@ import {
   type SubagentRunStatus as SharedSubagentRunStatus,
   type SubagentSelfHandoffSettings,
   type SubagentThinkingLevel,
+  type GenerationThroughputTotals,
   type UiMessage,
 } from "@pi-desktop/shared";
 import { classifyAgentError } from "./agent-errors.js";
@@ -136,6 +138,8 @@ export type SubagentRunResult = {
   turns: number;
   toolCalls: number;
   usage?: MessageUsage;
+  /** Settled-only generation throughput totals; absent when no sample committed. */
+  throughput?: GenerationThroughputTotals;
   modelFailures?: Array<{ model: string; code: string; message: string }>;
   /** In-memory context compactions the run needed (ADR 0299). */
   contextCompactions?: number;
@@ -353,6 +357,8 @@ export class SubagentRun {
   private emittedRowChars = 0;
   private lastReportText = "";
   private streamStartedAt?: number;
+  /** One monotonic generation-throughput sampler for the whole run: settled-only, exact provider output over first-content-to-end spans. Parent and child share this collector, so both sessions measure the identical figure. */
+  private readonly throughputSampler = new GenerationThroughputSampler();
   private lastReportTruncated = false;
   private turns = 0;
   private toolCalls = 0;
@@ -704,6 +710,7 @@ export class SubagentRun {
     toolCalls: number;
     turns: number;
     usage?: MessageUsage;
+    throughput?: GenerationThroughputTotals;
     contextTokens?: number;
   } {
     let contextTokens: number | undefined;
@@ -716,8 +723,10 @@ export class SubagentRun {
     } catch {
       contextTokens = undefined;
     }
+    const throughput = this.throughputSampler.totals();
     return {
       toolCalls: this.toolCalls,
+      ...(throughput ? { throughput } : {}),
       turns: this.turns,
       ...(this.usage ? { usage: this.usage } : {}),
       ...(contextTokens !== undefined ? { contextTokens } : {}),
@@ -1381,6 +1390,7 @@ export class SubagentRun {
     // preamble, and the degradation note travel with the same text in every
     // status, on local and remote sessions alike.
     const finalReport = [...preamble, text].join("\n\n");
+    const throughput = this.throughputSampler.totals();
     return {
       agentName: name,
       modelId: this.provider.modelId,
@@ -1391,6 +1401,7 @@ export class SubagentRun {
       toolCalls: this.toolCalls,
       ...(this.usage ? { usage: this.usage } : {}),
       ...(this.modelFailures.length ? { modelFailures: [...this.modelFailures] } : {}),
+      ...(throughput ? { throughput } : {}),
       ...(this.contextCompactions > 0 ? { contextCompactions: this.contextCompactions } : {}),
       ...(this.contextDegraded ? { contextDegraded: true } : {}),
       ...(this.lastReportTruncated ? { outputTruncated: true } : {}),
@@ -1533,6 +1544,7 @@ export class SubagentRun {
           ? this.currentAssistant
           : undefined;
         this.streamStartedAt = Date.now();
+        this.throughputSampler.resetAttempt();
         this.toolArgsPreparation.reset();
         // A retry keeps the same row but starts a new provider attempt: the
         // previous attempt's thinking generation ends here.
@@ -1564,6 +1576,7 @@ export class SubagentRun {
       case "message_update": {
         if (!this.currentAssistant || event.message.role !== "assistant") break;
         const typed = event.assistantMessageEvent;
+        this.throughputSampler.noteEvent(typed);
         this.trackStreamedToolCalls(typed);
         const content = assistantContent((event.message as AssistantMessage).content);
         const previousText = this.currentAssistant.content;
@@ -1705,6 +1718,10 @@ export class SubagentRun {
           this.emit({ type: "message_update", message: this.currentAssistant });
           break;
         }
+        // Settle-only throughput: a completed turn commits one sample from the
+        // first generated content to this end. Failed, aborted, and retried
+        // attempts never contribute; the row timing above stays untouched.
+        if (!failed && !aborted) this.throughputSampler.commitSample(message.usage?.output);
         // The run settles here with or without a thinking_end frame:
         // still-open thinking completes at this terminal boundary.
         const terminalThinking = this.thinkingPhase.finish();

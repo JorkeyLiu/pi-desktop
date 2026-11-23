@@ -7,15 +7,8 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import type {
-  MessageAttachment,
-  MessageUsage,
-  UiMessage,
-} from "@pi-desktop/shared";
-import {
-  formatCompactTokenCount,
-  isCertificateVerificationError,
-} from "@pi-desktop/shared";
+import type { MessageAttachment, UiMessage } from "@pi-desktop/shared";
+import { isCertificateVerificationError } from "@pi-desktop/shared";
 import { useOpenChatFileRef, useOpenPreviewTarget } from "../../../hooks/use-preview-target";
 import { useChatFileMenu } from "../../../hooks/use-chat-file-menu";
 import { ContextMenu } from "../../../components/ContextMenu";
@@ -32,7 +25,6 @@ import { useVerifiedChatText } from "../../../hooks/use-verified-chat-text";
 import { isHtmlFilePath } from "../../../lib/chat-links";
 import type { SourcePositionProps } from "../../../lib/markdown-source";
 import type { ToolAction } from "../../../lib/tool-display";
-import { calculateTokenRate } from "../../../lib/context-usage";
 import { useAppStore } from "../../../stores/app-store";
 import { Markdown, useCopy } from "../../../components/Markdown";
 import {
@@ -160,38 +152,17 @@ export function CopyButton({
 }
 export function MessageMeta({
   modelId,
-  usage,
-  responseDurationMs,
-  responseOutputTokens,
 }: {
   modelId?: string;
-  usage?: MessageUsage;
-  responseDurationMs?: number;
-  responseOutputTokens?: number;
 }) {
-  const { t } = useTranslation();
-  const throughput = calculateTokenRate(
-    responseOutputTokens ?? usage?.outputTokens ?? 0,
-    responseDurationMs,
-  );
-  const showThroughput = !usage && throughput !== undefined;
-  if (!modelId && !showThroughput) {
+  if (!modelId) {
     return null;
   }
   return (
     <div className="message-meta">
-      {modelId ? (
-        <span className="message-meta-chip model" title={modelId}>
-          {modelId}
-        </span>
-      ) : null}
-      {showThroughput ? (
-        <span className="message-meta-chip throughput">
-          {t("chat.usageThroughputEstimated", {
-            count: formatCompactTokenCount(throughput),
-          })}
-        </span>
-      ) : null}
+      <span className="message-meta-chip model" title={modelId}>
+        {modelId}
+      </span>
     </div>
   );
 }

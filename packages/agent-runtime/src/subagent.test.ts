@@ -83,14 +83,18 @@ function assistantMessage(overrides: {
     model: "local-model",
     stopReason: overrides.stopReason ?? "stop",
     timestamp: 1,
-    usage: overrides.usage ?? {
-      input: 10,
-      output: 5,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 15,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    // An explicitly passed `undefined` means the provider attached no usage:
+    // only a caller that omits the key gets the default fixture usage.
+    ...("usage" in overrides ? { usage: overrides.usage } : {
+      usage: {
+        input: 10,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 15,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    }),
     content: overrides.content,
   };
 }
@@ -1452,5 +1456,255 @@ describe("SubagentRun delegate tool context", () => {
     expect(JSON.stringify((first.run as unknown as SubagentRun).contextMessages())).toContain("A");
     expect(JSON.stringify((first.run as unknown as SubagentRun).contextMessages())).not.toContain("B");
     expect(JSON.stringify((second.run as unknown as SubagentRun).contextMessages())).toContain("B");
+  });
+});
+
+describe("generation throughput", () => {
+  const startMessage = (text = "") => ({
+    role: "assistant",
+    content: text ? [{ type: "text", text }] : [],
+  });
+
+  const updateMessage = (text: string, thinking = "") => {
+    const content: Array<Record<string, unknown>> = [];
+    if (thinking) content.push({ type: "thinking", thinking });
+    if (text) content.push({ type: "text", text });
+    return { role: "assistant", content };
+  };
+
+  const textFrame = (delta: string) => ({
+    type: "text_delta",
+    contentIndex: 0,
+    delta,
+    partial: assistantMessage({ content: [] }),
+  });
+
+  const toolFrame = (block: Record<string, unknown>) => ({
+    type: "toolcall_start",
+    contentIndex: 0,
+    partial: assistantMessage({ content: [block] }),
+  });
+
+  const endMessage = (usage: Record<string, unknown> | undefined, stopReason = "stop") =>
+    assistantMessage({
+      content: [{ type: "text", text: "done" }],
+      stopReason,
+      ...(usage === undefined ? { usage: undefined } : { usage }),
+    });
+
+  const usage = (output: number) => ({
+    input: 10,
+    output,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 10 + output,
+  });
+
+  it("commits exact provider output over first-content-to-end duration", () => {
+    vi.useFakeTimers();
+    try {
+      const { run } = createRun();
+      run.handleEvent({ type: "message_start", message: startMessage() });
+      vi.advanceTimersByTime(900);
+      run.handleEvent({
+        type: "message_update",
+        message: updateMessage("hello"),
+        assistantMessageEvent: textFrame("hello"),
+      });
+      vi.advanceTimersByTime(100);
+      run.handleEvent({ type: "message_end", message: endMessage(usage(40)) });
+      expect(run.result("completed", "done")).toMatchObject({
+        throughput: { tokens: 40, durationMs: 100, samples: 1 },
+      });
+      expect(run.progress()).toMatchObject({
+        throughput: { tokens: 40, durationMs: 100, samples: 1 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores empty deltas and pre-content waiting when timing a turn", () => {
+    vi.useFakeTimers();
+    try {
+      const { run } = createRun();
+      run.handleEvent({ type: "message_start", message: startMessage() });
+      vi.advanceTimersByTime(500);
+      run.handleEvent({
+        type: "message_update",
+        message: updateMessage(""),
+        assistantMessageEvent: textFrame(""),
+      });
+      vi.advanceTimersByTime(700);
+      run.handleEvent({
+        type: "message_update",
+        message: updateMessage("hi"),
+        assistantMessageEvent: textFrame("hi"),
+      });
+      vi.advanceTimersByTime(50);
+      run.handleEvent({ type: "message_end", message: endMessage(usage(9)) });
+      expect(run.result("completed", "done")).toMatchObject({
+        throughput: { tokens: 9, durationMs: 50, samples: 1 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets the clock on a new attempt so a failed attempt never leaks in", () => {
+    vi.useFakeTimers();
+    try {
+      const { run } = createRun();
+      run.handleEvent({ type: "message_start", message: startMessage() });
+      vi.advanceTimersByTime(800);
+      run.handleEvent({
+        type: "message_update",
+        message: updateMessage("stale"),
+        assistantMessageEvent: textFrame("stale"),
+      });
+      vi.advanceTimersByTime(50);
+      run.handleEvent({ type: "message_start", message: startMessage() });
+      vi.advanceTimersByTime(30);
+      run.handleEvent({
+        type: "message_update",
+        message: updateMessage("fresh"),
+        assistantMessageEvent: textFrame("fresh"),
+      });
+      vi.advanceTimersByTime(20);
+      run.handleEvent({ type: "message_end", message: endMessage(usage(7)) });
+      expect(run.result("completed", "done")).toMatchObject({
+        throughput: { tokens: 7, durationMs: 20, samples: 1 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("accumulates settled complete turns and only those", () => {
+    vi.useFakeTimers();
+    try {
+      const { run } = createRun();
+      run.handleEvent({ type: "message_start", message: startMessage() });
+      run.handleEvent({
+        type: "message_update",
+        message: updateMessage("one"),
+        assistantMessageEvent: textFrame("one"),
+      });
+      vi.advanceTimersByTime(100);
+      run.handleEvent({ type: "message_end", message: endMessage(usage(10)) });
+      run.handleEvent({ type: "message_start", message: startMessage() });
+      run.handleEvent({
+        type: "message_update",
+        message: updateMessage("two"),
+        assistantMessageEvent: textFrame("two"),
+      });
+      vi.advanceTimersByTime(300);
+      run.handleEvent({ type: "message_end", message: endMessage(usage(30)) });
+      // An aborted turn with provider output still commits nothing.
+      run.handleEvent({ type: "message_start", message: startMessage() });
+      run.handleEvent({
+        type: "message_update",
+        message: updateMessage("cut"),
+        assistantMessageEvent: textFrame("cut"),
+      });
+      vi.advanceTimersByTime(999);
+      run.handleEvent({
+        type: "message_end",
+        message: endMessage(usage(999), "aborted"),
+      });
+      expect(run.result("completed", "done")).toMatchObject({
+        throughput: { tokens: 40, durationMs: 400, samples: 2 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows a real provider zero when the duration is positive", () => {
+    vi.useFakeTimers();
+    try {
+      const { run } = createRun();
+      run.handleEvent({ type: "message_start", message: startMessage() });
+      run.handleEvent({
+        type: "message_update",
+        message: updateMessage("tool reply with no billed output"),
+        assistantMessageEvent: textFrame("tool reply with no billed output"),
+      });
+      vi.advanceTimersByTime(40);
+      run.handleEvent({ type: "message_end", message: endMessage(usage(0)) });
+      expect(run.result("completed", "done")).toMatchObject({
+        throughput: { tokens: 0, durationMs: 40, samples: 1 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("excludes turns with missing usage or no generated content", () => {
+    vi.useFakeTimers();
+    try {
+      const { run } = createRun();
+      run.handleEvent({ type: "message_start", message: startMessage() });
+      run.handleEvent({
+        type: "message_update",
+        message: updateMessage("no usage attached"),
+        assistantMessageEvent: textFrame("no usage attached"),
+      });
+      vi.advanceTimersByTime(60);
+      run.handleEvent({ type: "message_end", message: endMessage(undefined) });
+      run.handleEvent({ type: "message_start", message: startMessage() });
+      vi.advanceTimersByTime(70);
+      run.handleEvent({
+        type: "message_end",
+        message: endMessage(usage(11)),
+      });
+      const completed = run.result("completed", "done");
+      expect(completed.throughput).toBeUndefined();
+      expect(run.progress().throughput).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts a tool-call snapshot with arguments but not a bare signature", () => {
+    vi.useFakeTimers();
+    try {
+      const { run } = createRun();
+      run.handleEvent({ type: "message_start", message: startMessage() });
+      vi.advanceTimersByTime(200);
+      run.handleEvent({
+        type: "message_update",
+        message: startMessage(),
+        assistantMessageEvent: toolFrame({
+          type: "toolCall",
+          id: "call-1",
+          name: "Read",
+          arguments: {},
+        }),
+      });
+      vi.advanceTimersByTime(300);
+      run.handleEvent({ type: "message_end", message: endMessage(usage(12)) });
+      expect(run.result("completed", "done").throughput).toBeUndefined();
+
+      run.handleEvent({ type: "message_start", message: startMessage() });
+      vi.advanceTimersByTime(200);
+      run.handleEvent({
+        type: "message_update",
+        message: startMessage(),
+        assistantMessageEvent: toolFrame({
+          type: "toolCall",
+          id: "call-2",
+          name: "Read",
+          arguments: { path: "notes.md" },
+        }),
+      });
+      vi.advanceTimersByTime(150);
+      run.handleEvent({ type: "message_end", message: endMessage(usage(12)) });
+      expect(run.result("completed", "done")).toMatchObject({
+        throughput: { tokens: 12, durationMs: 150, samples: 1 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

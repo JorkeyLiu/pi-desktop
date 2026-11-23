@@ -80,7 +80,6 @@ test("latest turn inspector keeps the newest usage-bearing turn", () => {
   assert.equal(inspector?.usage.totalTokens, 15);
   assert.equal(inspector?.turnUsage.totalTokens, 15);
   assert.equal(inspector?.contextWindow, 256_000);
-  assert.equal(inspector?.responseDurationMs, 1000);
   assert.equal(inspector?.tools.length, 0);
 });
 
@@ -113,7 +112,6 @@ test("latest turn inspector ignores later subagent usage", () => {
   );
 
   assert.equal(inspector?.usage.totalTokens, 100);
-  assert.equal(inspector?.responseDurationMs, 2000);
   assert.equal(inspector?.tools.map((tool) => tool.toolName).join(","), "Task");
 });
 
@@ -143,7 +141,6 @@ test("latest turn inspector keeps the usage-bearing turn's tools over a later st
 
   assert.equal(inspector?.usage.totalTokens, 15);
   assert.equal(inspector?.tools.map((tool) => tool.toolName).join(","), "Read");
-  assert.equal(inspector?.responseDurationMs, 1000);
 });
 
 test("latest turn inspector does not merge compaction-split assistant turns", () => {
@@ -178,7 +175,6 @@ test("latest turn inspector does not merge compaction-split assistant turns", ()
 
   assert.equal(inspector?.usage.totalTokens, 28);
   assert.equal(inspector?.turnUsage.totalTokens, 28);
-  assert.equal(inspector?.responseDurationMs, 1500);
 });
 
 test("latest turn inspector keeps last-request usage beside the turn sum", () => {

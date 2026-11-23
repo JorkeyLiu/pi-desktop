@@ -245,6 +245,7 @@ fn parse_message(
         response_duration_ms: None,
         model_stream_duration_ms: None,
         response_output_tokens: None,
+        throughput: None,
         error: None,
         revision_root_id: None,
         revision_count: None,

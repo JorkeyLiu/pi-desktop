@@ -1546,17 +1546,17 @@ not a working claim, is what the reader sees.
   the group is explained by a helper icon.
   Long paths, commands, and tool summaries in the live process wrap inside the
   dock instead of becoming one-line ellipses.
-- The metrics group ends with average output throughput (`TPS`). It is the sum of
-  matched settled source-assistant output tokens divided by the sum of those
-  rows' model stream durations, so wait time, tool time, and a whole response's
-  duration never enter the figure. Only the selected chain's direct-child model
-  streams count: a nested delegate, another child, an in-flight row, a row with
-  no positive stream duration, and a row with no usable token figure are not
-  samples, and a repeated message id counts once in its latest settled
-  representation. A provider output count is used whenever it was reported,
-  including a genuine zero; an interrupted response's visible-content estimate is
-  used otherwise and prefixes the figure with `≈`. With no usable sample the
-  value is `—`, and the metric's help names how many model responses it recorded.
+- The metrics group ends with average output throughput (`TPS`): one session
+  average for the selected chain, computed from its canonical per-run totals
+  (exact provider output tokens over summed first-generated-content-to-end
+  spans) and stated with no estimate prefix, no tooltip, and no sample-count
+  helper. Failed, aborted, and in-flight runs never contribute, usage-less
+  turns never contribute, and child transcript rows never contribute no matter
+  what usage or stream figures they carry. A re-reported run segment replaces
+  its totals rather than adding a duplicate; only distinct run segments sum. A
+  real provider zero over a positive span is a genuine `0`; a chain whose
+  snapshots carry no totals reads `—`, never an invented zero or a heuristic
+  estimate.
 - A delegate that settles without completing explains why, because the process
   alone does not: a `Failed`, `Timed out`, or `Aborted` capsule with no reason
   is all a reader gets, and a delegate that dies before emitting a message row
@@ -2261,8 +2261,14 @@ Single message render — either user (plaintext) or assistant (markdown streami
   estimate note are intentionally omitted from the default view. Rows below
   the heading share one muted-label / tabular-value rhythm separated by
   spacing; the popover keeps its floating-layer edge and draws no inner
-  section rules (D297). Generation speed is a completed-turn value in tokens
-  per second and is not updated while a response is streaming. The
+  section rules (D297). Generation speed is one session average in tokens
+  per second across the whole session's settled own assistant responses —
+  the same canonical totals as subagent throughput (exact provider output
+  tokens over summed first-generated-content-to-end spans), never the latest
+  turn alone, never an estimate, and not updated while a response is
+  streaming. Child-stream rows belong to child sessions and never join the
+  parent's figure; failed, aborted, and in-flight turns never contribute.
+  With no usable sample the value is `—`, with no tooltip. The
   context-window total uses the same effective model window as the agent
   sidecar: a published models.dev `limit.context` replaces a legacy 128k
   generic binding seed, while a non-default per-model Advanced value remains

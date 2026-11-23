@@ -13540,14 +13540,15 @@ This test plan spec is accepted when:
   that has reported only zero counters therefore reads `Context —`, `Spent —`,
   `0 turns · 0 calls` and `—` average TPS; the
   child's model and reasoning level sit on the
-  footer's static model chip. The throughput figure is the summed output tokens
-  of the chain's settled direct-child model responses over their summed model
-  stream durations: wait, tool, and whole-response time never move it, a nested
-  delegate or another child's row never joins it, an in-flight row is not a
-  sample, and a repeated row counts once in its latest settled form. It reads
-  `—` when no row carries usable figures, prefixes `≈` when an interrupted
-  response fell back to its visible-content estimate, and its help names the
-  recorded sample count.
+  footer's static model chip. The throughput figure is the selected chain's one
+  session average from its canonical per-run totals — exact provider output
+  tokens over summed first-generated-content-to-end spans — stated with no
+  estimate prefix, no tooltip, and no sample-count helper. Failed, aborted, and
+  in-flight runs never contribute, usage-less turns never contribute, and child
+  transcript rows never contribute; a re-reported run segment replaces its
+  totals rather than doubling them, and only distinct run segments sum. A real
+  provider zero over a positive span reads `0`; the figure reads `—` when no
+  snapshot in the chain carries totals.
   The card is a single button that activates this tab — there is no second click
   on the card that closes it, no caret and no `aria-expanded` on the card — and
   the tab is closed only through its own close control.
@@ -13576,11 +13577,14 @@ This test plan spec is accepted when:
   opened transcript's metrics, actions and session scoping are rendered by
   `node scripts/e2e-subagent-dock.mjs`, which passed before the current
   detail-copy corrections; their revalidation is pending. Average throughput is
-  covered by `subagent-throughput.test.mjs` (weighting, exclusions, repeated
-  ids, provider zero versus estimate) and by the rendered tab header in
-  `subagent-continue-user-path.test.mjs` (rounded rate, `≈` estimate, `—` with
-  no sample, per-chain isolation, sample count in the help, and the running
-  first frame that states `Context —` beside `Spent —` with no helper icon).
+  covered by `subagent-chain-index.test.mjs` (distinct run segments sum, a
+  same-delegation re-report replaces instead of doubling, chains without totals
+  stay absent, and the one rate function's absent/zero guards) and by the
+  rendered tab header in `subagent-continue-user-path.test.mjs` (canonical
+  totals render, a resume chain's summed average on both the chain and the
+  chain-latest tabs, hostile child rows that must not move it, per-chain
+  isolation, the `—` states, and the running first frame that states
+  `Context —` beside `Spent —` with no helper icon).
 
 #### E2E-SUBAGENT-settlement-updates-before-parent-poll
 

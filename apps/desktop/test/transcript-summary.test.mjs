@@ -4,8 +4,7 @@ import test from "node:test";
 register(new URL("./helpers/ts-import-hooks.mjs", import.meta.url));
 const {
   assistantTurnContent, assistantTurnMessages, assistantTurnUsage,
-  assistantTurnResponseDuration, assistantTurnResponseOutputTokens,
-  assistantTurnResponseOutputIsEstimated, assistantTurnTools,
+  assistantTurnTools,
 } = await import("../src/lib/assistant-turns.ts");
 const { getAssistantTurnSummary, getAssistantTurnContent, messageContentFacts, reuseReferences } = await import("../src/lib/transcript-summary.ts");
 const { projectTurnProcess, visibleProcessSteps } = await import("../src/lib/turn-process.ts");
@@ -54,11 +53,8 @@ test("cached turn aggregates and process topology match legacy helpers", () => {
     assert.deepEqual(summary.messages, assistantTurnMessages(turn));
     assert.deepEqual(summary.tools, assistantTurnTools(turn));
     assert.deepEqual(summary.usage, assistantTurnUsage(turn));
-    assert.equal(summary.responseDurationMs, assistantTurnResponseDuration(turn));
-    assert.equal(summary.responseOutputTokens, assistantTurnResponseOutputTokens(turn));
-    assert.equal(summary.responseOutputEstimated, assistantTurnResponseOutputIsEstimated(turn));
     assert.equal(summary.actionMessage, [...messages].reverse().find((m) => m.content.trim()));
-    assert.equal(summary.metaMessage, [...messages].reverse().find((m) => m.modelId || m.usage || m.responseDurationMs || m.responseOutputTokens));
+    assert.equal(summary.metaMessage, [...messages].reverse().find((m) => m.modelId || m.usage));
     assert.equal(summary.latestUsageMessage, [...messages].reverse().find((m) => m.usage));
     assert.equal(summary.hasError, messages.some((m) => Boolean(m.error)));
     assert.equal(summary.streaming, messages.some((m) => m.status === "streaming"));

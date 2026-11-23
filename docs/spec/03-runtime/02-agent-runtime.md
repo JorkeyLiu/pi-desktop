@@ -2228,8 +2228,10 @@ does not dispose, abort, or re-root a runtime belonging to another session.
 - mark turn aborted in UI/storage
 - preserve elapsed response duration; when provider final usage is unavailable,
   estimate visible thinking plus answer output at four Unicode code points per
-  token and persist it as `responseOutputTokens` so stopped-turn throughput is
-  still available and visibly approximate
+  token and persist it as `responseOutputTokens` display metadata only.
+  Aborted, failed, and in-flight turns never contribute generation-throughput
+  samples: average TPS folds exact provider output over settled complete
+  responses only, so a stopped turn shows `—`, never an estimate
 - preserve request-to-first-response wait and streamed thinking/answer duration
   on assistant messages when available; stopped streams retain the elapsed
   streamed duration captured before cancellation

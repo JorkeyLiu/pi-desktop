@@ -53,8 +53,23 @@ export type MessageUsage = UsageProvenance & {
 export type UsageOperation = Omit<MessageUsage, "operations" | "aggregation"> & {
   operationId: string;
 };
+/**
+ * Canonical per-run generation throughput totals for one delegate run segment.
+ *
+ * Settled-only, exact-provider-output figures: `tokens` sums the provider's
+ * own output counts from completed turns (a real provider zero included),
+ * `durationMs` sums first-nonempty-generated-content-to-end monotonic spans,
+ * and `samples` counts the committed turns. Failed, aborted, in-flight, and
+ * usage-less turns never contribute. Absent means the run reported no usable
+ * figure, never an invented zero.
+ */
+export type GenerationThroughputTotals = {
+  tokens: number;
+  durationMs: number;
+  samples: number;
+};
 
-export { addUsage, withUsageIdentity } from "../message-usage.js";
+export { addThroughputTotals, addUsage, withUsageIdentity } from "../message-usage.js";
 
 export type MessageAttachment = {
   kind: "image" | "file" | "session";
@@ -144,6 +159,14 @@ export type UiMessage = {
   modelStreamDurationMs?: number;
   /** Output tokens used only for throughput when a stopped stream has no final usage. */
   responseOutputTokens?: number;
+  /**
+   * Settled-only generation throughput sample for one completed assistant
+   * turn: exact provider output over the first-nonempty-generated-content to
+   * settled-end span. Parent rows carry one sample each; the session average
+   * folds them. Absent on legacy rows, failed/aborted turns, and turns with
+   * no usable figure — never an invented zero.
+   */
+  throughput?: GenerationThroughputTotals;
   /** Structured failure attached to the assistant turn that failed. */
   error?: AppError;
   /** Stable regenerate-family key shared across rewritten user prompts. */

@@ -24,9 +24,6 @@ export type AssistantTurnSummary = {
   metaMessage?: UiMessage;
   latestUsageMessage?: UiMessage;
   usage?: MessageUsage;
-  responseDurationMs?: number;
-  responseOutputTokens?: number;
-  responseOutputEstimated: boolean;
   hasError: boolean;
   streaming: boolean;
   hasContent: boolean;
@@ -47,7 +44,7 @@ export function getAssistantTurnSummary(entry: AssistantTurnEntry): AssistantTur
   if (cached) return cached;
   const result: AssistantTurnSummary = {
     messages: [], tools: [], activityItems: [], toolItems: [], generatedImages: [],
-    responseOutputEstimated: false, hasError: false, streaming: false,
+    hasError: false, streaming: false,
     hasContent: false, process: [], responses: [],
   };
   const last = entry.parts.at(-1);
@@ -72,21 +69,11 @@ export function getAssistantTurnSummary(entry: AssistantTurnEntry): AssistantTur
       result.actionMessage = message;
       result.hasContent = true;
     }
-    if (message.modelId || message.usage || message.responseDurationMs || message.responseOutputTokens) {
+    if (message.modelId || message.usage) {
       result.metaMessage = message;
     }
     result.hasError ||= Boolean(message.error);
     result.streaming ||= message.status === "streaming";
-    const duration = message.responseDurationMs;
-    if (typeof duration === "number" && Number.isFinite(duration) && duration > 0) {
-      result.responseDurationMs = (result.responseDurationMs ?? 0) + duration;
-    }
-    const output = message.usage?.outputTokens ?? message.responseOutputTokens;
-    if (typeof output === "number" && Number.isFinite(output) && output > 0) {
-      result.responseOutputTokens = (result.responseOutputTokens ?? 0) + output;
-    }
-    result.responseOutputEstimated ||= (!message.usage || message.usage.outputTokens <= 0) &&
-      typeof message.responseOutputTokens === "number" && message.responseOutputTokens > 0;
     if (message.usage) {
       result.latestUsageMessage = message;
       const usage = result.usage ??= { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
