@@ -134,6 +134,16 @@ async function runHost() {
         "the real Write record is not contract-cased: " +
           shortJson(written.content),
       );
+      assert(
+        written.content?.editDiff?.root === "workspace" &&
+          written.content.editDiff?.operation === "write" &&
+          written.content.editDiff?.status === "added" &&
+          written.content.editDiff.additions === 2 &&
+          written.content.editDiff.deletions === 0 &&
+          Array.isArray(written.content.editDiff.hunks) &&
+          written.content.editDiff.hunks.length > 0,
+        "the real workspace Write carries no per-call diff: " + shortJson(written.content),
+      );
 
       // What the host stores next to the record uses the same vocabulary.
       const editMeta = metaPath(dataDir, session.id, editReview.snapshotId);
@@ -346,6 +356,67 @@ async function runHost() {
         "the external Edit carries no real diff: " + shortJson(outsideEdited.content),
       );
 
+      // A scratch Write that creates its file and an external Write that
+      // overwrites one: on roots without durable review records the per-call
+      // preview is the row's only evidence, while the Written content body
+      // stays exactly what the call wrote.
+      const scratchWritePath = join(scratchDir, "scratch-created.txt");
+      const scratchWritten = await host.call(
+        "tools.execute",
+        {
+          sessionId: session.id,
+          toolCallId: "write-scratch",
+          toolName: "Write",
+          args: { path: scratchWritePath, content: "one\ntwo\n" },
+          mode: "agent",
+        },
+        20_000,
+      );
+      assertToolSuccess(scratchWritten, "write-scratch");
+      assert.equal(scratchWritten.content?.root, "scratch", shortJson(scratchWritten.content));
+      assert(
+        !("review" in (scratchWritten.content ?? {})),
+        "a scratch Write must not gain a durable review record: " +
+          shortJson(scratchWritten.content),
+      );
+      assert(
+        scratchWritten.content?.editDiff?.operation === "write" &&
+          scratchWritten.content?.editDiff?.status === "added" &&
+          scratchWritten.content?.editDiff?.additions === 2 &&
+          scratchWritten.content?.editDiff?.deletions === 0 &&
+          Array.isArray(scratchWritten.content?.editDiff?.hunks) &&
+          scratchWritten.content.editDiff.hunks.length > 0,
+        "the scratch Write carries no real diff: " + shortJson(scratchWritten.content),
+      );
+
+      const outsideWritten = await host.call(
+        "tools.execute",
+        {
+          sessionId: session.id,
+          toolCallId: "write-outside",
+          toolName: "Write",
+          args: { path: outsidePath, content: "one\nTWO\nthree\n" },
+          mode: "agent",
+        },
+        20_000,
+      );
+      assertToolSuccess(outsideWritten, "write-outside");
+      assert.equal(outsideWritten.content?.root, "external", shortJson(outsideWritten.content));
+      assert(
+        !("review" in (outsideWritten.content ?? {})),
+        "an external Write must not gain a durable review record: " +
+          shortJson(outsideWritten.content),
+      );
+      assert(
+        outsideWritten.content?.editDiff?.operation === "write" &&
+          outsideWritten.content?.editDiff?.status === "modified" &&
+          outsideWritten.content?.editDiff?.additions === 1 &&
+          outsideWritten.content?.editDiff?.deletions === 0 &&
+          Array.isArray(outsideWritten.content?.editDiff?.hunks) &&
+          outsideWritten.content.editDiff.hunks.length > 0,
+        "the external Write carries no real diff: " + shortJson(outsideWritten.content),
+      );
+
       // Old persisted messages predate the per-call preview: they carry a
       // review record and nothing else, so the legacy fallback is what the
       // renderer may read for them.
@@ -363,6 +434,8 @@ async function runHost() {
         removed: removed.content,
         scratchEdit: scratchEdited.content,
         externalEdit: outsideEdited.content,
+        scratchWrite: scratchWritten.content,
+        externalWrite: outsideWritten.content,
         // The same real record as hosts persisted it before the contract.
         legacyEdit: withOperation("Edit"),
         // The same real record with an operation no contract names.
@@ -515,7 +588,7 @@ try {
   const payloads = await runHost();
   await runRenderer(payloads);
   console.log(
-    "PASS E2E-tool-review-inline: real tools.execute Write/Edit records render their +a/−d and diff on the main and delegate rows, including pre-contract records and the per-call preview on scratch and external edits",
+    "PASS E2E-tool-review-inline: real tools.execute Write/Edit records render their +a/−d and diff on the main and delegate rows, including pre-contract records and the per-call preview on workspace, scratch, and external Writes and on scratch and external edits",
   );
 } finally {
   await rm(tempRoot, { recursive: true, force: true });

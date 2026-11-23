@@ -746,7 +746,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                       </div>
                     </div>
                     {turn.rows.map((row) => (
-                      <Fragment key={`row-${row.message.id}`}>
+                      <Fragment key={`${row.kind}-${row.message.id}`}>
                         {row.kind === "tool" ? (
                         // An accepted self-handoff is a context checkpoint, not
                         // an ordinary tool invocation: it renders as the

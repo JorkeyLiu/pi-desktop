@@ -58,35 +58,16 @@ export type ReviewChange = {
   reversible: boolean;
 };
 /**
- * The `Edit` tool this preview was produced for. Only `Edit` carries a
- * preview; `Write` keeps its existing presentation.
+ * Which file-mutation tool the per-call preview below was produced for.
+ * Only `Edit` and `Write` carry this preview; the tool name selects the only
+ * operation and the only statuses the preview may report.
  */
-export type EditDiffOperation = "edit";
+export type FileMutationTool = "Edit" | "Write";
 
-/**
- * What one successful `Edit` did to the file's bytes. A move carries no line
- * change of its own: the path moved, so the content diff is empty rather
- * than a deletion plus an addition.
- */
-export type EditDiffStatus = "modified" | "deleted" | "moved";
-
-/**
- * The per-call diff preview one successful `Edit` carries in its own result,
- * on workspace, scratch, and explicitly approved external paths alike.
- * Unlike `ReviewChange` this is not durable: it holds no snapshot identity,
- * no rollback state, and no reversible flag, so a scratch or external edit
- * gets the same line evidence as a workspace edit without review snapshots
- * or aggregate/revert capabilities.
- *
- * `additions` / `deletions` are absent when the change could not be counted;
- * an unknown count is never reported as zero.
- */
-export type EditDiffPreview = {
+type FileMutationPreviewBase = {
   version: 1;
   path: string;
   root: "workspace" | "scratch" | "external";
-  operation: EditDiffOperation;
-  status: EditDiffStatus;
   additions?: number;
   deletions?: number;
   hunks: DiffHunk[];
@@ -94,6 +75,67 @@ export type EditDiffPreview = {
   truncated?: boolean;
   reason?: ReviewDiffReason;
 };
+
+/**
+ * The single tool-to-preview policy: each supported tool maps to its only
+ * legal operation and statuses. Renderers enforce tool/operation/status
+ * together from this table instead of maintaining separate tool, operation,
+ * and status sets whose Cartesian product would admit combinations the host
+ * never produces (for example `write`/`deleted` or an `Edit` row carrying a
+ * `write` preview).
+ */
+export const FILE_MUTATION_PREVIEW_POLICY = {
+  Edit: {
+    operation: "edit",
+    statuses: ["modified", "deleted", "moved"],
+  },
+  Write: {
+    operation: "write",
+    statuses: ["added", "modified"],
+  },
+} as const;
+
+/**
+ * The per-call diff preview one successful `Edit` or `Write` carries in its
+ * own result, on workspace, scratch, and explicitly approved external paths
+ * alike. Unlike `ReviewChange` this is not durable: it holds no snapshot
+ * identity, no rollback state, and no reversible flag, so a scratch or
+ * external call gets the same line evidence as a workspace call without
+ * review snapshots or aggregate/revert capabilities.
+ *
+ * The union is derived from `FILE_MUTATION_PREVIEW_POLICY`, so the legal
+ * operation/status combinations live in exactly one place: an `edit` preview
+ * reports `modified`, `deleted`, or `moved`, while a `write` preview reports
+ * `added` (a creation reads as all lines added) or `modified`.
+ * A move carries no line change of its own: the path moved, so the content
+ * diff is empty rather than a deletion plus an addition.
+ *
+ * `additions` / `deletions` are absent when the change could not be counted;
+ * an unknown count is never reported as zero.
+ *
+ * The wire field that carries this preview stays `editDiff`.
+ */
+export type FileMutationPreview = {
+  [Tool in FileMutationTool]: FileMutationPreviewBase & {
+    operation: (typeof FILE_MUTATION_PREVIEW_POLICY)[Tool]["operation"];
+    status: (typeof FILE_MUTATION_PREVIEW_POLICY)[Tool]["statuses"][number];
+  };
+}[FileMutationTool];
+
+export type FileMutationOperation = FileMutationPreview["operation"];
+
+export type FileMutationStatus = FileMutationPreview["status"];
+
+/**
+ * Legacy aliases for the file-mutation preview contract above. Prefer the
+ * `FileMutation*` names in new code; the persisted wire field stays
+ * `editDiff`.
+ */
+export type EditDiffOperation = FileMutationOperation;
+
+export type EditDiffStatus = FileMutationStatus;
+
+export type EditDiffPreview = FileMutationPreview;
 
 /**
  * One file's net change: the bytes the conversation first recorded for it,

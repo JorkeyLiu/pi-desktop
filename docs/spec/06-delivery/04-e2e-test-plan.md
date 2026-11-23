@@ -5263,7 +5263,14 @@ window; opening a normal panel afterward must still work.
   expanded one-add/one-delete diff, no directory badge in the collapsed head beside the counts,
   no raw `ops` text, and no review rollback affordance — while the existing
   workspace assertions (rollback, aggregate totals) keep passing unchanged.
-  Full UI journey Draft.
+  The same scenario drives real Writes on workspace (new file), scratch (new
+  file), and external (overwrite) roots and asserts each `editDiff` carries
+  operation `write` (`added` for created files, `modified` for overwrites)
+  with actual +N/−N counts beside the unchanged `Written content` body.
+  Renderer-covered by `edit-diff-preview.test.mjs`: every legal
+  tool/operation/status combination parses on every root, while illegal pairs
+  (`write`/`deleted`, `write`/`moved`, `edit`/`added`) and tool/operation
+  mismatches read as absent. Full UI journey Draft.
 
 #### E2E-058: Built-in interactive terminal is absent
 
@@ -19774,6 +19781,27 @@ host-created files. The full app's file-preview viewer is covered separately.
   once with no verdict, diagnostic field or payload drawer, that another failed
   tool still keeps its diagnostics, and that the row is named by its English and
   Chinese catalog names exactly once.
+
+ ### E2E-SUBAGENT-thinking-identity
+
+ - **Preconditions**: A delegate whose historical assistant message carries both
+   reasoning and text, so its transcript emits a thinking row and an answer row
+   for the same message id. No provider, paid API, or user desktop instance is
+   used; the fixture renders the production `SubagentTranscriptTab` over seeded
+   session messages with the real app store.
+ - **Steps**: Expand the historical thinking row, then drive the view rebuilds a
+   live delegate causes — a streaming thinking-only row that gains its answer,
+   later tool and answer appends — and finally reorder the later message ahead
+   of the historical one.
+ - **Expected**: Every rebuild keeps exactly one thinking row per message with
+   its own preview and text, the historical expansion stays on the historical
+   row, answers follow their own messages in order, and the tail content is
+   intact.
+ - **Status**: Automated in `pnpm test:e2e:subagent-thinking-identity`, which
+   mounts the production tab in a real Chromium renderer and asserts the
+   thinking/answer counts, the surviving expansion, and the post-reorder row
+   order; `apps/desktop/test/subagent-thinking-identity.test.mjs` pins the
+   transcript's dual-row shape and per-turn row identity at the unit level.
 
 ### E2E-SUBAGENT-handoff-keeps-steering
 
