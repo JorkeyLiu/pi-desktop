@@ -1463,8 +1463,17 @@ not a working claim, is what the reader sees.
   what it loaded while the main reading window is reduced, replaced, paged, or
   restored. Rows it already displayed stay displayed until the user closes or
   switches the tab: the chain's own cached entry holds them, live child rows
-  are routed into that entry as they are published, and only the panel's own
-  read changes its content. A live row after the last durable read leaves the
+  are routed into that entry as they are published, and a durable read replaces
+  only the durable range it actually read. A row that arrived live and that no
+  durable page has named yet — a tool that started but has not ended — survives
+  that read as well, including the newest-window replacement a gap wider than one
+  synchronization forces; it retires once, when a page names the same id and the
+  durable value replaces the live copy. One version per call is held — the state
+  its latest live event stated — so repeated publications of a streaming tool
+  cannot multiply it, and a replay of an earlier unsettled frame never downgrades
+  a row that already reached its end, on any read path. Live content and read lifecycle have
+  separate owners: a live publication never marks an in-flight read finished,
+  and a read whose answer was captured before a live row arrived leaves the
   entry stale, so a reopen refreshes the tail and merges it over the rows it
   already holds rather than resetting them; a failed read keeps those rows on
   screen with the failure stated inline and a retry. The rows are bounded

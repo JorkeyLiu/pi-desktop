@@ -101,20 +101,14 @@ export function createSubagentHistoryRuntime(
   }
 
   /**
-   * One read of the entry's scope. The answer applies only to the entry it was
-   * issued for: a newer read, a released session, or a closed tab replaces that
-   * entry's generation, and an answer issued for the previous one is dropped
-   * instead of merged. A live publication in between keeps the generation, so
-   * its durable answer still lands.
-   */
-  /**
    * Open one read of the entry's scope and publish the in-flight state.
    *
    * The answer applies only to the entry it was issued for: a newer read, a
    * released session, or a closed tab replaces that entry's generation, and an
    * answer issued for the previous one is dropped instead of merged. A live
    * publication in between keeps the generation, so its durable answer still
-   * lands.
+   * lands. `refreshing` belongs to this read alone: live ingestion preserves it,
+   * so a second read cannot start over the first one.
    */
   function openRead(input: SubagentHistoryInput, seed?: Partial<SubagentHistoryEntry>) {
     const previous = entryFor(input);

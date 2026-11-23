@@ -13611,6 +13611,38 @@ This test plan spec is accepted when:
   regressions automated; desktop journey documented. Required suites:
   `test:e2e`, `test:e2e:subagents`.
 
+#### E2E-SUBAGENT-live-row-survives-a-stale-scoped-read
+
+- **Preconditions**: Working checkout with built workspace packages, a ready
+  Electron build, and an isolated Chromium profile. No host process, provider,
+  account, or user data is involved: the fixture stubs only the preload bridge.
+- **Steps**: Mount the production delegate transcript tab and let it read the
+  chain's durable window. Start its tail read, hold the answer, and while it is
+  in flight publish a tool start (`Bash` running) and then release the answer
+  that was captured before the tool started. Continue until the tool ends and
+  its durable row arrives through another read, then replay the completion live.
+  Repeat with the parent's live array replaced, so the tab renders its entry
+  alone. Publish the same running tool repeatedly, and publish the completion
+  before any durable page names it, then replay the earlier running frame before
+  a read that joins the page the tab already reaches.
+- **Expected**: The in-flight read keeps its own refreshing state through the
+  live publication. The running row stays painted exactly once both while the
+  parent live array still carries it and when only the entry does, the durable
+  steering row next to it stays, and the wide gap's newest window keeps its row
+  budget. Repeated publications hold one unconfirmed row for the call, the
+  completed row stays completed — not regressed to running — through the newest
+  window and the joined page, and paints as completed from the entry alone. The
+  completed durable row replaces the live copy exactly once, the unconfirmed
+  marker retires, and a read that confirmed every live row finalizes the entry;
+  a live completion replayed afterwards adds nothing.
+- **Specs linked**: `04-ux/08-component-spec.md` §5.7, §9.9
+- **Acceptance criterion**: C — Conversation & stream, Quality
+- **Milestone**: M6+
+- **Status**: Automated in `pnpm test:e2e:subagent-steer-live-window` (real
+  Chromium renderer, isolated profile, production tab and store, held
+  `session.get` answer) plus `scoped-subagent-history.test.mjs` (store/event
+  history runtime with a gated transport and controlled promises).
+
 #### E2E-SUBAGENT-resume-a-settled-delegation
 
 - **Preconditions**: An Agent session on a deterministic local transport that can
