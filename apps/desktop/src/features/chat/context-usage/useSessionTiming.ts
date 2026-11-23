@@ -13,7 +13,9 @@ import {
   type SessionTiming,
   type SessionTimingTotals,
 } from "../../../lib/session-timing";
+import { addThroughputTotals, type GenerationThroughputTotals } from "@pi-desktop/shared";
 import type { SessionHistoryWindow } from "../../../stores/app-state";
+import { sumOwnSessionThroughput } from "../../../lib/generation-throughput";
 
 type HistoryLoadState = {
   key: string;
@@ -32,6 +34,8 @@ export type SessionTimingView = {
   timing?: SessionTiming;
   breakdown?: SessionTimingBreakdown;
   historyStatus: "loading" | "ready" | "error";
+  /** The session's own settled generation throughput, whole session not latest turn. */
+  throughput?: GenerationThroughputTotals;
 };
 
 export function useSessionTiming({
@@ -147,6 +151,12 @@ export function useSessionTiming({
           : {}),
       })
     : undefined;
+  // The session's own settled throughput: earlier history pages plus the live
+  // window fold through one additive figure, so paging never narrows it to
+  // the latest turn. Computed only while the inspector reads it.
+  const throughput = enabled
+    ? addThroughputTotals(earlierTotals?.throughput, sumOwnSessionThroughput(messages))
+    : undefined;
 
-  return { timing, breakdown, historyStatus };
+  return { timing, breakdown, historyStatus, throughput };
 }

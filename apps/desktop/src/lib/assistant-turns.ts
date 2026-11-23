@@ -605,44 +605,6 @@ export function assistantTurnTools(entry: AssistantTurnEntry): UiMessage[] {
   );
 }
 
-export function assistantTurnResponseDuration(
-  entry: AssistantTurnEntry,
-): number | undefined {
-  const durations = assistantTurnMessages(entry).flatMap((message) =>
-    typeof message.responseDurationMs === "number" &&
-    Number.isFinite(message.responseDurationMs) &&
-    message.responseDurationMs > 0
-      ? [message.responseDurationMs]
-      : [],
-  );
-  if (durations.length === 0) return undefined;
-  return durations.reduce((total, duration) => total + duration, 0);
-}
-
-export function assistantTurnResponseOutputTokens(
-  entry: AssistantTurnEntry,
-): number | undefined {
-  const counts = assistantTurnMessages(entry).flatMap((message) => {
-    const value = message.usage?.outputTokens ?? message.responseOutputTokens;
-    return typeof value === "number" && Number.isFinite(value) && value > 0
-      ? [value]
-      : [];
-  });
-  if (counts.length === 0) return undefined;
-  return counts.reduce((total, count) => total + count, 0);
-}
-
-export function assistantTurnResponseOutputIsEstimated(
-  entry: AssistantTurnEntry,
-): boolean {
-  return assistantTurnMessages(entry).some(
-    (message) =>
-      (!message.usage || message.usage.outputTokens <= 0) &&
-      typeof message.responseOutputTokens === "number" &&
-      message.responseOutputTokens > 0,
-  );
-}
-
 export function assistantTurnContent(entry: AssistantTurnEntry): string {
   return assistantTurnMessages(entry)
     .map((message) => (message.content || "").trim())

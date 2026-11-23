@@ -1,4 +1,6 @@
-import type { UiMessage } from "@pi-desktop/shared";
+import { addThroughputTotals } from "@pi-desktop/shared";
+import type { GenerationThroughputTotals, UiMessage } from "@pi-desktop/shared";
+import { sumOwnSessionThroughput } from "./generation-throughput";
 
 export type SessionTimingMessage = Pick<
   UiMessage,
@@ -12,6 +14,7 @@ export type SessionTimingMessage = Pick<
   | "parentToolCallId"
   | "nestedParentToolCallId"
   | "status"
+  | "throughput"
   | "createdAt"
 >;
 
@@ -36,6 +39,14 @@ export type SessionTimingTotals = {
   toolTimingCount: number;
   toolIntervals: Array<{ start: number; end: number }>;
   unplacedToolDurationMs: number;
+  /**
+   * The session's own generation throughput: every settled complete own
+   * assistant turn's exact provider output over its first-content-to-end
+   * span, folded additively. Child-stream rows belong to child sessions and
+   * never join; error, aborted, in-flight, and usage-less turns never join.
+   * Absent when no row carries a usable figure — never an invented zero.
+   */
+  throughput?: GenerationThroughputTotals;
 };
 
 export type SessionTimingBreakdown = {
@@ -102,6 +113,7 @@ export function combineSessionTimingTotals(
     toolIntervals: [...left.toolIntervals, ...right.toolIntervals],
     unplacedToolDurationMs:
       left.unplacedToolDurationMs + right.unplacedToolDurationMs,
+    throughput: addThroughputTotals(left.throughput, right.throughput),
   };
 }
 
@@ -169,6 +181,11 @@ export function sumSessionTiming(
       totals.unplacedToolDurationMs += durationMs;
     }
   }
+
+  // The session's own settled generation throughput folds through the one
+  // shared implementation, so the timing totals and the inspector's
+  // live-window figure can never disagree on eligibility.
+  totals.throughput = sumOwnSessionThroughput(messages);
 
   return totals;
 }

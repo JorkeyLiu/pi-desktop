@@ -262,7 +262,7 @@ export const AssistantTurn = memo(function AssistantTurn({
   const session = useAppStore((s) => s.sessions.find((item) => item.id === paneSessionId));
   const canEditMessages = sessionAllows(session ?? (paneSessionId.startsWith("remote:") ? { id: paneSessionId } : undefined), "canEditMessages");
   const summary = getAssistantTurnSummary(entry);
-  const { actionMessage, metaMessage, latestUsageMessage, usage, responseDurationMs, responseOutputTokens } = summary;
+  const { actionMessage, metaMessage, latestUsageMessage } = summary;
   const modelId = metaMessage?.modelId ?? latestUsageMessage?.modelId;
   const complete = !isActive && !summary.hasError && summary.hasContent && Boolean(actionMessage);
   // A live reply is joined only on menu/copy demand. Finished reply plugins
@@ -348,12 +348,7 @@ export const AssistantTurn = memo(function AssistantTurn({
         )}
         {generatedImages}
         {!isActive && metaMessage ? (
-          <MessageMeta
-            modelId={modelId}
-            usage={usage}
-            responseDurationMs={responseDurationMs}
-            responseOutputTokens={responseOutputTokens}
-          />
+          <MessageMeta modelId={modelId} />
         ) : null}
         {complete && actionMessage ? (
           <div className="message-actions">

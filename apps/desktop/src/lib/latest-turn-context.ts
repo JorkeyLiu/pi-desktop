@@ -15,9 +15,6 @@ export type LatestTurnContextInspector = {
   turnUsage: MessageUsage;
   contextWindow: number;
   tools: UiMessage[];
-  responseDurationMs?: number;
-  responseOutputTokens?: number;
-  responseOutputEstimated: boolean;
 };
 
 const inspectors = new WeakMap<object, LatestTurnContextInspector>();
@@ -72,18 +69,12 @@ export function latestTurnContextInspector(
       providers,
     ),
     tools: latestTurn?.tools ?? [],
-    responseDurationMs: latestTurn?.responseDurationMs,
-    responseOutputTokens: latestTurn?.responseOutputTokens,
-    responseOutputEstimated: latestTurn?.responseOutputEstimated ?? false,
   };
   const owner = getSessionMessageSnapshot(messages).owner;
   const previous = inspectors.get(owner);
   if (previous && previous.usage === result.usage &&
     sameUsage(previous.turnUsage, result.turnUsage) &&
     previous.contextWindow === result.contextWindow &&
-    previous.responseDurationMs === result.responseDurationMs &&
-    previous.responseOutputTokens === result.responseOutputTokens &&
-    previous.responseOutputEstimated === result.responseOutputEstimated &&
     previous.tools.length === result.tools.length &&
     previous.tools.every((tool, index) => tool === result.tools[index])
   ) return previous;

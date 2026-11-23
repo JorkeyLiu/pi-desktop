@@ -325,14 +325,73 @@ test("the child tab header keeps its known context across a resumed marker", asy
     assert.equal(context(render("d1")), "14K");
   } finally { await vite.close(); }
 });
+/**
+ * The child's average TPS on the production tab: one session average over the
+ * chain's canonical per-run totals. Distinct run segments sum (d1 + the d2
+ * continuation), a roster re-report of the same delegation never doubles the
+ * totals, and child usage/stream rows cannot move the figure. A chain whose
+ * snapshots carry no totals states the dash.
+ */
+test("the child tab average TPS sums the chain's run segments from canonical totals", async () => {
+  const { vite, render, useAppStore } = await setup();
+  try {
+    const firstRun = taskMessage("t1", "call-1", "d1", "completed", {
+      contextTokens: 12000,
+      usage: opUsage("op-1", 1500),
+      throughput: { tokens: 423, durationMs: 10000, samples: 1 },
+    });
+    const continued = message("t2", "tool", "", {
+      toolName: "Task", toolCallId: "call-2", toolStatus: "success",
+      toolArgs: { agent: "explorer", task: "Continue", resume: "d1", source: "user" },
+      toolResult: {
+        details: {
+          delegationId: "d2", status: "completed", resumedFrom: "d1",
+          turns: 2, toolCalls: 2, contextTokens: 14000,
+          throughput: { tokens: 577, durationMs: 10000, samples: 1 },
+        },
+      },
+    });
+    // Hostile child rows: under the removed page-based calculation these
+    // would dominate the average; now they must not move it.
+    const noisyChild = childAssistant("a1", "call-1", { outputTokens: 9999, totalTokens: 9999 }, "working on it", {
+      modelStreamDurationMs: 1,
+    });
+    const throughput = (html) =>
+      html.match(/Average TPS<\/span>\s*<span class="subagent-transcript-metric-value">([^<]*)</)?.[1] ?? null;
+    seed(useAppStore, { messages: [firstRun, noisyChild, continued], running: false });
+    // (423 + 577) tokens over (10 + 10)s across two distinct run segments.
+    assert.equal(throughput(render("d1")), "50");
+    // The chain-latest tab states the same one-chain average.
+    assert.equal(throughput(render("call-2")), "50");
+    // A roster re-report of d1 is the same run segment, not a new one: the
+    // snapshot's totals stand and the figure does not double.
+    seed(useAppStore, {
+      messages: [
+        firstRun, noisyChild, continued,
+        lifecycleMessage("l1", "TaskList", [{ delegationId: "d1", status: "completed", throughput: { tokens: 9999, durationMs: 1000, samples: 9 } }]),
+      ],
+      running: false,
+    });
+    assert.equal(throughput(render("d1")), "50");
+    // No canonical totals anywhere in the chain: the dash, never a heuristic
+    // from the child rows waiting alongside.
+    const bare = taskMessage("t8", "call-8", "d8", "completed", { contextTokens: 5000, usage: opUsage("op-8", 700) });
+    const bareChild = childAssistant("a8", "call-8", { outputTokens: 500, totalTokens: 500 }, "done", {
+      modelStreamDurationMs: 1000,
+    });
+    seed(useAppStore, { messages: [bare, bareChild], running: false });
+    assert.equal(throughput(render("d8")), "—");
+  } finally { await vite.close(); }
+});
 test("single metrics region separates context from spend without an unknown helper", async () => {
   const { vite, render, useAppStore } = await setup();
   try {
     seed(useAppStore, {
       messages: [
-        taskMessage("t1", "call-1", "d1", "completed", { contextTokens: 12000, usage: opUsage("op-1", 1500) }),
-        // Stale earlier representation of the same id: the latest settled row
-        // is the sample, never both and never the stale one.
+        taskMessage("t1", "call-1", "d1", "completed", { contextTokens: 12000, usage: opUsage("op-1", 1500), throughput: { tokens: 846, durationMs: 10000, samples: 2 } }),
+        // Child transcript rows never feed the average, however many usage or
+        // stream-duration figures they carry: only the Task snapshot's
+        // canonical per-run totals do.
         childAssistant("a1", "call-1", { outputTokens: 900, totalTokens: 900 }, "working on it", {
           modelStreamDurationMs: 1000,
         }),
@@ -351,9 +410,13 @@ test("single metrics region separates context from spend without an unknown help
     const html = render("d1");
     assert.match(html, /data-testid="subagent-metrics-throughput"/);
     assert.match(html, /Average TPS/);
-    assert.match(html, /subagent-transcript-metric-value">42\.3</);
-    assert.match(html, /1 recorded model responses, including reasoning/);
-    assert.doesNotMatch(html, /≈42\.3/);
+    assert.match(html, /subagent-transcript-metric-value">84\.6</);
+    // The figure is the chain's canonical per-run totals (846 tokens over two
+    // settled samples in 10s), never a row heuristic: no estimate prefix, no
+    // tooltip, no sample-count helper.
+    assert.doesNotMatch(html, /≈/);
+    assert.doesNotMatch(html, /recorded model responses/);
+    assert.match(html, /data-testid="subagent-metrics-throughput">/);
     // One region only: header owns it, footer never duplicates.
     assert.equal((html.match(/subagent-transcript-metrics/g) ?? []).length, 1);
     assert.doesNotMatch(html, /subagent-transcript-footer-metrics/);
@@ -367,8 +430,8 @@ test("single metrics region separates context from spend without an unknown help
     assert.match(html, /title="1 turn · 1 call"/);
     assert.doesNotMatch(html, /TurnsUnit_|CallsUnit_/);
     assert.doesNotMatch(html, /subagent-metrics-context">—</);
-    // Interrupted response: runtime provider 0 plus the visible estimate is
-    // an estimate and states so with the ≈ prefix.
+    // A settled task without canonical totals states the dash even when child
+    // rows carry usage and stream durations: child rows never feed the rate.
     const estimatedTask = taskMessage("t12", "call-12", "d12", "completed", { contextTokens: 8000, usage: opUsage("op-12", 900) });
     const estimatedChild = childAssistant("a12", "call-12", { outputTokens: 0, totalTokens: 0 }, "partial", {
       status: "aborted",
@@ -377,8 +440,9 @@ test("single metrics region separates context from spend without an unknown help
     });
     seed(useAppStore, { messages: [estimatedTask, estimatedChild], running: false });
     const estimatedHtml = render("d12");
-    assert.match(estimatedHtml, /subagent-transcript-metric-value">≈50</);
-    assert.match(estimatedHtml, /1 recorded model responses, including reasoning/);
+    assert.match(estimatedHtml, /Average TPS<\/span>\s*<span class="subagent-transcript-metric-value">—</);
+    assert.doesNotMatch(estimatedHtml, /≈/);
+    assert.doesNotMatch(estimatedHtml, /recorded model responses/);
     // No settled sample with stream time: the header states the dash, never a
     // fabricated rate, and keeps status, context, and spend intact.
     const missingTask = taskMessage("t13", "call-13", "d13", "completed", { contextTokens: 5000, usage: opUsage("op-13", 700) });
@@ -386,19 +450,20 @@ test("single metrics region separates context from spend without an unknown help
     seed(useAppStore, { messages: [missingTask, missingChild], running: false });
     const missingHtml = render("d13");
     assert.match(missingHtml, /subagent-transcript-metric-value">—</);
-    assert.match(missingHtml, /0 recorded model responses, including reasoning/);
+    assert.doesNotMatch(missingHtml, /recorded model responses/);
     assert.match(missingHtml, /Completed/);
     assert.match(missingHtml, /data-testid="subagent-metrics-context"/);
     assert.match(missingHtml, /data-testid="subagent-metrics-spend"/);
     // A different selected chain reads its own samples, not every child row.
-    const otherTask = taskMessage("t2", "call-9", "d2", "completed", { contextTokens: 1000, usage: opUsage("op-2", 300) });
-    const otherChild = childAssistant("a2", "call-9", { outputTokens: 100, totalTokens: 100 }, "other", {
-      modelStreamDurationMs: 1000,
+    const otherTask = taskMessage("t2", "call-9", "d2", "completed", { contextTokens: 1000, usage: opUsage("op-2", 300), throughput: { tokens: 100, durationMs: 1000, samples: 1 } });
+    const otherChild = childAssistant("a2", "call-9", { outputTokens: 9999, totalTokens: 9999 }, "other", {
+      modelStreamDurationMs: 1,
     });
     seed(useAppStore, { messages: [otherTask, otherChild], running: false });
     const otherHtml = render("d2");
     assert.match(otherHtml, /subagent-transcript-metric-value">100</);
-    assert.doesNotMatch(otherHtml, /42\.3/);
+    assert.doesNotMatch(otherHtml, /84\.6/);
+    assert.doesNotMatch(otherHtml, /9999/);
     // Unknown context renders — without a helper, never 0 and never hidden,
     // and the spend slot keeps its labelled dash beside it.
     const legacyTask = taskMessage("t1", "call-1", "d9", "completed");
@@ -407,6 +472,7 @@ test("single metrics region separates context from spend without an unknown help
     assert.match(unknownHtml, /subagent-metrics-context">—/);
     assert.doesNotMatch(unknownHtml, /ui-help-icon/);
     assert.match(unknownHtml, /subagent-metrics-spend">—/);
+    assert.match(unknownHtml, /Average TPS<\/span>\s*<span class="subagent-transcript-metric-value">—</);
     // The header never fabricates a counter. A Task result that reported only
     // context and spend states no activity figure at all — never
     // `0 turns · 0 calls` — while both figures it did report are stated.

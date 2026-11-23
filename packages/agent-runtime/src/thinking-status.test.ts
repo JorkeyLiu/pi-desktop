@@ -1040,6 +1040,17 @@ describe("thinking attempt teardown", () => {
            key === "responseOutputTokens"
          ) {
            continue;
+         } else if (
+           key === "throughput" &&
+           entry !== null &&
+           typeof entry === "object" &&
+           !Array.isArray(entry)
+         ) {
+           // The sampler's span is wall-clock volatile like the dropped timing
+           // keys above; the settled commit itself (exact provider tokens and
+           // one sample) is the stable wire fact this trace pins.
+           const { tokens, samples } = entry as Record<string, unknown>;
+           out[key] = { tokens, samples };
          } else if (key === "id" && typeof entry === "string" && entry !== "call-1") {
            out[key] = "assistant-bubble";
          } else {

@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
+import { register } from "node:module";
+import { dirname, join } from "node:path";
 import test from "node:test";
-import {
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+register(pathToFileURL(join(here, "helpers/ts-import-hooks.mjs")));
+const {
   calculateSessionTimingBreakdown,
   calculateSessionTiming,
   loadEarlierModelResponseDuration,
   loadEarlierSessionTiming,
   sumModelResponseDuration,
-} from "../src/lib/session-timing.ts";
+  sumSessionTiming,
+} = await import("../src/lib/session-timing.ts");
 
 test("session response duration sums top-level model responses only", () => {
   assert.equal(
@@ -239,4 +246,23 @@ test("earlier timing pages include request, response, and tool metadata", async 
     end: Date.parse("2026-10-01T00:00:03.000Z"),
   }]);
   assert.deepEqual(reads.map((read) => read.messageBefore), [2_000, 1_000]);
+});
+
+test("session timing folds own settled throughput and skips nested/failed rows", () => {
+  const totals = sumSessionTiming([
+    { role: "assistant", throughput: { tokens: 1000, durationMs: 20000, samples: 2 } },
+    { role: "assistant", throughput: { tokens: 500, durationMs: 10000, samples: 1 }, parentToolCallId: "task-1" },
+    { role: "assistant", throughput: { tokens: 700, durationMs: 5000, samples: 1 }, status: "error" },
+    { role: "assistant", throughput: { tokens: 300, durationMs: 0, samples: 1 } },
+    { role: "user" },
+  ]);
+  // Nested child rows and failed rows never join the parent's figure, and
+  // a zero-span report is rejected by the shared validation; the fold is the
+  // one shared implementation, so this matches sumOwnSessionThroughput over
+  // the same rows.
+  assert.deepEqual(totals.throughput, { tokens: 1000, durationMs: 20000, samples: 2 });
+  assert.equal(
+    sumSessionTiming([{ role: "assistant" }, { role: "user" }]).throughput,
+    undefined,
+  );
 });

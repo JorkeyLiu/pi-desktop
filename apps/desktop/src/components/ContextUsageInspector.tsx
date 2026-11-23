@@ -20,7 +20,6 @@ import {
   aggregateToolTokenUsage,
   calculateCacheRate,
   calculateContextUsage,
-  calculateTokenRate,
   contextOccupancyTokens,
   contextUsageView,
   resolveContextUsageDisplay,
@@ -29,6 +28,10 @@ import {
   placeContextInspector,
   type ContextInspectorPlacement,
 } from "../lib/context-inspector-position";
+import {
+  formatThroughputRate,
+  throughputPerSecond,
+} from "../lib/generation-throughput";
 import { useSessionTiming } from "../features/chat/context-usage/useSessionTiming";
 
 const CONTEXT_RING_RADIUS = 9;
@@ -36,22 +39,16 @@ const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS;
 
 export function ContextUsageInspector({
   usage,
-  turnUsage,
   contextWindow,
   tools,
-  responseDurationMs,
-  responseOutputTokens,
-  responseOutputEstimated = false,
 }: {
   usage: MessageUsage;
   turnUsage: MessageUsage;
   contextWindow: number;
   tools: UiMessage[];
-  responseDurationMs?: number;
-  responseOutputTokens?: number;
-  responseOutputEstimated?: boolean;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const language = i18n.language || "en";
   const panelId = useId();
   // The transcript shows one row per compaction; the inspector adds what those
   // rows cannot — how much of the model context the newest summary occupies.
@@ -105,10 +102,10 @@ export function ContextUsageInspector({
   // model request. Summing every tool-loop call inflates cache read past
   // the window (OpenCode last-message accounting).
   const turnTotal = contextOccupancyTokens(usage);
-  const throughput = calculateTokenRate(
-    responseOutputTokens ?? turnUsage.outputTokens,
-    responseDurationMs,
-  );
+  // One session average: the whole session's settled own responses, not the
+  // latest turn alone. Failed, aborted, and in-flight turns never contribute;
+  // `—` when the session reported no usable figure.
+  const throughput = throughputPerSecond(sessionTiming.throughput);
   const cacheRate = calculateCacheRate(
     usage.inputTokens,
     usage.cacheReadTokens,
@@ -344,16 +341,11 @@ export function ContextUsageInspector({
         <div>
           <span>{t("chat.usageThroughputLabel")}</span>
           <strong>
-            {throughput === undefined
+            {throughput === null
               ? t("chat.usageThroughputUnavailable")
-              : t(
-                  responseOutputEstimated
-                    ? "chat.usageThroughputEstimated"
-                    : "chat.usageThroughput",
-                  {
-                    count: formatCompactTokenCount(throughput),
-                  },
-                )}
+              : t("chat.usageThroughput", {
+                  count: formatThroughputRate(throughput, language),
+                })}
           </strong>
         </div>
       </div>

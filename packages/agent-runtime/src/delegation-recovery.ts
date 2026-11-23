@@ -34,6 +34,7 @@ import {
   SUBAGENT_THINKING_LEVELS,
   type DelegationHandoffCheckpoint,
   type MessageUsage,
+  type GenerationThroughputTotals,
   type UiMessage,
 } from "@pi-desktop/shared";
 import { isRecord, timestampMs } from "./agent-messages.js";
@@ -59,6 +60,12 @@ export type RecoveredReportSource =
 
 /** One parent-owned delegation rebuilt from history: data only, never live. */
 export type RecoveredDelegation = DelegationView & {
+  /**
+   * Canonical per-run generation throughput, cached when a live run settles
+   * so pruning cannot hide it. Absent for history-rebuilt entries: legacy
+   * payloads carry no totals and none are invented.
+   */
+  throughput?: GenerationThroughputTotals;
   recovered: true;
   /** Full stored report text; empty when no evidence was persisted. */
   report: string;
@@ -89,6 +96,7 @@ export type SettledDelegationInput = {
   lastActivityAt: number;
   turns: number;
   toolCalls: number;
+  throughput?: GenerationThroughputTotals;
   usage?: MessageUsage;
   contextTokens?: number;
   lastToolName?: string;
@@ -437,6 +445,7 @@ export class RecoveredDelegationCatalog {
       turns: record.turns,
       toolCalls: record.toolCalls,
       ...(record.usage ? { usage: record.usage } : {}),
+      ...(record.throughput ? { throughput: record.throughput } : {}),
       ...(record.contextTokens !== undefined ? { contextTokens: record.contextTokens } : {}),
       ...(record.lastToolName ? { lastToolName: record.lastToolName } : {}),
       ...(record.executionTurnId ? { executionTurnId: record.executionTurnId } : {}),

@@ -474,7 +474,9 @@ test("assistant context inspector keeps a compact summary and retry action wired
   assert.match(transcriptSource, /function MessageMeta/);
   assert.match(transcriptSource, /message-meta-chip/);
   assert.doesNotMatch(transcriptSource, /ContextUsageInspector/);
-  assert.match(transcriptSource, /showThroughput/);
+  // The per-turn estimated TPS chip is gone: one session average lives in
+  // the context inspector, and the turn meta keeps the model chip only.
+  assert.doesNotMatch(transcriptSource, /showThroughput/);
   assert.match(composerSource, /latest-turn-context/);
   assert.match(composerSource, /latestTurnContextInspector/);
   assert.match(composerSource, /sessionCompactions/);

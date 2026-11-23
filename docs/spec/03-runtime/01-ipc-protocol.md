@@ -1100,7 +1100,7 @@ type UiMessage = {
  thinking?: string; // assistant reasoning, never folded into content
  thinkingStatus?: "streaming" | "complete"; // transient block-level thinking phase; never persisted
  usage?: MessageUsage; // provider-reported assistant usage
- responseDurationMs?: number; // elapsed assistant response duration for throughput
+ responseDurationMs?: number; // elapsed assistant response duration (timing display)
  providerWaitMs?: number; // request start to first model response event
  modelStreamDurationMs?: number; // streamed thinking and answer duration
  responseOutputTokens?: number; // estimated partial output when stop has no final usage

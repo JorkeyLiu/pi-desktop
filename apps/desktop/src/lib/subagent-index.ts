@@ -1,5 +1,9 @@
-import { addUsage } from "@pi-desktop/shared";
-import type { MessageUsage, UiMessage } from "@pi-desktop/shared";
+import { addThroughputTotals, addUsage } from "@pi-desktop/shared";
+import type {
+  MessageUsage,
+  GenerationThroughputTotals,
+  UiMessage,
+} from "@pi-desktop/shared";
 import { contextOccupancyTokens } from "./context-usage";
 import { delegationLifecycleKind, isDelegationStartTool } from "./tool-display";
 import { delegationIdForMessage } from "./subagent-panel";
@@ -240,6 +244,10 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
     let snapshotSpend: MessageUsage | undefined;
     let childSpend: MessageUsage | undefined;
     let gauge = UNMEASURED_CONTEXT;
+    // Canonical throughput per run segment, keyed by delegation: the latest
+    // snapshot of one delegation replaces its totals (a re-report or replay
+    // never adds a duplicate), and only distinct run segments sum.
+    const totalsByDelegation = new Map<string, GenerationThroughputTotals>();
     for (const row of rows) {
       const lifecycleParsed = lifecycle.get(row.delegationId) ?? null;
       const segmentParsed = row.snapshot ?? lifecycleParsed;
@@ -247,6 +255,8 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
         entries.push(segmentParsed);
         snapshotSpend = addUsage(snapshotSpend, segmentParsed.usage);
       }
+      const totals = row.snapshot?.throughput ?? lifecycleParsed?.throughput;
+      if (totals) totalsByDelegation.set(row.delegationId, totals);
       const child = childUsage.get(row.callId);
       if (child) childSpend = addUsage(childSpend, child.usage);
       const occupancy =
@@ -273,12 +283,19 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
       }
     }
     const base = aggregateSubagentChainMetrics(entries);
-    if (!base && !usage && gauge.tokens === undefined) return null;
+    // One session's chain is one average: distinct run segments sum, and a
+    // re-reported delegation keeps only its latest totals.
+    let throughput: GenerationThroughputTotals | undefined;
+    for (const totals of totalsByDelegation.values()) {
+      throughput = addThroughputTotals(throughput, totals);
+    }
+    if (!base && !usage && gauge.tokens === undefined && !throughput) return null;
     return {
       ...(base?.toolCalls !== undefined ? { toolCalls: base.toolCalls } : {}),
       ...(base?.turns !== undefined ? { turns: base.turns } : {}),
       ...(gauge.tokens !== undefined ? { contextTokens: gauge.tokens } : {}),
       ...(usage ? { usage } : {}),
+      ...(throughput ? { throughput } : {}),
       contextProvenance: gauge.provenance,
       ...(gauge.estimated ? { contextEstimated: true } : {}),
     };

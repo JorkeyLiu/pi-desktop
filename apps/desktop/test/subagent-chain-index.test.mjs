@@ -179,6 +179,7 @@ async function setup() {
   });
   const chain = await server.ssrLoadModule("/src/lib/subagent-chain.ts");
   const metrics = await server.ssrLoadModule("/src/lib/subagent-metrics.ts");
+  const generation = await server.ssrLoadModule("/src/lib/generation-throughput.ts");
   const title = await server.ssrLoadModule("/src/lib/subagent-title.ts");
   const keys = await server.ssrLoadModule("/src/lib/subagent-chain-provider.tsx");
   const metricsProvider = await server.ssrLoadModule(
@@ -203,6 +204,7 @@ async function setup() {
     server,
     chain,
     metrics,
+    generation,
     title,
     keys,
     metricsProvider,
@@ -313,6 +315,94 @@ test("a lifecycle roster row reports for a segment that reported nothing itself"
   // A later roster row for the same delegation wins.
   const later = [...messages, lifecycleRow("w2", "TaskList", [{ delegationId: "d2", turns: 12 }])];
   assert.equal(api.metrics.aggregateChainMetricsFromMessages(later, "d1").turns, 12);
+});
+
+test("throughput sums distinct run segments from canonical totals, never child rows", () => {
+  const { aggregateChainMetricsFromMessages } = api.metrics;
+  const { throughputPerSecond, formatThroughputRate } = api.generation;
+  const messages = [
+    user("u1"),
+    taskCall("t1", "call-1", {
+      delegationId: "d1",
+      metrics: { throughput: { tokens: 423, durationMs: 10000, samples: 1 } },
+    }),
+    // Hostile legacy rows: usage and stream time that the removed page-based
+    // calculation would have sampled. The canonical fold ignores them.
+    {
+      ...childRow("a1", "call-1", { inputTokens: 8000, outputTokens: 9999, totalTokens: 17999 }),
+      modelStreamDurationMs: 1,
+    },
+    taskCall("t2", "call-2", {
+      delegationId: "d2",
+      resume: "d1",
+      metrics: { throughput: { tokens: 577, durationMs: 10000, samples: 2 } },
+    }),
+  ];
+  const folded = aggregateChainMetricsFromMessages(messages, "d1");
+  assert.deepEqual(folded.throughput, { tokens: 1000, durationMs: 20000, samples: 3 });
+  assert.equal(throughputPerSecond(folded.throughput), 50);
+  assert.equal(formatThroughputRate(50, "en"), "50");
+  // A roster re-report of d1 is the same run segment, not a new one: the
+  // snapshot's totals stand and the chain total does not double.
+  const rereported = [
+    ...messages,
+    lifecycleRow("w1", "TaskList", [
+      { delegationId: "d1", status: "completed", throughput: { tokens: 9999, durationMs: 1000, samples: 9 } },
+    ]),
+  ];
+  assert.deepEqual(
+    aggregateChainMetricsFromMessages(rereported, "d1").throughput,
+    { tokens: 1000, durationMs: 20000, samples: 3 },
+  );
+  // A chain whose snapshots carry no totals has no figure at all to read
+  // throughput from: the fold is null, never a zeroed totals object.
+  const legacy = aggregateChainMetricsFromMessages(
+    [user("u1"), taskCall("t1", "call-1", { delegationId: "d9", metrics: {} })],
+    "d9",
+  );
+  assert.equal(legacy, null);
+  // The one rate function: missing, empty and timeless figures are absent, a
+  // real provider zero over a positive span is a genuine zero.
+  assert.equal(throughputPerSecond(undefined), null);
+  assert.equal(throughputPerSecond({ tokens: 10, durationMs: 1000, samples: 0 }), null);
+  assert.equal(throughputPerSecond({ tokens: 10, durationMs: 0, samples: 1 }), null);
+  assert.equal(throughputPerSecond({ tokens: 0, durationMs: 1000, samples: 1 }), 0);
+  assert.equal(throughputPerSecond({ tokens: 423, durationMs: 10000, samples: 1 }), 42.3);
+});
+
+test("a session sums every own completed response, never the latest turn alone", () => {
+  const { sumOwnSessionThroughput, throughputPerSecond } = api.generation;
+  const own = (id, throughput, extra = {}) => ({
+    id, role: "assistant", content: "done", createdAt: AT, status: "complete", throughput, ...extra,
+  });
+  // Two settled turns add; the figure is the whole session, not the newest row.
+  const both = [
+    user("u1"),
+    own("a1", { tokens: 423, durationMs: 10000, samples: 1 }),
+    own("a2", { tokens: 577, durationMs: 10000, samples: 2 }),
+  ];
+  const folded = sumOwnSessionThroughput(both);
+  assert.deepEqual(folded, { tokens: 1000, durationMs: 20000, samples: 3 });
+  assert.equal(throughputPerSecond(folded), 50);
+  // Child streams belong to child sessions: own rows exclude parent, nested,
+  // tool, error, and aborted rows, while a real provider zero stays a sample.
+  const mixed = [
+    ...both,
+    own("c1", { tokens: 9999, durationMs: 1000, samples: 1 }, { parentToolCallId: "call-1" }),
+    own("c2", { tokens: 9999, durationMs: 1000, samples: 1 }, { nestedParentToolCallId: "call-9" }),
+    own("e1", { tokens: 9999, durationMs: 1000, samples: 1 }, { status: "error" }),
+    own("x1", { tokens: 9999, durationMs: 1000, samples: 1 }, { status: "aborted" }),
+    { id: "t1", role: "tool", content: "", createdAt: AT, toolName: "Task", toolCallId: "call-1", toolStatus: "success", toolResult: { details: {} } },
+    own("z1", { tokens: 0, durationMs: 1000, samples: 1 }),
+  ];
+  assert.deepEqual(sumOwnSessionThroughput(mixed), { tokens: 1000, durationMs: 21000, samples: 4 });
+  // Legacy rows without samples, malformed totals, and an empty session stay absent.
+  assert.equal(sumOwnSessionThroughput([user("u1"), own("a9", undefined)]), undefined);
+  assert.equal(
+    sumOwnSessionThroughput([own("a9", { tokens: 5, durationMs: 0, samples: 1 })]),
+    undefined,
+  );
+  assert.equal(sumOwnSessionThroughput([]), undefined);
 });
 
 test("a child assistant row is the legacy occupancy fallback, flagged as an estimate", () => {
