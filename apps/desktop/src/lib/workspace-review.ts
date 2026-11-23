@@ -1,7 +1,6 @@
 import type {
   DiffHunk,
-  EditDiffPreview,
-  EditDiffStatus,
+  FileMutationPreview,
   ReviewChange,
   ReviewChangeState,
   ReviewChangeStatus,
@@ -9,6 +8,7 @@ import type {
   ReviewFileChange,
   UiMessage,
 } from "@pi-desktop/shared";
+import { FILE_MUTATION_PREVIEW_POLICY } from "@pi-desktop/shared";
 
 const REVIEW_CHANGE_TOOLS = new Set(["Write", "Edit"]);
 const REVIEW_CHANGE_STATUSES = new Set<ReviewChangeStatus>([
@@ -202,66 +202,90 @@ export function reviewChangesFromMessages(
   });
 }
 
-const EDIT_DIFF_ROOTS = new Set<EditDiffPreview["root"]>([
+const EDIT_DIFF_ROOTS = new Set<FileMutationPreview["root"]>([
   "workspace",
   "scratch",
   "external",
 ]);
-const EDIT_DIFF_STATUSES = new Set<EditDiffStatus>([
-  "modified",
-  "deleted",
-  "moved",
-]);
 
 /**
- * Read the per-call diff preview one successful `Edit` carries in its own
- * result. This is the uniform evidence for workspace, scratch, and
- * explicitly approved external edits; it is not a durable review record and
- * never confers rollback. Callers fall back to `reviewChangeFromMessage` for
- * messages written before the preview existed.
+ * Read the per-call file-mutation preview one successful `Edit` or `Write`
+ * carries in its own result. This is the uniform evidence for workspace,
+ * scratch, and explicitly approved external calls; it is not a durable review
+ * record and never confers rollback. Callers fall back to
+ * `reviewChangeFromMessage` for messages written before the preview existed.
+ *
+ * Tool, operation, and status are enforced together from the shared
+ * `FILE_MUTATION_PREVIEW_POLICY`: the message's tool selects the only legal
+ * operation and statuses, so a mismatched tool/operation pair or an illegal
+ * combination such as `write`/`deleted` reads as absent. The wire field stays
+ * `editDiff`.
  *
  * The counts are `null` when the host could not count the change, so callers
  * never read an unknown count as zero. Anything malformed reads as absent so
  * no fake diff is ever rendered.
  */
-export function editDiffFromMessage(message: UiMessage): EditDiffPreview | null {
+export function fileMutationPreviewFromMessage(
+  message: UiMessage,
+): FileMutationPreview | null {
   if (message.role !== "tool" || message.toolStatus !== "success") {
     return null;
   }
-  if (message.toolName !== "Edit") return null;
+  const policy =
+    FILE_MUTATION_PREVIEW_POLICY[
+      message.toolName as keyof typeof FILE_MUTATION_PREVIEW_POLICY
+    ];
+  if (!policy) return null;
   const details = toolResultDetails(message);
   const preview = recordValue(details?.editDiff);
   if (!preview || preview.version !== 1) return null;
   const path = nonEmptyString(preview.path);
   const root = preview.root;
+  const operation = preview.operation;
   const status = preview.status;
   const additions = nonNegativeInteger(preview.additions);
   const deletions = nonNegativeInteger(preview.deletions);
   if (
     !path ||
     typeof root !== "string" ||
-    !EDIT_DIFF_ROOTS.has(root as EditDiffPreview["root"]) ||
-    preview.operation !== "edit" ||
+    !(EDIT_DIFF_ROOTS as Set<string>).has(root) ||
+    operation !== policy.operation ||
     typeof status !== "string" ||
-    !EDIT_DIFF_STATUSES.has(status as EditDiffStatus)
+    !(policy.statuses as readonly string[]).includes(status)
   ) {
     return null;
   }
   const reason = parseReason(preview.reason);
-  return {
-    version: 1,
+  const base = {
+    version: 1 as const,
     path,
-    root: root as EditDiffPreview["root"],
-    operation: "edit",
-    status: status as EditDiffStatus,
+    root: root as FileMutationPreview["root"],
     ...(additions === null ? {} : { additions }),
     ...(deletions === null ? {} : { deletions }),
     hunks: parseHunks(preview.hunks),
-    ...(preview.binary === true ? { binary: true } : {}),
-    ...(preview.truncated === true ? { truncated: true } : {}),
+    ...(preview.binary === true ? { binary: true as const } : {}),
+    ...(preview.truncated === true ? { truncated: true as const } : {}),
     ...(reason ? { reason } : {}),
   };
+  if (policy.operation === "edit") {
+    return {
+      ...base,
+      operation: "edit" as const,
+      status: status as "modified" | "deleted" | "moved",
+    };
+  }
+  return {
+    ...base,
+    operation: "write" as const,
+    status: status as "added" | "modified",
+  };
 }
+
+/**
+ * Legacy alias for `fileMutationPreviewFromMessage`. The wire field stays
+ * `editDiff`.
+ */
+export const editDiffFromMessage = fileMutationPreviewFromMessage;
 
 /** One file's net change as the host reported it. */
 export function parseReviewFileChange(value: unknown): ReviewFileChange | null {
