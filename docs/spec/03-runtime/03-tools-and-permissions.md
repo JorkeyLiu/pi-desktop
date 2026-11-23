@@ -306,17 +306,15 @@ type ReviewChange = {
   the vocabulary is refused instead of displayed.
  - Scratch-root, failed, denied, and unresolvable writes have no `review`
    record. Binary or oversized content may omit hunks and be non-reversible.
- - Every successful `Edit` — workspace, scratch, or permission-authorized
+ - Every successful `Edit` or `Write` — workspace, scratch, or permission-authorized
    external — also carries a per-call preview that is independent of Git and
    of the durable record above:
 
  ```ts
- type EditDiffPreview = {
+ type FileMutationPreviewBase = {
    version: 1;
    path: string;
    root: "workspace" | "scratch" | "external";
-   operation: "edit";
-   status: "modified" | "deleted" | "moved";
    additions?: number;
    deletions?: number;
    hunks: DiffHunk[];
@@ -324,7 +322,26 @@ type ReviewChange = {
    truncated?: boolean;
    reason?: ReviewDiffReason;
  };
+ type FileMutationPreview =
+   | (FileMutationPreviewBase & {
+       operation: "edit";
+       status: "modified" | "deleted" | "moved";
+     })
+   | (FileMutationPreviewBase & {
+       operation: "write";
+       status: "added" | "modified";
+     });
  ```
+
+ - The preview is a discriminated union over the only legal
+   operation/status combinations: `edit` reports `modified`, `deleted`, or
+   `moved`, while `write` reports `added` or `modified`. The host builds each
+   side only through its narrow constructor and the renderer enforces the
+   tool, the operation, and the status together from one shared policy, so a
+   mismatched pair such as `write`/`deleted`, `write`/`moved`, or
+   `edit`/`added` — or an `Edit` row carrying a `write` preview — reads as
+   absent and never renders. The persisted wire field stays `editDiff`, and
+   the older `EditDiff*` type names remain as aliases.
 
  - The preview is computed from the same bytes the call operated on, with the
    same bounded differ and the same size/binary/truncation limits, so its
@@ -333,8 +350,11 @@ type ReviewChange = {
    is empty rather than a deletion plus an addition. Counts are absent — never
    zero — when the change could not be counted.
  - The preview confers no snapshot, no identity, and no rollback; it never
-   enters the session's review aggregates. Failed, denied, and no-change edits
-   carry no preview, so nothing fabricated is ever displayed.
+   enters the session's review aggregates. Failed, denied, and no-change `Edit`
+   calls carry no preview, as do failed or denied `Write` calls; a `Write` that
+   rewrites identical bytes succeeds and previews +0/−0, so nothing fabricated
+   is ever displayed. A newly-created file previews as `write`/`added`, with the
+   whole file read as lines added.
 - Rollback is host-owned and hash-guarded. It restores the captured previous
   bytes, or removes a newly-created file, only when the current content still
   equals the post-tool hash. A later edit returns `conflict` without touching

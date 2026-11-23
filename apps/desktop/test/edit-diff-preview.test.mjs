@@ -3,17 +3,19 @@ import test from "node:test";
 import { slotSsr } from "./helpers/slot-ssr.mjs";
 import {
   editDiffFromMessage,
+  fileMutationPreviewFromMessage,
   reviewChangeFromMessage,
 } from "../src/lib/workspace-review.ts";
 
 /*
- * Unified per-call Edit diffs: a successful Edit on workspace, scratch, or a
- * permission-authorized external path carries the same actual before/after
- * counts and expanded hunks, independent of Git tracking. The producer still
- * records each call's own root, but the collapsed head prints the file and
- * its counts with no directory badge. Workspace-only rollback and
- * review.files totals are untouched: no durable review snapshot is
- * synthesized for scratch/external,
+ * Unified per-call mutation diffs: a successful Edit or Write on workspace,
+ * scratch, or a permission-authorized external path carries the same actual
+ * before/after counts and expanded hunks, independent of Git tracking. A
+ * Write that created its file reports operation "write" with status "added".
+ * The producer still records each call's own root, but the collapsed head
+ * prints the file and its counts with no directory badge. Workspace-only
+ * rollback and review.files totals are untouched: no durable review snapshot
+ * is synthesized for scratch/external,
  * and only the durable workspace record drives rollback.
  */
 
@@ -52,8 +54,34 @@ const message = (details, overrides = {}) => ({
   ...overrides,
 });
 
+const writePreview = (overrides = {}) =>
+  preview({
+    path: "created.txt",
+    operation: "write",
+    status: "added",
+    additions: 2,
+    deletions: 0,
+    hunks: [
+      {
+        header: "@@ -0,0 +1,2 @@",
+        lines: [
+          { type: "add", text: "one" },
+          { type: "add", text: "two" },
+        ],
+      },
+    ],
+    ...overrides,
+  });
+
+const writeMessage = (details, overrides = {}) =>
+  message(details, {
+    toolName: "Write",
+    toolArgs: { path: "created.txt", content: "one\ntwo\n" },
+    ...overrides,
+  });
+
 test("a scratch edit preview parses with its counts and hunks", () => {
-  const parsed = editDiffFromMessage(message({ root: "scratch", editDiff: preview() }));
+  const parsed = fileMutationPreviewFromMessage(message({ root: "scratch", editDiff: preview() }));
   assert(parsed);
   assert.equal(parsed.root, "scratch");
   assert.equal(parsed.status, "modified");
@@ -65,7 +93,7 @@ test("a scratch edit preview parses with its counts and hunks", () => {
 });
 
 test("an external edit preview parses with the external root", () => {
-  const parsed = editDiffFromMessage(
+  const parsed = fileMutationPreviewFromMessage(
     message({
       root: "external",
       path: "/outside/out.txt",
@@ -94,7 +122,7 @@ test("a legacy workspace review still parses with no preview to fall back from",
       reversible: true,
     },
   };
-  assert.equal(editDiffFromMessage(message(details)), null);
+  assert.equal(fileMutationPreviewFromMessage(message(details)), null);
   assert(reviewChangeFromMessage(message(details)));
 });
 
@@ -104,24 +132,83 @@ test("a malformed preview reads as absent so no fake diff renders", () => {
     { root: "scratch", editDiff: { ...preview(), root: "nowhere" } },
     { root: "scratch", editDiff: { ...preview(), status: "renamed" } },
     { root: "scratch", editDiff: { ...preview(), path: "  " } },
-    { root: "scratch", editDiff: { ...preview(), operation: "write" } },
+    { root: "scratch", editDiff: { ...preview(), operation: "delete" } },
     { root: "scratch", editDiff: { hunks: [] } },
     { root: "scratch" },
   ];
   for (const details of malformed) {
-    assert.equal(editDiffFromMessage(message(details)), null, JSON.stringify(details));
+    assert.equal(fileMutationPreviewFromMessage(message(details)), null, JSON.stringify(details));
+  }
+  for (const details of malformed) {
+    assert.equal(
+      fileMutationPreviewFromMessage(writeMessage(details)),
+      null,
+      JSON.stringify(details),
+    );
   }
   assert.equal(
-    editDiffFromMessage(
+    fileMutationPreviewFromMessage(
       message({ root: "scratch", editDiff: preview() }, { toolStatus: "error" }),
     ),
     null,
   );
   assert.equal(
-    editDiffFromMessage(
-      message({ root: "scratch", editDiff: preview() }, { toolName: "Write" }),
+    fileMutationPreviewFromMessage(
+      writeMessage({ root: "scratch", editDiff: writePreview() }, { toolName: "Bash" }),
     ),
     null,
+  );
+});
+
+test("a workspace write preview parses as added with its counts and hunks", () => {
+  const parsed = fileMutationPreviewFromMessage(
+    writeMessage({ root: "workspace", bytes: 8, editDiff: writePreview({ root: "workspace" }) }),
+  );
+  assert(parsed);
+  assert.equal(parsed.operation, "write");
+  assert.equal(parsed.status, "added");
+  assert.equal(parsed.root, "workspace");
+  assert.equal(parsed.path, "created.txt");
+  assert.equal(parsed.additions, 2);
+  assert.equal(parsed.deletions, 0);
+  assert.equal(parsed.hunks.length, 1);
+  assert.equal(parsed.hunks[0].lines[1].text, "two");
+  assert.equal(reviewChangeFromMessage(writeMessage({ root: "workspace", editDiff: writePreview() })), null);
+});
+
+test("an overwriting write preview parses as modified", () => {
+  const parsed = fileMutationPreviewFromMessage(
+    writeMessage({
+      root: "workspace",
+      editDiff: writePreview({
+        root: "workspace",
+        path: "source.txt",
+        status: "modified",
+        additions: 2,
+        deletions: 1,
+      }),
+    }),
+  );
+  assert(parsed);
+  assert.equal(parsed.operation, "write");
+  assert.equal(parsed.status, "modified");
+  assert.equal(parsed.additions, 2);
+  assert.equal(parsed.deletions, 1);
+});
+
+test("a write preview keeps the bytes size badge while the head shows no directory badge", async (t) => {
+  const ssr = await slotSsr(t);
+  const { headerToolChips, toolResultChips } = await ssr.load("/src/lib/tool-presentation.ts");
+  const chips = toolResultChips(
+    writeMessage({ root: "workspace", bytes: 8, editDiff: writePreview({ root: "workspace" }) }),
+  );
+  assert(chips.some((chip) => chip.role === "size"), "the producer keeps the bytes badge");
+  assert.deepEqual(
+    headerToolChips(
+      writeMessage({ root: "scratch", editDiff: writePreview() }),
+    ),
+    [],
+    "the collapsed head carries no directory badge",
   );
 });
 
@@ -129,7 +216,7 @@ test("an uncounted preview omits counts instead of reporting zero", () => {
   const { additions, deletions, ...rest } = preview({ root: "external" });
   void additions;
   void deletions;
-  const parsed = editDiffFromMessage(
+  const parsed = fileMutationPreviewFromMessage(
     message({ root: "external", editDiff: { ...rest, truncated: true, reason: "fileTooLarge" } }),
   );
   assert(parsed);
@@ -188,4 +275,70 @@ test("a malformed preview falls back to the stated ops instead of a fake diff", 
     message({ root: "scratch", editDiff: { ...preview(), status: "renamed" } }),
   );
   assert(JSON.stringify(blocks).includes("PUT 2.=2"), "unevidenced edits keep their ops");
+});
+
+test("illegal operation/status combinations and tool mismatches read as absent", () => {
+  const illegal = [
+    // Write never deletes or moves.
+    ["Write", preview({ operation: "write", status: "deleted" })],
+    ["Write", preview({ operation: "write", status: "moved" })],
+    // Edit never reports a creation.
+    ["Edit", preview({ operation: "edit", status: "added" })],
+    // The tool selects the operation: an Edit row never carries a write
+    // preview and a Write row never carries an edit preview.
+    ["Edit", preview({ operation: "write", status: "added" })],
+    ["Write", writePreview({ operation: "edit", status: "modified" })],
+  ];
+  for (const [toolName, editDiff] of illegal) {
+    assert.equal(
+      fileMutationPreviewFromMessage(message({ root: "scratch", editDiff }, { toolName })),
+      null,
+      `${toolName} must reject ${editDiff.operation}/${editDiff.status}`,
+    );
+  }
+});
+
+test("every legal tool/operation/status combination parses on every root", () => {
+  const legal = [
+    ["Edit", preview({ status: "modified" })],
+    ["Edit", preview({ status: "deleted" })],
+    ["Edit", preview({ status: "moved" })],
+    ["Write", writePreview({ status: "added" })],
+    ["Write", writePreview({ status: "modified" })],
+  ];
+  for (const root of ["workspace", "scratch", "external"]) {
+    for (const [toolName, editDiff] of legal) {
+      const parsed = fileMutationPreviewFromMessage(
+        message({ root, editDiff: { ...editDiff, root } }, { toolName }),
+      );
+      assert(
+        parsed,
+        `${toolName}/${editDiff.operation}/${editDiff.status} must parse on ${root}`,
+      );
+      assert.equal(parsed.operation, editDiff.operation);
+      assert.equal(parsed.status, editDiff.status);
+      assert.equal(parsed.root, root);
+    }
+  }
+});
+
+test("a binary preview stays uncounted with the binary flag", () => {
+  const { additions, deletions, ...rest } = preview();
+  void additions;
+  void deletions;
+  const parsed = fileMutationPreviewFromMessage(
+    message({ root: "scratch", editDiff: { ...rest, binary: true } }),
+  );
+  assert(parsed);
+  assert.equal(parsed.additions, undefined);
+  assert.equal(parsed.deletions, undefined);
+  assert.equal(parsed.binary, true);
+});
+
+test("the legacy editDiffFromMessage export stays the same parser", () => {
+  assert.equal(editDiffFromMessage, fileMutationPreviewFromMessage);
+  const parsed = editDiffFromMessage(message({ root: "scratch", editDiff: preview() }));
+  assert(parsed);
+  assert.equal(parsed.operation, "edit");
+  assert.equal(parsed.status, "modified");
 });

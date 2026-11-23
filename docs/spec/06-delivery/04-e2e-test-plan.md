@@ -5263,7 +5263,14 @@ window; opening a normal panel afterward must still work.
   expanded one-add/one-delete diff, no directory badge in the collapsed head beside the counts,
   no raw `ops` text, and no review rollback affordance — while the existing
   workspace assertions (rollback, aggregate totals) keep passing unchanged.
-  Full UI journey Draft.
+  The same scenario drives real Writes on workspace (new file), scratch (new
+  file), and external (overwrite) roots and asserts each `editDiff` carries
+  operation `write` (`added` for created files, `modified` for overwrites)
+  with actual +N/−N counts beside the unchanged `Written content` body.
+  Renderer-covered by `edit-diff-preview.test.mjs`: every legal
+  tool/operation/status combination parses on every root, while illegal pairs
+  (`write`/`deleted`, `write`/`moved`, `edit`/`added`) and tool/operation
+  mismatches read as absent. Full UI journey Draft.
 
 #### E2E-058: Built-in interactive terminal is absent
 
