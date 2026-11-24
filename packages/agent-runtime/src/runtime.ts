@@ -204,16 +204,17 @@ import {
   effectiveModelContextWindow,
   estimateOutputCapInputTokens,
 } from "./output-cap.js";
-import {
-  composeSubagentSystemPrompt,
-  SubagentRun,
-  SUBAGENT_LIST_TOOL_NAME,
-  SUBAGENT_STOP_TOOL_NAME,
-  SUBAGENT_TOOL_NAME,
-  SUBAGENT_WAIT_TOOL_NAME,
-  type SubagentRunResult,
-  type SubagentToolOutcome,
-} from "./subagent.js";
+ import {
+   composeSubagentSystemPrompt,
+   SubagentRun,
+   SUBAGENT_LIST_TOOL_NAME,
+   SUBAGENT_STEER_TOOL_NAME,
+   SUBAGENT_STOP_TOOL_NAME,
+   SUBAGENT_TOOL_NAME,
+   SUBAGENT_WAIT_TOOL_NAME,
+   type SubagentRunResult,
+   type SubagentToolOutcome,
+ } from "./subagent.js";
 import type {
   InstalledSubagentHandoff,
   SubagentHandoffPersistenceError,
@@ -247,6 +248,7 @@ import {
   type DelegationWaitHost,
 } from "./subagent-progress.js";
 import { createThinkingPhaseTracker } from "./thinking-phase.js";
+import { GenerationThroughputSampler } from "./generation-throughput.js";
 import {
   applyDelegationActivity,
   applyValidatedSteer,
@@ -277,8 +279,18 @@ import {
   mapContinueSpawnError,
   prepareSubagentContinue,
   resolveContinueSpawnTarget,
-  scopeDelegateTools,
-} from "./subagent-continue.js";
+   scopeDelegateTools,
+ } from "./subagent-continue.js";
+ import {
+   applyModelSteer,
+   isCodedSteerError,
+   modelSteerReceipt,
+   readModelSteerRequest,
+   validateModelSteer,
+   type ModelSteerCaller,
+   type ModelSteerRecordState,
+   type ValidatedModelSteer,
+ } from "./subagent-steer.js";
 import {
   composeModeSystemPrompt,
   DEFAULT_RUNTIME_SYSTEM_PROMPT,
@@ -1921,6 +1933,14 @@ export class DesktopAgentRuntime {
    * which is the correct anchor: the request goes out once all have resolved. */
   private requestStartedAt?: number;
   private streamStartedAt?: number;
+  /**
+   * One monotonic generation-throughput sampler for the whole parent
+   * session. The same collector the child runs use, so both sessions measure
+   * the identical figure: settled-only, exact provider output over
+   * first-content-to-end spans. Attempt-scoped (`resetAttempt` on every
+   * `message_start`), consumed single-shot by a settled complete `message_end`.
+   */
+  private readonly generationThroughput = new GenerationThroughputSampler();
   private agentActivity?: AgentActivity;
   /** Targets of the in-flight parent wait; live snapshots refresh this set. */
   private delegationWaitTargets?: DelegationRecord[];
@@ -4053,10 +4073,11 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     const subagentTools =
       this.subagents.length
         ? [
-            this.buildSubagentTool(),
-            this.buildSubagentWaitTool(),
-            this.buildSubagentListTool(),
-            this.buildSubagentStopTool(),
+             this.buildSubagentTool(),
+             this.buildSubagentWaitTool(),
+             this.buildSubagentListTool(),
+             this.buildSubagentStopTool(),
+             this.buildSubagentSteerTool(),
           ]
         : [];
     const contextTools = this.compactionEnabled
@@ -4176,16 +4197,17 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
 
   private isCoreTool(name: string): boolean {
     return (
-      name === CONTEXT_COMPACTION_TOOL_NAME ||
-      retainModeToolDeclaration(name) ||
-      MODE_TRANSITION_TOOL_NAMES.has(name) ||
-      // The whole delegation lifecycle stays in the core set rather than the
-      // on-demand catalog: a capability the model has to go looking for is one
-      // it will not use, and delegation is worth the extra schemas per request.
-      name === SUBAGENT_TOOL_NAME ||
-      name === SUBAGENT_WAIT_TOOL_NAME ||
-      name === SUBAGENT_LIST_TOOL_NAME ||
-      name === SUBAGENT_STOP_TOOL_NAME ||
+     name === CONTEXT_COMPACTION_TOOL_NAME ||
+     retainModeToolDeclaration(name) ||
+     MODE_TRANSITION_TOOL_NAMES.has(name) ||
+     // The whole delegation lifecycle stays in the core set rather than the
+     // on-demand catalog: a capability the model has to go looking for is one
+     // it will not use, and delegation is worth the extra schemas per request.
+     name === SUBAGENT_TOOL_NAME ||
+     name === SUBAGENT_WAIT_TOOL_NAME ||
+     name === SUBAGENT_LIST_TOOL_NAME ||
+     name === SUBAGENT_STOP_TOOL_NAME ||
+     name === SUBAGENT_STEER_TOOL_NAME ||
       (this.mode === "agent"
         ? AGENT_CORE_TOOL_NAMES.has(name)
         : proposalKindForMode(this.mode)
@@ -4628,7 +4650,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           : [
               `No delegation model overrides are configured. ${DELEGATION_DEFAULT_MODEL_GUIDANCE} ${DELEGATION_MODEL_OPT_IN_GUIDANCE}`,
             ]),
-        "`task` is the delegate's only instruction. It cannot see this conversation, and you cannot correct it while it runs, so state the goal, the paths and facts it cannot infer, and exactly what to report back.",
+        "`task` is the delegate's only instruction. It cannot see this conversation, so state the goal, the paths and facts it cannot infer, and exactly what to report back. To adjust it while it is still running, call TaskSteer with its delegationId; Task(resume) refuses a running delegation and is only for settled ones.",
         "To run delegates concurrently, emit several Task calls in one assistant message. A message that mixes Task with any other tool runs one call at a time. You may keep working or talk to the user while they run; the runtime delivers their reports when they finish. Call TaskStop only to cancel.",
         "To continue a previous subagent, pass its `resume` id (the `delegationId` returned by Task). Saying \"reuse\" in prose is not enough. Do not pass `model` when resuming; start a new delegation to change models.",
         `Available subagents:\n${catalog}`,
@@ -5228,6 +5250,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       turns: record.result?.turns ?? record.turns,
       toolCalls: record.result?.toolCalls ?? record.toolCalls,
       ...(record.usage ? { usage: record.usage } : {}),
+      ...(record.result?.throughput ? { throughput: record.result.throughput } : {}),
       ...(record.contextTokens !== undefined
         ? { contextTokens: record.contextTokens }
         : {}),
@@ -6057,6 +6080,134 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       },
     };
   }
+   /**
+    * `TaskSteer`: queue one follow-up message into a running delegation the
+    * parent model started itself. The call only queues: the message reaches
+    * the child at its next turn boundary without interrupting its current
+    * tool batch, and the receipt says `queued`, never `consumed`. Settled,
+    * stopping, unknown, or foreign targets fail with a structured error and
+    * no side effect — they are never resumed, spawned, or stopped here.
+    */
+   private buildSubagentSteerTool(): AgentTool {
+     return {
+       name: SUBAGENT_STEER_TOOL_NAME,
+       label: "Task Steer",
+       description: [
+         "Queue one follow-up message into a running subagent you started with Task, for use while it is still running.",
+         "The message reaches the child at its next turn boundary without interrupting its current tool batch; the current batch runs to its barrier first. The receipt confirms queueing only, not consumption — check the child's next progress or TaskWait to see what it did with the message.",
+         "Use it only for a delegation in this session that is still running and that you started yourself. It cannot steer a settled or stopping delegation (continue those with Task(resume)), an unknown id, a delegation the user controls, or another agent's run.",
+         "Exactly one target per call: pass the `delegationId` Task returned plus the non-empty `message` to queue. There is no broadcast and no exactly-once promise beyond the runtime's duplicate queueing guard.",
+       ].join("\n\n"),
+       parameters: Type.Object({
+         delegationId: Type.String({
+           description: "delegationId returned by Task for the running subagent to steer. Exactly one target.",
+         }),
+         message: Type.String({
+           description: "Follow-up direction to queue into the child's conversation at its next turn boundary.",
+         }),
+       }),
+       executionMode: "sequential",
+       execute: async (toolCallId, params) => this.executeModelSteer(toolCallId, params),
+     };
+   }
+
+   /**
+    * Classify a `TaskSteer` caller for the ownership check. The parent
+    * model's own calls carry no delegate attribution; any call a delegate's
+    * scoped tool made carries its owner's delegation id (or, failing that,
+    * membership in a delegate's in-flight set). A delegate caller is never
+    * authorized: nested delegation tools stay denied, so it owns nothing
+    * steerable.
+    */
+   private classifyModelSteerCaller(toolCallId: string): ModelSteerCaller {
+     const owner = this.mutationOwners.get(toolCallId);
+     if (owner) return { kind: "delegate", delegationId: owner };
+     if (this.delegateToolCalls.has(toolCallId) || this.delegateCallContexts.has(toolCallId)) {
+       for (const record of this.delegations.values()) {
+         if (record.pendingToolCallIds?.has(toolCallId)) {
+           return { kind: "delegate", delegationId: record.delegationId };
+         }
+       }
+       return { kind: "delegate" };
+     }
+     for (const record of this.delegations.values()) {
+       if (record.pendingToolCallIds?.has(toolCallId)) {
+         return { kind: "delegate", delegationId: record.delegationId };
+       }
+     }
+     return { kind: "parent" };
+   }
+
+   /** Map a live record to the state the model-steer decision reads. */
+   private modelSteerTarget(delegationId: string): ModelSteerRecordState | undefined {
+     const record = this.delegations.get(delegationId);
+     if (!record) return undefined;
+     return {
+       delegationId: record.delegationId,
+       parentToolCallId: record.parentToolCallId,
+       agentName: record.agentName,
+       status: record.status,
+       stopRequested: record.stopRequested,
+       settled: record.run?.isSettled?.() === true,
+       hasLiveLoop: typeof record.run?.steer === "function",
+       ...(record.userOrigin ? { userOrigin: true as const } : {}),
+     };
+   }
+
+   /**
+    * Execute one `TaskSteer` call: authorize, validate liveness, queue, and
+    * receipt. Coded rejections become the standard tool-error result
+    * (`afterToolCall` marks `isError`); unexpected failures still throw.
+    * Nothing is spawned, resumed, or stopped on any path.
+    */
+   private async executeModelSteer(toolCallId: string, params: unknown) {
+     const caller = this.classifyModelSteerCaller(toolCallId);
+     const request = readModelSteerRequest(params);
+     let validated: ValidatedModelSteer;
+     try {
+       validated = validateModelSteer(
+         caller,
+         (id) => this.modelSteerTarget(id),
+         request,
+       );
+     } catch (error) {
+       if (isCodedSteerError(error)) return this.subagentToolError(toolCallId, error.message);
+       throw error;
+     }
+     if (validated.validated.outcome === "already-applied") {
+       return modelSteerReceipt(validated.delegationId, validated.validated);
+     }
+     const target = this.delegations.get(validated.delegationId);
+     // The liveness check above held a live loop; a settle in this gap is
+     // retried as a coded rejection, never queued silently.
+     if (!target || !target.run) {
+       return this.subagentToolError(
+         toolCallId,
+         `Delegation "${validated.delegationId}" settled before the steering arrived; ` +
+           `continue it with Task(resume: "${validated.delegationId}").`,
+       );
+     }
+     const ownerTurnId = target.parentTurnId ?? target.taskTurnId;
+     (target.steeredMessageIds ??= new Set());
+     try {
+       applyModelSteer(validated.validated, {
+         sessionId: this.sessionId,
+         ...(ownerTurnId ? { ownerTurnId } : {}),
+         parentToolCallId: target.parentToolCallId,
+         agentName: target.agentName,
+         steerLoop: (text, images, rowId) => target.run!.steer(text, images, rowId),
+         markSteered: (id) => {
+           (target.steeredMessageIds as Set<string>).add(id);
+         },
+         appendRow: (envelope, message) => this.appendDelegationRow(target, envelope, message),
+         emit: (envelope) => this.onEvent(envelope),
+       });
+     } catch (error) {
+       if (isCodedSteerError(error)) return this.subagentToolError(toolCallId, error.message);
+       throw error;
+     }
+     return modelSteerReceipt(validated.delegationId, validated.validated);
+   }
 
   private selectedMcpTools(input: string | RuntimePrompt): string[] {
     return resolveMcpToolSelection(
@@ -8324,6 +8475,10 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         if (event.message.role === "assistant") {
           this.clearAgentActivity();
           this.streamStartedAt = Date.now();
+          // A new provider attempt starts: a retry, overflow/silent/progress
+          // re-run, or fresh turn never inherits the previous attempt's stamp,
+          // so only the final attempt's span pairs with the settled usage.
+          this.generationThroughput.resetAttempt();
           const content = assistantContent((event.message as any).content);
           const retryingAssistant =
             this.providerRetryInProgress ||
@@ -8348,6 +8503,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
                 ? retryingAssistant?.content ?? ""
                 : content.text;
           this.toolArgsPreparation.reset();
+          // A rerun keeps the same bubble but a new provider attempt: the
+          // previous attempt's thinking generation ends here, and only a real
+          // thinking frame in the new attempt starts it again.
+          const attemptThinking = retryingAssistant
+            ? this.thinkingPhase.finish()
+            : undefined;
+          const carriedThinking = attemptThinking ?? retryingAssistant?.thinkingStatus;
           if (!retryingAssistant) this.thinkingPhase.reset();
           this.currentAssistant = {
             id: retryingAssistant?.id ?? randomUUID(),
@@ -8356,8 +8518,8 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             ...(content.hasThinking && content.thinking
               ? { thinking: content.thinking }
               : {}),
-            ...(retryingAssistant?.thinkingStatus !== undefined
-              ? { thinkingStatus: retryingAssistant.thinkingStatus }
+            ...(carriedThinking !== undefined
+              ? { thinkingStatus: carriedThinking }
               : {}),
             createdAt: nowIso(),
             status: "streaming",
@@ -8392,9 +8554,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       }
       case "message_update": {
         if (this.currentAssistant && event.message.role === "assistant") {
-          this.prepareToolCalls(event.assistantMessageEvent);
           this.applyHostedSearch(event.message);
           const content = assistantContent((event.message as any).content);
+          const typed = event.assistantMessageEvent;
+          // Stamp this attempt's first nonempty model-generated event on the
+          // raw frame, before the emission gate: the same synchronous hook the
+          // child runs use, so both sessions measure the identical span.
+          this.generationThroughput.noteEvent(typed);
           const previousText = this.currentAssistant.content;
           const previousThinking = this.currentAssistant.thinking ?? "";
           const nextText = content.hasText ? content.text : previousText;
@@ -8407,12 +8573,16 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           const thinkingDelta = content.hasThinking
             ? cumulativeDelta(previousThinking, content.thinking)
             : { delta: "", reset: false };
-          // Typed thinking frames drive the block-level phase; a real thinking
-          // delta without typed frames keeps the row breathing too. Later text
-          // or tool activity never moves the phase here.
-          const phaseChange =
-            this.thinkingPhase.observe(event.assistantMessageEvent) ??
-            (thinkingDelta.delta ? this.thinkingPhase.noteThinkingDelta() : undefined);
+          // The phase reports what the model is generating right now, so it
+          // follows the latest typed frame: a thinking frame keeps the row
+          // breathing, and a real text or tool-call frame stops it even when
+          // the thinking block never ends. Only streams without typed frames
+          // fall back to a real thinking delta.
+          const phaseChange = typed
+            ? this.thinkingPhase.observe(typed)
+            : thinkingDelta.delta
+              ? this.thinkingPhase.noteThinkingDelta()
+              : undefined;
           this.currentAssistant = {
             ...this.currentAssistant,
             content: nextText,
@@ -8440,6 +8610,9 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
               ...(thinkingDelta.reset ? { resetThinking: true } : {}),
             });
           }
+          // Tool preparation becomes a visible row, so it is queued after the
+          // phase update: the dot must stop before the tool row appears.
+          this.prepareToolCalls(typed);
         }
         break;
       }
@@ -8594,6 +8767,10 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             // Hold the bubble open. The re-run streams into this same one, so
             // a recovered turn leaves no empty message behind in the
             // transcript and the user never learns it happened.
+            // The attempt ends here even though its bubble stays open: thinking
+            // still generating stops, and the re-run reopens it only on a real
+            // thinking frame.
+            const silentAttemptThinking = this.thinkingPhase.finish();
             this.currentAssistant = {
               ...this.currentAssistant,
               content: nextText,
@@ -8602,6 +8779,9 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
                 : content.hasThinking
                   ? { thinking: undefined }
                   : {}),
+              ...(silentAttemptThinking !== undefined
+                ? { thinkingStatus: silentAttemptThinking }
+                : {}),
               status: "streaming",
               modelId: this.provider.modelId,
               providerId: this.provider.id,
@@ -8642,6 +8822,9 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             this.progressTurnRerunAttempted = true;
             this.pendingProgressTurnRerun = true;
             this.suppressProgressTurnRunEnd = true;
+            // Same attempt boundary as the silent re-run: the progress re-run
+            // must not inherit a breathing phase from this attempt.
+            const progressAttemptThinking = this.thinkingPhase.finish();
             this.currentAssistant = {
               ...this.currentAssistant,
               content: nextText,
@@ -8650,6 +8833,9 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
                 : content.hasThinking
                   ? { thinking: undefined }
                   : {}),
+              ...(progressAttemptThinking !== undefined
+                ? { thinkingStatus: progressAttemptThinking }
+                : {}),
               status: "streaming",
               modelId: this.provider.modelId,
               providerId: this.provider.id,
@@ -8668,6 +8854,9 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             // Keep the failed response inside the same visible assistant bubble
             // while compaction prepares the retry. A provider overflow is an
             // internal recovery transition, not a terminal user-facing error.
+            // Overflow recovery ends this attempt; compaction and the retry
+            // start a new one.
+            const overflowAttemptThinking = this.thinkingPhase.finish();
             this.currentAssistant = {
               ...this.currentAssistant,
               content: nextText,
@@ -8676,6 +8865,9 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
                 : content.hasThinking
                   ? { thinking: undefined }
                   : {}),
+              ...(overflowAttemptThinking !== undefined
+                ? { thinkingStatus: overflowAttemptThinking }
+                : {}),
               status: "streaming",
               modelId: this.provider.modelId,
               providerId: this.provider.id,
@@ -8702,6 +8894,9 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           ) {
             this.pendingProviderRetry = diagnosticError;
             this.suppressProviderRetryRunEnd = true;
+            // A provider retry is a new attempt on the same bubble: this
+            // attempt's thinking generation stops before the delay.
+            const retryAttemptThinking = this.thinkingPhase.finish();
             this.currentAssistant = {
               ...this.currentAssistant,
               content: nextText,
@@ -8710,6 +8905,9 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
                 : content.hasThinking
                   ? { thinking: undefined }
                   : {}),
+              ...(retryAttemptThinking !== undefined
+                ? { thinkingStatus: retryAttemptThinking }
+                : {}),
               status: "streaming",
               modelId: this.provider.modelId,
               providerId: this.provider.id,
@@ -8738,6 +8936,16 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
                   thinking: nextThinking,
                 })
               : undefined;
+          // Settle-only generation throughput: a completed turn commits one
+          // sample from its first generated content to this end. Failed,
+          // aborted, and retried attempts never contribute — the early-break
+          // re-run paths above return before this terminal block, and the
+          // attempt stamp is consumed single-shot here. Shares the child's
+          // collector, so both sessions measure the identical figure.
+          const throughput =
+            !failed && !aborted
+              ? this.generationThroughput.commitRowSample(usage?.outputTokens)
+              : undefined;
           // The stream settles here with or without a thinking_end frame:
           // still-open thinking completes at this terminal boundary.
           const terminalThinking = this.thinkingPhase.finish();
@@ -8765,6 +8973,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             ...(responseOutputTokens !== undefined
               ? { responseOutputTokens }
               : {}),
+            ...(throughput ? { throughput } : {}),
             ...(classifiedError
               ? { error: classifiedError, isError: true }
               : {}),

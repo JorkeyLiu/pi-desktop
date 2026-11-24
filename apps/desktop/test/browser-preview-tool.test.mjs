@@ -114,10 +114,14 @@ test("agent runtime exposes BrowserPreview in every mode and prompts for it", ()
   assert.match(runtimeSource, /live-reloads/);
 });
 
-test("Browser tool automatically reveals its view before browser operations", async () => {
-  assert.match(browserPluginSource, /Browser operations automatically reveal the work-panel view/);
-  assert.match(browserPluginSource, /Do not ask the user to open Browser manually/);
-  assert.match(browserPluginSource, /await pi\.browser\.reveal\(\)/);
+test("Browser tool runs on the caller's page without revealing", async () => {
+  assert.match(browserPluginSource, /in the background on the caller's page without revealing/);
+  assert.match(browserPluginSource, /Use reveal only when the user explicitly asks to see the page/);
+  // The tool never reveals unconditionally: no execute path may call reveal.
+  assert.doesNotMatch(browserPluginSource, /pi\.browser\.reveal\(\)/);
+  // Plan/Goal mode surface is unchanged: read-only actions stay available.
+  assert.match(browserPluginSource, /const PLAN_SAFE_ACTIONS = \["navigate", "snapshot", "screenshot", "console"\]/);
+  assert.match(browserPluginSource, /planSafeActions: PLAN_SAFE_ACTIONS/);
 
   let registeredTool;
   const calls = [];
@@ -139,7 +143,7 @@ test("Browser tool automatically reveals its view before browser operations", as
     const plugin = await import("../resources/plugins/pi.browser/main.js");
     await plugin.onLoad();
     const result = await registeredTool.execute({ action: "snapshot" });
-    assert.deepEqual(calls, ["reveal", "snapshot"]);
+    assert.deepEqual(calls, ["snapshot"]);
     assert.deepEqual(result, {
       ok: true,
       action: "snapshot",

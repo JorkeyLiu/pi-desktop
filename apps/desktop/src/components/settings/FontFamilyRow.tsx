@@ -6,7 +6,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
+import { portalToBody } from "../../lib/portal-visibility";
+import { useEscapeOwner, useSecondaryWindowActive } from "../../lib/secondary-window-context";
 import { useTranslation } from "react-i18next";
 import type { AppSettings } from "@pi-desktop/shared";
 import {
@@ -49,6 +50,8 @@ export function FontFamilyRow({
     top: number;
     left: number;
   } | null>(null);
+  const secondaryWindowActive = useSecondaryWindowActive();
+  useEscapeOwner(open && secondaryWindowActive);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -83,7 +86,7 @@ export function FontFamilyRow({
   }, [showToast, t]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !secondaryWindowActive) return;
     const onPointer = (event: MouseEvent) => {
       const target = event.target as Node;
       if (
@@ -94,15 +97,20 @@ export function FontFamilyRow({
       }
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeMenu();
+      if (event.key !== "Escape") return;
+      // Capture + stop so the secondary window underneath this picker does
+      // not close on the same Escape that dismisses the menu.
+      event.preventDefault();
+      event.stopPropagation();
+      closeMenu();
     };
     window.addEventListener("mousedown", onPointer);
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     return () => {
       window.removeEventListener("mousedown", onPointer);
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
-  }, [open, closeMenu]);
+  }, [open, closeMenu, secondaryWindowActive]);
 
   useEffect(() => {
     if (!open) return;
@@ -324,9 +332,8 @@ export function FontFamilyRow({
             </span>
             <IconChevronDown size={14} />
           </button>
-          {open &&
-            typeof document !== "undefined" &&
-            createPortal(
+          {open
+            ? portalToBody(
               <div
                 ref={menuRef}
                 className={`settings-font-menu${
@@ -427,8 +434,8 @@ export function FontFamilyRow({
                   </div>
                 )}
               </div>,
-              document.body,
-            )}
+            )
+            : null}
         </div>
       </div>
     </div>

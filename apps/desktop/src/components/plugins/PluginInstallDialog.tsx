@@ -8,6 +8,7 @@ import {
 } from "../../features/plugins/install-progress";
 import { useAppStore } from "../../stores/app-store";
 import { Button, cx, portalOverlay } from "../ui";
+import { useEscapeOwner, useSecondaryWindowActive } from "../../lib/secondary-window-context";
 import {
   IconCircleCheck,
   IconCopy,
@@ -47,6 +48,8 @@ export function PluginInstallDialog({ job, onCancel, onRetry, onClose }: Props) 
   // Hide docked native plugin views while this host install sheet is open.
   useBlockingOverlay();
   const { t } = useTranslation();
+  const secondaryWindowActive = useSecondaryWindowActive();
+  useEscapeOwner(secondaryWindowActive);
   const showToast = useAppStore((state) => state.showToast);
   const [hovered, setHovered] = useState(false);
   /**
@@ -66,13 +69,13 @@ export function PluginInstallDialog({ job, onCancel, onRetry, onClose }: Props) 
   const escapeLocked = running && (job.phase === "resolve" || job.phase === "download");
 
   useEffect(() => {
-    if (escapeLocked) return;
+    if (escapeLocked || !secondaryWindowActive) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeRef.current();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [escapeLocked]);
+  }, [escapeLocked, secondaryWindowActive]);
 
   // A finished install reports itself and then leaves, unless the pointer is
   // still on it: the confirmation is worth reading before it goes.

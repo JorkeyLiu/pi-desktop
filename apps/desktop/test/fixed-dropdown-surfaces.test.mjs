@@ -67,8 +67,8 @@ test("renderer-owned dropdown surfaces are fixed and out of layout flow", () => 
 });
 
 test("anchored menus portal, measure, and reposition without reflowing parents", () => {
-  assert.match(anchoredMenuSource, /createPortal\(/);
-  assert.match(anchoredMenuSource, /document\.body/);
+  assert.match(anchoredMenuSource, /portalToBody\(/);
+  assert.match(anchoredMenuSource, /import \{ portalToBody \} from "\.\.\/\.\.\/lib\/portal-visibility"/);
   assert.match(anchoredMenuSource, /ResizeObserver/);
   assert.match(anchoredMenuSource, /addEventListener\("scroll", onViewportChange, true\)/);
   assert.match(anchoredMenuSource, /visibility: hidden/);

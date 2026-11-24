@@ -277,22 +277,6 @@ export function aggregateToolTokenUsage(
   return [...groups.values()];
 }
 
-export function calculateTokenRate(
-  outputTokens: number,
-  responseDurationMs: number | undefined,
-): number | undefined {
-  if (
-    !Number.isFinite(outputTokens) ||
-    outputTokens <= 0 ||
-    !Number.isFinite(responseDurationMs) ||
-    responseDurationMs === undefined ||
-    responseDurationMs <= 0
-  ) {
-    return undefined;
-  }
-  return Math.round(outputTokens / (responseDurationMs / 1000));
-}
-
 /**
  * Estimate visible assistant output when an interrupted provider response does
  * not include final usage. This mirrors the runtime's durable fallback.

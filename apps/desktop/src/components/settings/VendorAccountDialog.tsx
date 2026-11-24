@@ -22,6 +22,7 @@ import { ProviderHeadersEditor } from "./ProviderHeadersEditor";
 import { useProviderModels } from "./useProviderModels";
 import { useProbeFeedback } from "./useProbeFeedback";
 import { ModelSelectionPanes, useModelSelection } from "./ModelSelectionPanes";
+import { useEscapeOwner, useSecondaryWindowActive } from "../../lib/secondary-window-context";
 
 export type VendorAccountForm = {
   name: string;
@@ -45,6 +46,8 @@ export function VendorAccountDialog({
   saving: boolean;
 }) {
   const { t } = useTranslation();
+  const secondaryWindowActive = useSecondaryWindowActive();
+  useEscapeOwner(secondaryWindowActive);
   const [name, setName] = useState(initialName);
   const [headerPairs, setHeaderPairs] = useState(() => recordToPairs(provider.headers));
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -73,6 +76,7 @@ export function VendorAccountDialog({
   const selection = useModelSelection(discovery, models, setModels);
 
   useEffect(() => {
+    if (!secondaryWindowActive) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || saving) return;
       if (advancedOpen) {
@@ -83,8 +87,7 @@ export function VendorAccountDialog({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [advancedOpen, onClose, saving]);
-
+  }, [advancedOpen, onClose, saving, secondaryWindowActive]);
   const canSave = !saving && !!name.trim() && models.length > 0;
 
   const submit = () => {

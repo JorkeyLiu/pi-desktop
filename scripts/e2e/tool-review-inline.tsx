@@ -33,6 +33,14 @@ type ToolReviewPayloads = {
   moved: HostContent;
   /** A real `Edit` that deleted the file (`REM`). */
   removed: HostContent;
+  /** A real scratch `Edit`: the per-call preview, no durable record. */
+  scratchEdit: HostContent;
+  /** A real external `Edit`: the per-call preview, no durable record. */
+  externalEdit: HostContent;
+  /** A real scratch `Write` that created its file: preview only, no record. */
+  scratchWrite: HostContent;
+  /** A real external `Write` that overwrote its file: preview only, no record. */
+  externalWrite: HostContent;
 };
 
 const createdAt = "2026-10-18T00:00:00.000Z";
@@ -257,6 +265,167 @@ globalThis.toolReviewProbe = async (payloads: ToolReviewPayloads) => {
         "expanding the real Edit row shows its one-line diff",
         editAdds === 1 && editDels === 1,
         { editAdds, editDels },
+      );
+    }
+    // ── 1b. Scratch and external edits carry the same per-call diff ──
+    // No durable record exists for these roots, so the row reads the
+    // preview: the same +a/−d and expanded hunks, the file name with no
+    // directory badge beside the counts, and no rollback handle.
+    const rootBadgedRows: Array<{
+      id: string;
+      label: string;
+      content: HostContent;
+      badge: string;
+    }> = [
+      {
+        id: "edit-scratch",
+        label: "scratch",
+        content: payloads.scratchEdit,
+        badge: "scratch",
+      },
+      {
+        id: "edit-external",
+        label: "external",
+        content: payloads.externalEdit,
+        badge: "external",
+      },
+    ];
+    for (const entry of rootBadgedRows) {
+      const host = mount(
+        column,
+        <ToolRow message={toolMessageFromContent(entry.id, "Edit", entry.content)} />,
+      );
+      await settle();
+      const counts = countsText(host);
+      check(
+        `the real ${entry.label} Edit row states +a and −d`,
+        counts.includes("+1") && counts.includes("−1"),
+        counts,
+      );
+      const chips = [...host.querySelectorAll(".tool-chip")].map(
+        (chip) => chip.textContent ?? "",
+      );
+      check(
+        `the real ${entry.label} Edit row shows no ${entry.badge} directory badge`,
+        !chips.some((text) => text.includes(entry.badge)),
+        chips,
+      );
+      await expand(host);
+      const adds = host.querySelectorAll(
+        ".review-change-diff .diff-line.add",
+      ).length;
+      const dels = host.querySelectorAll(
+        ".review-change-diff .diff-line.del",
+      ).length;
+      check(
+        `expanding the real ${entry.label} Edit row shows its one-line diff`,
+        adds === 1 && dels === 1,
+        { adds, dels },
+      );
+      const bodyText = host.querySelector(".tool-row-body")?.textContent ?? "";
+      check(
+        `the real ${entry.label} Edit row prints no raw ops beside its diff`,
+        !bodyText.includes("PUT 2.="),
+        bodyText.slice(0, 200),
+      );
+      check(
+        `the real ${entry.label} Edit row offers no rollback`,
+        host.querySelector(".review-change-rollback") === null &&
+          host.querySelector(".review-change-state") === null,
+        {
+          rollback: Boolean(host.querySelector(".review-change-rollback")),
+          state: Boolean(host.querySelector(".review-change-state")),
+        },
+      );
+    }
+
+    // ── 1c. Scratch and external Writes carry the same per-call preview ──
+    // No durable record exists for these roots either, so the row reads the
+    // preview beside the unchanged Written content body: the same +N/−N, the
+    // expanded hunks, the file name with no directory badge beside the
+    // counts, and no rollback handle.
+    const rootWriteRows: Array<{
+      id: string;
+      label: string;
+      content: HostContent;
+      badge: string;
+      bytes: string;
+      adds: number;
+      dels: number;
+    }> = [
+      {
+        id: "write-scratch",
+        label: "scratch",
+        content: payloads.scratchWrite,
+        badge: "scratch",
+        bytes: "one\ntwo\n",
+        adds: 2,
+        dels: 0,
+      },
+      {
+        id: "write-external",
+        label: "external",
+        content: payloads.externalWrite,
+        badge: "external",
+        bytes: "one\nTWO\nthree\n",
+        adds: 1,
+        dels: 0,
+      },
+    ];
+    for (const entry of rootWriteRows) {
+      const host = mount(
+        column,
+        <ToolRow
+          message={toolMessageFromContent(entry.id, "Write", entry.content, {}, {
+            path: String(entry.content.path ?? ""),
+            content: entry.bytes,
+          })}
+        />,
+      );
+      await settle();
+      const counts = countsText(host);
+      check(
+        `the real ${entry.label} Write row states its +additions`,
+        counts.includes(`+${entry.adds}`),
+        counts,
+      );
+      const chips = [...host.querySelectorAll(".tool-chip")].map(
+        (chip) => chip.textContent ?? "",
+      );
+      check(
+        `the real ${entry.label} Write row shows no ${entry.badge} directory badge`,
+        !chips.some((text) => text.includes(entry.badge)),
+        chips,
+      );
+      await expand(host);
+      const adds = host.querySelectorAll(
+        ".review-change-diff .diff-line.add",
+      ).length;
+      const dels = host.querySelectorAll(
+        ".review-change-diff .diff-line.del",
+      ).length;
+      check(
+        `expanding the real ${entry.label} Write row shows its diff`,
+        adds === entry.adds && dels === entry.dels,
+        { adds, dels },
+      );
+      const bodyText = host.querySelector(".tool-row-body")?.textContent ?? "";
+      check(
+        `the real ${entry.label} Write row keeps its Written content beside the diff`,
+        entry.bytes
+          .split("\n")
+          .filter((line) => line.length > 0)
+          .every((line) => bodyText.includes(line)),
+        bodyText.slice(0, 200),
+      );
+      check(
+        `the real ${entry.label} Write row offers no rollback`,
+        host.querySelector(".review-change-rollback") === null &&
+          host.querySelector(".review-change-state") === null,
+        {
+          rollback: Boolean(host.querySelector(".review-change-rollback")),
+          state: Boolean(host.querySelector(".review-change-state")),
+        },
       );
     }
 

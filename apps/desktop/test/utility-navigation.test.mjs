@@ -47,46 +47,40 @@ function harness(page = "chat") {
 }
 
 for (const page of ["chat", "scheduled", "settings"]) {
-  test(`Plugins footer goes back one history entry to ${page}`, () => {
+  test(`Plugins footer opens the window from ${page} and closes it again`, () => {
     const h = harness(page);
     h.click();
     assert.equal(h.get().page, "plugins");
-    assert.equal(h.get().navIndex, 1);
-    h.click();
-    assert.equal(h.get().page, page);
+    assert.equal(h.get().navStack.length, 1, "A window is not a history entry");
     assert.equal(h.get().navIndex, 0);
-    assert.equal(h.get().navStack.length, 2, "Back must not append a return entry");
-    if (page === "chat") {
-      assert.equal(h.selections.length, 1);
-      assert.equal(h.selections[0][0], "session-a");
-      assert.equal(h.selections[0][1].record, false);
-    } else {
-      assert.deepEqual(h.selections, []);
-    }
+    h.click();
+    assert.equal(h.get().page, "chat");
+    assert.equal(h.get().navStack.length, 1);
+    assert.equal(h.get().navIndex, 0);
+    assert.deepEqual(h.selections, [], "Closing a window selects no conversation");
   });
 }
 
-test("Plugins footer respects the immediate history entry, including Settings", () => {
+test("switching destinations replaces the one window without stacking history", () => {
   const h = harness("scheduled");
   h.actions.setPage("settings");
-  h.click();
-  h.click();
   assert.equal(h.get().page, "settings");
-  assert.equal(h.get().navIndex, 1);
+  h.click();
+  assert.equal(h.get().page, "plugins");
+  assert.equal(h.get().navStack.length, 1);
+  // History belongs to conversations alone, so while a window covers chat
+  // neither direction moves the reader anywhere.
   h.actions.navForward();
   assert.equal(h.get().page, "plugins");
-  h.click();
-  assert.equal(h.get().page, "settings");
+  h.actions.navBack();
+  assert.equal(h.get().page, "plugins");
 });
 
-test("Plugins without earlier history falls back to chat", () => {
-  for (const navStack of [[], [{ page: "plugins" }]]) {
-    const h = harness("plugins");
-    h.set({ navStack, navIndex: navStack.length - 1 });
-    h.click();
-    assert.equal(h.get().page, "chat");
-    assert.deepEqual(h.selections, []);
-  }
+test("Plugins footer closes the window when it is already presented", () => {
+  const h = harness("plugins");
+  h.click();
+  assert.equal(h.get().page, "chat");
+  assert.deepEqual(h.selections, []);
 });
 
 test("plugin browsing choices survive subscribers disconnecting without retaining dialogs or operations", () => {

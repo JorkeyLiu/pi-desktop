@@ -17,6 +17,7 @@ import {
   type AgentEventEnvelope,
   type MessageUsage,
   type SubagentThinkingLevel,
+  type GenerationThroughputTotals,
   type UiMessage,
 } from "@pi-desktop/shared";
 import { isRecord } from "./agent-messages.js";
@@ -96,6 +97,11 @@ export type DelegationView = {
   contextTokens?: number;
   lastToolName?: string;
   executionTurnId?: string;
+  /**
+   * Retained live loop handle, narrowed to the progress read. Present only
+   * for entries with a run active in this process; recovered history has none.
+   */
+  run?: { progress(): { throughput?: GenerationThroughputTotals } } | null;
   resumedFrom?: string;
   modelChangedFrom?: string;
   delivery?: "parent" | "user";
@@ -106,6 +112,7 @@ export type DelegationView = {
     turns?: number;
     toolCalls?: number;
     usage?: MessageUsage;
+    throughput?: GenerationThroughputTotals;
     error?: { code: string; message: string };
     report?: string;
     modelFailures?: readonly unknown[];
@@ -119,6 +126,8 @@ export type DelegationView = {
 };
 
 export function delegationSummary(record: DelegationView): Record<string, unknown> {
+  // Settled totals win; a running record reports its live loop's own totals.
+  const throughput = record.result?.throughput ?? record.run?.progress().throughput;
   return {
     delegationId: record.delegationId,
     agent: record.agentName,
@@ -134,6 +143,10 @@ export function delegationSummary(record: DelegationView): Record<string, unknow
     ...(record.contextTokens !== undefined
       ? { contextTokens: record.contextTokens }
       : {}),
+    // Canonical per-run generation throughput: settled-only, exact provider
+    // output over first-content-to-end spans. Absent when the run reported
+    // no usable figure.
+    ...(throughput ? { throughput } : {}),
     ...(record.lastToolName ? { lastToolName: record.lastToolName } : {}),
     ...(record.completedAt ? { completedAt: record.completedAt } : {}),
     ...(record.result?.modelFailures ? { modelFailures: record.result.modelFailures } : {}),
@@ -230,6 +243,7 @@ export type WaitResultSnapshot = {
   handoffCheckpointError?: SubagentHandoffPersistenceError;
   scratchReportPath?: string;
   usage?: MessageUsage;
+  throughput?: GenerationThroughputTotals;
   contextTokens?: number;
   report: string;
   /** True when the snapshot was rebuilt from persisted history, not a live run. */
@@ -238,6 +252,8 @@ export type WaitResultSnapshot = {
 
 /** Read one record as a wait-result snapshot (heartbeat for runners). */
 export function snapshotWaitRecord(record: DelegationRecord): WaitResultSnapshot {
+  // Settled totals win over the live loop's own totals, matching delegationSummary.
+  const throughput = record.result?.throughput ?? record.run?.progress().throughput;
   return {
     delegationId: record.delegationId,
     agent: record.agentName,
@@ -262,6 +278,7 @@ export function snapshotWaitRecord(record: DelegationRecord): WaitResultSnapshot
     ...(record.usage ?? record.result?.usage
       ? { usage: record.usage ?? record.result?.usage }
       : {}),
+    ...(throughput ? { throughput } : {}),
     ...(record.contextTokens !== undefined
       ? { contextTokens: record.contextTokens }
       : {}),

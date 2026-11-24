@@ -1334,7 +1334,7 @@ export type PluginHostApi = {
     openExternal: (url: string) => Promise<void>;
   };
   browser: {
-    /** Reveal the Browser view for the calling session and wait until it is ready. */
+    /** Reveal the Browser view for the calling session. Optional: execution runs in the background without revealing. */
     reveal: () => Promise<void>;
     navigate: (input: { url?: string; path?: string }) => Promise<unknown>;
     action: (input: { action: "back" | "forward" | "reload" | "stop" }) => Promise<void>;

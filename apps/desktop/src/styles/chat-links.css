@@ -75,6 +75,29 @@
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/*
+ * A path row's rendered file name: the only preview target in the header. It
+ * is a shrink-to-text inline block inside the flex:1 layout summary, so only
+ * the name itself answers a click or a hover while the blank summary area
+ * keeps the header's toggle behavior. It carries its own ellipsis clamped to
+ * the summary, so a name too long for the row still ends at the row's edge.
+ */
+.tool-row-file-name {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.tool-row-file-name.linked {
+  cursor: pointer;
+}
+.tool-row-file-name.linked:hover {
+  color: var(--ds-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 
 /* Local image references render inline via a bounded data URL; the chip is
    the fallback when the file cannot be resolved. */

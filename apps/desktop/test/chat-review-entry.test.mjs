@@ -214,8 +214,10 @@ test("chat renders one message-owned review inside the tool row that made it", (
   // second collapsed row naming the same file (D192).
   assert.match(
     transcriptSource,
-    /\{review \? <ReviewChangeCounts change=\{review\} \/> : null\}[\s\S]*?<ReviewChangeBody message=\{message\} \/>/,
+    /\{evidence \? <ReviewChangeCounts change=\{evidence\} \/> : null\}[\s\S]*?<ReviewChangeBody message=\{message\} \/>[\s\S]*?<ReviewDiffView/,
   );
+  // The counts read the message-owned evidence: the durable workspace review
+  // or the per-call preview scratch and approved external edits carry.
   assert.doesNotMatch(transcriptSource, /<ReviewChangeCard\b/);
   // The standalone card is the review panel's row for a change no tool row
   // shows, and it stays the only place that repeats the file name.

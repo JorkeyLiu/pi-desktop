@@ -92,7 +92,7 @@ import {
   Sun,
   Target,
   Terminal,
-  TextSelect,
+  TextQuote,
   Trash2,
   TriangleAlert,
   UserRound,
@@ -189,8 +189,8 @@ export const IconSidebar = icon(PanelLeft);
 export const IconArrowUp = icon(ArrowUp);
 export const IconArrowDown = icon(ArrowDown);
 export const IconCopy = icon(Copy);
-/* Chat context menus: hand a message's rendered text to the platform selection. */
-export const IconTextSelect = icon(TextSelect);
+/* Chat context menus: the selected-text Copy and Quote items. */
+export const IconQuote = icon(TextQuote);
 export const IconCode = icon(Code2);
 export const IconDatabase = icon(Database);
 export const IconCheck = icon(Check);

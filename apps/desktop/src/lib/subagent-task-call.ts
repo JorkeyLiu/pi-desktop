@@ -1,5 +1,5 @@
 import type { UiMessage } from "@pi-desktop/shared";
-import { delegationChainMaps } from "./assistant-turns";
+import { delegationChainMaps, isAcceptedSubagentCall } from "./assistant-turns";
 import { isDelegationStartTool } from "./tool-display";
 
 /**
@@ -27,6 +27,13 @@ export function delegateTaskTitle(call: UiMessage): string {
   if (typeof description !== "string") return "";
   return description.replace(/\s+/g, " ").trim();
 }
+/** The agent role one `Task` call asked for: the `agent` it was dispatched with. */
+export function delegateTaskAgent(call: UiMessage): string {
+  const args = call.toolArgs;
+  if (!args || typeof args !== "object" || Array.isArray(args)) return "";
+  const agent = (args as { agent?: unknown }).agent;
+  return typeof agent === "string" ? agent : "";
+}
 
 /** The `resume` argument a `Task(resume …)` call sends, unread if absent. */
 export function resumeArgOf(message: UiMessage): unknown {
@@ -53,7 +60,9 @@ export function resumeTarget(
  *
  * `childOf` plus the bare-call-id fallback: `delegationChainMaps` only links the
  * delegation-id form, so a resume that names the prior call id directly needs
- * its own edge to keep the chain connected before results land.
+ * its own edge to keep the chain connected before results land. Either form
+ * only extends the chain from an executed call: a rejected resume is a request
+ * attempt with no run behind it, so it builds no edge.
  */
 export function subagentResumeLinks(messages: readonly UiMessage[]): {
   callByDelegationId: Map<string, string>;
@@ -61,11 +70,21 @@ export function subagentResumeLinks(messages: readonly UiMessage[]): {
 } {
   const { callByDelegationId, childOf } = delegationChainMaps(messages);
   const resumeLink = new Map(childOf);
+  const childParents = new Set<string>();
+  const pending: { target: string; next: string; message: UiMessage }[] = [];
   for (const message of messages) {
+    if (message.parentToolCallId) childParents.add(message.parentToolCallId);
     if (message.role !== "tool" || !isDelegationStartTool(message.toolName)) continue;
+    if (!message.toolCallId) continue;
     const target = resumeTarget(resumeArgOf(message), callByDelegationId);
-    if (!target || !message.toolCallId) continue;
-    if (!resumeLink.has(target)) resumeLink.set(target, message.toolCallId);
+    if (!target) continue;
+    pending.push({ target, next: message.toolCallId, message });
+  }
+  // First link per target wins, as before; the gate runs after the pass so the
+  // child rows a later call produced are visible when its acceptance is judged.
+  for (const { target, next, message } of pending) {
+    if (resumeLink.has(target)) continue;
+    if (isAcceptedSubagentCall(message, childParents.has(next))) resumeLink.set(target, next);
   }
   return { callByDelegationId, resumeLink };
 }

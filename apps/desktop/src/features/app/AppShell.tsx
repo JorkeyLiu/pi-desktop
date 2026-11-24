@@ -1,4 +1,4 @@
-import { type CSSProperties, lazy, type ReactNode, Suspense, useEffect } from "react";
+import { type CSSProperties, lazy, type ReactNode, Suspense, useCallback, useEffect } from "react";
 import { ConversationTopbar } from "../../components/ConversationTopbar";
 import { ExtensionPromptHost } from "../../components/ExtensionPromptDialog";
 import { PluginRendererHost } from "../../plugins/renderer-host/PluginRendererHost";
@@ -19,25 +19,12 @@ import { useCopyTex } from "../../hooks/use-copy-tex";
 import { api } from "../../lib/api";
 import { PortalVisibilityProvider } from "../../lib/portal-visibility";
 import { workPanelLayout } from "../../lib/work-panel-resize";
+import { useAppStore } from "../../stores/app-store";
 import { LiveVoiceStatusHost } from "../voice/live/LiveVoiceStatusHost";
 import { CollapsedTitlebarActions, RoutePending } from "./chrome";
+import { SecondaryWindows } from "./SecondaryWindows";
 import { useAppShellRuntime } from "./useAppShellRuntime";
 
-const SettingsPage = lazy(() =>
-  import("../../pages/SettingsPage").then((module) => ({
-    default: module.SettingsPage,
-  })),
-);
-const ScheduledPage = lazy(() =>
-  import("../../pages/ScheduledPage").then((module) => ({
-    default: module.ScheduledPage,
-  })),
-);
-const PluginsPage = lazy(() =>
-  import("../../pages/PluginsPage").then((module) => ({
-    default: module.PluginsPage,
-  })),
-);
 const loadChatSurface = () => import("../../components/ChatSurface");
 const ChatSurface = lazy(() =>
   loadChatSurface().then((module) => ({
@@ -67,7 +54,6 @@ export function AppShell() {
     handleSidebarWidthCommit,
     handleSidebarResizeCollapse,
     toggleSidebar,
-    reopenSidebar,
     autoCollapseSidebar,
     appShellRef,
     shellWidth,
@@ -93,6 +79,7 @@ export function AppShell() {
     workPanelToggleTooltip,
     workPanelWidth,
   } = useAppShellRuntime();
+  const setPage = useAppStore((state) => state.setPage);
   useCopyTex();
 
   useEffect(() => {
@@ -102,11 +89,19 @@ export function AppShell() {
   }, []);
 
   useEffect(() => {
-    if (!ready || page !== "chat" || !workPanelOpen) return;
+    if (!ready || !workPanelOpen) return;
     void loadWorkPanel().catch((error: unknown) => {
       console.error("Failed to preload the work panel", error);
     });
-  }, [page, ready, workPanelOpen]);
+  }, [ready, workPanelOpen]);
+
+  // One dismissal path for the secondary-window layer: the header close
+  // control, the scrim, Escape, and a sidebar destination toggle all end in
+  // the same `setPage("chat")`, which also makes the store's single window
+  // slot empty again.
+  const closeSecondaryWindow = useCallback(() => {
+    setPage("chat");
+  }, [setPage]);
 
   const pendingWorkPanelWidth = workPanelLayout({
     containerWidth: shellWidth,
@@ -134,11 +129,18 @@ export function AppShell() {
   if (ready) {
     shell = (
       <>
-        <PortalVisibilityProvider visible={page !== "settings"}>
+        {/*
+          Chat is the only home. Settings, Extensions, and Scheduled open as
+          in-app floating windows over this shell, so the conversation stays
+          mounted — transcript scroll, composer draft, and running turn are
+          never rebuilt by a destination switch. The shell is inert while a
+          window is up (never `display: none`, which would discard scroll
+          offsets), and its portal layers follow the same visibility.
+        */}
+        <PortalVisibilityProvider visible={page === "chat"}>
           <div
             className="app-chat-shell"
-            hidden={page === "settings"}
-            inert={page === "settings" ? true : undefined}
+            inert={page === "chat" ? undefined : true}
           >
             {!sidebarCollapsed || sidebarExiting ? (
               <Sidebar
@@ -188,33 +190,14 @@ export function AppShell() {
 
             {!workPanelMaximized && (
               <section className="main-pane">
-                {page === "chat" ? (
-                  <ConversationTopbar
-                    sidebarCollapsed={sidebarCollapsed}
-                    workPanelOpen={presentedWorkPanelOpen}
-                    onToggleSidebar={toggleSidebar}
-                    onNewTask={() => void runMenuCommand("newTask")}
-                    onOpenSearch={() => setSearchOpen(true)}
-                  />
-                ) : (
-                  <div
-                    className={cx(
-                      "main-titlebar",
-                      presentedWorkPanelOpen && "work-panel-open",
-                    )}
-                  >
-                    {sidebarCollapsed && (
-                      <div className="main-titlebar-left no-drag">
-                        <CollapsedTitlebarActions
-                          onToggleSidebar={reopenSidebar}
-                          onNewTask={() => void runMenuCommand("newTask")}
-                          sidebarToggleShortcut={sidebarToggleShortcut}
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-                {page !== "settings" ? <UpdateBanner /> : null}
+                <ConversationTopbar
+                  sidebarCollapsed={sidebarCollapsed}
+                  workPanelOpen={presentedWorkPanelOpen}
+                  onToggleSidebar={toggleSidebar}
+                  onNewTask={() => void runMenuCommand("newTask")}
+                  onOpenSearch={() => setSearchOpen(true)}
+                />
+                <UpdateBanner />
 
                 {backendDown && (
                   <div
@@ -272,17 +255,7 @@ export function AppShell() {
                 )}
 
                 <Suspense fallback={<RoutePending />}>
-                  {page === "scheduled" ? (
-                    <div className="route-surface route-page">
-                      <ScheduledPage />
-                    </div>
-                  ) : page === "plugins" ? (
-                    <div className="route-surface route-page">
-                      <PluginsPage />
-                    </div>
-                  ) : (
-                    <ChatSurface visible={page === "chat"} />
-                  )}
+                  <ChatSurface />
                 </Suspense>
               </section>
             )}
@@ -337,17 +310,12 @@ export function AppShell() {
             </TooltipButton>
           </div>
         </PortalVisibilityProvider>
-        {page === "settings" ? (
-          <Suspense fallback={<RoutePending />}>
-            <SettingsPage />
-          </Suspense>
-        ) : null}
+        <SecondaryWindows page={page} onClose={closeSecondaryWindow} />
         <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
         <ToastHost />
         <LiveVoiceStatusHost />
         <PluginRendererHost />
         <ExtensionPromptHost />
-        {page === "settings" ? <UpdateBanner /> : null}
       </>
     );
   }
@@ -358,7 +326,6 @@ export function AppShell() {
       className={cx(
         "app-shell",
         !ready && "app-shell-boot",
-        page === "settings" && ready && "settings-mode",
         sidebarCollapsed && "sidebar-collapsed",
         workPanelMaximized && "work-panel-maximized",
         showSplash && "is-booting",

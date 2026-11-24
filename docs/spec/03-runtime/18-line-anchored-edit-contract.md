@@ -626,6 +626,12 @@ Rollback's post-tool hash check is unaffected: it uses the full digest, not the
 16-bit tag. After a rollback the session snapshot store must be invalidated for
 that path, or the model would hold a tag for content the rollback replaced.
 
+Every successful `Edit` also attaches a per-call diff preview to its own result
+(`03-tools-and-permissions.md` §4c): the same bounded differ runs over the same
+before/after bytes the call operated on, so the counts are actual even where no
+durable snapshot exists (scratch, permission-authorized external paths). The
+preview carries no snapshot identity and confers no rollback.
+
 ### 13.2 Single-path `Edit`
 
 The permission gate, review snapshot, artifacts row
@@ -644,7 +650,9 @@ existing per-session mutation permit already excludes that.
 
 The Edit row renders from the review record's hunks — which ADR 0043 already
 produces — and shows the op headers verbatim as the model's stated intent.
-Resolved block spans and every warning from §8.4, §9.2, and §10 are surfaced on
+Where no durable record exists (scratch, permission-authorized external edits),
+the row renders the call's own preview hunks instead, behind the same
+localized root badge. Resolved block spans and every warning from §8.4, §9.2, and §10 are surfaced on
 the row, not swallowed.
 
 ### 13.5 Subagents

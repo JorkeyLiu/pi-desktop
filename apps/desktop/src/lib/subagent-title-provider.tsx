@@ -9,7 +9,7 @@ import type { UiMessage } from "@pi-desktop/shared";
 import { reuseReadonlyMap } from "./assistant-turns";
 import { reuseReferences } from "./transcript-summary";
 import { isDelegationStartTool } from "./tool-display";
-import { subagentTaskTitles } from "./subagent-title";
+import { subagentTaskAgents, subagentTaskTitles } from "./subagent-title";
 
 /**
  * The task titles of the whole conversation, keyed by delegation identity.
@@ -29,6 +29,23 @@ const SubagentTitleContext =
 /** The conversation-wide task titles, or `null` outside a transcript surface. */
 export function useSubagentTaskTitles(): ReadonlyMap<string, string> | null {
   return useContext(SubagentTitleContext);
+}
+
+/**
+ * The requested agent of every delegation of the whole conversation, keyed by
+ * delegation identity — the same authority as the titles above.
+ *
+ * A `TaskSteer` row carries only `delegationId` and `message`, never the
+ * target's role, so it reads the recorded role here instead of its own
+ * arguments. A surface without a provider resolves to no badge rather than a
+ * routing id.
+ */
+const SubagentAgentContext =
+  createContext<ReadonlyMap<string, string> | null>(null);
+
+/** The conversation-wide delegation agents, or `null` outside a transcript surface. */
+export function useSubagentTaskAgents(): ReadonlyMap<string, string> | null {
+  return useContext(SubagentAgentContext);
 }
 
 export function SubagentTitleProvider({
@@ -59,9 +76,15 @@ export function SubagentTitleProvider({
   const titlesRef = useRef<ReadonlyMap<string, string>>(rawTitles);
   const titles = reuseReadonlyMap(titlesRef.current, rawTitles);
   titlesRef.current = titles;
+  const rawAgents = useMemo(() => subagentTaskAgents(calls), [calls]);
+  const agentsRef = useRef<ReadonlyMap<string, string>>(rawAgents);
+  const agents = reuseReadonlyMap(agentsRef.current, rawAgents);
+  agentsRef.current = agents;
   return (
     <SubagentTitleContext.Provider value={titles}>
-      {children}
+      <SubagentAgentContext.Provider value={agents}>
+        {children}
+      </SubagentAgentContext.Provider>
     </SubagentTitleContext.Provider>
   );
 }

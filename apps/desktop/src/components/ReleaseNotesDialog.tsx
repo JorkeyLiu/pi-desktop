@@ -7,6 +7,7 @@ import {
   resolveChangelogLocale,
 } from "@pi-desktop/shared/changelog-loader";
 import { OverlayBackdrop, Badge, cx, portalOverlay, TooltipButton } from "./ui";
+import { useEscapeOwner, useSecondaryWindowActive } from "../lib/secondary-window-context";
 import { IconClose } from "./icons";
 
 export function ReleaseNotesDialog({
@@ -64,7 +65,10 @@ export function ReleaseNotesDialog({
     [locale],
   );
 
+  const secondaryWindowActive = useSecondaryWindowActive();
+  useEscapeOwner(secondaryWindowActive);
   useEffect(() => {
+    if (!secondaryWindowActive) return;
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -99,7 +103,7 @@ export function ReleaseNotesDialog({
       document.body.style.overflow = previousOverflow;
       previouslyFocused?.focus();
     };
-  }, [onClose]);
+  }, [onClose, secondaryWindowActive]);
 
   return portalOverlay(
     <OverlayBackdrop

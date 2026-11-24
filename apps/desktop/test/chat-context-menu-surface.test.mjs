@@ -20,6 +20,10 @@ const assistantTurnSource = await readFile(
   new URL("../src/features/chat/transcript/AssistantTurn.tsx", import.meta.url),
   "utf8",
 );
+const transcriptMenuSource = await readFile(
+  new URL("../src/features/chat/transcript/TranscriptMenu.tsx", import.meta.url),
+  "utf8",
+);
 
 test("the pointer-anchored menu portals, measures, and closes without trapping focus", () => {
   assert.match(menuSource, /portalToBody\(/);
@@ -29,7 +33,7 @@ test("the pointer-anchored menu portals, measures, and closes without trapping f
   assert.match(menuSource, /window\.addEventListener\("keydown", onKeyDown, true\)/);
   assert.match(menuSource, /if \(event\.key === "Tab"\)/);
   assert.match(menuSource, /onContextMenu=\{/);
-  assert.match(menuSource, /function snapshotSelection\(/);
+  assert.match(menuSource, /export function readContextMenuSelection\(root: EventTarget\): string/);
   assert.match(menuSource, /live\.isCollapsed/);
   assert.match(menuSource, /root\.contains\(anchorNode\)/);
   assert.match(menuSource, /root\.contains\(focusNode\)/);
@@ -37,16 +41,35 @@ test("the pointer-anchored menu portals, measures, and closes without trapping f
   assert.match(menuSource, /if \(!request\.items\.length\) return;/);
 });
 
-test("the transcript owns one menu and each speaking row can open it", () => {
+test("the transcript owns one selected-text menu and each surface opens it gated", () => {
   assert.match(transcriptSource, /<TranscriptMenuProvider>/);
   assert.match(transcriptSource, /onContextMenu=\{onContextMenu\}/);
-  assert.match(transcriptSource, /conversationMenuItems\(/);
+  assert.match(transcriptSource, /openSelectedTextMenu\(event\)/);
   assert.match(messageRowSource, /onContextMenu=\{onContextMenu\}/);
-  assert.match(messageRowSource, /userMessageMenuItems\(/);
+  assert.match(messageRowSource, /openSelectedTextMenu\(event\)/);
   assert.match(assistantTurnSource, /onContextMenu=\{onContextMenu\}/);
-  assert.match(assistantTurnSource, /assistantTurnMenuItems\(/);
+  assert.match(assistantTurnSource, /openSelectedTextMenu\(event\)/);
 });
 
+test("the transcript gate opens nothing without a selection", () => {
+  assert.match(transcriptMenuSource, /readContextMenuSelection\(event\.currentTarget\)/);
+  assert.match(transcriptMenuSource, /if \(!readContextMenuSelection\(event\.currentTarget\)\) return;/);
+  assert.match(transcriptMenuSource, /selectedTextMenuItems\(/);
+  assert.doesNotMatch(transcriptSource, /conversationMenuItems/);
+  assert.doesNotMatch(transcriptSource, /copyConversation/);
+  assert.doesNotMatch(messageRowSource, /userMessageMenuItems/);
+  assert.doesNotMatch(assistantTurnSource, /assistantTurnMenuItems/);
+  assert.doesNotMatch(messageRowSource, /select-text/);
+  assert.doesNotMatch(assistantTurnSource, /select-text/);
+});
+
+test("the transcript gate requires the pointer to hit the selected text", () => {
+  assert.match(menuSource, /export function contextMenuClickHitsSelection\(/);
+  assert.match(menuSource, /export function clearChatSelection\(/);
+  assert.match(menuSource, /getClientRects\(\)/);
+  assert.match(transcriptMenuSource, /contextMenuClickHitsSelection\(event\.currentTarget, point\)/);
+  assert.match(transcriptMenuSource, /clearChatSelection\(event\.currentTarget\)/);
+});
 test("the context-menu surface is a measured fixed layer", () => {
   const rule = styles.match(/\.context-menu\s*\{[\s\S]*?\}/)?.[0] ?? "";
   assert.match(rule, /position:\s*fixed/);

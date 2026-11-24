@@ -1,6 +1,6 @@
 import type { SessionDetail, SessionHistoryScope, UiMessage } from "@pi-desktop/shared";
 import { delegationHistoryScope } from "@pi-desktop/shared";
-import { dedupeSessionMessages, upsertLiveSessionMessage } from "./session-transcript";
+ import { dedupeSessionMessages, orderRowsByLiveAnnouncement, upsertLiveSessionMessage } from "./session-transcript";
 import { subagentChainCallIds } from "./subagent-chain";
 import { delegationIdForMessage } from "./subagent-panel";
 import { isDelegationStartTool } from "./tool-display";
@@ -95,11 +95,31 @@ export type SubagentHistoryEntry = {
    */
   omittedAfterId?: string;
   /**
+   * Live rows this chain routed in that no durable page has confirmed yet,
+   * oldest first, always a subset of `messages`.
+   *
+   * A running child row exists only in the parent's live array until its tool
+   * ends, so a read issued before that end cannot contain it. Keeping the
+   * unconfirmed rows here is what lets every durable merge — including the
+   * window replacement a wide gap forces — put them back instead of erasing a
+   * row the reader is watching. A page that names the row confirms it, and the
+   * live copy retires exactly once. A call appears here once, holding the state
+   * its latest live event published, so repeated publications cannot grow it.
+   */
+  livePending: UiMessage[];
+  /**
    * True while no live row arrived after the last durable read: the entry
    * matches the store, so reopening it costs nothing. A live row clears it,
-   * and only a durable read sets it again.
+   * and a durable read sets it again unless a live row arrived while that read
+   * was in flight — then the answer is already stale.
    */
   finalized: boolean;
+  /**
+   * Whether a live row was routed in while a read of this entry was in flight.
+   * The answer that read returns was captured before that row, so it cannot
+   * finalize the entry; the flag is consumed by the read that sets it.
+   */
+  liveDuringRead?: boolean;
   /** True while a read of an already loaded entry is in flight. */
   refreshing: boolean;
   /** Search target this entry was opened to show, if any. */
@@ -139,6 +159,8 @@ export function createSubagentHistoryEntry(
     refreshing: false,
     focus: null,
     scoped: false,
+    livePending: [],
+    liveDuringRead: false,
     touched,
   };
 }
@@ -177,32 +199,36 @@ export function aliasesWith(aliases: readonly string[], next: string | undefined
   return [...aliases, next].slice(-MAX_ALIASES);
 }
 
-/**
- * Stable conversation order across the chain's evidence.
- *
- * Durable pages arrive in physical order, live rows arrive in session order,
- * and a chain's root `Task` records are kept apart from its child rows; the
- * merged view has to read like one conversation. Creation time is the order
- * the backend produced the rows in, and identical stamps keep their arrival
- * order, so the merge never reshuffles rows the reader already sees.
- */
-function orderedRows(rows: readonly UiMessage[]): UiMessage[] {
-  if (rows.length < 2) return [...rows];
-  const arrival = new Map<string, number>();
-  for (const [index, row] of rows.entries()) {
-    if (!arrival.has(row.id)) arrival.set(row.id, index);
-  }
-  return [...rows].sort((left, right) => {
-    const leftAt = left.createdAt;
-    const rightAt = right.createdAt;
-    if (leftAt !== rightAt) {
-      if (!leftAt) return 1;
-      if (!rightAt) return -1;
-      return leftAt < rightAt ? -1 : 1;
-    }
-    return (arrival.get(left.id) ?? 0) - (arrival.get(right.id) ?? 0);
-  });
-}
+
+ /**
+  * History baseline order for the delegate view: creation time, arrival-tied.
+  *
+  * This is the durable skeleton's own order — the rows the live tail does not
+  * name stay on it (paging, focus islands, and context keep the semantics the
+  * existing scoped-history tests pin down). It is not the tool order
+  * authority: rows the live tail names keep the first-announcement order the
+  * transcript already showed (see `orderRowsByLiveAnnouncement`), because
+  * completion re-stamps `createdAt` and durable pages arrive in finish order.
+  * The base stays chronological; the overlay only repositions live-named
+  * rows among themselves.
+  */
+ function orderedRows(rows: readonly UiMessage[]): UiMessage[] {
+   if (rows.length < 2) return [...rows];
+   const arrival = new Map<string, number>();
+   for (const [index, row] of rows.entries()) {
+     if (!arrival.has(row.id)) arrival.set(row.id, index);
+   }
+   return [...rows].sort((left, right) => {
+     const leftAt = left.createdAt;
+     const rightAt = right.createdAt;
+     if (leftAt !== rightAt) {
+       if (!leftAt) return 1;
+       if (!rightAt) return -1;
+       return leftAt < rightAt ? -1 : 1;
+     }
+     return (arrival.get(left.id) ?? 0) - (arrival.get(right.id) ?? 0);
+   });
+ }
 
 /** Every live row that belongs to the chain: its root `Task` rows and its children. */
 function ownedChainRows(
@@ -283,46 +309,83 @@ export function subagentHistoryTouchesLive(
   return false;
 }
 
-/**
- * The rows a delegate view renders: the chain's own cached rows plus the live
- * tail that belongs to it.
- *
- * The entry already owns the rows ingestion persisted; this merge keeps the
- * view correct for the publication boundary between a live event and a render,
- * and it resolves the chain over both views at once — a continuation opens its
- * own `Task(resume …)` call after the page was read, so only reading the cached
- * page and the live tail together keeps that segment on the tab that already
- * represents the chain.
- */
-export function subagentHistoryMessages(
-  entry: SubagentHistoryEntry | undefined,
-  live: readonly UiMessage[],
-): UiMessage[] {
+ /**
+  * The rows a delegate view renders: the chain's own cached rows plus the live
+  * tail that belongs to it.
+  *
+  * The entry already owns the rows ingestion persisted; this merge keeps the
+  * view correct for the publication boundary between a live event and a render,
+  * and it resolves the chain over both views at once — a continuation opens its
+  * own `Task(resume …)` call after the page was read, so only reading the cached
+  * page and the live tail together keeps that segment on the tab that already
+  * represents the chain.
+  *
+  * Two position rules, one authority each. The history baseline is
+  * chronological (`orderedRows`): rows the live tail does not name keep the
+  * creation-time order the existing scoped-history tests pin down, so paging,
+  * focus islands, and context keep their semantics. The live overlay
+  * (`orderRowsByLiveAnnouncement`) owns rows the live tail names: they keep
+  * the first-announcement order the transcript already showed, because
+  * completion re-stamps `createdAt` and durable pages arrive in finish order.
+  * For those live-named rows `createdAt` is display metadata, never a
+  * position key — a re-stamp or refresh only replaces values. Live rows stay
+  * authoritative for an id the cache already holds, so a completed child row
+  * replaces its streaming copy.
+  */
+ export function subagentHistoryMessages(
+   entry: SubagentHistoryEntry | undefined,
+   live: readonly UiMessage[],
+ ): UiMessage[] {
   if (!entry) return [...live];
-  const base = orderedRows(dedupeSessionMessages([...entry.context, ...entry.messages]));
-  if (!live.length) return base;
+  // Chronological history baseline first: the entry's own order already
+  // carries live announcement order for ingested rows, but paging prepends
+  // older pages ahead of focus islands, so the baseline must be restored by
+  // creation time. Completion re-stamps `createdAt` on the same id, so the
+  // baseline sort below only runs over rows the live tail does not name —
+  // live-named rows keep their entry slots here and the overlay restores
+  // their announcement order next. Either set alone would regress the other:
+  // a full re-sort moves a re-stamped A after B, entry order alone strands
+  // a paged focus island behind its older page.
+  const base = dedupeSessionMessages([...entry.context, ...entry.messages]);
+  if (!live.length) return orderedRows(base);
   const owned = ownedChainRows(entry, live);
-  if (!owned.context.length && !owned.messages.length) return base;
+  if (!owned.context.length && !owned.messages.length) return orderedRows(base);
   const ownedIds = new Set([...owned.context, ...owned.messages].map((row) => row.id));
   let output = base;
   for (const message of live) {
     if (!ownedIds.has(message.id)) continue;
-    // Live rows are authoritative for an id the cache already holds, so a
-    // completed child row replaces its streaming copy.
     output = upsertLiveSessionMessage(output, message);
   }
-  return orderedRows(output);
-}
+  const liveOrder = new Map<string, number>();
+  for (const [index, message] of live.entries()) {
+    if (!liveOrder.has(message.id)) liveOrder.set(message.id, index);
+  }
+  // Durable baseline: rows the live tail does not name keep chronological
+  // order among the positions they already hold; a live-only A is never
+  // moved by a sorted-B anchor because B's slot is not in this set.
+  const durablePositions: number[] = [];
+  for (const [index, message] of output.entries()) {
+    if (!liveOrder.has(message.id)) durablePositions.push(index);
+  }
+  const sortedDurable = orderedRows(durablePositions.map((position) => output[position]));
+  let next = output.slice();
+  durablePositions.forEach((position, step) => {
+    next[position] = sortedDurable[step];
+  });
+  // Live overlay second: rows the live tail names keep the first-announcement
+  // order among themselves; durable-only rows never move for them.
+  return orderRowsByLiveAnnouncement(next, liveOrder, (message) => liveOrder.has(message.id));
+ }
 
-/**
- * Trim the oldest rows of a chain that grew past its row budget.
- *
- * The focus row is kept wherever it sits, so trimming can leave it as an island
- * with a hole after it. That hole is recorded rather than hidden: the entry then
- * names the first row of the retained run that follows the island, and the view
- * states the omission there. A trim that only drops rows before every kept row
- * keeps the range contiguous, and no marker is set.
- */
+ /**
+  * Trim the oldest rows of a chain that grew past its row budget.
+  *
+  * The focus row is kept wherever it sits, so trimming can leave it as an island
+  * with a hole after it. That hole is recorded rather than hidden: the entry then
+  * names the first row of the retained run that follows the island, and the view
+  * states the omission there. A trim that only drops rows before every kept row
+  * keeps the range contiguous, and no marker is set.
+  */
 function limitRows(entry: SubagentHistoryEntry, limit: number): SubagentHistoryEntry {
   if (limit <= 0 || entry.messages.length <= limit) return entry;
   const focusId = entry.focus?.messageId;
@@ -338,11 +401,109 @@ function limitRows(entry: SubagentHistoryEntry, limit: number): SubagentHistoryE
     }
     kept.push(row);
   }
-  if (!droppedAfterFocus) return { ...entry, messages: kept };
+  const keptIds = new Set(kept.map((row) => row.id));
+  const trimmed: SubagentHistoryEntry = {
+    ...entry,
+    messages: kept,
+    // An unconfirmed row is always one of the rows, so a trim bounds both.
+    livePending: (entry.livePending ?? []).filter((row) => keptIds.has(row.id)),
+  };
+  if (!droppedAfterFocus) return trimmed;
   const island = kept.findIndex((row) => row.id === focusId);
   const following = island >= 0 ? kept[island + 1] : undefined;
-  if (!following) return { ...entry, messages: kept };
-  return { ...entry, messages: kept, omittedAfterId: focusId };
+  if (!following) return trimmed;
+  return { ...trimmed, omittedAfterId: focusId };
+}
+
+/** Tool states that are still in flight, so a later one may still replace them. */
+const UNSETTLED_TOOL_STATUSES = new Set(["running", "preparing"]);
+
+/** True when a child row has already reached its terminal state. */
+function isSettledChildRow(row: UiMessage): boolean {
+  return typeof row.toolStatus === "string" && !UNSETTLED_TOOL_STATUSES.has(row.toolStatus);
+}
+
+/**
+ * One unconfirmed version per call, at the position the call first appeared.
+ *
+ * A running child republishes on every event, so the same call reaches the
+ * pending set many times with an advancing state; keeping one version per id is
+ * what bounds it by the chain's own rows instead of by the event count. The
+ * later publication wins, except that a replay of an earlier unsettled frame
+ * never downgrades a settled one — the same rule a late prepare frame already
+ * follows for an executing row.
+ */
+function mergePendingRows(
+  held: readonly UiMessage[],
+  incoming: readonly UiMessage[],
+): UiMessage[] {
+  const order: string[] = [];
+  const byId = new Map<string, UiMessage>();
+  for (const row of [...held, ...incoming]) {
+    const current = byId.get(row.id);
+    if (!current) {
+      order.push(row.id);
+      byId.set(row.id, row);
+      continue;
+    }
+    if (isSettledChildRow(current) && !isSettledChildRow(row)) continue;
+    byId.set(row.id, row);
+  }
+  const merged: UiMessage[] = [];
+  for (const id of order) {
+    const row = byId.get(id);
+    if (row) merged.push(row);
+  }
+  return merged;
+}
+
+/** True when two pending sets hold the same row objects in the same order. */
+function samePendingRows(held: readonly UiMessage[], next: readonly UiMessage[]): boolean {
+  if (held.length !== next.length) return false;
+  return held.every((row, index) => row === next[index]);
+}
+
+/**
+ * The one durable/live reconciliation rule.
+ *
+ * `confirmed` is the ids of the rows a durable answer names. A live row the
+ * answer names has become durable, so its live copy retires here — exactly
+ * once, because the durable value already stands at that id — and the row
+ * leaves the pending set. A live row the answer does not name is still newer
+ * than the read: the durable window cannot speak for it, so the row is put
+ * back into the result — advancing a copy the merge already holds. A settled
+ * live row is therefore never displayed from an older unsettled copy of the
+ * same call, whichever read path built the rows.
+ *
+ * Retention is bounded by the row budget (`limitRows`): pending holds one
+ * version per call and always a subset of `messages`, so a chain that keeps
+ * streaming cannot accumulate rows past its own window. Pending state only
+ * spans the distance between a live event and the durable row that records the
+ * same call.
+ */
+function reconcileLiveRows(
+  rows: readonly UiMessage[],
+  confirmed: ReadonlySet<string>,
+  pending: readonly UiMessage[],
+): { messages: UiMessage[]; livePending: UiMessage[] } {
+  let messages = dedupeSessionMessages([...rows]);
+  const held = new Map(messages.map((row) => [row.id, row]));
+  const livePending: UiMessage[] = [];
+  for (const row of mergePendingRows([], pending)) {
+    if (confirmed.has(row.id)) continue;
+    const current = held.get(row.id);
+    // A merge can already hold this call from an older live copy — the row the
+    // parent published before the tool ended, or the retained window a page
+    // read joined. The pending version is the newest state this chain saw, so
+    // it replaces an unsettled copy in place; a settled copy already stands and
+    // keeps the durable value.
+    if (!current || (isSettledChildRow(row) && !isSettledChildRow(current))) {
+      messages = upsertLiveSessionMessage(messages, row);
+      held.set(row.id, row);
+    }
+    livePending.push(row);
+  }
+  return { messages, livePending };
 }
 
 /**
@@ -354,6 +515,15 @@ function limitRows(entry: SubagentHistoryEntry, limit: number): SubagentHistoryE
  * records that identify it, and any delegation identity those records reveal.
  * Nothing is derived at render time, so availability, identity, and content do
  * not depend on the main viewport at all.
+ *
+ * Each row routed in is also recorded as unconfirmed until a durable page names
+ * it: a tool that started but has not ended has no durable row yet, so a read
+ * issued before that end must not be able to erase the row. A row that already
+ * settled is never downgraded by a replay of its earlier unsettled frame. One version per
+ * call is kept — the newest this chain published — so repeated publications of
+ * the same running tool do not multiply the unconfirmed set. The read's own
+ * lifecycle (`refreshing`) belongs to the read that started it, so a live
+ * publication never makes an in-flight read look finished.
  *
  * Returns `undefined` when the live array holds nothing new for this chain, so
  * a publication never republishes an unchanged entry.
@@ -367,15 +537,43 @@ export function applySubagentLiveRows(
   const owned = ownedChainRows(entry, live);
   if (!owned.context.length && !owned.messages.length) return undefined;
   let messages = entry.messages;
-  for (const row of owned.messages) messages = upsertLiveSessionMessage(messages, row);
+  const held = new Map(messages.map((row) => [row.id, row]));
+  // The same settled-stands rule the merge paths follow: a replay of an earlier
+  // unsettled frame never downgrades a row that already reached its end, so the
+  // live array cannot hand the tab a completed call as still running.
+  const accepted: UiMessage[] = [];
+  for (const row of owned.messages) {
+    const current = held.get(row.id);
+    if (current && isSettledChildRow(current) && !isSettledChildRow(row)) continue;
+    messages = upsertLiveSessionMessage(messages, row);
+    held.set(row.id, row);
+    accepted.push(row);
+  }
   let context = entry.context;
   for (const row of owned.context) context = upsertLiveSessionMessage(context, row);
   let aliases = entry.aliases;
   for (const row of owned.context) aliases = aliasesWith(aliases, delegationIdForMessage(row));
+  // A finalized entry has already confirmed every row it holds, so a live
+  // update of a row it holds is a replay of a durable row, not a new
+  // unconfirmed one. Only rows the last durable read could not name join the
+  // pending set.
+  const confirmed = new Set(
+    entry.finalized ? entry.messages.map((row) => row.id) : [],
+  );
+  const { livePending } = reconcileLiveRows(
+    messages,
+    confirmed,
+    mergePendingRows(entry.livePending ?? [], accepted),
+  );
+  // A row routed in while a read is in flight makes that answer stale, and the
+  // read that publishes the answer consumes the flag.
+  const liveDuringRead = entry.liveDuringRead === true || entry.refreshing === true;
   const changed =
     messages !== entry.messages ||
     context !== entry.context ||
     aliases.length !== entry.aliases.length ||
+    !samePendingRows(entry.livePending ?? [], livePending) ||
+    entry.liveDuringRead !== liveDuringRead ||
     entry.finalized;
   if (!changed) return undefined;
   return limitRows(
@@ -384,11 +582,12 @@ export function applySubagentLiveRows(
       messages,
       context,
       aliases,
+      livePending,
+      liveDuringRead,
       status: messages.length || context.length ? "ready" : entry.status,
       // Live rows arrived after the last durable read: the entry may miss
       // events, so a reopen reads the tail again instead of trusting it.
       finalized: false,
-      refreshing: false,
     },
     limit,
   );
@@ -429,10 +628,17 @@ export function applySubagentHistoryPage(
 ): SubagentHistoryEntry {
   const rows = detail.messages ?? [];
   const initial = direction === "initial";
-  const messages =
+  const merged =
     direction === "latest"
       ? mergeTailRows(entry.messages, rows)
       : dedupeSessionMessages([...rows, ...entry.messages]);
+  // The page confirms the live rows it names; the rest are newer than this
+  // read and stay until a later page names them.
+  const { messages, livePending } = reconcileLiveRows(
+    merged,
+    new Set(rows.map((row) => row.id)),
+    entry.livePending ?? [],
+  );
   const pageContext = detail.historyContext?.length
     ? dedupeSessionMessages([...detail.historyContext])
     : [];
@@ -474,11 +680,16 @@ export function applySubagentHistoryPage(
       status: messages.length ? "ready" : "empty",
       messages,
       context,
+      livePending,
       messageStart,
       messageEnd: detail.messageEnd ?? entry.messageEnd,
       hasMoreBefore,
       hasMoreAfter,
-      finalized: true,
+      // A live row that arrived while this read was in flight is not in its
+      // answer, so the entry stays stale and the next open refreshes the tail
+      // instead of trusting this read.
+      finalized: entry.liveDuringRead !== true,
+      liveDuringRead: false,
       refreshing: false,
       scoped: initial ? detail.historyScope !== undefined : entry.scoped || detail.historyScope !== undefined,
       error: undefined,
@@ -554,19 +765,31 @@ export function applySubagentHistoryTailWindow(
     messages = [focusRow, ...messages];
     omittedAfterId = focusRow.id;
   }
+  // Every page the walk read confirms the rows it named, including pages the
+  // window itself could not keep. A live row none of them named has no durable
+  // copy yet, so it is put back after the retained run instead of erased by
+  // the replacement.
+  const confirmed = new Set(
+    pages.flatMap((page) => (page.messages ?? []).map((row) => row.id)),
+  );
+  const reconciled = reconcileLiveRows(messages, confirmed, entry.livePending ?? []);
   return {
     ...entry,
     canonicalId,
     aliases,
-    status: messages.length ? "ready" : "empty",
-    messages,
+    status: reconciled.messages.length ? "ready" : "empty",
+    messages: reconciled.messages,
     context,
+    livePending: reconciled.livePending,
     omittedAfterId,
     messageStart: oldest?.messageStart ?? entry.messageStart,
     messageEnd: newest?.messageEnd ?? entry.messageEnd,
     hasMoreBefore: true,
     hasMoreAfter: false,
-    finalized: true,
+    // A window that predates a live row does not finalize the entry: the next
+    // open reads the tail again instead of trusting it.
+    finalized: entry.liveDuringRead !== true,
+    liveDuringRead: false,
     refreshing: false,
     scoped,
     error: undefined,

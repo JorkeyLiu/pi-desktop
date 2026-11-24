@@ -29,6 +29,101 @@ pub enum ReviewChangeState {
     RolledBack,
 }
 
+/// The file-mutation tool a per-call preview was produced for. Unlike
+/// [`ReviewChangeOperation`] this has no `Delete`: the durable review record
+/// keeps its own operation vocabulary, while a preview is only ever produced
+/// by `Edit` or `Write`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FileMutationOperation {
+    Edit,
+    Write,
+}
+
+/// The only statuses an `Edit` preview may report: a content change, a
+/// deletion (all lines removed), or a move (no line change of its own).
+/// Taking this instead of the broad [`EditDiffStatus`] makes an
+/// `edit`/`added` preview unrepresentable at the call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditPreviewStatus {
+    Modified,
+    Deleted,
+    Moved,
+}
+
+/// The only statuses a `Write` preview may report: `Added` when the write
+/// created the file (reads as all lines added) or `Modified` when it
+/// overwrote bytes, including the unknown-baseline case whose counts are
+/// omitted rather than inferred as zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WritePreviewStatus {
+    Added,
+    Modified,
+}
+
+/// What one successful `Edit` or `Write` did to the file's bytes. A move
+/// carries no line change of its own: the path moved, so the content diff is
+/// empty rather than a deletion plus an addition. A write that created the
+/// file reads as all lines added. The per-operation `*PreviewStatus` enums
+/// above are the only way to build a preview; this enum stays as the wire
+/// vocabulary so persisted `editDiff` payloads keep reading.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum EditDiffStatus {
+    Modified,
+    Deleted,
+    Moved,
+    Added,
+}
+
+impl From<EditPreviewStatus> for EditDiffStatus {
+    fn from(status: EditPreviewStatus) -> Self {
+        match status {
+            EditPreviewStatus::Modified => EditDiffStatus::Modified,
+            EditPreviewStatus::Deleted => EditDiffStatus::Deleted,
+            EditPreviewStatus::Moved => EditDiffStatus::Moved,
+        }
+    }
+}
+
+impl From<WritePreviewStatus> for EditDiffStatus {
+    fn from(status: WritePreviewStatus) -> Self {
+        match status {
+            WritePreviewStatus::Added => EditDiffStatus::Added,
+            WritePreviewStatus::Modified => EditDiffStatus::Modified,
+        }
+    }
+}
+
+/// The per-call diff preview one successful `Edit` or `Write` carries in its
+/// own result. Unlike `ReviewChange` this is not durable: it holds no snapshot
+/// identity, no rollback state, and no reversible flag, so a scratch or
+/// explicitly approved external call gets the same line evidence as a
+/// workspace call without gaining review snapshots or aggregate/revert
+/// capabilities.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileMutationPreview {
+    pub version: u8,
+    pub path: String,
+    /// The root the result already reports: `workspace`, `scratch`, or
+    /// `external`.
+    pub root: String,
+    pub operation: FileMutationOperation,
+    pub status: EditDiffStatus,
+    /// Omitted when the comparison could not count the change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additions: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<usize>,
+    pub hunks: Vec<ReviewDiffHunk>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub binary: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ReviewDiffLimit>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewDiffLine {

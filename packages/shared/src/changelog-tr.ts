@@ -5,6 +5,8 @@ export const trEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
+      "Tarayıcı araç satırları artık çalıştırılan eylemi adlandırır — sayfa açma, anlık görüntü, ekran görüntüsü ve daha fazlası — ve üretilen sayfayı ya da sonucu gösterir; hatalarda ham ayrıntılar yerine yalnızca neden yazılır.",
+      "Bir alt aracıya yönlendirme iletisi, aynı görevin bekleme satırıyla aynı görünür — aracı, hedef görev ve gönderildi durumu — ve açıldığında yönlendirme metninin kendisini gösterir.",
       "Yeniden başlatma, çalışma panelini bıraktığınız gibi geri getirir: açık veya daraltılmış, aynı genişlikte, her sohbetin sekmeleri sırasıyla, seçili sekme ve en son gösterilen dosya önizlemesi ya da tarayıcı sayfasıyla.",
       "Yeniden başlatma, en son okuduğunuz projeyi ve sohbeti dökümüyle birlikte açar; açıkça temizlediğiniz bir proje geri gelmez.",
       "Uzun bir sohbette yukarı okurken konumunuz korunur: daha eski sayfalar ve yeni bağlanan geçmiş, okuduğunuz mesajları artık kaydırmaz.",
@@ -32,6 +34,8 @@ export const trEntries: ChangelogEntry[] = [
       "Bir alt ajan raporu ancak ana ajanın konuşmasına gerçekten ulaştığında teslim edilmiş sayılır: aktarım öncesinde reddedilirse veya değiştirilirse rapor beklemeye devam eder, bir sonraki bekleme veya sürdürmede gelir ve asla iki kez gönderilmez.",
       "Bir alt ajanın kendi bağlam devri ve ona gönderdiğiniz devam mesajı artık her uzunlukta metni kabul ediyor: uzun devam metinleri sabit bir karakter sınırında reddedilmek yerine yetkilendirilmiş çalışana olduğu gibi ulaşıyor.",
       "Eklenti ve MCP sunucularının stdio çıktısı artık her çerçevenin gerçekten taşıdığı UTF-8 baytlarıyla çerçeve çerçeve ölçülüyor: çok baytlı metin taşıyan bir çerçeve gerçek bayt sayısıyla sayılır ve tek bir okumada gelen birkaç küçük çerçeve, boyutları toplanmak yerine ayrı ayrı ölçülür.",
+      "Düzenlenen dosyalar; projede, geçici kopyalarda ve onaylı harici klasörlerde aynı satır farkını gösterir.",
+      "Daraltılmış araç satırlarında artık konum rozeti yok: bir dosya satırı adını ve değişiklik sayılarını korur, önizlemeyi yalnızca dosya adının kendisi açar.",
     ],
   },
   {

@@ -34,6 +34,7 @@ import {
   type ContextMenuPoint,
 } from "../lib/context-menu";
 import { texClipboardPayload } from "../lib/selection-tex";
+import { useEscapeOwner, useSecondaryWindowActive } from "../lib/secondary-window-context";
 
 export type ContextMenuItem = {
   /** Stable identity for React keys and for tests naming a row. */
@@ -103,7 +104,14 @@ function pointForEvent(event: ContextMenuTrigger): ContextMenuPoint {
  * not mirror this gate onto the copy listener — it rejects every range built
  * with `selectNodeContents`, this row's Copy item included.
  */
-function snapshotSelection(root: EventTarget): string {
+ /**
+  * The live selection owned by `root`, read for a chat surface before it opens
+  * its menu. Exported so the transcript gate and the menu snapshot read the
+  * same value: the gate decides *whether* a menu opens, the snapshot captures
+  * *what* its items act on, and two different readings would offer a menu for
+  * text its Copy then does not carry.
+  */
+ export function readContextMenuSelection(root: EventTarget): string {
   // Textarea ranges are not represented by the document Selection.
   const editor = document.activeElement;
   if (
@@ -162,6 +170,82 @@ function snapshotSelection(root: EventTarget): string {
   return texClipboardPayload(live) ?? live.toString();
 }
 
+/**
+ * A pointer the keyboard did not send, or null for a keyboard-opened menu
+ * (Shift+F10, the context-menu key), which reports no coordinates.
+ */
+export type ContextMenuClickPoint = { x: number; y: number } | null;
+
+/**
+ * Whether a right-click landed on the selected text itself.
+ *
+ * Containment in the row is not enough: a click on unselected words of the
+ * same paragraph still has both range ends inside the row, so the gate would
+ * offer Copy for text the pointer never touched. The click must hit the
+ * selection's own geometry — one client rect per line box, which is also
+ * what makes a multiline selection keep its menu on every line. A keyboard
+ * menu has no pointer to test and keeps the existing behavior.
+ *
+ * Chat-boundary only: the transcript gate calls this, and no generic caller
+ * does, so markdown-link, file-reference, and work-panel menus never change.
+ */
+export function contextMenuClickHitsSelection(
+  root: EventTarget,
+  point: ContextMenuClickPoint,
+): boolean {
+  if (!point) return true;
+  const editor = document.activeElement;
+  if (
+    root instanceof Node &&
+    editor instanceof HTMLTextAreaElement &&
+    root.contains(editor) &&
+    editor.selectionStart !== editor.selectionEnd
+  ) {
+    const rect = editor.getBoundingClientRect();
+    return (
+      point.x >= rect.left &&
+      point.x <= rect.right &&
+      point.y >= rect.top &&
+      point.y <= rect.bottom
+    );
+  }
+  const live = window.getSelection();
+  if (!live || live.rangeCount === 0 || live.isCollapsed) return false;
+  const rects = live.getRangeAt(0).getClientRects();
+  for (const rect of rects) {
+    if (
+      point.x >= rect.left &&
+      point.x <= rect.right &&
+      point.y >= rect.top &&
+      point.y <= rect.bottom
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Cancel a selection the right-clicked surface owns, browser-like: a
+ * right-click outside the selected words clears the old selection instead of
+ * leaving it behind. Never touches a selection that lives outside `root`.
+ */
+export function clearChatSelection(root: EventTarget): void {
+  if (!(root instanceof Node)) return;
+  const editor = document.activeElement;
+  if (editor instanceof HTMLTextAreaElement && root.contains(editor)) {
+    editor.setSelectionRange(editor.selectionEnd, editor.selectionEnd);
+    return;
+  }
+  const live = window.getSelection();
+  if (!live || live.rangeCount === 0) return;
+  const { anchorNode, focusNode } = live;
+  const inside =
+    (anchorNode && root.contains(anchorNode)) ||
+    (focusNode && root.contains(focusNode));
+  if (inside) live.removeAllRanges();
+}
+
 export function useContextMenu() {
   const [state, setState] = useState<ContextMenuState | null>(null);
   const closeContextMenu = useCallback(() => setState(null), []);
@@ -177,11 +261,11 @@ export function useContextMenu() {
       event.stopPropagation();
       /*
         Snapshot the live selection before the menu takes focus: focusing a
-        menuitem collapses the range, and Copy would then only see the whole
-        turn. A collapsed caret, or a selection that lives outside this
-        target, is stored as empty so Copy still falls back.
+        menuitem collapses the range, and an item reading it later would see
+        nothing. A collapsed caret, or a selection that lives outside this
+        target, is stored as empty for the items to interpret.
       */
-      const selection = snapshotSelection(event.currentTarget);
+      const selection = readContextMenuSelection(event.currentTarget);
       setState({ ...request, point: pointForEvent(event), selection });
     },
     [],
@@ -196,6 +280,14 @@ export function ContextMenu({
   state: ContextMenuState | null;
   onClose: () => void;
 }) {
+  /*
+    Only an actually open menu owns Escape. This host stays mounted while
+    closed (`state` null) in ordinary chat, and an unconditional claim would
+    pin the owner set non-empty forever, so no surrounding window could ever
+    close on Escape. A retained-but-hidden window claims nothing at all.
+  */
+  const secondaryWindowActive = useSecondaryWindowActive();
+  useEscapeOwner(secondaryWindowActive && state !== null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [placement, setPlacement] = useState<ContextMenuPlacement | null>(null);
 
@@ -260,7 +352,7 @@ export function ContextMenu({
   }, [state]);
 
   useEffect(() => {
-    if (!state) return;
+    if (!state || !secondaryWindowActive) return;
     const menu = menuRef.current;
     /*
       Capture phase on purpose: a nested surface that stops propagation on its
@@ -292,7 +384,7 @@ export function ContextMenu({
       window.removeEventListener("blur", onClose);
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [onClose, state]);
+  }, [onClose, secondaryWindowActive, state]);
 
   // Keyboard users land on the first item; Enter then runs it instead of
   // re-opening the menu.

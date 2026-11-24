@@ -996,3 +996,90 @@ fn a_record_whose_path_escapes_its_root_is_refused() {
         .join("outside.txt")
         .exists());
 }
+
+#[test]
+fn write_preview_reports_creation_as_added() {
+    let preview = preview_write_diff(
+        "created.txt".to_string(),
+        "workspace".to_string(),
+        WritePreviewStatus::Added,
+        Some(&[]),
+        b"one\ntwo\n",
+    );
+    assert_eq!(preview.operation, FileMutationOperation::Write);
+    assert_eq!(preview.status, EditDiffStatus::Added);
+    assert_eq!(preview.additions, Some(2));
+    assert_eq!(preview.deletions, Some(0));
+    assert!(!preview.hunks.is_empty());
+    assert!(!preview.truncated);
+    assert_eq!(preview.reason, None);
+}
+
+#[test]
+fn write_preview_without_baseline_omits_counts() {
+    let preview = preview_write_diff(
+        "unknown.txt".to_string(),
+        "workspace".to_string(),
+        WritePreviewStatus::Modified,
+        None,
+        b"one\n",
+    );
+    assert_eq!(preview.operation, FileMutationOperation::Write);
+    assert_eq!(preview.additions, None);
+    assert_eq!(preview.deletions, None);
+    assert!(preview.hunks.is_empty());
+    assert!(preview.truncated);
+    assert_eq!(preview.reason, Some(ReviewDiffLimit::BaselineUnavailable));
+}
+
+#[test]
+fn edit_preview_covers_only_its_own_statuses() {
+    let modified = preview_edit_diff(
+        "source.txt".to_string(),
+        "workspace".to_string(),
+        EditPreviewStatus::Modified,
+        b"one\n",
+        Some(b"two\n"),
+    );
+    assert_eq!(modified.operation, FileMutationOperation::Edit);
+    assert_eq!(modified.status, EditDiffStatus::Modified);
+    let deleted = preview_edit_diff(
+        "gone.txt".to_string(),
+        "workspace".to_string(),
+        EditPreviewStatus::Deleted,
+        b"one\n",
+        None,
+    );
+    assert_eq!(deleted.operation, FileMutationOperation::Edit);
+    assert_eq!(deleted.status, EditDiffStatus::Deleted);
+    assert_eq!(deleted.additions, Some(0));
+    assert_eq!(deleted.deletions, Some(1));
+    let moved = preview_edit_diff(
+        "dest.txt".to_string(),
+        "workspace".to_string(),
+        EditPreviewStatus::Moved,
+        b"one\n",
+        Some(b"one\n"),
+    );
+    assert_eq!(moved.operation, FileMutationOperation::Edit);
+    assert_eq!(moved.status, EditDiffStatus::Moved);
+}
+
+#[test]
+fn preview_operation_has_no_delete_and_keeps_wire_spelling() {
+    let edit = serde_json::to_value(FileMutationOperation::Edit).unwrap();
+    let write = serde_json::to_value(FileMutationOperation::Write).unwrap();
+    assert_eq!(edit, serde_json::json!("edit"));
+    assert_eq!(write, serde_json::json!("write"));
+    let preview = preview_write_diff(
+        "created.txt".to_string(),
+        "workspace".to_string(),
+        WritePreviewStatus::Added,
+        Some(&[]),
+        b"one\n",
+    );
+    let value = serde_json::to_value(&preview).unwrap();
+    assert_eq!(value["version"], serde_json::json!(1));
+    assert_eq!(value["operation"], serde_json::json!("write"));
+    assert_eq!(value["status"], serde_json::json!("added"));
+}

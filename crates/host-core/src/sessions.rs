@@ -184,6 +184,19 @@ pub struct MessageAttachment {
     pub inline_path: Option<String>,
 }
 
+/// Settled-only generation throughput sample for one completed assistant
+/// turn: exact provider output tokens over the first-nonempty-generated
+/// to settled-end monotonic span, with the committed sample count (always 1
+/// on a parent row). Absent on legacy rows, failed/aborted turns, and turns
+/// with no usable figure — never an invented zero.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThroughputTotals {
+    pub tokens: i64,
+    pub duration_ms: i64,
+    pub samples: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiMessage {
@@ -227,6 +240,9 @@ pub struct UiMessage {
     /// Partial output estimate used when a user stops before final usage arrives.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_output_tokens: Option<i64>,
+    /// Settled-only generation throughput sample for this assistant turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub throughput: Option<ThroughputTotals>,
     /// Structured AppError for an assistant turn that failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<Value>,
@@ -428,6 +444,9 @@ pub(crate) fn ui_to_record(message: &UiMessage) -> (MessageRecord, Option<String
     if let Some(tokens) = message.response_output_tokens {
         meta_obj.insert("responseOutputTokens".into(), json!(tokens));
     }
+    if let Some(throughput) = &message.throughput {
+        meta_obj.insert("throughput".into(), json!(throughput));
+    }
     if let Some(error) = &message.error {
         meta_obj.insert("error".into(), error.clone());
     }
@@ -609,6 +628,9 @@ pub(crate) fn record_to_ui(record: MessageRecord) -> UiMessage {
     let response_duration_ms = meta.get("responseDurationMs").and_then(|v| v.as_i64());
     let model_stream_duration_ms = meta.get("modelStreamDurationMs").and_then(|v| v.as_i64());
     let response_output_tokens = meta.get("responseOutputTokens").and_then(|v| v.as_i64());
+    let throughput = meta
+        .get("throughput")
+        .and_then(|value| serde_json::from_value::<ThroughputTotals>(value.clone()).ok());
     let revision_root_id = meta
         .get("revisionRootId")
         .and_then(|v| v.as_str())
@@ -705,6 +727,7 @@ pub(crate) fn record_to_ui(record: MessageRecord) -> UiMessage {
             response_duration_ms,
             model_stream_duration_ms,
             response_output_tokens,
+            throughput: throughput.clone(),
             error,
             revision_root_id,
             revision_count,
@@ -760,6 +783,7 @@ pub(crate) fn record_to_ui(record: MessageRecord) -> UiMessage {
             response_duration_ms,
             model_stream_duration_ms,
             response_output_tokens,
+            throughput,
             error,
             revision_root_id,
             revision_count,
@@ -4565,6 +4589,7 @@ mod tests {
             response_duration_ms: None,
             model_stream_duration_ms: None,
             response_output_tokens: None,
+            throughput: None,
             error: None,
             revision_root_id: None,
             revision_count: None,
@@ -5549,6 +5574,7 @@ mod tests {
             response_duration_ms: None,
             model_stream_duration_ms: None,
             response_output_tokens: None,
+            throughput: None,
             error: None,
             revision_root_id: None,
             revision_count: None,
@@ -6393,6 +6419,7 @@ mod tests {
             response_duration_ms: Some(2_000),
             model_stream_duration_ms: Some(1_800),
             response_output_tokens: Some(34),
+            throughput: None,
             error: None,
             revision_root_id: None,
             revision_count: None,
@@ -6464,6 +6491,11 @@ mod tests {
         timed.response_duration_ms = Some(2_000);
         timed.model_stream_duration_ms = Some(1_800);
         timed.response_output_tokens = Some(20);
+        timed.throughput = Some(ThroughputTotals {
+            tokens: 423,
+            duration_ms: 10_000,
+            samples: 1,
+        });
         append_message(&db, &session.id, &timed, None).unwrap();
 
         // A row written before the field existed has no such key and must
@@ -6478,13 +6510,27 @@ mod tests {
         assert_eq!(timed_meta["modelStreamDurationMs"], json!(1_800));
         assert_eq!(timed_meta["responseDurationMs"], json!(2_000));
         assert_eq!(timed_meta["responseOutputTokens"], json!(20));
+        assert_eq!(
+            timed_meta["throughput"],
+            json!({ "tokens": 423, "durationMs": 10_000, "samples": 1 })
+        );
         let legacy_meta = records[1].meta.as_ref().expect("legacy metadata");
         assert!(legacy_meta.get("modelStreamDurationMs").is_none());
+        assert!(legacy_meta.get("throughput").is_none());
 
         let detail = get_session(&db, &session.id).unwrap().unwrap();
         assert_eq!(detail.messages[0].model_stream_duration_ms, Some(1_800));
         assert_eq!(detail.messages[0].response_output_tokens, Some(20));
+        assert_eq!(
+            detail.messages[0].throughput,
+            Some(ThroughputTotals {
+                tokens: 423,
+                duration_ms: 10_000,
+                samples: 1
+            })
+        );
         assert_eq!(detail.messages[1].model_stream_duration_ms, None);
+        assert_eq!(detail.messages[1].throughput, None);
     }
 
     #[test]
@@ -6509,6 +6555,7 @@ mod tests {
             response_duration_ms: None,
             model_stream_duration_ms: None,
             response_output_tokens: None,
+            throughput: None,
             error: None,
             revision_root_id: None,
             revision_count: None,
@@ -9153,5 +9200,100 @@ mod tests {
         assert_eq!(trimmed["details"]["review"]["path"], json!("src/large.ts"));
         assert_eq!(trimmed["details"]["review"]["reversible"], json!(true));
         assert_eq!(trimmed["details"]["review"]["additions"], json!(1_200));
+    }
+
+    /// A per-call edit preview must survive the display trim applied to a
+    /// re-read transcript: identity and actual counts stay parseable after
+    /// `record_to_ui_for_display`, and a count the host could not compute
+    /// stays absent instead of reading as zero when the hunks are cut.
+    #[test]
+    fn a_large_edit_preview_keeps_identity_and_counts_under_display_trimming() {
+        let hunks: Vec<Value> = (0..1_200)
+            .map(|index| {
+                json!({
+                    "header": format!("@@ -{index},1 +{index},1 @@"),
+                    "lines": [{ "type": "add", "text": "x".repeat(400) }],
+                })
+            })
+            .collect();
+        let record = MessageRecord {
+            id: "tool-1".into(),
+            role: "tool".into(),
+            tool_name: Some("Edit".into()),
+            is_error: false,
+            blocks: json!([{
+                "type": "tool_call",
+                "callId": "call-1",
+                "name": "Edit",
+                "args": {
+                    "path": "outside/large.ts",
+                    "tag": "0000",
+                    "ops": "x".repeat(100_000),
+                },
+                "result": {
+                    "ok": true,
+                    "details": {
+                        "root": "external",
+                        "editDiff": {
+                            "version": 1,
+                            "path": "outside/large.ts",
+                            "root": "external",
+                            "operation": "edit",
+                            "status": "modified",
+                            "additions": 1_200,
+                            "deletions": 0,
+                            "hunks": hunks.clone(),
+                        },
+                    },
+                },
+                "status": "success",
+            }]),
+            meta: None,
+            created_at: "2026-10-18T00:00:00.000Z".into(),
+        };
+
+        let message = record_to_ui_for_display(record, 64 * 1024);
+        let preview = &message
+            .tool_result
+            .as_ref()
+            .expect("tool result survives display trim")["details"]["editDiff"];
+        assert_eq!(preview["version"], json!(1));
+        assert_eq!(preview["root"], json!("external"));
+        assert_eq!(preview["path"], json!("outside/large.ts"));
+        assert_eq!(preview["operation"], json!("edit"));
+        assert_eq!(preview["status"], json!("modified"));
+        assert_eq!(preview["additions"], json!(1_200));
+        assert_eq!(preview["deletions"], json!(0));
+        // The hunks were cut by the bound while the counts stayed actual.
+        let cut = preview["hunks"]
+            .as_array()
+            .expect("hunks stay an array under display trim");
+        assert!(cut
+            .iter()
+            .any(|hunk| hunk.as_str() == Some("[truncated for display]")));
+
+        // An uncounted preview carries no counts; trimming its hunks must not
+        // invent zeros the renderer could mistake for a real +0/-0.
+        let uncounted = json!({
+            "details": {
+                "root": "scratch",
+                "editDiff": {
+                    "version": 1,
+                    "path": "note.txt",
+                    "root": "scratch",
+                    "operation": "edit",
+                    "status": "modified",
+                    "hunks": hunks,
+                    "reason": "fileTooLarge",
+                    "truncated": true
+                }
+            }
+        });
+        let trimmed = preview_value(uncounted, 64 * 1024);
+        let preview = &trimmed["details"]["editDiff"];
+        assert_eq!(preview["root"], json!("scratch"));
+        assert_eq!(preview["status"], json!("modified"));
+        assert!(preview.get("additions").is_none());
+        assert!(preview.get("deletions").is_none());
     }
 }

@@ -227,7 +227,7 @@ test("renders semantic, shape-distinct sidebar status indicators", () => {
   );
   assert.match(styles, /thread-item-status\.running::before[\s\S]*--ds-warning/);
   assert.match(styles, /thread-item-status\.idle::before[\s\S]*--ds-accent/);
-  assert.match(styles, /thread-item-status\.pending::before[\s\S]*--ds-warning/);
+  assert.match(styles, /\.thread-item-status\.pending::before\s*\{[^}]*--ds-pending/);
   assert.match(styles, /thread-item-status\.completed[\s\S]*--ds-success/);
   assert.match(styles, /thread-item-status\.failed[\s\S]*--ds-error/);
   // The manual mark carries no halo and no animation.
@@ -235,6 +235,7 @@ test("renders semantic, shape-distinct sidebar status indicators", () => {
     /\.thread-item-status\.pending::before {[\s\S]*?\n}/,
   )?.[0] ?? "";
   assert.doesNotMatch(pendingBlock, /animation|box-shadow/);
+  assert.doesNotMatch(pendingBlock, /--ds-warning/, "the manual mark must not reuse the running orange");
   assert.match(
     styles,
     /prefers-reduced-motion: reduce[\s\S]*thread-item-status\.running::after[\s\S]*animation: none/,

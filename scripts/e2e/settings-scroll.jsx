@@ -1,11 +1,15 @@
-// Mounted production SettingsPage; only the preload boundary uses fixture data.
+// Mounted production SecondaryWindows layer with the Settings plate; only the
+// preload boundary uses fixture data. Scroll, destination, anchor, locale,
+// proxy, and preference behaviors run inside the real modal lifecycle, so the
+ // entry-focus assertion targets the plate container (initial focus never
+ // lands on the close control, whose hover tooltip would paint uninvited).
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import { catalogs, flattenCatalog } from "@pi-desktop/i18n";
 import { IPC } from "@pi-desktop/shared";
-import { SettingsPage } from "../../apps/desktop/src/features/settings/SettingsPage";
+import { SecondaryWindows } from "../../apps/desktop/src/features/app/SecondaryWindows";
 import { useAppStore } from "../../apps/desktop/src/stores/app-store";
 import { initLanguageSync } from "../../apps/desktop/src/lib/app-language";
 
@@ -97,8 +101,13 @@ await i18n.use(initReactI18next).init({
 });
 useAppStore.setState({ settings, settingsTab: "ai", page: "settings" });
 initLanguageSync();
+function ScrollHarness() {
+  const page = useAppStore((state) => state.page);
+  const setPage = useAppStore((state) => state.setPage);
+  return <SecondaryWindows page={page} onClose={() => setPage("chat")} />;
+}
 const root = createRoot(document.getElementById("root"));
-flushSync(() => root.render(<SettingsPage />));
+flushSync(() => root.render(<ScrollHarness />));
 const frame = () => new Promise(requestAnimationFrame);
 async function settle() { await frame(); await frame(); }
 async function waitFor(predicate, message) {
@@ -350,22 +359,35 @@ async function exerciseSendWhileRunning() {
 }
 window.settingsScrollProbe = async () => {
   await settle();
+  const plate = () => document.querySelector('[data-secondary-window-root="settings"]');
+  await waitFor(() => plate(), "Settings plate did not present");
+  await waitFor(() => document.querySelector(".settings-content"), "Settings content did not load");
+  await settle();
+  const plateNode = plate();
+  assert(plateNode, "Settings plate must present");
+  // Initial focus lands on the plate container itself — never the close
+  // control, whose hover tooltip would otherwise paint uninvited — and the
+  // first Tab from there reaches the close control through trap order.
   assert(
-    document.activeElement === document.querySelector(".settings-back"),
-    "Mounting Settings must move focus to the rail's back action",
+    document.activeElement === plateNode || document.hasFocus() === false,
+    "Mounting Settings must move focus to the plate container",
   );
-  // The retired in-page rail search is gone; the back action stays in the rail's
-  // top band, above the scrollable destination list, on the same left edge.
+  const closeControl = plateNode?.querySelector('[data-nav="close-secondary"]');
+  assert(closeControl, "Settings plate must expose its close control");
+  assert(
+    closeControl === plateNode.querySelector("button:not([disabled])"),
+    "The close control must be the first Tab stop in the plate",
+  );
+  // The retired in-page rail search is gone, and the retired back-to-app row
+  // is gone with it: the floating close control owns dismissal, and the rail
+  // starts directly with the scrollable destination list.
   assert(document.querySelector(".settings-search") === null,
     "The Settings rail must not carry a page-local search input");
-  const back = document.querySelector(".settings-back");
+  assert(document.querySelector(".settings-back") === null,
+    "The Settings rail must not carry the retired back-to-app row");
+  assert(plate()?.getAttribute("aria-modal") === "true", "Settings plate is not aria-modal");
   const navScroll = document.querySelector(".settings-nav-scroll");
-  assert(back && navScroll, "Settings must render the back action and the destination list");
-  const backBounds = back.getBoundingClientRect();
-  const navBounds = navScroll.getBoundingClientRect();
-  assert(backBounds.bottom <= navBounds.top + 1, "Back to app must sit above the destination list");
-  const railBounds = document.querySelector(".settings-nav").getBoundingClientRect();
-  assert(backBounds.left - railBounds.left < 24, "Back to app must sit at the rail's left edge");
+  assert(navScroll, "Settings must render the destination list");
   const checks = [];
   checks.push(await exerciseProxyDraftRestoration());
   await checkCloudSyncVisibility();

@@ -1,4 +1,4 @@
-import type { MessageUsage, MessageUsageCost, UsageOperation, UsageProvenance } from "./types/messages.js";
+import type { MessageUsage, MessageUsageCost, GenerationThroughputTotals, UsageOperation, UsageProvenance } from "./types/messages.js";
 
 const tokenKeys = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "totalTokens"] as const;
 const costKeys = ["input", "output", "cacheRead", "cacheWrite", "total"] as const;
@@ -93,4 +93,38 @@ export function addUsage(total: MessageUsage | undefined, next: MessageUsage | u
     ...(hasCostMetadata ? sumCosts(values) : {}),
     ...(operations.size ? { aggregation: "aggregate" as const, operations: [...operations.values()] } : {}),
   };
+}
+/**
+ * Additive fold of canonical per-run generation throughput totals over one
+ * session or one chain. A missing side is the identity (absent stays absent
+ * unless a side carries a validated figure); a real provider zero survives.
+ * Malformed totals — negative, non-finite, or zero-sample — are dropped
+ * rather than inventing a figure: partial totals are not a measurement.
+ */
+export function addThroughputTotals(
+  total: GenerationThroughputTotals | undefined,
+  next: GenerationThroughputTotals | undefined,
+): GenerationThroughputTotals | undefined {
+  const left = validThroughputTotals(total);
+  const right = validThroughputTotals(next);
+  if (!left) return right;
+  if (!right) return left;
+  return {
+    tokens: left.tokens + right.tokens,
+    durationMs: left.durationMs + right.durationMs,
+    samples: left.samples + right.samples,
+  };
+}
+function validThroughputTotals(
+  value: GenerationThroughputTotals | undefined,
+): GenerationThroughputTotals | undefined {
+  if (!value) return undefined;
+  const { tokens, durationMs, samples } = value;
+  if (typeof tokens !== "number" || !Number.isFinite(tokens) || tokens < 0) return undefined;
+  // Committed samples always span a positive first-content-to-end duration;
+  // a zero span carries no rate and is not a summable figure.
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || !(durationMs > 0)) return undefined;
+  if (typeof samples !== "number" || !Number.isFinite(samples) || samples <= 0) return undefined;
+  if (!Number.isInteger(samples) || !Number.isInteger(tokens)) return undefined;
+  return { tokens, durationMs, samples };
 }

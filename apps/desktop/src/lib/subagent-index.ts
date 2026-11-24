@@ -1,5 +1,9 @@
-import { addUsage } from "@pi-desktop/shared";
-import type { MessageUsage, UiMessage } from "@pi-desktop/shared";
+import { addThroughputTotals, addUsage } from "@pi-desktop/shared";
+import type {
+  MessageUsage,
+  GenerationThroughputTotals,
+  UiMessage,
+} from "@pi-desktop/shared";
 import { contextOccupancyTokens } from "./context-usage";
 import { delegationLifecycleKind, isDelegationStartTool } from "./tool-display";
 import { delegationIdForMessage } from "./subagent-panel";
@@ -15,13 +19,14 @@ import {
   UNMEASURED_CONTEXT,
   type SubagentMetrics,
 } from "./subagent-metrics-values";
+import { isAcceptedSubagentCall } from "./assistant-turns";
 import {
+  delegateTaskAgent,
   delegateTaskTitle,
   resumeArgOf,
   resumeTarget,
   subagentResumeLinks,
 } from "./subagent-task-call";
-
 /**
  * One conversation's delegation chains, resolved once.
  *
@@ -53,6 +58,9 @@ import {
  *   contributes an identity to the title and chain-key maps. An ordinary tool
  *   row can still be a chain member through a resume edge that names it, and
  *   still receives the chain's folded figures, but it opens no chain of its own;
+ * - only an executed `Task` call seeds or extends one: a rejected resume with
+ *   no handle, no spawn in flight and no child rows is a request attempt, not
+ *   a segment, so the chain's latest segment stays on the last accepted call;
  * - a resume that names nothing resolvable still records its edge, so the
  *   dangling name is a chain member — malformed history stays readable exactly
  *   as before, and a cycle terminates;
@@ -92,6 +100,8 @@ export type SubagentTranscriptIndex = {
   metrics: (delegationId: string) => SubagentMetrics | null;
   /** Every `Task` call's title, keyed by the identity its row is keyed by. */
   titles: ReadonlyMap<string, string>;
+  /** Every delegation's requested agent, keyed by the same identity as `titles`. */
+  agents: ReadonlyMap<string, string>;
   /** Every identity's chain key: the call id its component starts at. */
   chainKeys: ReadonlyMap<string, string>;
   /** Every segment's folded figures, keyed by `Task` call id. */
@@ -121,7 +131,6 @@ export function subagentTranscriptIndex(
 
 function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
   const { callByDelegationId, resumeLink } = subagentResumeLinks(messages);
-
   // A resume edge is walked forward from every `Task` call that names it, and
   // backward only from the single edge the link map kept for that target.
   const forward = new Map<string, string[]>();
@@ -142,9 +151,15 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
   /** Latest valid child assistant report per parent call id. */
   const childUsage = new Map<string, { occupancy: number; usage: MessageUsage }>();
 
+  // The child rows arrive after the call they belong to, so a call's acceptance
+  // is judged after the pass; the stashed rows keep session order, so the
+  // forward edges and the seed list read exactly as before for executed calls.
+  const childParents = new Set<string>();
+  const taskRows: CallRow[] = [];
   for (let order = 0; order < messages.length; order += 1) {
     const message = messages[order];
     const callId = message.toolCallId;
+    if (message.parentToolCallId) childParents.add(message.parentToolCallId);
     if (callId) {
       const dispatchTitle = delegateTaskTitle(message);
       if (dispatchTitle && !firstTitle.has(callId)) {
@@ -166,11 +181,6 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
       continue;
     }
     if (!callId) continue;
-    const delegationCall = isDelegationStartTool(message.toolName);
-    if (delegationCall) {
-      const target = resumeTarget(resumeArgOf(message), callByDelegationId);
-      if (target) forward.set(target, [...(forward.get(target) ?? EMPTY_LIST), callId]);
-    }
     const row: CallRow = {
       callId,
       delegationId: delegationIdForMessage(message),
@@ -180,7 +190,16 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
       message,
     };
     calls.push(row);
-    if (delegationCall) delegationCalls.push(row);
+    if (isDelegationStartTool(message.toolName)) taskRows.push(row);
+  }
+  // Only an executed call seeds or extends a chain: a rejected resume is a
+  // request attempt with no run behind it, so it must neither move the
+  // chain's latest segment nor open a chain.
+  for (const row of taskRows) {
+    if (!isAcceptedSubagentCall(row.message, childParents.has(row.callId))) continue;
+    delegationCalls.push(row);
+    const target = resumeTarget(resumeArgOf(row.message), callByDelegationId);
+    if (target) forward.set(target, [...(forward.get(target) ?? EMPTY_LIST), row.callId]);
   }
 
   const chains = new Map<string, ReadonlySet<string>>();
@@ -225,6 +244,10 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
     let snapshotSpend: MessageUsage | undefined;
     let childSpend: MessageUsage | undefined;
     let gauge = UNMEASURED_CONTEXT;
+    // Canonical throughput per run segment, keyed by delegation: the latest
+    // snapshot of one delegation replaces its totals (a re-report or replay
+    // never adds a duplicate), and only distinct run segments sum.
+    const totalsByDelegation = new Map<string, GenerationThroughputTotals>();
     for (const row of rows) {
       const lifecycleParsed = lifecycle.get(row.delegationId) ?? null;
       const segmentParsed = row.snapshot ?? lifecycleParsed;
@@ -232,6 +255,8 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
         entries.push(segmentParsed);
         snapshotSpend = addUsage(snapshotSpend, segmentParsed.usage);
       }
+      const totals = row.snapshot?.throughput ?? lifecycleParsed?.throughput;
+      if (totals) totalsByDelegation.set(row.delegationId, totals);
       const child = childUsage.get(row.callId);
       if (child) childSpend = addUsage(childSpend, child.usage);
       const occupancy =
@@ -258,12 +283,19 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
       }
     }
     const base = aggregateSubagentChainMetrics(entries);
-    if (!base && !usage && gauge.tokens === undefined) return null;
+    // One session's chain is one average: distinct run segments sum, and a
+    // re-reported delegation keeps only its latest totals.
+    let throughput: GenerationThroughputTotals | undefined;
+    for (const totals of totalsByDelegation.values()) {
+      throughput = addThroughputTotals(throughput, totals);
+    }
+    if (!base && !usage && gauge.tokens === undefined && !throughput) return null;
     return {
       ...(base?.toolCalls !== undefined ? { toolCalls: base.toolCalls } : {}),
       ...(base?.turns !== undefined ? { turns: base.turns } : {}),
       ...(gauge.tokens !== undefined ? { contextTokens: gauge.tokens } : {}),
       ...(usage ? { usage } : {}),
+      ...(throughput ? { throughput } : {}),
       contextProvenance: gauge.provenance,
       ...(gauge.estimated ? { contextEstimated: true } : {}),
     };
@@ -332,7 +364,7 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
     return earliest?.title ?? "";
   };
 
-  const { titles, chainKeys } = batchMaps(delegationCalls, resumeLink);
+  const { titles, chainKeys, agents } = batchMaps(delegationCalls, resumeLink);
 
   // One fold per chain, published under every call id the chain holds, so a card
   // of any segment reads the figures of the work it belongs to.
@@ -362,6 +394,7 @@ function build(messages: readonly UiMessage[]): SubagentTranscriptIndex {
     title,
     metrics: metricsOf,
     titles,
+    agents,
     chainKeys,
     metricsByCallId,
   };
@@ -389,20 +422,26 @@ function collectRosterMetrics(
 
 /**
  * The batch maps the transcript providers hand down: every `Task` call's title
- * keyed by the identity its row is keyed by, and every identity's chain key.
+ * and requested agent, each keyed by the identity its row is keyed by, and
+ * every identity's chain key.
  *
- * One chain is one child session however many `Task` rows opened it, so both
- * maps name a chain by its earliest call: the resume edges point a continuation
- * at the call it continues, and walking to the earliest ancestor names the
- * component without re-reading the conversation once per call.
+ * One chain is one child session however many `Task` rows opened it, so all
+ * three maps name a chain by its earliest call: the resume edges point a
+ * continuation at the call it continues, and walking to the earliest ancestor
+ * names the component without re-reading the conversation once per call.
  */
 function batchMaps(
   calls: readonly CallRow[],
   resumeLink: ReadonlyMap<string, string>,
-): { titles: ReadonlyMap<string, string>; chainKeys: ReadonlyMap<string, string> } {
+): {
+  titles: ReadonlyMap<string, string>;
+  agents: ReadonlyMap<string, string>;
+  chainKeys: ReadonlyMap<string, string>;
+} {
   const titles = new Map<string, string>();
+  const agents = new Map<string, string>();
   const chainKeys = new Map<string, string>();
-  if (calls.length === 0) return { titles, chainKeys };
+  if (calls.length === 0) return { titles, agents, chainKeys };
   const parentOf = new Map<string, string>();
   for (const [prior, next] of resumeLink) {
     if (!parentOf.has(next)) parentOf.set(next, prior);
@@ -417,19 +456,27 @@ function batchMaps(
     return root;
   };
   // Session order decides: the chain's first description is its title, and a
-  // continuation's own description never replaces it.
+  // continuation's own description never replaces it. The requested agent
+  // follows the same rule: the chain's earliest named role is the delegation.
   const titleByRoot = new Map<string, string>();
+  const agentByRoot = new Map<string, string>();
   for (const call of calls) {
     const root = rootOf(call.callId);
-    if (titleByRoot.has(root)) continue;
-    const dispatchTitle = delegateTaskTitle(call.message);
-    if (dispatchTitle) titleByRoot.set(root, dispatchTitle);
+    if (!titleByRoot.has(root)) {
+      const dispatchTitle = delegateTaskTitle(call.message);
+      if (dispatchTitle) titleByRoot.set(root, dispatchTitle);
+    }
+    if (!agentByRoot.has(root)) {
+      const dispatchAgent = delegateTaskAgent(call.message);
+      if (dispatchAgent) agentByRoot.set(root, dispatchAgent);
+    }
   }
   for (const call of calls) {
     const key = rootOf(call.callId);
     chainKeys.set(call.callId, key);
     if (!chainKeys.has(call.delegationId)) chainKeys.set(call.delegationId, key);
     titles.set(call.delegationId, titleByRoot.get(key) ?? "");
+    agents.set(call.delegationId, agentByRoot.get(key) ?? "");
   }
-  return { titles, chainKeys };
+  return { titles, agents, chainKeys };
 }

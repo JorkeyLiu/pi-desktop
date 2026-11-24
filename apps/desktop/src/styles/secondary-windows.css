@@ -1,0 +1,226 @@
+/*
+  Secondary windows — the in-app floating plates that host Settings, Extensions,
+  and Scheduled.
+
+  Chat is the only home. A destination opens one centered, content-sized plate
+  over a dimmed scrim instead of replacing the main pane, so the conversation
+  (transcript scroll, composer draft, running turn) stays mounted underneath.
+  Exactly one plate is presented; switching destinations swaps the presented
+  content instead of stacking another root window. Plates stay fixed: no
+  dragging, resizing, or native window per destination.
+
+  All three plates share one quiet surface: the Settings content background, a
+  subtle border, and the dialog shadow. There is no title band — each
+  destination's own header carries the single visible title, and the
+  destination keeps its full height for content.
+
+  Hidden plates are retained with `visibility` + `content-visibility` rather
+  than `display: none`, so their scroll offsets and unsaved drafts survive.
+*/
+
+.secondary-window-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 40; /* same layer family as the dialog veil */
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+/* Closed layer stays mounted for keep-alive but is neither painted nor hit. */
+.secondary-window-layer:not(.is-open) {
+  visibility: hidden;
+}
+
+.secondary-window-layer.is-open {
+  pointer-events: auto;
+}
+
+.secondary-window-scrim {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in oklab, #000 38%, transparent);
+  animation: secondary-window-scrim-in var(--motion-duration-normal) var(--motion-ease-out) both;
+}
+
+@keyframes secondary-window-scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.secondary-window {
+  --sw-width: 900px;
+  --sw-height: 700px;
+  /*
+    One grid cell: every retained plate occupies the same centered cell, and
+    only the presented one accepts pointer input.
+  */
+  position: relative;
+  grid-area: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  width: min(var(--sw-width), calc(100vw - 48px));
+  height: min(var(--sw-height), calc(100vh - 48px));
+  overflow: hidden;
+  border: 1px solid var(--ds-border-default);
+  border-radius: var(--radius-lg-plus);
+  /* The same content background Settings paints: one quiet surface shared by
+    all three windows, not an elevated card with its own title band. */
+  background: var(--ds-bg-primary);
+  box-shadow: var(--ds-shadow-dialog);
+  color: var(--ds-text-primary);
+  isolation: isolate;
+  animation: secondary-window-in var(--motion-duration-normal) var(--motion-ease-out) both;
+}
+
+/* Programmatic initial-focus target only: never a Tab stop, never a ring. */
+.secondary-window:focus {
+  outline: none;
+}
+
+@keyframes secondary-window-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.988);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.secondary-window-settings {
+  --sw-width: 1120px;
+  --sw-height: 820px;
+}
+
+.secondary-window-plugins {
+  --sw-width: 900px;
+  --sw-height: 700px;
+}
+
+.secondary-window-scheduled {
+  --sw-width: 1200px;
+  --sw-height: 760px;
+}
+
+/* Retained but not presented: no paint, no hit target, no tab stop. */
+.secondary-window.is-inactive {
+  visibility: hidden;
+  content-visibility: hidden;
+  pointer-events: none;
+  animation: none;
+}
+
+/*
+  The close control floats top-right over reserved content space instead of
+  owning a title band: the destination's own header carries the visible title.
+  Quiet until hovered or focused, so it reads as part of the surface.
+*/
+.secondary-window-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-sm);
+  color: var(--ds-text-muted);
+}
+
+.secondary-window-close:hover {
+  background: var(--ds-bg-hover);
+  color: var(--ds-text-primary);
+}
+
+.secondary-window-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+/*
+  Window-resident destinations are not full pages: drop the 980px centered cap
+  and the native-titlebar top reservation, and reserve the floating close
+  control's top-right space so headers and toolbars never slide under it.
+  Specificity ties the platform titlebar rule; this file loads later.
+*/
+.secondary-window .secondary-window-body .page-frame {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 20px 52px 40px 28px;
+}
+
+/*
+  Settings inside the plate: the rail keeps the sidebar material, the section
+  title is the window's single visible title, and the floating close control
+  gets reserved top-right space in the content pane. The rail keeps its own
+  rule (`var(--ds-settings-nav-width)`); the window only narrows the token, so
+  the width stays one fact.
+*/
+.settings-shell-window {
+  --ds-settings-nav-width: 252px;
+}
+
+.settings-shell-window .settings-nav-scroll {
+  padding-top: 18px;
+}
+
+.settings-shell-window .settings-content {
+  /*
+    No native-titlebar reservation inside the plate; the right reserve keeps
+    the section content clear of the floating close control.
+  */
+  padding: 24px 52px 48px 32px;
+}
+
+/*
+  Scenic plugin themes own the image canvas: the Settings plate composites over
+  the single root scenic layer instead of painting its own opaque surface, the
+  same contract the full-window Settings page had.
+*/
+:root[data-plugin-theme^="plugin:io.github.akshayxkill.nexus-scenic-themes:"] .secondary-window-settings {
+  background: transparent !important;
+  box-shadow: none;
+}
+
+/* Small windows: the plate becomes near-fullscreen so the content stays usable
+  at the app's 800×560 minimum size. */
+@media (max-width: 860px), (max-height: 640px) {
+  .secondary-window {
+    width: calc(100vw - 16px);
+    height: calc(100vh - 16px);
+    border-radius: var(--radius-md-plus);
+  }
+
+  .settings-shell-window {
+    --ds-settings-nav-width: 216px;
+  }
+
+  .settings-shell-window .settings-content {
+    padding: 20px 44px 32px 20px;
+  }
+
+  /* Same specificity as the base in-window rule so the narrow reserves win. */
+  .secondary-window .secondary-window-body .page-frame {
+    padding: 16px 44px 32px 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .secondary-window,
+  .secondary-window-scrim {
+    animation: none;
+  }
+}

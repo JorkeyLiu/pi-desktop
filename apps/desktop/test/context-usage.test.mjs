@@ -3,7 +3,6 @@ import test from "node:test";
 import {
   aggregateToolTokenUsage,
   calculateCacheRate,
-  calculateTokenRate,
   calculateContextUsage,
   contextOccupancyTokens,
   contextUsageView,
@@ -216,12 +215,6 @@ test("occupancy sums last-request input, output, and cache, not reasoning twice"
   assert.equal(contextOccupancyTokens(usage), 97);
   assert.equal(calculateContextUsage(usage, 200).usedTokens, 97);
   assert.equal(usageTokenTotal(usage), 15);
-});
-
-test("generation throughput uses provider output and stream duration", () => {
-  assert.equal(calculateTokenRate(1_200, 4_000), 300);
-  assert.equal(calculateTokenRate(0, 4_000), undefined);
-  assert.equal(calculateTokenRate(1_200, undefined), undefined);
 });
 
 test("stopped responses get immediate estimated output and duration metadata", () => {

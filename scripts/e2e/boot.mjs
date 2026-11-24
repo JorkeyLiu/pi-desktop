@@ -16,7 +16,11 @@ export function desktopPaths(root = repositoryRoot()) {
   return { appDir, electronBinary };
 }
 
-export function resolveElectronBinary(root = repositoryRoot()) {
+ export function resolveElectronBinary(root = repositoryRoot()) {
+   // A worktree without its own downloaded Electron binary can reference an
+   // existing compatible one (e.g. the source checkout's) without linking
+   // another checkout's writable `node_modules` into its own tree.
+   const override = process.env.PI_ELECTRON_BINARY?.trim();
   const { appDir } = desktopPaths(root);
   const electronDir = join(appDir, "node_modules", "electron");
   const pathFile = join(electronDir, "path.txt");
@@ -25,11 +29,15 @@ export function resolveElectronBinary(root = repositoryRoot()) {
     : process.platform === "win32"
       ? "electron.exe"
       : "electron";
-  const binary = join(electronDir, "dist", relativeBinary);
-  if (!existsSync(binary)) {
-    throw new Error("Electron binary missing: " + binary);
-  }
-  return { appDir, electronBinary: binary };
+   const binary = join(electronDir, "dist", relativeBinary);
+   if (override) {
+     if (!existsSync(override)) throw new Error("PI_ELECTRON_BINARY missing: " + override);
+     return { appDir, electronBinary: override };
+   }
+   if (!existsSync(binary)) {
+     throw new Error("Electron binary missing: " + binary);
+   }
+   return { appDir, electronBinary: binary };
 }
 
 export function assertDesktopBuild(root = repositoryRoot()) {

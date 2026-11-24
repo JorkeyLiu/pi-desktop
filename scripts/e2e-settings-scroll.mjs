@@ -32,7 +32,24 @@ try {
       i18next: join(root, "apps/desktop/node_modules/i18next"),
       "react-i18next": join(root, "apps/desktop/node_modules/react-i18next") },
     nodePaths: [join(root, "apps/desktop/node_modules")],
-    plugins: [urlAssets],
+    loader: { ".woff": "empty", ".woff2": "empty", ".ttf": "empty", ".png": "empty" },
+    plugins: [urlAssets,
+      {
+        name: "settings-scroll-asset-stubs",
+        setup(assetBuild) {
+          assetBuild.onResolve({ filter: /\.(woff2?|ttf|otf|eot|png|jpe?g|gif|webp|ico|avif|mp3|wav|ogg|flac)$/ }, ({ path, resolveDir }) => {
+            if (path.startsWith(".")) {
+              return { path: join(resolveDir, path.split("?")[0]), namespace: "settings-scroll-asset" };
+            }
+            return null;
+          });
+          assetBuild.onLoad({ filter: /.*/, namespace: "settings-scroll-asset" }, () => ({
+            contents: "export default '';",
+            loader: "js",
+          }));
+        },
+      },
+    ],
   });
   const renderer = join(root, "apps/desktop/out/renderer");
   const html = await readFile(join(renderer, "index.html"), "utf8");

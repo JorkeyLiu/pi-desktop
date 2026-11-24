@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addUsage, withUsageIdentity, type MessageUsage } from "./types.js";
+import { addThroughputTotals, addUsage, withUsageIdentity, type MessageUsage } from "./types.js";
 
 const parent: MessageUsage = {
   inputTokens: 200,
@@ -111,4 +111,45 @@ it("malformed prices and overflowing cost totals remain unknown", () => {
     expect(result?.costStatus).toBe("unknown");
     expect(result?.cost).toBeUndefined();
   }
+});
+
+describe("addThroughputTotals", () => {
+  it("sums canonical per-run totals additively", () => {
+    expect(
+      addThroughputTotals(
+        { tokens: 423, durationMs: 10000, samples: 1 },
+        { tokens: 577, durationMs: 10000, samples: 2 },
+      ),
+    ).toEqual({ tokens: 1000, durationMs: 20000, samples: 3 });
+  });
+
+  it("treats a missing side as the identity and keeps real zeros", () => {
+    expect(addThroughputTotals(undefined, { tokens: 0, durationMs: 1000, samples: 1 })).toEqual({
+      tokens: 0,
+      durationMs: 1000,
+      samples: 1,
+    });
+    expect(addThroughputTotals({ tokens: 0, durationMs: 1000, samples: 1 }, undefined)).toEqual({
+      tokens: 0,
+      durationMs: 1000,
+      samples: 1,
+    });
+    expect(addThroughputTotals(undefined, undefined)).toBeUndefined();
+  });
+
+  it("drops malformed totals rather than inventing a figure", () => {
+    const good = { tokens: 10, durationMs: 1000, samples: 1 };
+    for (const bad of [
+      { tokens: -1, durationMs: 1000, samples: 1 },
+      { tokens: 10, durationMs: 0, samples: 1 },
+      { tokens: 10, durationMs: 1000, samples: 0 },
+      { tokens: Number.NaN, durationMs: 1000, samples: 1 },
+    ]) {
+      expect(addThroughputTotals(good, bad as never)).toEqual(good);
+      expect(addThroughputTotals(bad as never, good)).toEqual(good);
+    }
+    expect(
+      addThroughputTotals({ tokens: -1, durationMs: 0, samples: 0 }, { tokens: -2, durationMs: -5, samples: 0 }),
+    ).toBeUndefined();
+  });
 });

@@ -190,10 +190,10 @@ test("font size presets use Starbucks-style cup names", () => {
 test("chat context-menu copy stays user-facing", () => {
   assert.equal(english["chat.copyFailed"], "Couldn't copy to the clipboard");
   assert.equal(english["chat.messageMenu"], "Message actions");
-  assert.equal(english["chat.copyConversation"], "Copy conversation");
+  assert.equal(english["chat.copy"], "Copy");
+  assert.equal(english["chat.quote"], "Quote");
   assert.equal(chinese["chat.copyFailed"], "复制到剪贴板失败");
-  assert.equal(chinese["chat.copyConversation"], "复制整个对话");
-  assert.equal(chinese["chat.selectMessageText"], "选中消息文本");
+  assert.equal(chinese["chat.quote"], "引用");
 });
 
 test("pt-BR keeps security disclosures and action semantics intact", () => {

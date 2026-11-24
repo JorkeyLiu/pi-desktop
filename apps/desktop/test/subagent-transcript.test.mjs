@@ -232,10 +232,13 @@ test("inline delegate runs keep the live conversation process", () => {
 });
 
 test("a Task row names the delegate it used and opens its transcript", () => {
+  // A delegation is always expandable: the delegate run alone grants details,
+  // alongside tool details and review/edit evidence in the same clause.
   assert.match(
     transcriptSource,
-    /hasToolDetails\(message\) \|\| Boolean\(delegate\)/,
+    /const hasDetails =[\s\S]*?Boolean\(delegate\)/,
   );
+  assert.match(transcriptSource, /hasToolDetails\(message\)/);
   assert.match(transcriptSource, /TOOL_ACTION_KEYS.*delegate: "chat\.toolDelegated"/s);
   assert.match(transcriptSource, /TOOL_RUNNING_KEYS.*delegate: "chat\.toolDelegating"/s);
   assert.match(transcriptSource, /className="tool-row-agent"/);

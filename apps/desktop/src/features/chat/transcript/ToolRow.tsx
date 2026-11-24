@@ -27,6 +27,7 @@ import {
   getToolIdentityKey,
   getToolSummary,
   getToolSummaryKey,
+  isTaskSteerTool,
   isToolPathSummary,
 } from "../../../lib/tool-display";
 import { ToolPathSummary } from "./ToolPathSummary";
@@ -34,10 +35,22 @@ import { isThinkingActive } from "../../../lib/turn-process";
 import {
   buildToolPresentation,
   hasToolDetails,
+  headerToolChips,
   runOutcome,
-  toolResultChips,
   toolResultPayload,
 } from "../../../lib/tool-presentation";
+import {
+  browserActionLabelKey,
+  browserActionOf,
+  browserFailed,
+  browserSummarySpec,
+  isBrowserPluginTool,
+} from "../../../lib/browser-tool-presentation";
+import {
+  resolveTaskSteerTarget,
+  taskSteerFailed,
+  taskSteerSummarySpec,
+} from "../../../lib/task-steer-presentation";
 import {
   subagentRunsEqual,
   type SubagentRun,
@@ -54,14 +67,18 @@ import {
   type SubagentOutcome,
   type SubagentTiming,
 } from "../../../lib/subagent-topology";
-import { useSubagentTaskTitles } from "../../../lib/subagent-title-provider";
+import { useSubagentTaskAgents, useSubagentTaskTitles } from "../../../lib/subagent-title-provider";
 import { useAppStore } from "../../../stores/app-store";
 import { Markdown } from "../../../components/Markdown";
 import {
   ReviewChangeBody,
   ReviewChangeCounts,
+  ReviewDiffView,
 } from "../../../components/ReviewChangeCard";
-import { reviewChangeFromMessage } from "../../../lib/workspace-review";
+import {
+  editDiffFromMessage,
+  reviewChangeFromMessage,
+} from "../../../lib/workspace-review";
 import { ToolChips, ToolDetailBlocks } from "../../../components/ToolDetails";
 import {
   IconArrowDown,
@@ -83,9 +100,10 @@ import {
   useAutomaticDisclosure,
   useMessageRevealRequest,
 } from "./shared";
-import { delegateAgentName } from "./model";
+import { delegateAgentName, steerTargetDelegationId } from "./model";
 import { PluginToolCard } from "./PluginToolCard";
 import { useSlotEntryForKey } from "../../../plugins/renderer-slots/use-slots";
+import { TaskTargetCluster } from "./TaskHeader";
 
 type ToolRowProps = {
   message: UiMessage;
@@ -218,6 +236,7 @@ function HostToolRow({
   // row's own part: a delegation's description lives on the `Task` call that
   // started it, which may sit in a different activity part.
   const conversationTitles = useSubagentTaskTitles();
+  const conversationAgents = useSubagentTaskAgents();
   const openTarget = useOpenPreviewTarget();
   const { fileMenu, openFileMenu, closeFileMenu } = useChatFileMenu();
   const status = message.toolStatus;
@@ -230,10 +249,28 @@ function HostToolRow({
   const preparing = status === "preparing";
   const pulsing = preparing && message.toolArgsComplete !== true;
   const action = getToolAction(message.toolName);
+ // Whether this row is the shipped Browser plugin tool, which owns its own
+ // identity, summary and failure state below.
+ const isBrowserTool = isBrowserPluginTool(message.toolName);
   // A numeric exit code means Bash returned normally; only invocation errors
   // without a normal exit, or explicit error payloads, mark the row as failed.
   const run = action === "run" ? runOutcome(message) : null;
-  const failed = run ? run === "failed" : status === "error";
+ // A browser call that answered with a failure payload reads as failed even
+ // when the runtime left `toolStatus` at success: it delivered no page, tree,
+ // shot or value.
+ const browserFailedCall = isBrowserTool && browserFailed(message);
+  // A steer failure payload outranks a stale success status the same way a
+  // browser failure does: the row failed when the call delivered no guidance.
+  const steerFailedCall = isTaskSteerTool(message.toolName) && taskSteerFailed(message);
+  const failed = run ? run === "failed" : browserFailedCall || steerFailedCall || status === "error";
+  // A delivered steer states `Sent`: the send action the row reports, never a
+  // claim about consumption. A failed steer keeps the error wording below.
+  const steerSent =
+    isTaskSteerTool(message.toolName) &&
+    !steerFailedCall &&
+    !preparing &&
+    status !== "running" &&
+    status !== "denied";
   // A tool call never opens itself — except a checklist, which is the work the
   // user is watching live, and whose own body is what shows that progress. That
   // default is a derived default: once the user collapses the row, their choice
@@ -254,25 +291,66 @@ function HostToolRow({
     onUserInteraction?.();
     collapseDisclosure();
   }, [collapseDisclosure, onUserInteraction]);
-  const argSummary = getToolSummary(message.toolName, message.toolArgs);
+  // The shipped Browser plugin reads its own summary: a finished call names
+  // its result, a running call the arguments it was issued with — never ids,
+  // scripts or typed text. Every other tool keeps its own summary rule.
+  const browserSpec = isBrowserTool
+    ? browserSummarySpec(message.toolArgs, toolResultPayload(message), message.toolStatus)
+    : null;
+  // A steer row names the guidance text it carries, bounded to a single line;
+  // routing ids never reach the head.
+  const steerText = !browserSpec && isTaskSteerTool(message.toolName) ? taskSteerSummarySpec(message.toolArgs).text : "";
+  // The collapsed head states the target: the delegation title when the
+  // conversation resolves it, else the call's own description as the honest
+  // unknown-target fallback. The raw routing id never reaches either.
+  const steerTarget =
+    isTaskSteerTool(message.toolName) && message.toolStatus !== "preparing"
+      ? resolveTaskSteerTarget(message, conversationTitles)
+      : "";
+  const steerAgent =
+    isTaskSteerTool(message.toolName) && message.toolStatus !== "preparing"
+      ? (conversationAgents?.get(steerTargetDelegationId(message)) ?? "")
+      : "";
+  // A steer that resolved its target reuses the delivered-wait header: the
+  // left summary is the plain recorded agent (the wait's roster slot), and the
+  // target title moves to the shared right tile. Without a resolved target
+  // the row keeps its guidance-text fallback, never the routing id.
+  const steerTargeted = steerTarget !== "";
+  const steerSummary = steerTargeted ? steerAgent || steerText : steerTarget || steerText;
+  const argSummary = browserSpec ? browserSpec.text : steerSummary || getToolSummary(message.toolName, message.toolArgs);
   // A path stays whole in `title`, in the copy menu and in its preview target;
   // only what the row prints omits its middle.
-  const summaryIsPath = isToolPathSummary(message.toolName, message.toolArgs);
-  const summaryIsCode = getToolSummaryKey(message.toolName, message.toolArgs) === "command";
-  // A workspace mutation carries its own durable review record (D192): the row
-  // ends with its +a/−d and hosts the diff, so the transcript never grows a
-  // second collapsed row naming the same file.
+  const summaryIsPath = browserSpec ? browserSpec.path : isToolPathSummary(message.toolName, message.toolArgs);
+  const summaryIsCode = browserSpec ? false : getToolSummaryKey(message.toolName, message.toolArgs) === "command";
+  // A mutation carries its own evidence (D192): a durable workspace review
+  // record, or the per-call preview scratch and approved external edits
+  // carry. The row ends with its +a/−d and hosts the diff, so the transcript
+  // never grows a second collapsed row naming the same file. Rollback stays
+  // owned by the durable workspace record; the preview never confers it.
   const review = reviewChangeFromMessage(message);
-  const previewTarget = PREVIEWABLE_ACTIONS.has(action)
-    ? getToolPreviewTarget(message.toolArgs, root)
-    : null;
+  const editPreview = editDiffFromMessage(message);
+  const evidence = review ?? editPreview;
+  // The Browser plugin tool answers with page state, not workspace files: its
+  // URL and path arguments never preview-open, so a `fetch` classification
+  // must not hand it a file or link target.
+  const previewTarget = isBrowserTool
+    ? null
+    : PREVIEWABLE_ACTIONS.has(action)
+      ? getToolPreviewTarget(message.toolArgs, root)
+      : null;
   // A run row keeps its command in the head and only its output in the body.
   const runHead = action === "run";
   // A delegation is always expandable: its brief, report and the delegate's
   // own rows all live in the body.
   const hasDetails =
-    !preparing && (hasToolDetails(message) || Boolean(delegate) || Boolean(review));
-  const chips = toolResultChips(message);
+    !preparing &&
+    (hasToolDetails(message) ||
+      Boolean(delegate) ||
+      Boolean(review) ||
+      Boolean(editPreview));
+  // The head states counts, never the directory: `headerToolChips` drops the
+  // scratch/external roots the payload still carries.
+  const chips = headerToolChips(message);
   // A lifecycle row (ADR 0089) is about subagents, so it is presented as one:
   // the agent names it reports on replace the bare delegation ids it was
   // called with, and its badge rolls up their statuses (D268). A settled
@@ -291,7 +369,16 @@ function HostToolRow({
           ? "chat.toolIdentityTaskStop"
           : getToolIdentityKey(message.toolName);
   const formattedName = getToolDisplayName(message.toolName);
-  const rawName = identityKey ? t(identityKey) : formattedName || t("chat.tool");
+  // The shipped Browser plugin reads as its catalog word plus its own action
+  // (`Browser · Open page`); any other action keeps the bare word rather than
+  // a misleading label, and every other tool keeps its own identity rule.
+  const browserActionKey = isBrowserTool ? browserActionLabelKey(browserActionOf(message.toolArgs)) : null;
+  const browserName = isBrowserTool
+    ? browserActionKey
+      ? `${t("chat.toolBrowser")} · ${t(browserActionKey)}`
+      : t("chat.toolBrowser")
+    : null;
+  const rawName = browserName ?? (identityKey ? t(identityKey) : formattedName || t("chat.tool"));
   const roster = lifecycle ? delegationRoster(message) : [];
   const rosterSummary = lifecycle ? delegationRosterSummary(roster) : "";
   const rosterOutcome = lifecycle ? delegationRosterOutcome(roster) : null;
@@ -345,9 +432,12 @@ function HostToolRow({
    const waitTitle = waitLabelKey
      ? [t(waitLabelKey), rosterSummary].filter(Boolean).join(" · ")
      : undefined;
+  const isSteer = isTaskSteerTool(message.toolName);
   const agentName =
     action === "delegate" && !lifecycle
-      ? delegateAgentName(message, delegate)
+      ? isSteer
+        ? (conversationAgents?.get(steerTargetDelegationId(message)) ?? "")
+        : delegateAgentName(message, delegate)
       : "";
   // The delegate's last answer row is its report, so the body must not print
   // the same text a second time.
@@ -378,7 +468,10 @@ function HostToolRow({
             outcome === "denied"
               ? "chat.toolDeniedNoDetail"
               : "chat.toolFailedNoDetail",
-          ),
+        ),
+        // A steer row keeps the head the row already renders: identity, agent
+        // badge, target title and status below. The expanded body owns only
+        // the guidance text, so no target travels through the options.
         ...(nestedReport ? { hideDelegateReport: true } : {}),
       }),
     };
@@ -416,17 +509,21 @@ function HostToolRow({
       ? t(LIFECYCLE_RUNNING_KEYS[lifecycle])
       : t(waitLabelKey ?? LIFECYCLE_LABEL_KEYS[lifecycle])
     : null;
+  // A browser failure payload outranks a stale success status, but a denial
+  // keeps its own wording: the row states `Denied`, not `Failed`.
   const statusLabel =
     lifecycleLabel ??
     (run
       ? runLabel
       : status === "running"
         ? t("chat.running")
-        : status === "error"
-          ? t("chat.toolFailed")
-          : status === "denied"
-            ? t("chat.toolDenied")
-            : t("chat.toolCompleted"));
+        : status === "denied"
+          ? t("chat.toolDenied")
+          : status === "error" || browserFailedCall || steerFailedCall
+            ? t("chat.toolFailed")
+            : steerSent
+              ? t("chat.toolSent")
+              : t("chat.toolCompleted"));
 
   // Auto-scroll the nested `.tool-row-content` containers to their bottom
   // while the tool is still running. These elements have `max-height: 260px`
@@ -472,7 +569,7 @@ function HostToolRow({
   const statusBadge = preparing ? null :
     !runHead && !lifecycle && status === "running" ? (
       <span className="tool-spinner" aria-label={t("chat.running")} />
-    ) : runHead || lifecycle || status === "error" || status === "denied" ? (
+    ) : runHead || lifecycle || status === "error" || status === "denied" || browserFailedCall || steerFailedCall || steerSent ? (
       <span className={`tool-row-state ${statusTone}`} role="status" aria-live="polite">
         <span className="tool-row-state-dot" aria-hidden />
         {statusLabel}
@@ -483,12 +580,12 @@ function HostToolRow({
     <div
       className={`tool-row ${
         open ? "open" : ""
-      }${pulsing ? " is-preparing" : ""} status-${run === "failed" ? "error" : status || "success"}`}
+      }${pulsing ? " is-preparing" : ""} status-${run === "failed" || browserFailedCall ? "error" : status || "success"}`}
       role="region"
       data-message-id={message.id}
       data-tool-name={message.toolName ?? ""}
       aria-busy={preparing ? true : undefined}
-      aria-label={`${t("chat.toolCall")}: ${rawName}${agentName ? `, ${agentName}` : ""}${accessibleStatus ? `, ${accessibleStatus}` : ""}`}
+      aria-label={`${t("chat.toolCall")}: ${rawName}${agentName || steerAgent ? `, ${agentName || steerAgent}` : ""}${accessibleStatus ? `, ${accessibleStatus}` : ""}`}
     >
         <div className={`tool-row-head${runHead ? " is-run" : ""}`}>
           <button
@@ -507,45 +604,71 @@ function HostToolRow({
             <span className="tool-row-name" title={waitTitle}>
               {rawName}
             </span>
-            {agentName ? (
+            {!steerTargeted && (agentName || steerAgent) ? (
               <span className="tool-row-agent" title={t("chat.subagentAgent")}>
-                {agentName}
+                {agentName || steerAgent}
               </span>
             ) : null}
             {!preparing && summary ? (
-              <span
-                className={`tool-row-summary${summaryIsCode ? " is-code" : ""}${previewTarget && localToolsAllowed ? " linked" : ""}${summaryIsPath ? " is-path" : ""}`}
-                title={summary}
-                onClick={
-                  previewTarget && localToolsAllowed
-                    ? (e) => {
-                        e.stopPropagation();
-                        openTarget(previewTarget);
-                      }
-                    : undefined
-                }
-                onContextMenu={
-                  localToolsAllowed && previewTarget?.kind === "file"
-                    ? (event) => openFileMenu(event, { path: previewTarget.path })
-                    : undefined
-                }
-              >
-                {summaryIsPath ? <ToolPathSummary path={summary} /> : summary}
-              </span>
+              summaryIsPath ? (
+                // The layout span keeps the row's alignment and ellipsis; only
+                // the rendered file name inside it preview-opens, so the blank
+                // flex area and every other header cell still toggle the row.
+                // The whole path stays the file name's own hover text, and the
+                // file menu and preview target keep the untouched value.
+                <span className="tool-row-summary is-path">
+                  <span
+                    className={`tool-row-file-name${previewTarget && localToolsAllowed ? " linked" : ""}`}
+                    title={summary}
+                    onClick={
+                      previewTarget && localToolsAllowed
+                        ? (e) => {
+                            e.stopPropagation();
+                            openTarget(previewTarget);
+                          }
+                        : undefined
+                    }
+                    onContextMenu={
+                      localToolsAllowed && previewTarget?.kind === "file"
+                        ? (event) => openFileMenu(event, { path: previewTarget.path })
+                        : undefined
+                    }
+                  >
+                    <ToolPathSummary path={summary} />
+                  </span>
+                </span>
+              ) : (
+                <span
+                  className={`tool-row-summary${summaryIsCode ? " is-code" : ""}${previewTarget && localToolsAllowed ? " linked" : ""}`}
+                  title={summary}
+                  onClick={
+                    previewTarget && localToolsAllowed
+                      ? (e) => {
+                          e.stopPropagation();
+                          openTarget(previewTarget);
+                        }
+                      : undefined
+                  }
+                  onContextMenu={
+                    localToolsAllowed && previewTarget?.kind === "file"
+                      ? (event) => openFileMenu(event, { path: previewTarget.path })
+                      : undefined
+                  }
+                >
+                  {summary}
+                </span>
+              )
             ) : null}
             <ToolChips chips={chips} />
-            {review ? <ReviewChangeCounts change={review} /> : null}
+            {evidence ? <ReviewChangeCounts change={evidence} /> : null}
              {deliveredRoster ? (
                deliveredSummary ? (
-                 <span className="tool-row-lifecycle">
-                   <span className="tool-row-agent is-delivered" title={deliveredSummary}>
-                     {deliveredSummary}
-                   </span>
-                   {statusBadge}
-                 </span>
+                 <TaskTargetCluster title={deliveredSummary}>{statusBadge}</TaskTargetCluster>
                ) : (
                  statusBadge
                )
+             ) : steerTargeted ? (
+               <TaskTargetCluster title={steerTarget}>{statusBadge}</TaskTargetCluster>
              ) : lifecycle && roster.length > 0 ? (
                <span className="tool-row-lifecycle">
                  <span className="tool-row-agent is-count">
@@ -570,7 +693,7 @@ function HostToolRow({
           {summary}
         </span>
       ) : null}
-      {open && (Boolean(blocks && blocks.length > 0) || Boolean(review)) ? (
+      {open && (Boolean(blocks && blocks.length > 0) || Boolean(evidence)) ? (
         <div className="tool-row-body" id={detailsId} ref={disclosure.bodyRef} {...disclosure.bodyEvents}>
           <DisclosureCollapseRail
             label={t("chat.collapseToolOutput")}
@@ -582,6 +705,15 @@ function HostToolRow({
           {review ? (
             <div className="tool-row-review">
               <ReviewChangeBody message={message} />
+            </div>
+          ) : editPreview ? (
+            <div className="tool-row-review">
+              <ReviewDiffView
+                hunks={editPreview.hunks}
+                binary={editPreview.binary}
+                truncated={editPreview.truncated}
+                reason={editPreview.reason}
+              />
             </div>
           ) : null}
         </div>

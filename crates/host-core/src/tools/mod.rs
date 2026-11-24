@@ -1496,6 +1496,20 @@ fn tool_write(
     if ignore_rules::is_sensitive_path(&resolved) {
         return Err(ignore_rules::denied_error(path));
     }
+    // The baseline for the per-call preview: a missing file means this write
+    // creates it (a creation reads as all lines added), while any other read
+    // failure leaves the baseline unknown so the counts are omitted rather
+    // than inferred as zero. This reads only the already authorized target.
+    enum WriteBaseline {
+        Absent,
+        Present(Vec<u8>),
+        Unknown,
+    }
+    let baseline = match std::fs::read(&resolved) {
+        Ok(bytes) => WriteBaseline::Present(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => WriteBaseline::Absent,
+        Err(_) => WriteBaseline::Unknown,
+    };
     if let Some(parent) = resolved.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| ("TOOL_FAILED".into(), format!("mkdir failed: {e}")))?;
@@ -1513,12 +1527,28 @@ fn tool_write(
     let tag = hashline::tag_of_lf_text(&file.text);
     let display = display_tool_path(root_kind, root, &resolved);
     hashline::record_write(hashline, &hashline::canonical_key(&resolved), &file, &tag);
+    let (status, before) = match &baseline {
+        WriteBaseline::Absent => (crate::review::WritePreviewStatus::Added, Some(&[][..])),
+        WriteBaseline::Present(bytes) => (
+            crate::review::WritePreviewStatus::Modified,
+            Some(&bytes[..]),
+        ),
+        WriteBaseline::Unknown => (crate::review::WritePreviewStatus::Modified, None),
+    };
+    let edit_diff = crate::review::preview_write_diff(
+        display.clone(),
+        root_label(root_kind).to_string(),
+        status,
+        before,
+        &landed,
+    );
     Ok(json!({
         "path": display,
         "root": root_label(root_kind),
         "bytes": content.len(),
         "tag": tag,
         "header": hashline::section_header(&display, &tag),
+        "editDiff": edit_diff,
     }))
 }
 
@@ -1661,12 +1691,20 @@ fn tool_edit(
         std::fs::remove_file(&resolved)
             .map_err(|e| hashline::ToolError::new("TOOL_FAILED", format!("delete failed: {e}")))?;
         hashline::invalidate_path(hashline, &canonical);
+        let edit_diff = crate::review::preview_edit_diff(
+            display.clone(),
+            root_label(root_kind).to_string(),
+            crate::review::EditPreviewStatus::Deleted,
+            &live,
+            None,
+        );
         return Ok(json!({
             "path": display,
             "root": root_label(root_kind),
             "deleted": true,
             "ops": success.ops_echo,
             "warnings": success.warnings,
+            "editDiff": edit_diff,
         }));
     }
 
@@ -1706,13 +1744,20 @@ fn tool_edit(
             &success.tag,
         );
         return Ok(json!({
-            "path": dest_display,
+            "path": dest_display.clone(),
             "root": root_label(dest_root),
             "tag": success.tag,
             "header": hashline::section_header(&dest_display, &success.tag),
             "movedFrom": display,
             "ops": success.ops_echo,
             "warnings": success.warnings,
+            "editDiff": crate::review::preview_edit_diff(
+                dest_display,
+                root_label(dest_root).to_string(),
+                crate::review::EditPreviewStatus::Moved,
+                &live,
+                Some(&bytes),
+            ),
         }));
     }
 
@@ -1720,12 +1765,19 @@ fn tool_edit(
         .map_err(|e| hashline::ToolError::new("TOOL_FAILED", format!("write failed: {e}")))?;
     hashline::record_write(hashline, &canonical, &file, &success.tag);
     Ok(json!({
-        "path": display,
+        "path": display.clone(),
         "root": root_label(root_kind),
         "tag": success.tag,
         "header": hashline::section_header(&display, &success.tag),
         "ops": success.ops_echo,
         "warnings": success.warnings,
+        "editDiff": crate::review::preview_edit_diff(
+            display,
+            root_label(root_kind).to_string(),
+            crate::review::EditPreviewStatus::Modified,
+            &live,
+            Some(&bytes),
+        ),
     }))
 }
 
@@ -5510,6 +5562,590 @@ mod tests {
         assert!(
             msg.contains("no-such-file.txt"),
             "diagnostic should name the path: {msg}"
+        );
+    }
+
+    struct EditDiffHarness {
+        workspace: tempfile::TempDir,
+        scratch: tempfile::TempDir,
+        store: hashline::HashlineStore,
+    }
+
+    impl EditDiffHarness {
+        fn setup() -> Self {
+            let workspace = tempfile::tempdir().unwrap();
+            let scratch = tempfile::tempdir().unwrap();
+            std::fs::write(workspace.path().join("source.txt"), "one\ntwo\n").unwrap();
+            std::fs::write(scratch.path().join("note.txt"), "alpha\nbeta\n").unwrap();
+            Self {
+                workspace,
+                scratch,
+                store: hashline::HashlineStore::new(),
+            }
+        }
+
+        async fn read_tag(&self, tool: &str, path: &str, external: bool) -> String {
+            let result = execute_tool_with_path_access(
+                Some(self.workspace.path()),
+                Some(self.scratch.path()),
+                tool,
+                &serde_json::json!({ "path": path }),
+                ToolExecutionOptions {
+                    timeout_ms: Some(10_000),
+                    bash_options: None,
+                    allow_external_paths: external,
+                    hashline: Some(HashlineContext {
+                        session_id: "edit-diff-test",
+                        store: &self.store,
+                    }),
+                },
+            )
+            .await;
+            assert!(
+                result.ok,
+                "{tool} read of {path} must succeed: {:?}",
+                result.content
+            );
+            result.content["tag"]
+                .as_str()
+                .expect("read records a tag")
+                .to_string()
+        }
+
+        async fn edit(
+            &self,
+            path: &str,
+            tag: &str,
+            ops: &str,
+            external: bool,
+        ) -> ToolsExecuteResult {
+            execute_tool_with_path_access(
+                Some(self.workspace.path()),
+                Some(self.scratch.path()),
+                "Edit",
+                &serde_json::json!({ "path": path, "tag": tag, "ops": ops }),
+                ToolExecutionOptions {
+                    timeout_ms: Some(10_000),
+                    bash_options: None,
+                    allow_external_paths: external,
+                    hashline: Some(HashlineContext {
+                        session_id: "edit-diff-test",
+                        store: &self.store,
+                    }),
+                },
+            )
+            .await
+        }
+
+        async fn write(&self, path: &str, content: &str, external: bool) -> ToolsExecuteResult {
+            execute_tool_with_path_access(
+                Some(self.workspace.path()),
+                Some(self.scratch.path()),
+                "Write",
+                &serde_json::json!({ "path": path, "content": content }),
+                ToolExecutionOptions {
+                    timeout_ms: Some(10_000),
+                    bash_options: None,
+                    allow_external_paths: external,
+                    hashline: Some(HashlineContext {
+                        session_id: "edit-diff-test",
+                        store: &self.store,
+                    }),
+                },
+            )
+            .await
+        }
+    }
+
+    #[tokio::test]
+    async fn workspace_edit_carries_actual_per_call_diff() {
+        let harness = EditDiffHarness::setup();
+        let tag = harness.read_tag("Read", "source.txt", false).await;
+        let result = harness
+            .edit("source.txt", &tag, "PUT 2.=2:\n+TWO\n", false)
+            .await;
+        assert!(result.ok, "edit must succeed: {:?}", result.content);
+        let diff = &result.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "successful workspace Edit must carry editDiff: {:?}",
+            result.content
+        );
+        assert_eq!(diff["version"], 1);
+        assert_eq!(diff["root"], "workspace");
+        assert_eq!(diff["operation"], "edit");
+        assert_eq!(diff["status"], "modified");
+        assert_eq!(diff["additions"], 1);
+        assert_eq!(diff["deletions"], 1);
+        let hunks = diff["hunks"].as_array().expect("hunks array");
+        assert!(!hunks.is_empty(), "a one-line change must show hunks");
+        let body = serde_json::to_string(hunks).unwrap();
+        assert!(
+            body.contains("TWO") && body.contains("two"),
+            "hunks must show the actual changed lines: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn scratch_edit_carries_diff_with_scratch_root() {
+        let harness = EditDiffHarness::setup();
+        let target = harness.scratch.path().join("note.txt");
+        let path = target.to_string_lossy().to_string();
+        let tag = harness.read_tag("Read", &path, false).await;
+        let result = harness
+            .edit(&path, &tag, "PUT 1.=1:\n+ALPHA\n", false)
+            .await;
+        assert!(result.ok, "scratch edit must succeed: {:?}", result.content);
+        assert_eq!(result.content["root"], "scratch");
+        let diff = &result.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "successful scratch Edit must carry editDiff: {:?}",
+            result.content
+        );
+        assert_eq!(diff["root"], "scratch");
+        assert_eq!(diff["additions"], 1);
+        assert_eq!(diff["deletions"], 1);
+        assert!(
+            diff["hunks"]
+                .as_array()
+                .is_some_and(|hunks| !hunks.is_empty()),
+            "scratch edit must show hunks"
+        );
+    }
+
+    #[tokio::test]
+    async fn external_edit_carries_diff_only_with_permission() {
+        let harness = EditDiffHarness::setup();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("out.txt"), "a\nb\n").unwrap();
+        let path = outside.path().join("out.txt").to_string_lossy().to_string();
+
+        let denied = harness.edit(&path, "abcd", "PUT 1.=1:\n+A\n", false).await;
+        assert!(!denied.ok, "external edit without permission must fail");
+        assert!(
+            denied
+                .content
+                .get("editDiff")
+                .is_none_or(|value| value.is_null()),
+            "a denied edit must not fabricate a diff: {:?}",
+            denied.content
+        );
+
+        let tag = harness.read_tag("Read", &path, true).await;
+        let result = harness.edit(&path, &tag, "PUT 1.=1:\n+A\n", true).await;
+        assert!(
+            result.ok,
+            "permitted external edit must succeed: {:?}",
+            result.content
+        );
+        assert_eq!(result.content["root"], "external");
+        let diff = &result.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "permitted external Edit must carry editDiff: {:?}",
+            result.content
+        );
+        assert_eq!(diff["root"], "external");
+        assert_eq!(diff["additions"], 1);
+        assert_eq!(diff["deletions"], 1);
+    }
+
+    #[tokio::test]
+    async fn edit_move_reports_moved_without_deletion_counts() {
+        let harness = EditDiffHarness::setup();
+        let tag = harness.read_tag("Read", "source.txt", false).await;
+        let result = harness
+            .edit("source.txt", &tag, "MV \"moved.txt\"\n", false)
+            .await;
+        assert!(result.ok, "move must succeed: {:?}", result.content);
+        let diff = &result.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "a move must carry editDiff: {:?}",
+            result.content
+        );
+        assert_eq!(diff["status"], "moved");
+        assert_eq!(diff["additions"], 0);
+        assert_eq!(diff["deletions"], 0);
+        assert!(
+            diff["hunks"]
+                .as_array()
+                .is_some_and(|hunks| hunks.is_empty()),
+            "a pure move changes no lines: {:?}",
+            diff["hunks"]
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_delete_reports_deletion_counts() {
+        let harness = EditDiffHarness::setup();
+        let tag = harness.read_tag("Read", "source.txt", false).await;
+        let result = harness.edit("source.txt", &tag, "REM\n", false).await;
+        assert!(result.ok, "delete must succeed: {:?}", result.content);
+        assert_eq!(result.content["deleted"], true);
+        let diff = &result.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "a delete must carry editDiff: {:?}",
+            result.content
+        );
+        assert_eq!(diff["status"], "deleted");
+        assert_eq!(diff["additions"], 0);
+        assert_eq!(diff["deletions"], 2);
+    }
+
+    #[tokio::test]
+    async fn warned_stale_tag_edit_keeps_warning_and_accurate_diff() {
+        let harness = EditDiffHarness::setup();
+        let stale = harness.read_tag("Read", "source.txt", false).await;
+        let live = harness
+            .edit("source.txt", &stale, "PUT >$:\n+TAIL\n", false)
+            .await;
+        assert!(live.ok, "first append must succeed: {:?}", live.content);
+        let second = harness
+            .edit("source.txt", &stale, "PUT >$:\n+TAIL2\n", false)
+            .await;
+        assert!(
+            second.ok,
+            "position-stable stale-tag edit must succeed: {:?}",
+            second.content
+        );
+        assert!(
+            second.content["warnings"]
+                .as_array()
+                .is_some_and(|w| !w.is_empty()),
+            "the stale tag must stay reported: {:?}",
+            second.content
+        );
+        let diff = &second.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "a warned edit must still carry its diff: {:?}",
+            second.content
+        );
+        assert_eq!(diff["additions"], 1);
+        assert_eq!(diff["deletions"], 0);
+        let body = serde_json::to_string(&diff["hunks"]).unwrap();
+        assert!(
+            body.contains("TAIL2"),
+            "the diff must reflect the second append: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_cut_reports_exact_counts() {
+        let harness = EditDiffHarness::setup();
+        let tag = harness.read_tag("Read", "source.txt", false).await;
+        let result = harness.edit("source.txt", &tag, "CUT 1.=1\n", false).await;
+        assert!(result.ok, "cut must succeed: {:?}", result.content);
+        let diff = &result.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "a cut must carry editDiff: {:?}",
+            result.content
+        );
+        assert_eq!(diff["status"], "modified");
+        assert_eq!(diff["additions"], 0);
+        assert_eq!(diff["deletions"], 1);
+    }
+
+    #[tokio::test]
+    async fn failed_edit_carries_no_fabricated_diff() {
+        let harness = EditDiffHarness::setup();
+        let missing = harness
+            .edit("no-such-file.txt", "abcd", "PUT 1.=1:\n+X\n", false)
+            .await;
+        assert!(!missing.ok, "edit of a missing file must fail");
+        assert!(
+            missing
+                .content
+                .get("editDiff")
+                .is_none_or(|value| value.is_null()),
+            "a failed edit must not fabricate a diff: {:?}",
+            missing.content
+        );
+
+        let tag = harness.read_tag("Read", "source.txt", false).await;
+        let no_change = harness
+            .edit("source.txt", &tag, "PUT 1.=1:\n+one\n", false)
+            .await;
+        assert!(!no_change.ok, "an identical replacement must fail");
+        assert_eq!(
+            no_change.error_code.as_deref(),
+            Some("EDIT_NO_CHANGE"),
+            "identical replacement keeps its code: {:?}",
+            no_change.content
+        );
+        assert!(
+            no_change
+                .content
+                .get("editDiff")
+                .is_none_or(|value| value.is_null()),
+            "a no-op edit must not fabricate a diff: {:?}",
+            no_change.content
+        );
+    }
+
+    #[tokio::test]
+    async fn large_edit_reports_limit_without_false_zero_counts() {
+        let harness = EditDiffHarness::setup();
+        let big = "line\n".repeat(200_000);
+        std::fs::write(harness.workspace.path().join("big.txt"), &big).unwrap();
+        let tag = harness.read_tag("Read", "big.txt", false).await;
+        let result = harness
+            .edit("big.txt", &tag, "PUT 1.=1:\n+BIG\n", false)
+            .await;
+        assert!(result.ok, "large edit must succeed: {:?}", result.content);
+        let diff = &result.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "a large edit must carry editDiff: {:?}",
+            result.content
+        );
+        assert_eq!(diff["reason"], "fileTooLarge");
+        assert_eq!(diff["truncated"], true);
+        assert!(
+            diff.get("additions").is_none_or(|value| value.is_null())
+                && diff.get("deletions").is_none_or(|value| value.is_null()),
+            "an uncounted change must omit counts, not report zero: {diff}"
+        );
+    }
+
+    #[tokio::test]
+    async fn binary_edit_reports_binary_without_counts() {
+        let harness = EditDiffHarness::setup();
+        // Invalid UTF-8 without NUL passes Read's binary sniff but is not
+        // text the differ can count, so the preview must say binary.
+        let bytes = b"one\xff\ntwo\n".to_vec();
+        std::fs::write(harness.workspace.path().join("blob.txt"), &bytes).unwrap();
+        let tag = harness.read_tag("Read", "blob.txt", false).await;
+        let result = harness
+            .edit("blob.txt", &tag, "PUT 2.=2:\n+TWO\n", false)
+            .await;
+        assert!(result.ok, "binary edit must succeed: {:?}", result.content);
+        let diff = &result.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "a binary edit must carry editDiff: {:?}",
+            result.content
+        );
+        assert_eq!(diff["binary"], true);
+        assert!(
+            diff.get("additions").is_none_or(|value| value.is_null()),
+            "a binary change must omit counts, not report zero: {diff}"
+        );
+    }
+    #[tokio::test]
+    async fn workspace_write_new_file_carries_added_preview() {
+        let harness = EditDiffHarness::setup();
+        let result = harness.write("created.txt", "one\ntwo\n", false).await;
+        assert!(result.ok, "write must succeed: {:?}", result.content);
+        assert_eq!(result.content["root"], "workspace");
+        // The established Write presentation is unchanged: bytes, tag, header.
+        assert_eq!(result.content["bytes"], 8);
+        assert!(result.content["tag"].is_string());
+        assert!(result.content["header"].is_string());
+        let diff = &result.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "a successful workspace Write must carry editDiff: {:?}",
+            result.content
+        );
+        assert_eq!(diff["version"], 1);
+        assert_eq!(diff["root"], "workspace");
+        assert_eq!(diff["operation"], "write");
+        assert_eq!(diff["status"], "added");
+        assert_eq!(diff["additions"], 2);
+        assert_eq!(diff["deletions"], 0);
+        let hunks = diff["hunks"].as_array().expect("hunks array");
+        assert!(!hunks.is_empty(), "a new file must show its added lines");
+        let body = serde_json::to_string(hunks).unwrap();
+        assert!(
+            body.contains("one") && body.contains("two"),
+            "hunks must show the written lines: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_write_overwrite_carries_modified_preview() {
+        let harness = EditDiffHarness::setup();
+        let result = harness
+            .write("source.txt", "one\nTWO\nthree\n", false)
+            .await;
+        assert!(result.ok, "overwrite must succeed: {:?}", result.content);
+        let diff = &result.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "an overwriting Write must carry editDiff: {:?}",
+            result.content
+        );
+        assert_eq!(diff["operation"], "write");
+        assert_eq!(diff["status"], "modified");
+        assert_eq!(diff["additions"], 2);
+        assert_eq!(diff["deletions"], 1);
+        let body = serde_json::to_string(&diff["hunks"]).unwrap();
+        assert!(
+            body.contains("TWO") && body.contains("two"),
+            "hunks must show the actual changed lines: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn scratch_write_carries_diff_with_scratch_root() {
+        let harness = EditDiffHarness::setup();
+        let target = harness.scratch.path().join("fresh.txt");
+        let path = target.to_string_lossy().to_string();
+        let result = harness.write(&path, "alpha\n", false).await;
+        assert!(
+            result.ok,
+            "scratch write must succeed: {:?}",
+            result.content
+        );
+        assert_eq!(result.content["root"], "scratch");
+        let diff = &result.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "a successful scratch Write must carry editDiff: {:?}",
+            result.content
+        );
+        assert_eq!(diff["root"], "scratch");
+        assert_eq!(diff["operation"], "write");
+        assert_eq!(diff["status"], "added");
+        assert_eq!(diff["additions"], 1);
+        assert_eq!(diff["deletions"], 0);
+        assert!(
+            diff["hunks"]
+                .as_array()
+                .is_some_and(|hunks| !hunks.is_empty()),
+            "a scratch write must show hunks"
+        );
+    }
+
+    #[tokio::test]
+    async fn external_write_carries_diff_only_with_permission() {
+        let harness = EditDiffHarness::setup();
+        let outside = tempfile::tempdir().unwrap();
+        let path = outside.path().join("out.txt").to_string_lossy().to_string();
+
+        let denied = harness.write(&path, "a\n", false).await;
+        assert!(!denied.ok, "external write without permission must fail");
+        assert!(
+            denied
+                .content
+                .get("editDiff")
+                .is_none_or(|value| value.is_null()),
+            "a denied write must not fabricate a diff: {:?}",
+            denied.content
+        );
+
+        std::fs::write(outside.path().join("out.txt"), "a\nb\n").unwrap();
+        let result = harness.write(&path, "a\nB\n", true).await;
+        assert!(
+            result.ok,
+            "permitted external write must succeed: {:?}",
+            result.content
+        );
+        assert_eq!(result.content["root"], "external");
+        let diff = &result.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "a permitted external Write must carry editDiff: {:?}",
+            result.content
+        );
+        assert_eq!(diff["root"], "external");
+        assert_eq!(diff["operation"], "write");
+        assert_eq!(diff["status"], "modified");
+        assert_eq!(diff["additions"], 1);
+        assert_eq!(diff["deletions"], 1);
+    }
+
+    #[tokio::test]
+    async fn write_identical_content_reports_zero_change() {
+        let harness = EditDiffHarness::setup();
+        let result = harness.write("source.txt", "one\ntwo\n", false).await;
+        assert!(
+            result.ok,
+            "identical write must succeed: {:?}",
+            result.content
+        );
+        let diff = &result.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "an unchanged Write still carries its preview: {:?}",
+            result.content
+        );
+        assert_eq!(diff["status"], "modified");
+        assert_eq!(diff["additions"], 0);
+        assert_eq!(diff["deletions"], 0);
+        assert!(
+            diff["hunks"]
+                .as_array()
+                .is_some_and(|hunks| hunks.is_empty()),
+            "identical content changes no lines: {:?}",
+            diff["hunks"]
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_write_carries_no_fabricated_diff() {
+        let harness = EditDiffHarness::setup();
+        std::fs::write(harness.workspace.path().join("blocker"), "x\n").unwrap();
+        let result = harness.write("blocker/child.txt", "y\n", false).await;
+        assert!(!result.ok, "write under a file must fail");
+        assert!(
+            result
+                .content
+                .get("editDiff")
+                .is_none_or(|value| value.is_null()),
+            "a failed write must not fabricate a diff: {:?}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn large_write_reports_limit_without_false_zero_counts() {
+        let harness = EditDiffHarness::setup();
+        let big = "line\n".repeat(200_000);
+        std::fs::write(harness.workspace.path().join("big.txt"), &big).unwrap();
+        let changed = format!("{big}EXTRA\n");
+        let result = harness.write("big.txt", &changed, false).await;
+        assert!(result.ok, "large write must succeed: {:?}", result.content);
+        let diff = &result.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "a large write must carry editDiff: {:?}",
+            result.content
+        );
+        assert_eq!(diff["operation"], "write");
+        assert_eq!(diff["reason"], "fileTooLarge");
+        assert_eq!(diff["truncated"], true);
+        assert!(
+            diff.get("additions").is_none_or(|value| value.is_null())
+                && diff.get("deletions").is_none_or(|value| value.is_null()),
+            "an uncounted change must omit counts, not report zero: {diff}"
+        );
+    }
+
+    #[tokio::test]
+    async fn binary_write_reports_binary_without_counts() {
+        let harness = EditDiffHarness::setup();
+        // Invalid UTF-8 the differ cannot count: the preview must say binary.
+        let bytes = b"one\xff\ntwo\n".to_vec();
+        std::fs::write(harness.workspace.path().join("blob.txt"), &bytes).unwrap();
+        let result = harness.write("blob.txt", "one\nTWO\n", false).await;
+        assert!(result.ok, "binary write must succeed: {:?}", result.content);
+        let diff = &result.content["editDiff"];
+        assert!(
+            diff.is_object(),
+            "a binary write must carry editDiff: {:?}",
+            result.content
+        );
+        assert_eq!(diff["operation"], "write");
+        assert_eq!(diff["binary"], true);
+        assert!(
+            diff.get("additions").is_none_or(|value| value.is_null()),
+            "a binary change must omit counts, not report zero: {diff}"
         );
     }
 }

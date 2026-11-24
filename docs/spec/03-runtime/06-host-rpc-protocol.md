@@ -1011,6 +1011,14 @@ type ToolsExecuteResult = {
   errorCode?: string
   // Workspace Write/Edit results may include content.details.review. The
   // record is persisted with the tool message and is independent of Git.
+  // Successful Edit and Write results on any authorized root also carry
+  // content.details.editDiff, a per-call preview with the call's actual
+  // +/− counts and hunks (03-tools-and-permissions.md §4c). It is a
+  // discriminated union: operation "edit" pairs only with "modified",
+  // "deleted", or "moved", and operation "write" pairs only with "added"
+  // (a newly-created file) or "modified". The renderer also requires the
+  // preview's operation to match the message's tool, so a mismatched pair
+  // reads as absent. It confers no snapshot and no rollback.
   // Bash command failures preserve content.exitCode/stdout/stderr while
   // setting ok=false, isError=true, and errorCode=TOOL_FAILED.
   // The agent runtime forwards isError into the tool transcript without

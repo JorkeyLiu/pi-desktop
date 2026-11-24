@@ -5,6 +5,8 @@ export const esEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
+      "Las filas de la herramienta del navegador ahora nombran la acción ejecutada —abrir página, instantánea, captura y más— y muestran la página o el resultado obtenido; los errores solo indican el motivo, sin detalles sin procesar.",
+      "Un mensaje de dirección a un subagente se lee como la fila de espera de la misma tarea — agente, tarea destino y estado enviado — y se abre sobre el propio texto de guía.",
       "Al reiniciar, el panel de trabajo vuelve tal como lo dejaste: abierto o contraído, con el mismo ancho, las pestañas de cada conversación en su orden, la pestaña seleccionada y la vista previa del archivo o la página del navegador que mostraba.",
       "Al reiniciar se reabren el último proyecto y la última conversación que estabas leyendo, con su historial; un proyecto que borras explícitamente no vuelve.",
       "Al desplazarte hacia arriba en una conversación larga se mantiene tu posición: las páginas antiguas y el historial recién montado ya no desplazan los mensajes que estás leyendo.",
@@ -32,6 +34,8 @@ export const esEntries: ChangelogEntry[] = [
       "El informe de un subagente solo cuenta como entregado cuando llega realmente a la conversación del agente principal: si la entrega se rechaza o se sustituye antes, el informe sigue esperando, llega en la siguiente espera o reanudación y nunca se envía dos veces.",
       "El traspaso de contexto de un subagente y el seguimiento que le envías aceptan ahora texto de cualquier longitud: las continuaciones largas llegan íntegras al delegado en lugar de rechazarse por un límite fijo de caracteres.",
       "La salida stdio de plugins y servidores MCP ahora se mide trama a trama en los bytes UTF-8 que cada trama transporta realmente: una trama con texto multibyte cuenta los bytes que de verdad tiene, y varias tramas pequeñas que llegan en una sola lectura se miden por separado en lugar de sumar sus tamaños.",
+      "Los archivos editados muestran la misma diferencia por líneas en el proyecto, en copias temporales y en carpetas externas aprobadas.",
+      "Las filas de herramientas contraídas ya no llevan insignia de ubicación: la fila de un archivo conserva su nombre y sus recuentos de cambios, y solo el propio nombre del archivo abre la vista previa.",
     ],
   },
   {

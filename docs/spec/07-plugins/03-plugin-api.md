@@ -830,21 +830,31 @@ workspace-scoped. A local file page may navigate to other existing local files;
 web pages retain only the prior in-workspace file-navigation allowance.
 
 The current guest page is a host-owned `WebContentsView` (`persist:work-browser`).
-Each resource tab retains its own page. A navigation for a background session is
-queued for that session's last selected tab, or its first tab when none exists.
-It does not navigate or return another session's visible page.
+Each resource tab retains its own page. A navigation for a background session
+executes directly on that session's last selected tab (lazily created when the
+session has no page yet). It does not navigate or return another session's
+visible page.
 `setBounds` is content-relative to the calling plugin view and is clamped so
 the guest cannot cover chat/composer. `cdp` is deny-by-default; cookie,
 storage, target, and network-interception methods fail with
 `PERMISSION_DENIED`. Session identity for agent calls comes from the in-flight
 `plugins.execute` `sessionId`, not from plugin arguments (D333 / ADR 0170).
 Page operations (`navigate`, `action`, `openExternal`, `getState`, snapshot,
-screenshot, and CDP calls) are available only while the Browser view is
-visible. `reveal()` asks the host to activate the Browser tab for the calling
-session and resolves only after that session's view is visible. A background
-session never takes focus; if it cannot become visible, `reveal()` fails with
-`UNAVAILABLE`. The bundled Browser agent tool calls `reveal()` before each
-operation. `BrowserPreview` remains the live-reloading workspace-file preview.
+screenshot, and CDP calls) execute on the calling session's own page without
+requiring the Browser view to be visible. `reveal()` remains the explicit,
+optional UI affordance: it asks the host to activate the Browser tab for the
+calling session and resolves only after that session's view is visible. A
+background session never takes focus; if it cannot become visible, `reveal()`
+fails with `UNAVAILABLE`. The bundled Browser agent tool runs without `reveal()`
+and only reveals on explicit user request. `BrowserPreview` remains the
+live-reloading workspace-file preview.
+
+`click` scrolls the snapshotted element into view and activates it in-page
+with a user gesture (a hover/press/release pointer sequence plus the
+element's activation behavior, so links navigate, checkboxes toggle, and
+forms submit). The same path runs whether the page is visible or hidden and
+never reveals, focuses, or attaches any page; targeting is uid-based, so an
+overlapping element does not intercept the activation.
 
 Full-page `screenshot` captures are proportionally scaled to no more than
 1280×2048 output pixels. Viewport screenshots and raw `Page.captureScreenshot`

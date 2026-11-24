@@ -204,6 +204,13 @@ export type AppState = {
   toasts: ToastItem[];
   notifications: AppNotification[];
   unreadNotificationCount: number;
+  /**
+   * The one secondary window that is open, with `chat` meaning "none".
+   *
+   * Settings, Extensions, and Scheduled are in-app floating windows over the
+   * chat shell, so this is a single slot rather than a route: at most one
+   * window is presented, and switching destinations replaces its content.
+   */
   page: "chat" | "scheduled" | "plugins" | "settings";
   /** Tab ids come from the shared settings index. */
   settingsTab: SettingsTabId;
@@ -211,6 +218,7 @@ export type AppState = {
   settingsAnchor: string | null;
   /** Bumped by every setSettingsTab so a same-tab navigation is observable. */
   settingsTabNonce: number;
+  /** Conversation history only; secondary windows are never history entries. */
   navStack: Array<{ page: AppState["page"]; sessionId?: string }>;
   navIndex: number;
   error?: string | null;
@@ -246,7 +254,7 @@ export type AppState = {
     isolated?: boolean;
   }) => Promise<void>;
   forkSession: (id: string) => Promise<void>;
-  forkAssistantMessage: (messageId: string) => Promise<void>;
+  forkAssistantMessage: (messageId: string, sourceSessionId?: string) => Promise<void>;
   configureActiveSession: (config: {
     mode: Mode;
     providerId?: string;
@@ -396,9 +404,11 @@ export type AppState = {
   refreshPlanCheckpoints: () => Promise<void>;
   handleAgentEvent: (envelope: AgentEventEnvelope) => void;
   handlePlansChanged: (event: PlanningStateEvent) => void;
-  setPage: (page: AppState["page"], opts?: { record?: boolean }) => void;
+  /** Open (or switch to) the one secondary window; `chat` closes it. */
+  setPage: (page: AppState["page"]) => void;
   setSettingsTab: (tab: AppState["settingsTab"]) => void;
   setSettingsAnchor: (key: string | null) => void;
+  /** Traverse conversation history; no-ops while a secondary window is open. */
   navBack: () => void;
   navForward: () => void;
   canNavBack: () => boolean;

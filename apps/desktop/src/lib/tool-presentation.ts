@@ -5,9 +5,21 @@ import {
   getToolSummaryKey,
   isAskToolName,
   isSubagentHandoffTool,
+  isTaskSteerTool,
   type ToolAction,
 } from "./tool-display";
-import { reviewChangeFromMessage } from "./workspace-review";
+import { editDiffFromMessage, reviewChangeFromMessage } from "./workspace-review";
+import {
+  browserFailureBlock,
+  browserFailed,
+  browserSuccessBlocks,
+  isBrowserPluginTool,
+} from "./browser-tool-presentation";
+import {
+  taskSteerFailed,
+  taskSteerFailureBlock,
+  taskSteerReceiptBlocks,
+} from "./task-steer-presentation";
 import { isWithinHighlightLimits } from "./render-content-limits";
 
 /*
@@ -30,8 +42,8 @@ const MAX_LIST_ITEMS = 200;
 const DIFF_CONTEXT_LINES = 2;
 /** Longer single-line strings become their own block instead of a field row. */
 const MAX_FIELD_VALUE = 120;
-/** Internal review snapshots are rendered by ReviewChangeCard, not as fields. */
-const HIDDEN_KEYS = new Set(["review"]);
+/** Internal review snapshots and per-call edit previews render as diffs, not fields. */
+const HIDDEN_KEYS = new Set(["review", "editDiff"]);
 
 export type ToolPresentationMessage = {
   role?: string;
@@ -54,7 +66,7 @@ export type ToolChip =
   | { role: "exit" | "matches" | "files" | "replacements"; count: number }
   /** AskTool progress: answered out of every question asked; a skip is not answered. */
   | { role: "answered"; answered: number; total: number }
-  | { role: "truncated" | "scratch" }
+  | { role: "truncated" | "scratch" | "external" }
   | { role: "lines"; text: string }
   | { role: "size"; text: string };
 
@@ -164,6 +176,15 @@ export type ToolBlock =
       body: string;
     })
   | (BlockBase & { kind: "raw"; text: string })
+  | (BlockBase & {
+       kind: "image";
+       /** Data-URL source for the captured page shot. */
+       src: string;
+       /** Human-readable shot label (saved path or capture description). */
+       alt: string;
+       /** Bytes the block's copy control hands back (path or label, never pixels). */
+       copy: string;
+     })
   | (BlockBase & { kind: "empty"; scope: "files" | "matches" })
   | (BlockBase & { kind: "note"; text: string; code?: string });
 
@@ -1025,7 +1046,20 @@ export function toolResultChips(message: ToolPresentationMessage): ToolChip[] {
   }
   if (details.truncated === true) chips.push({ role: "truncated" });
   if (details.root === "scratch") chips.push({ role: "scratch" });
+  if (details.root === "external") chips.push({ role: "external" });
   return chips;
+}
+/**
+ * The chips the collapsed `ToolRow` head prints: the producer's counts, kept
+ * whole, without the directory the change belongs to. A collapsed row names
+ * its file and states its outcome; where that file lives stays in the result
+ * payload (`details.root`), the row's preview target and its file menu, so no
+ * second row and no badge restate it in the head.
+ */
+export function headerToolChips(message: ToolPresentationMessage): ToolChip[] {
+  return toolResultChips(message).filter(
+    (chip) => chip.role !== "scratch" && chip.role !== "external",
+  );
 }
 
 /**
@@ -1115,10 +1149,12 @@ function resultBlocks(
     }
     case "edit": {
       const ops = stringAt(args, "ops");
-      // Workspace edits already own a ReviewChangeCard with the real diff;
-      // only scratch edits and imported sessions need the model's stated ops.
+      // An edit with line evidence owns its diff: a durable workspace review
+      // or the per-call preview scratch and approved external edits carry.
+      // Only edits without either need the model's stated ops.
       const reviewed =
-        reviewChangeFromMessage(message as unknown as UiMessage) !== null;
+        reviewChangeFromMessage(message as unknown as UiMessage) !== null ||
+        editDiffFromMessage(message as unknown as UiMessage) !== null;
       if (ops !== null && !reviewed) {
         blocks.push(codeBlock("input", ops));
       }
@@ -1128,11 +1164,11 @@ function resultBlocks(
           blocks.push({ kind: "note", role: "notice", text: warning });
         }
       }
-      // The mutation mapping has said its whole say: a reviewed change is the
-      // diff the row hosts, a scratch edit is its ops. The record's own
-      // `path`/`root`/`tag`/`deleted`/`ops` fields restate that at lower
-      // fidelity, so an empty body here is an answer rather than a payload the
-      // generic fallback still has to render (D226).
+      // The mutation mapping has said its whole say: an evidenced change is
+      // the diff the row hosts, an unevidenced edit is its ops. The record's
+      // own `path`/`root`/`tag`/`deleted`/`ops` fields restate that at lower
+      // fidelity, so an empty body here is an answer rather than a payload
+      // the generic fallback still has to render (D226).
       mapped = reviewed || ops !== null || resultFailed(message);
       break;
     }
@@ -1467,6 +1503,26 @@ export function buildToolPresentation(
     return handoffFailureBlock(message, options);
   }
 
+  // The shipped Browser plugin owns its own row: a failure states only its
+  // reason (never echoed arguments or raw state), and a known action renders
+  // its own curated body. Anything else falls through to the generic mapping
+  // rather than losing data. Only the exact tool takes this path; any other
+  // tool whose name merely ends in `Browser` keeps the ordinary presentation.
+  if (isBrowserPluginTool(message.toolName)) {
+    if (browserFailed(message)) return browserFailureBlock(message, options);
+    const curated = browserSuccessBlocks(message);
+    if (curated) return curated;
+  }
+  // An accepted steer names only its human target task and the guidance text
+  // actually sent — no receipt sentence, no status/result section, no raw
+  // payload. Any other outcome keeps the accurate generic mapping, and only
+  // the exact built-in takes this path.
+  if (isTaskSteerTool(message.toolName)) {
+    if (taskSteerFailed(message)) return taskSteerFailureBlock(message, options);
+    const receipt = taskSteerReceiptBlocks(message, options);
+    if (receipt) return receipt;
+  }
+
   const action = getToolAction(message.toolName);
   const args = asRecord(message.toolArgs);
   const payload = toolResultPayload(message);
@@ -1485,12 +1541,13 @@ export function buildToolPresentation(
     action === "run" &&
     options.hideSummaryArg === true &&
     getToolSummaryKey(message.toolName, args) !== null;
-  // A workspace mutation's record already states the file, the operation and
-  // the change; `path`/`tag`/`ops` are how the change was requested, not what
-  // it did, so the body must not print them beside the diff.
+  // A mutation's evidence already states the file, the operation and the
+  // change; `path`/`tag`/`ops` are how the change was requested, not what it
+  // did, so the body must not print them beside the diff.
   const reviewedEdit =
     action === "edit" &&
-    reviewChangeFromMessage(message as unknown as UiMessage) !== null;
+    (reviewChangeFromMessage(message as unknown as UiMessage) !== null ||
+      editDiffFromMessage(message as unknown as UiMessage) !== null);
   const wantArgs =
     action !== "delegate" &&
     !reviewedEdit &&

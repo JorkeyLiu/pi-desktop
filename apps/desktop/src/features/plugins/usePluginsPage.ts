@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/app-store";
 import { api } from "../../lib/api";
+import { useEscapeOwner, useSecondaryWindowActive } from "../../lib/secondary-window-context";
 import { usePluginBrowseState } from "./browse-state";
 import type {
   MarketPluginDetail,
@@ -213,27 +214,37 @@ export function usePluginsPage() {
     void refreshMarket(query);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locale]);
+  // These three surfaces close on Escape and would otherwise also reach the
+  // window layer that hosts this page. They own nothing while this window is
+  // retained but hidden: a hidden detail must not claim Escape or close the
+  // presented window's surfaces.
+  const secondaryWindowActive = useSecondaryWindowActive();
+  useEscapeOwner(
+    secondaryWindowActive && (Boolean(selectedId) || Boolean(pendingInstall) || installDialogOpen),
+  );
 
   // Escape closes the detail sheet, but only while it owns the top layer: the
   // permission dialog and the install dialog in front of it handle their own
   // dismissal.
   useEffect(() => {
+    if (!secondaryWindowActive) return;
     if (!selectedId || pendingInstall || installDialogOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeDetail();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [selectedId, pendingInstall, installDialogOpen]);
+  }, [selectedId, pendingInstall, installDialogOpen, secondaryWindowActive]);
 
   useEffect(() => {
+    if (!secondaryWindowActive) return;
     if (!pendingInstall) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setPendingInstall(null);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [pendingInstall]);
+  }, [pendingInstall, secondaryWindowActive]);
 
   // An install reports itself while it runs: the phase, the mirror it is trying
   // and the bytes that have arrived. Reports for another plugin are ignored, and

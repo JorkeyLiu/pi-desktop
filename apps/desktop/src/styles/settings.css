@@ -3,29 +3,15 @@
   shortcut recorder, toggles, and the appearance theme/language pickers.
 */
 
-/* Codex settings: full-window page (no app sidebar) */
-.app-shell.settings-mode {
-  background: var(--ds-bg-primary);
-}
-
-:root[data-plugin-theme^="plugin:io.github.akshayxkill.nexus-scenic-themes:"] .app-shell.settings-mode,
-:root[data-plugin-theme^="plugin:io.github.akshayxkill.nexus-scenic-themes:"] .settings-shell,
-:root[data-plugin-theme^="plugin:io.github.akshayxkill.nexus-scenic-themes:"] .settings-shell-full,
-:root[data-plugin-theme^="plugin:io.github.akshayxkill.nexus-scenic-themes:"] .settings-content,
-:root[data-plugin-theme^="plugin:io.github.akshayxkill.nexus-scenic-themes:"] .settings-content-inner,
-:root[data-plugin-theme^="plugin:io.github.akshayxkill.nexus-scenic-themes:"] .settings-titlebar {
-  background: transparent !important;
-}
-
-/* Scenic plugin themes own the image canvas. Keep the host Settings page as
+/*
+ * Scenic plugin themes own the image canvas. Keep the host Settings window as
  * transparent compositing surfaces so the single root scenic layer remains
- * visible beneath it; ordinary themes never match this attribute. */
-:root[data-plugin-theme^="plugin:io.github.akshayxkill.nexus-scenic-themes:"] .app-shell.settings-mode,
+ * visible beneath it; ordinary themes never match this attribute.
+ */
 :root[data-plugin-theme^="plugin:io.github.akshayxkill.nexus-scenic-themes:"] .settings-shell,
 :root[data-plugin-theme^="plugin:io.github.akshayxkill.nexus-scenic-themes:"] .settings-shell-full,
 :root[data-plugin-theme^="plugin:io.github.akshayxkill.nexus-scenic-themes:"] .settings-content,
-:root[data-plugin-theme^="plugin:io.github.akshayxkill.nexus-scenic-themes:"] .settings-content-inner,
-:root[data-plugin-theme^="plugin:io.github.akshayxkill.nexus-scenic-themes:"] .settings-titlebar {
+:root[data-plugin-theme^="plugin:io.github.akshayxkill.nexus-scenic-themes:"] .settings-content-inner {
   background: transparent !important;
 }
 
@@ -105,29 +91,8 @@
   .plugin-scenic-theme-card, .plugin-scenic-blur-control { background: var(--ds-bg-elevated); }
 }
 
-/* The band spans the content column only. Spanning the full window width
- * painted --ds-bg-primary over the nav rail, so the strip above the rail read
- * as a different color from the rail underneath it. */
-.settings-titlebar {
-  pointer-events: none;
-  position: absolute;
-  /* Physical insets on purpose: chrome.css narrows this band on Windows/Linux
-   * with `right`, and a logical `inset-inline-end` here would beat it on
-   * declaration order rather than lose on specificity. The app never renders
-   * RTL, so there is no directional cost. */
-  left: var(--ds-settings-nav-width);
-  right: 0;
-  top: 0;
-  z-index: 10;
-  height: var(--ds-toolbar-height);
-  background: var(--ds-bg-primary);
-  /* Let the settings content and titlebar read as one surface. */
-  border-bottom: 0;
-  -webkit-app-region: drag;
-}
-
+/* Column rail: the scrolling directory of destinations. */
 .settings-shell-full .settings-nav {
-  /* Column rail: back-to-app band, scrolling directory. */
   display: flex;
   flex-direction: column;
   /* Gold coding-shell settings rail ~275px at 1200-wide captures */
@@ -137,41 +102,6 @@
   padding: 0;
   gap: 0;
   overflow: hidden;
-}
-
-/*
- * The rail's top band holds the native drag strip and the Back to app
- * control: traffic-light clearance plus the rail's control grid. The action
- * sits at the rail's top-left, where the removed search field used to be.
- */
-.settings-nav-top {
-  display: flex;
-  flex: 0 0 auto;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  /* traffic-light / titlebar clearance */
-  padding: 48px 12px 6px;
-}
-
-/* 32px control, sitting under the rail's traffic-light clearance. */
-.settings-back {
-  display: inline-flex;
-  height: 32px;
-  align-items: center;
-  gap: 2px;
-  width: fit-content;
-  border-radius: var(--radius-sm);
-  padding: 0 8px 0 4px;
-  color: var(--ds-text-secondary);
-  font-size: var(--text-md);
-  line-height: var(--leading-tighter);
-  transition: background var(--motion-duration-fast) var(--motion-ease-out), color var(--motion-duration-fast) var(--motion-ease-out);
-}
-
-.settings-back:hover {
-  background: var(--ds-bg-hover);
-  color: var(--ds-text-primary);
 }
 
 .settings-search-wrap {

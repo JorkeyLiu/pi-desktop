@@ -1,8 +1,9 @@
 # 06. Settings Information Architecture
 
-## 1. Settings root (Codex full-page shell)
+## 1. Settings root (floating window)
 
-Settings is a **full-window page** that replaces the app sidebar + main chrome (Codex electron behavior):
+Settings opens in the single in-app floating window over chat (Codex electron
+behavior), so the app sidebar, chat shell, and work panel stay behind it:
 
 - Switching to a different Settings destination starts the content pane at the
   top, including plugin destinations. Re-selecting the current destination or
@@ -16,34 +17,32 @@ Settings is a **full-window page** that replaces the app sidebar + main chrome (
   shows a compact loading/failure state with a retry action instead of an empty
   section.
 
-- Left settings rail only, **275px**, using the same `sidebar-surface` material
-  as the main sidebar: native vibrancy with shared tint/sheen on macOS, opaque
-  `--ds-bg-sidebar` on Windows/Linux, and shared optional background imagery.
-  macOS settings-wrapper ancestry is transparent; the content pane and its
-  titlebar remain opaque. Only a nested settings content enter wrapper plays a
-  route animation; the scrolling inner pane, rail, and backing never fade or
-  translate. That entrance is opacity-only. Settings dialogs and sheets portal
-  to a viewport-fixed `#pi-desktop-overlays` host on the document element and
-  cover the full window, including the rail.
-- Returning to the app restores the prior sidebar collapsed/expanded state
-  without a sidebar entrance animation or a width ramp. Real toggle and
-  automatic collapse/restore transitions on the visible shell still animate;
-  initial presentation and route restoration do not.
-- Top-left of the rail: the **Back to app** (`返回应用`) action, keeping its
-  chevron + label form as a 32px control. It sits inside the rail's own top
-  band but stays explicitly non-draggable, and it is the first focus stop when
-  Settings opens, so entering Settings never lands on an unfocused page. The
-  rail has no pinned footer and no in-page **Search settings…** pill; settings
-  destinations are found through the global command palette / Settings search
-  only. The directory below the back action scrolls when the window is too short
-  for every destination.
-- The 46px top band is a native window drag region across both the rail and the
-  content pane, but it is drawn in two parts so each keeps its own surface: the
-  rail drags via its own top strip on the rail surface, and the content pane's
-  band starts at the rail edge on the primary surface. The band must never paint
-  the primary surface over the rail, which would show two colors in one top row.
-  Interactive controls remain explicitly non-draggable, and the drag strip must
-  never capture clicks meant for the back action.
+- Left settings rail only, **252px** while the window sits at its preferred
+  1120px width, using the same `sidebar-surface` material as the main sidebar:
+  native vibrancy with shared tint/sheen on macOS, opaque `--ds-bg-sidebar` on
+  Windows/Linux, and shared optional background imagery. macOS window ancestry
+  is transparent; the content pane and the window's own header bar remain
+  opaque. Only a nested settings content enter wrapper plays a route animation;
+  the scrolling inner pane, rail, and backing never fade or translate. That
+  entrance is opacity-only. Settings dialogs and sheets portal to a
+  viewport-fixed `#pi-desktop-overlays` host on the document element and cover
+  the whole app window, including the rail inside the plate.
+- The chat shell is never replaced, so Settings has no "return to the app"
+  restoration step: the app sidebar keeps its collapsed/expanded state and no
+  sidebar entrance animation or width ramp plays when the window closes. Real
+  toggle and automatic collapse/restore transitions on the visible shell still
+  animate.
+- The window header carries the Settings title and the window's close control
+  (`nav.closeSecondaryWindow`) at its trailing edge; that control is the first
+  focus stop when Settings opens, so the window never lands on an unfocused
+  surface. The rail has no back-to-app action, no pinned footer and no in-page
+  **Search settings…** pill; settings destinations are found through the global
+  command palette / Settings search only. The rail scrolls when the window is
+  too short for every destination.
+- The window's own header band is not a native drag region and reserves no
+  platform window-control band: the plate is centered and never reaches the
+  titlebar, so dragging and minimize/maximize/close stay on the app's native
+  chrome outside the window. Controls inside the header are ordinary buttons.
 - A compact navigation directory with short, parallel labels and icons, in this
   exact order:
   1. **General / 常规** — Lucide `SlidersHorizontal` (appearance, language, font,
@@ -1029,9 +1028,9 @@ system while preserving their different data ownership:
   not duplicated in Settings
 - Project archive is indexed by Settings search and is not duplicated as a home
   sidebar destination or standalone global-search page
-- Back to app returns to the chat shell from the rail's top-left action, which is
-  the first focus stop when Settings opens; the rail has no pinned footer
-  action, and the in-page search pill is gone.
+- The window header's close control returns to chat from its trailing edge and
+  is the first focus stop when Settings opens; the rail has no pinned footer
+  action, no back-to-app action, and the in-page search pill is gone.
 - Developer-only destinations, where declared, join and leave the rail, page,
   and search as one unit. Cloud sync and Remote Hosts are Experimental but not
   developer-only, so both remain available in packaged builds and are not
@@ -1039,8 +1038,10 @@ system while preserving their different data ownership:
 
 ## 4. Acceptance
 
-1. Opening Settings hides the coding app sidebar (full-page takeover)
-2. Rail shows the back-to-app action at its top-left, focused on entry, and
+1. Opening Settings presents the one floating window over chat: the app
+   sidebar, chat shell, and work panel stay mounted behind it and are inert
+2. The window header shows the Settings title focused on its close control on
+   entry, and the rail shows
    exactly General / 常规, Chat / 对话, Models / 模型, Instructions / 指令,
    Skills / 技能, MCP, Subagents / 子智能体, Projects / 项目, Cloud sync / 云同步
    and Remote Hosts / 远程主机 (both Experimental, all builds), and Info / 信息 in
@@ -1057,10 +1058,10 @@ system while preserving their different data ownership:
    Defaults, including the Command shell and send-while-running rows; Info shows
    the Developer card. Plugin-contributed destinations, when present, appear after
    every core group under Extensions. Each destination is a renderer-composited
-   sandboxed surface: it preserves the existing Settings rail, titlebar,
-   Windows/Linux minimize/maximize controls, native drag/resize regions, and
-   content geometry. Token
-   usage lives in plugin `pi.token-insights`, not Settings.
+   sandboxed surface: it preserves the window plate, its header, the Settings
+   rail, and content geometry. Native drag regions and window controls stay on
+   the app chrome outside the plate. Token usage lives in plugin
+   `pi.token-insights`, not Settings.
 7. Provider secrets never display raw key values
 8. Model configuration shows compact Defaults, separate vendor accounts, the
    account edit/add dialogs, and AI service cards rather than a dense always-on
@@ -1071,11 +1072,13 @@ system while preserving their different data ownership:
    card surface in both light and dark themes. A row's live value (the pinned
    default model) is data rather than prose and stays visible, and a form
    field's hint follows the same rule as a row's explanation
-10. Dragging the empty top band from either side of Settings moves the native
-   window without blocking Back or navigation controls
-11. Resizing the window expands or contracts the content cards with the
-    available content pane; the fixed rail and pane gutters remain intact and
-    the page does not gain horizontal overflow
+10. The window plate is centered and fixed: dragging its header or edges does
+    not move or resize the app window, and the native titlebar outside the plate
+    keeps all window drag, resize, and minimize/maximize/close behavior
+11. Resizing the app window expands or contracts the plate up to its
+    destination's preferred size; at narrow widths the plate becomes a
+    near-fullscreen inset, the fixed rail narrows, and the page does not gain
+    horizontal overflow
 12. Project archive always exposes archived records and can restore them without
     duplicating the index in the app shell
 13. Project archive renders no description line — no hero, banner, or page-level
@@ -1143,12 +1146,14 @@ system while preserving their different data ownership:
 
 ## 5. General chrome metrics
 
-The shell retains the Codex gold chrome while allowing the content pane to use
-the current window width:
+The window retains the Codex gold chrome while the content pane uses the plate
+width:
 
 | Token | Value |
 |---|---|
-| Rail width | ~275px (`--ds-settings-nav-width`, shared by the rail and the top band inset) |
+| Rail width | 252px inside the 1120px plate (`--ds-settings-nav-width`); 216px at narrow widths |
+| Rail surface | Shared sidebar material; light opaque fallback `#f3f3f3`, native glass on macOS |
+| Window header | 44px across the plate, title + close control; not a native drag region |
 | Rail surface | Shared sidebar material; light opaque fallback `#f3f3f3`, native glass on macOS |
 | Top band | content pane only, inset by the rail width; rail keeps its own surface |
 | Active nav pill | denser 6px/10px pad, ~8px radius, gray mix on rail |

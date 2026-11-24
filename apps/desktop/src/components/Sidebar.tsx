@@ -222,8 +222,6 @@ export function Sidebar({
   const sessionOutcomes = useAppStore((s) => s.sessionOutcomes);
   const pendingPermissions = useAppStore((s) => s.pendingPermissions);
   const setPage = useAppStore((s) => s.setPage);
-  const navBack = useAppStore((s) => s.navBack);
-  const canNavBack = useAppStore((s) => s.canNavBack);
   const page = useAppStore((s) => s.page);
   const settings = useAppStore((s) => s.settings);
   const prefetchSession = useAppStore((s) => s.prefetchSession);
@@ -2593,7 +2591,7 @@ export function Sidebar({
               data-nav="settings"
               tooltip={t("nav.settings")}
               ariaLabel={t("nav.settings")}
-              onClick={() => setPage("settings")}
+              onClick={() => setPage(page === "settings" ? "chat" : "settings")}
               aria-pressed={page === "settings"}
             >
               <IconSettings size={14} aria-hidden />
@@ -2604,9 +2602,7 @@ export function Sidebar({
               data-nav="plugins"
               tooltip={t("nav.plugins")}
               ariaLabel={t("nav.plugins")}
-              onClick={() => page === "plugins"
-                ? (canNavBack() ? navBack() : setPage("chat"))
-                : setPage("plugins")}
+              onClick={() => setPage(page === "plugins" ? "chat" : "plugins")}
               aria-pressed={page === "plugins"}
             >
               <IconPlug size={14} aria-hidden />
@@ -2617,7 +2613,7 @@ export function Sidebar({
               data-nav="scheduled"
               tooltip={t("scheduled.title")}
               ariaLabel={t("scheduled.title")}
-              onClick={() => setPage("scheduled")}
+              onClick={() => setPage(page === "scheduled" ? "chat" : "scheduled")}
               aria-pressed={page === "scheduled"}
             >
               <IconClock size={14} aria-hidden />

@@ -9,9 +9,11 @@
  * and `DisclosureAnchorContext` use) and the provider renders exactly one
  * `<ContextMenu>`.
  *
- * The item vocabulary is the one the hover action rows already ship — Copy,
- * Edit, Delete, Regenerate, Branch, versions — now also reachable from the
- * keyboard-visible pointer path instead of hover only.
+ * The transcript offers exactly one menu, over selected text only: Copy the
+ * exact selection, or Quote it into the composer as a blockquote. A collapsed
+ * caret, a selection outside the right-clicked surface, or a right-click on a
+ * button or empty background opens nothing — the toolbar rows already own
+ * every other action, and they are never duplicated here.
  */
 import {
   createContext,
@@ -22,17 +24,36 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  clearChatSelection,
   ContextMenu,
+  contextMenuClickHitsSelection,
+  readContextMenuSelection,
   useContextMenu,
-  type ContextMenuRequest,
+  type ContextMenuClickPoint,
 } from "../../../components/ContextMenu";
 import { useAppStore } from "../../../stores/app-store";
-import { copySelectionOrFallback } from "../../../lib/chat-transcript-text";
+import { appendQuoteToDraft, buildQuoteText } from "../../../lib/chat-quotes";
+import {
+  draftKeyForSession,
+  readComposerDraft,
+} from "../../../lib/composer-draft-cache";
+import { selectedTextMenuItems } from "./menu-items";
 
-export type OpenTranscriptMenu = (
-  event: ReactMouseEvent<HTMLElement>,
-  request: ContextMenuRequest,
-) => void;
+/**
+ * Opens the selected-text menu, or nothing when no text is selected in the
+ * right-clicked surface. A pointer gesture on non-editable transcript text is
+ * always claimed, even when no menu opens, so Chromium cannot apply its
+ * right-click word selection afterwards; editables keep the platform menu.
+ */
+export type OpenTranscriptMenu = (event: ReactMouseEvent<HTMLElement>) => void;
+// Text fields and editable prose keep the platform's own context menu: they
+// own caret placement and spellcheck, so the transcript never claims theirs.
+function isEditableContextMenuTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    !!target.closest("input, textarea, [contenteditable=''], [contenteditable='true']")
+  );
+}
 
 /**
  * A row rendered outside the provider (tests, a focused single-row view) keeps
@@ -45,9 +66,45 @@ export function useTranscriptMenu(): OpenTranscriptMenu {
 }
 
 export function TranscriptMenuProvider({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   const { contextMenu, openContextMenu, closeContextMenu } = useContextMenu();
+  const { copyText, quoteText } = useChatTextActions();
+  const openSelectedTextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => {
+      const point: ContextMenuClickPoint =
+        event.clientX === 0 && event.clientY === 0
+          ? null
+          : { x: event.clientX, y: event.clientY };
+      // Claim a pointer gesture on non-editable transcript text before reading
+      // anything: Chromium applies its right-click word selection as the
+      // contextmenu default action, after dispatch, so the live selection here
+      // is still the user's own. Without this, an ordinary right-click with no
+      // prior selection leaves a stray word selected even though no menu opens.
+      // A keyboard menu carries no coordinates and keeps the existing behavior.
+      if (point && !isEditableContextMenuTarget(event.target)) {
+        event.preventDefault();
+      }
+      // Gate before the open, on the same reading the menu snapshot takes:
+      // without a selection there is no custom menu at all.
+      if (!readContextMenuSelection(event.currentTarget)) return;
+      // The pointer must land on the selected words themselves: Chromium keeps
+      // the old selection when right-clicking elsewhere in the same paragraph,
+      // so containment alone would offer Copy for text the pointer never
+      // touched. A click outside the selection cancels it, browser-like, and
+      // opens nothing.
+      if (!contextMenuClickHitsSelection(event.currentTarget, point)) {
+        if (point) clearChatSelection(event.currentTarget);
+        return;
+      }
+      openContextMenu(event, {
+        label: t("chat.messageMenu"),
+        items: selectedTextMenuItems({ t, actions: { copyText, quoteText } }),
+      });
+    },
+    [copyText, openContextMenu, quoteText, t],
+  );
   return (
-    <TranscriptMenuContext.Provider value={openContextMenu}>
+    <TranscriptMenuContext.Provider value={openSelectedTextMenu}>
       {children}
       <ContextMenu state={contextMenu} onClose={closeContextMenu} />
     </TranscriptMenuContext.Provider>
@@ -55,22 +112,25 @@ export function TranscriptMenuProvider({ children }: { children: ReactNode }) {
 }
 
 /**
- * The clipboard and selection half of a menu item.
+ * The clipboard and composer half of the selected-text menu.
  *
  * A menu disappears the moment an item runs, so an item cannot report its
  * outcome through its own state the way the hover copy chips do (see `useCopy`);
- * the toast host carries the outcome instead.
+ * the toast host carries the copy outcome instead. A quote lands in the
+ * composer through the same prefill the smart-Stop restore path uses, so the
+ * composer applies it, keeps the existing draft around it, and takes focus —
+ * this action only addresses it.
  */
 export function useChatTextActions() {
   const { t } = useTranslation();
   const showToast = useAppStore((state) => state.showToast);
+  const activeSessionId = useAppStore((state) => state.activeSessionId);
 
   const copyText = useCallback(
-    async (text: string, selection?: string) => {
-      const payload = copySelectionOrFallback(selection, text);
-      if (!payload) return;
+    async (selection: string) => {
+      if (!selection) return;
       try {
-        await navigator.clipboard.writeText(payload);
+        await navigator.clipboard.writeText(selection);
         showToast(t("chat.copied"), { variant: "success" });
       } catch {
         showToast(t("chat.copyFailed"), { variant: "error" });
@@ -79,24 +139,25 @@ export function useChatTextActions() {
     [showToast, t],
   );
 
-  /*
-    Selecting the row's rendered text hands a partial copy back to the platform:
-    dragging across a long answer is the only way to take a sentence out of it,
-    and the row is already on screen, so nothing needs measuring.
-  */
-  const selectText = useCallback((element: HTMLElement | null) => {
-    if (element instanceof HTMLTextAreaElement) {
-      element.focus();
-      element.select();
-      return;
-    }
-    const selection = window.getSelection();
-    if (!element || !selection) return;
-    const range = document.createRange();
-    range.selectNodeContents(element);
-    selection.removeAllRanges();
-    selection.addRange(range);
-  }, []);
+  const quoteText = useCallback(
+    (selection: string) => {
+      if (!selection || !activeSessionId) return;
+      const quote = buildQuoteText(selection);
+      if (!quote) return;
+      // Read the live draft so a quote adds to what the user already typed.
+      // The composer applies this prefill for its own session and then clears
+      // it, focusing the composer as part of applying.
+      const draft = readComposerDraft(draftKeyForSession(activeSessionId));
+      useAppStore.setState({
+        composerPrefill: {
+          sessionId: activeSessionId,
+          text: appendQuoteToDraft(draft?.text ?? "", quote),
+          fileReferences: draft?.fileReferences ?? [],
+        },
+      });
+    },
+    [activeSessionId],
+  );
 
-  return { copyText, selectText };
+  return { copyText, quoteText };
 }

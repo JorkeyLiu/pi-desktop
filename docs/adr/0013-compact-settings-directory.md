@@ -1,6 +1,6 @@
 # ADR 0013: Consolidate settings navigation into four destinations
 
-- Status: Superseded in part by ADR 0026
+- Status: Superseded in part by ADR 0026; the full-page shell shape is superseded by D665
 - Date: 2026-07-26
 
 ## Context
@@ -19,8 +19,11 @@ decision rather than silently rewriting the historical rows.
 
 ## Decision
 
-Keep the full-page settings shell, Back to app action, search control, rail
-metrics, content cards, and theme behavior from D063/D070.
+Keep the settings rail, search control, rail metrics, content cards, and theme
+behavior from D063/D070. *(The full-page shell shape — replacing the app shell
+and the Back to app action — is superseded by D665: Settings now opens in the
+single in-app floating window over chat, whose header close control replaces
+Back to app.)*
 
 Replace the broad grouped directory with exactly four destinations in this
 order:

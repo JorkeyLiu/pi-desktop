@@ -77,6 +77,8 @@ function blockCopyText(block: ToolBlock): string {
       return block.body;
     case "raw":
       return block.text;
+    case "image":
+      return block.copy;
     case "empty":
       // Nothing matched, so there are no bytes to hand back.
       return "";
@@ -304,6 +306,8 @@ function BlockBody({
       return <ToolDocumentCard block={block} />;
     case "raw":
       return <ToolRawPayload block={block} />;
+    case "image":
+      return <img className="tool-screenshot-image" src={block.src} alt={block.alt} />;
     case "empty":
       return <EmptyResult block={block} />;
     case "note":
@@ -412,6 +416,7 @@ const CHIP_LABEL_KEYS: Record<ToolChip["role"], string> = {
   replacements: "chat.toolChipReplacements",
   truncated: "chat.toolChipTruncated",
   scratch: "chat.toolChipScratch",
+  external: "chat.toolChipExternal",
   lines: "chat.toolChipLines",
   size: "chat.toolChipSize",
 };

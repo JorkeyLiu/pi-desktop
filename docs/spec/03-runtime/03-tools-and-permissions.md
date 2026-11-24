@@ -304,8 +304,57 @@ type ReviewChange = {
   `Delete`; the host and the renderer still read those spellings, so an
   existing conversation keeps its counts and its diff, while a value outside
   the vocabulary is refused instead of displayed.
-- Scratch-root, failed, denied, and unresolvable writes have no `review`
-  record. Binary or oversized content may omit hunks and be non-reversible.
+ - Scratch-root, failed, denied, and unresolvable writes have no `review`
+   record. Binary or oversized content may omit hunks and be non-reversible.
+ - Every successful `Edit` or `Write` — workspace, scratch, or permission-authorized
+   external — also carries a per-call preview that is independent of Git and
+   of the durable record above:
+
+ ```ts
+ type FileMutationPreviewBase = {
+   version: 1;
+   path: string;
+   root: "workspace" | "scratch" | "external";
+   additions?: number;
+   deletions?: number;
+   hunks: DiffHunk[];
+   binary?: boolean;
+   truncated?: boolean;
+   reason?: ReviewDiffReason;
+ };
+ type FileMutationPreview =
+   | (FileMutationPreviewBase & {
+       operation: "edit";
+       status: "modified" | "deleted" | "moved";
+     })
+   | (FileMutationPreviewBase & {
+       operation: "write";
+       status: "added" | "modified";
+     });
+ ```
+
+ - The preview is a discriminated union over the only legal
+   operation/status combinations: `edit` reports `modified`, `deleted`, or
+   `moved`, while `write` reports `added` or `modified`. The host builds each
+   side only through its narrow constructor and the renderer enforces the
+   tool, the operation, and the status together from one shared policy, so a
+   mismatched pair such as `write`/`deleted`, `write`/`moved`, or
+   `edit`/`added` — or an `Edit` row carrying a `write` preview — reads as
+   absent and never renders. The persisted wire field stays `editDiff`, and
+   the older `EditDiff*` type names remain as aliases.
+
+ - The preview is computed from the same bytes the call operated on, with the
+   same bounded differ and the same size/binary/truncation limits, so its
+   counts are the call's actual +/− and never inferred from the `ops` text. A
+   move carries no line change of its own: the path moved, so the content diff
+   is empty rather than a deletion plus an addition. Counts are absent — never
+   zero — when the change could not be counted.
+ - The preview confers no snapshot, no identity, and no rollback; it never
+   enters the session's review aggregates. Failed, denied, and no-change `Edit`
+   calls carry no preview, as do failed or denied `Write` calls; a `Write` that
+   rewrites identical bytes succeeds and previews +0/−0, so nothing fabricated
+   is ever displayed. A newly-created file previews as `write`/`added`, with the
+   whole file read as lines added.
 - Rollback is host-owned and hash-guarded. It restores the captured previous
   bytes, or removes a newly-created file, only when the current content still
   equals the post-tool hash. A later edit returns `conflict` without touching
@@ -649,7 +698,7 @@ A document may opt into the parent session's live tool catalog with
 `tools: inherit` or `tools: [inherit, Bash]` (ADR 0246 / D415). At `Task` spawn
 the runtime unions `toolCatalog` keys (including deferred plugin/MCP tools)
 with any assignable extras, then drops `Task` / `TaskWait` / `TaskList` /
-`TaskStop`, `EnterPlanMode` / `EnterGoalMode`, `asktool`, `new_context`, and
+`TaskStop`, `TaskSteer`, `EnterPlanMode` / `EnterGoalMode`, `asktool`, `new_context`, and
 `ToolSearch`. Builtins do not opt in. `inherit` is visible in the Markdown and
 in Settings; host-core keeps the token so an inherit-only document still
 loads. Plugin tools, `Skill`, and MCP tools are therefore available to a

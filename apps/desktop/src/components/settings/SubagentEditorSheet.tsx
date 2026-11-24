@@ -22,6 +22,7 @@ import {
 import { useAppStore } from "../../stores/app-store";
 import { Button, Field, HelpIcon, Input, SettingsToggle, Textarea, TooltipButton, cx, portalOverlay } from "../ui";
 import { IconChevronRight, IconFolderOpen, IconX } from "../icons";
+import { useEscapeOwner, useSecondaryWindowActive } from "../../lib/secondary-window-context";
 import {
   groupSubagentModelChoices,
   subagentModelChoices,
@@ -579,6 +580,8 @@ export function SubagentEditorSheet({
   onReveal?: () => void;
 }) {
   const { t } = useTranslation();
+  const secondaryWindowActive = useSecondaryWindowActive();
+  useEscapeOwner(secondaryWindowActive);
   const providers = useAppStore((state) => state.providers);
   const copiedPreset = Boolean(initialPresetId && findSubagentPreset(initialPresetId));
   const [nameTouched, setNameTouched] = useState(!!editing || copiedPreset);
@@ -598,12 +601,13 @@ export function SubagentEditorSheet({
   const orphanModel = subagentModelOrphanPin(draft.model, modelChoices);
 
   useEffect(() => {
+    if (!secondaryWindowActive) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !saving) onClose();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [saving, onClose]);
+  }, [saving, onClose, secondaryWindowActive]);
 
   const set = <K extends keyof SubagentDraft>(key: K, value: SubagentDraft[K]) =>
     setDraft({ ...draft, [key]: value });

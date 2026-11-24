@@ -14784,3 +14784,103 @@ describe("DesktopAgentRuntime tool argument preparation", () => {
     await runtime.dispose();
   });
 });
+
+describe("parent generation throughput", () => {
+  const assistant = (content: unknown[]) => ({ role: "assistant", content });
+  const piUsage = (output: number) => ({
+    input: 10,
+    output,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 10 + output,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  });
+  const textUpdate = (text: string) =>
+    ({
+      type: "message_update",
+      message: assistant([{ type: "text", text }]),
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: text,
+        partial: assistant([]),
+      },
+    }) as never;
+  const endEvents = (onEvent: ReturnType<typeof vi.fn>) =>
+    onEvent.mock.calls
+      .map(([envelope]) => (envelope as any).event)
+      .filter((event: any) => event.type === "message_end");
+
+  it("commits one settled sample from first content to end", async () => {
+    vi.useFakeTimers();
+    try {
+      const onEvent = vi.fn();
+      const runtime = createRuntime({ onEvent });
+      const handleAgentEvent = (runtime as any).handleAgentEvent.bind(runtime);
+      await handleAgentEvent({ type: "message_start", message: assistant([]) });
+      vi.advanceTimersByTime(900);
+      await handleAgentEvent(textUpdate("hello"));
+      vi.advanceTimersByTime(100);
+      await handleAgentEvent({
+        type: "message_end",
+        message: { ...assistant([{ type: "text", text: "hello" }]), usage: piUsage(40), stopReason: "stop" },
+      });
+      const [ended] = endEvents(onEvent).slice(-1);
+      expect(ended.message.status).toBe("complete");
+      expect(ended.message.throughput).toEqual({ tokens: 40, durationMs: 100, samples: 1 });
+      await runtime.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a retried attempt pairs only its own span with the final usage", async () => {
+    vi.useFakeTimers();
+    try {
+      const onEvent = vi.fn();
+      const runtime = createRuntime({ onEvent });
+      const handleAgentEvent = (runtime as any).handleAgentEvent.bind(runtime);
+      await handleAgentEvent({ type: "message_start", message: assistant([]) });
+      vi.advanceTimersByTime(800);
+      await handleAgentEvent(textUpdate("stale"));
+      vi.advanceTimersByTime(50);
+      // A provider retry is a new attempt on the same bubble: only the final
+      // attempt's first-content-to-end span may pair with the final usage.
+      await handleAgentEvent({ type: "message_start", message: assistant([]) });
+      vi.advanceTimersByTime(30);
+      await handleAgentEvent(textUpdate("fresh"));
+      vi.advanceTimersByTime(20);
+      await handleAgentEvent({
+        type: "message_end",
+        message: { ...assistant([{ type: "text", text: "fresh" }]), usage: piUsage(7), stopReason: "stop" },
+      });
+      const [ended] = endEvents(onEvent).slice(-1);
+      expect(ended.message.throughput).toEqual({ tokens: 7, durationMs: 20, samples: 1 });
+      await runtime.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborted and usage-less turns commit no sample", async () => {
+    vi.useFakeTimers();
+    try {
+      const onEvent = vi.fn();
+      const runtime = createRuntime({ onEvent });
+      const handleAgentEvent = (runtime as any).handleAgentEvent.bind(runtime);
+      await handleAgentEvent({ type: "message_start", message: assistant([]) });
+      await handleAgentEvent(textUpdate("partial"));
+      vi.advanceTimersByTime(100);
+      await handleAgentEvent({
+        type: "message_end",
+        message: { ...assistant([{ type: "text", text: "partial" }]), usage: piUsage(0), stopReason: "aborted" },
+      });
+      const [aborted] = endEvents(onEvent).slice(-1);
+      expect(aborted.message.status).toBe("aborted");
+      expect(aborted.message.throughput).toBeUndefined();
+      await runtime.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

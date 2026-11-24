@@ -36,11 +36,7 @@ import {
 import { activityItemsEqual } from "./ActivityGroup";
 import { GeneratedImages } from "./GeneratedImages";
 import { MessageRow } from "./MessageRow";
-import { assistantTurnMenuItems } from "./menu-items";
-import {
-  useChatTextActions,
-  useTranscriptMenu,
-} from "./TranscriptMenu";
+import { useTranscriptMenu } from "./TranscriptMenu";
 import {
   getAssistantTurnSummary,
   getAssistantTurnContent,
@@ -259,15 +255,14 @@ export const AssistantTurn = memo(function AssistantTurn({
   runtimeActivity,
 }: AssistantTurnProps) {
   const { t } = useTranslation();
-  const openTranscriptMenu = useTranscriptMenu();
-  const { copyText, selectText } = useChatTextActions();
+  const openSelectedTextMenu = useTranscriptMenu();
   const retryAssistantMessage = useAppStore((s) => s.retryAssistantMessage);
   const forkAssistantMessage = useAppStore((s) => s.forkAssistantMessage);
   const paneSessionId = useSlotSessionId();
   const session = useAppStore((s) => s.sessions.find((item) => item.id === paneSessionId));
   const canEditMessages = sessionAllows(session ?? (paneSessionId.startsWith("remote:") ? { id: paneSessionId } : undefined), "canEditMessages");
   const summary = getAssistantTurnSummary(entry);
-  const { actionMessage, metaMessage, latestUsageMessage, usage, responseDurationMs, responseOutputTokens } = summary;
+  const { actionMessage, metaMessage, latestUsageMessage } = summary;
   const modelId = metaMessage?.modelId ?? latestUsageMessage?.modelId;
   const complete = !isActive && !summary.hasError && summary.hasContent && Boolean(actionMessage);
   // A live reply is joined only on menu/copy demand. Finished reply plugins
@@ -281,32 +276,12 @@ export const AssistantTurn = memo(function AssistantTurn({
   [complete, actionMessage, content]);
   const streaming = isActive && summary.streaming;
   /*
-    The turn owns the menu for its whole subtree, the answer rows it renders
-    included: Regenerate and Branch act on the turn's answer message, so a menu
-    owned by a single message part could not offer them honestly.
+    The turn opens the shared selected-text menu: a selection anywhere in
+    its subtree — answer prose, tool output — offers Copy and Quote, and
+    anything else opens nothing. Regenerate and Branch stay on the toolbar.
   */
   const onContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
-    openTranscriptMenu(event, {
-      label: t("chat.messageMenu"),
-      items: assistantTurnMenuItems({
-        t,
-        answer: complete ? content : getAssistantTurnContent(entry),
-        selectTarget:
-          [
-            ...event.currentTarget.querySelectorAll<HTMLElement>(
-              ".message-bubble",
-            ),
-          ].at(-1) ?? null,
-        complete: complete && Boolean(actionMessage) && canEditMessages,
-        actions: { copyText, selectText },
-        onRegenerate: () => {
-          if (actionMessage) void retryAssistantMessage(actionMessage.id);
-        },
-        onBranch: () => {
-          if (actionMessage) void forkAssistantMessage(actionMessage.id);
-        },
-      }),
-    });
+    openSelectedTextMenu(event);
   };
 
   // Collect delegation statuses across ALL activity parts of this turn so that
@@ -373,12 +348,7 @@ export const AssistantTurn = memo(function AssistantTurn({
         )}
         {generatedImages}
         {!isActive && metaMessage ? (
-          <MessageMeta
-            modelId={modelId}
-            usage={usage}
-            responseDurationMs={responseDurationMs}
-            responseOutputTokens={responseOutputTokens}
-          />
+          <MessageMeta modelId={modelId} />
         ) : null}
         {complete && actionMessage ? (
           <div className="message-actions">
@@ -389,7 +359,7 @@ export const AssistantTurn = memo(function AssistantTurn({
               className="copy-btn icon"
               tooltip={t("chat.forkResponse")}
               ariaLabel={t("chat.forkResponse")}
-              onClick={() => void forkAssistantMessage(actionMessage.id)}
+              onClick={() => void forkAssistantMessage(actionMessage.id, paneSessionId || undefined)}
             >
               <IconBranch size={13} />
             </TooltipButton> : null}

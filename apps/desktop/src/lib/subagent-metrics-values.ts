@@ -1,6 +1,11 @@
 import { addUsage } from "@pi-desktop/shared";
-import type { MessageUsage, UiMessage } from "@pi-desktop/shared";
+import type {
+  GenerationThroughputTotals,
+  MessageUsage,
+  UiMessage,
+} from "@pi-desktop/shared";
 import { contextOccupancyTokens } from "./context-usage";
+import { parseThroughputTotals } from "./generation-throughput";
 
 /**
  * The subagent figures as values: what one report says, and how a chain's
@@ -40,6 +45,14 @@ export type SubagentMetrics = {
   /** Cumulative billed spend, ledger-deduped by operation identity. */
   usage?: MessageUsage;
   /**
+   * Canonical per-run generation throughput totals, folded per run segment
+   * (latest snapshot per delegation) and summed over a chain. Absent means
+   * the chain reported no usable figure: failed, aborted, in-flight, and
+   * usage-less turns never contribute, and legacy payloads carry no totals.
+   * Callers render `—`, never an invented zero or a heuristic estimate.
+   */
+  throughput?: GenerationThroughputTotals;
+  /**
    * Where the chain's occupancy figure came from. `snapshot` is a Task result's
    * own `contextTokens`; `lifecycle` is a TaskWait/TaskList/TaskStop roster
    * entry for the same delegation; `child` is the latest valid child assistant
@@ -76,6 +89,11 @@ function asUsage(value: unknown): MessageUsage | undefined {
   return value as MessageUsage;
 }
 
+function asNonNegativeFinite(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  return value;
+}
+
 /**
  * Live/settled progress from one Task result payload (`delegationSummary`).
  * Returns null when the payload carries no metrics at all, so callers render
@@ -92,11 +110,13 @@ export function parseSubagentMetrics(payload: unknown): SubagentMetrics | null {
   const turns = asNonNegativeInt(record.turns);
   const contextTokens = asNonNegativeInt(record.contextTokens);
   const usage = asUsage(record.usage);
+  const throughput = parseThroughputTotals(record.throughput);
   if (
     toolCalls === undefined &&
     turns === undefined &&
     contextTokens === undefined &&
-    usage === undefined
+    usage === undefined &&
+    throughput === undefined
   ) {
     return null;
   }
@@ -105,6 +125,7 @@ export function parseSubagentMetrics(payload: unknown): SubagentMetrics | null {
     ...(turns !== undefined ? { turns } : {}),
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     ...(usage ? { usage } : {}),
+    ...(throughput ? { throughput } : {}),
   };
 }
 
@@ -169,6 +190,10 @@ export function aggregateSubagentChainMetrics(
   let seen = false;
   let usage: MessageUsage | undefined;
   let gauge = UNMEASURED_CONTEXT;
+  // Throughput is deliberately not folded here: entries carry no delegation
+  // identity, so this fold cannot replace a re-reported run's totals. The
+  // transcript index folds throughput per delegation (latest snapshot wins)
+  // and sums only distinct run segments; see its foldChain.
   for (const entry of entries) {
     if (!entry) continue;
     seen = true;

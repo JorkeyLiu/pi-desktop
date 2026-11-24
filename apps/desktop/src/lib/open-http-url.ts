@@ -51,9 +51,9 @@ export function planHttpUrlOpen(
  * Explicit preview (workspace HTML, BrowserPreview, the link context-menu
  * "Open in work panel" item) keeps calling `openUrlInWorkPanel` directly.
  *
- * Plugin/settings pages cover or unmount the dock, so a work-panel destination
- * returns to chat first without recording a navigation hop. A missing session
- * falls back to the OS browser.
+ * Settings, Extensions, and Scheduled are windows over the chat shell, so the
+ * dock behind them is not reachable: a work-panel destination closes the window
+ * first. A missing session falls back to the OS browser.
  */
 export function openHttpUrl(url: string): void {
   const state = useAppStore.getState();
@@ -61,7 +61,7 @@ export function openHttpUrl(url: string): void {
   if (plan.action === "ignore") return;
   if (plan.action === "workpanel") {
     if (plan.returnToChat) {
-      state.setPage("chat", { record: false });
+      state.setPage("chat");
     }
     state.openUrlInWorkPanel(plan.url);
     return;

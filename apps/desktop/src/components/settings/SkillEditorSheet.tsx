@@ -9,6 +9,7 @@ import {
 } from "@pi-desktop/shared";
 import { Button, Field, HelpIcon, Input, SettingsToggle, Textarea, TooltipButton, portalOverlay } from "../ui";
 import { IconFolderOpen, IconX } from "../icons";
+import { useEscapeOwner, useSecondaryWindowActive } from "../../lib/secondary-window-context";
 
 /** Hard cap host-core enforces on a skill document. */
 export const MAX_SKILL_BYTES = 128 * 1024;
@@ -168,6 +169,8 @@ export function SkillEditorSheet({
   onReveal?: () => void;
 }) {
   const { t } = useTranslation();
+  const secondaryWindowActive = useSecondaryWindowActive();
+  useEscapeOwner(secondaryWindowActive);
   const [nameTouched, setNameTouched] = useState(!!editing);
   const errorKey = skillDraftError(draft);
   // The starter document means a new skill draft is never empty; what makes it
@@ -177,12 +180,13 @@ export function SkillEditorSheet({
   const slug = draft.id || skillSlug(draft.name);
 
   useEffect(() => {
+    if (!secondaryWindowActive) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !saving) onClose();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [saving, onClose]);
+  }, [saving, onClose, secondaryWindowActive]);
 
   const set = <K extends keyof SkillDraft>(key: K, value: SkillDraft[K]) =>
     setDraft({ ...draft, [key]: value });

@@ -1059,3 +1059,467 @@ test("a gap wider than one sync keeps a contiguous newest window and states the 
   assert.ok(next.includes("child-2050"), "repeated older paging keeps walking the gap's rows");
   assert.equal(next[1], "child-11", "the focus range is never dropped while the gap is paged");
 });
+
+
+/*
+ * A running child tool has no durable row until it ends, so a read issued while
+ * it runs cannot contain it. These tests pin the one durable/live reconciliation
+ * rule: a stale scoped read may replace the durable window, but it never erases a
+ * live row it did not name, the read's own lifecycle stays owned by the read, and
+ * the completed durable row replaces its live copy exactly once.
+ */
+
+const CALL_ID = "call-live";
+const BASH_ID = "bash-live";
+const STEER_ID = "steer-live";
+const LIVE_START = Date.UTC(2026, 0, 1, 0, 0, 0);
+
+const liveBash = (status, extra = {}) => ({
+  id: BASH_ID,
+  role: "tool",
+  toolName: "Bash",
+  toolCallId: BASH_ID,
+  parentToolCallId: CALL_ID,
+  toolArgs: { command: "npm test" },
+  content: "",
+  toolStatus: status,
+  createdAt: new Date(LIVE_START + 2400_500).toISOString(),
+  ...extra,
+});
+
+const steerRow = () => ({
+  id: STEER_ID,
+  role: "user",
+  content: "Keep going, re-run the suite",
+  parentToolCallId: CALL_ID,
+  createdAt: new Date(LIVE_START + 2401_000).toISOString(),
+});
+
+const callTask = () => ({
+  ...taskRow(CALL_ID, "d1"),
+  id: `${CALL_ID}-row`,
+  createdAt: new Date(LIVE_START + 1000).toISOString(),
+});
+
+const ROW_STEER = 2401;
+const ROW_BASH = 2402;
+
+const durableRows = (indices) =>
+  indices.map((index) =>
+    index === ROW_STEER
+      ? steerRow()
+      : index === ROW_BASH
+        ? { ...liveBash("success", { content: "suite passed" }), createdAt: new Date(LIVE_START + 2402_000).toISOString() }
+        : childRow(index, CALL_ID),
+  );
+
+function makeGate() {
+  let openStart;
+  let openRelease;
+  const started = new Promise((resolve) => {
+    openStart = resolve;
+  });
+  const released = new Promise((resolve) => {
+    openRelease = resolve;
+  });
+  return { started, released, start: openStart, release: openRelease };
+}
+
+/**
+ * A delegation backend whose tail read waits for the test. Only the transport
+ * is controlled: every store action, merge, and render helper is production
+ * code. `state.durable` is the durable index list, so a stage can append the
+ * row a completed tool would persist.
+ */
+function gatedTransport({ calls, state, gates }) {
+  return async (id, options = {}) => {
+    calls.push({ id, options });
+    const scope = delegation("d1");
+    const context = [callTask()];
+    if (options.messageAround) {
+      const windowRows = [10, 11];
+      return page(id, durableRows(windowRows), {
+        messageStart: windowRows[0],
+        messageEnd: windowRows.at(-1) + 1,
+        hasMoreBefore: true,
+        hasMoreAfter: true,
+        scope,
+        context,
+      });
+    }
+    if (options.messageBefore === undefined) {
+      const gate = makeGate();
+      gates.push(gate);
+      gate.start();
+      await gate.released;
+      const slice = state.durable.slice(-100);
+      return page(id, durableRows(slice), {
+        messageStart: slice[0],
+        messageEnd: slice.at(-1) + 1,
+        hasMoreBefore: state.durable.some((index) => index < slice[0]),
+        hasMoreAfter: false,
+        scope,
+        context,
+      });
+    }
+    const eligible = state.durable.filter((index) => index < options.messageBefore);
+    const slice = eligible.slice(-100);
+    return page(id, durableRows(slice), {
+      messageStart: slice[0],
+      messageEnd: slice.at(-1) + 1,
+      hasMoreBefore: state.durable.some((index) => index < slice[0]),
+      hasMoreAfter: true,
+      scope,
+      context,
+    });
+  };
+}
+
+const rowIds = (entry) => entry.messages.map((message) => message.id);
+const bashCopies = (entry) => entry.messages.filter((message) => message.id === BASH_ID);
+
+const gapIndices = () =>
+  Array.from({ length: 23 }, (_, block) =>
+    Array.from({ length: 100 }, (_, offset) => 100 + block * 100 + offset),
+  ).flat();
+
+test("a stale tail window keeps the live running child row and its steering row", async (t) => {
+  const sessionId = "topic-delegate-steer-gap";
+  seedStore(sessionId);
+  const calls = [];
+  const gates = [];
+  const state = { durable: [...[10, 11], ...gapIndices(), ROW_STEER] };
+  t.mock.method(api, "getSession", gatedTransport({ calls, state, gates }));
+
+  await useAppStore.getState().ensureSubagentHistory({
+    sessionId,
+    tabKey: "d1",
+    messageId: "child-11",
+    query: "",
+    requestId: 3,
+  });
+  let entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(entry.messageEnd, 12, "the tab starts on the durable window it read");
+  assert.deepEqual(rowIds(entry), ["child-10", "child-11"]);
+
+  // The child tool starts: the runtime publishes tool_start before the steering
+  // reply is echoed, and no durable row exists for the call yet.
+  const tailRead = useAppStore.getState().loadLatestSubagentHistory({ sessionId, tabKey: "d1" });
+  await gates[0].started;
+  assert.equal(
+    findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1").refreshing,
+    true,
+    "the tail read owns the entry's refreshing state",
+  );
+  useAppStore.setState({
+    activeSessionId: sessionId,
+    messages: [callTask(), liveBash("running")],
+  });
+  entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.deepEqual(rowIds(entry), ["child-10", "child-11", BASH_ID], "the live row is routed in");
+  assert.equal(bashCopies(entry).length, 1);
+  assert.equal(bashCopies(entry)[0].toolStatus, "running");
+  assert.deepEqual(entry.livePending.map((message) => message.id), [BASH_ID]);
+  assert.equal(
+    entry.refreshing,
+    true,
+    "a live publication never makes an in-flight read look finished",
+  );
+
+  // The read was issued before the tool started, so its answer cannot name the
+  // row; the gap is wider than one synchronization, so it keeps a newest window.
+  gates[0].release();
+  await tailRead;
+  entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(entry.omittedAfterId, "child-11", "the wide gap is stated, not hidden");
+  assert.ok(
+    rowIds(entry).includes(STEER_ID),
+    "the durable row the read did name stays",
+  );
+  assert.ok(
+    rowIds(entry).includes(BASH_ID),
+    "the live row the read did not name is not erased by the window",
+  );
+  assert.equal(bashCopies(entry).length, 1, "the live row is not duplicated");
+  assert.equal(
+    bashCopies(entry)[0].toolStatus,
+    "running",
+    "the still-running row keeps its live state",
+  );
+  assert.ok(
+    entry.messages.length <= SUBAGENT_HISTORY_MESSAGE_LIMIT,
+    "the retained window keeps its row budget",
+  );
+  assert.equal(entry.refreshing, false, "the read releases its own refresh state");
+  assert.equal(
+    entry.finalized,
+    false,
+    "a read that predates a live row does not claim the entry matches the store",
+  );
+
+  // Entry-only render: another conversation is on screen, so the tab has no live
+  // array to fall back on. The row must still be there.
+  useAppStore.setState({ activeSessionId: "some-other-session", messages: [] });
+  const rendered = subagentHistoryMessages(
+    findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1"),
+    [],
+  ).map((message) => message.id);
+  assert.ok(rendered.includes(BASH_ID), "the row renders from the entry alone");
+  assert.ok(rendered.includes(STEER_ID), "the steering row renders from the entry alone");
+});
+
+test("the completed durable row replaces its live copy exactly once", async (t) => {
+  const sessionId = "topic-delegate-steer-complete";
+  seedStore(sessionId);
+  const calls = [];
+  const gates = [];
+  const state = { durable: [...[10, 11], ...gapIndices(), ROW_STEER] };
+  t.mock.method(api, "getSession", gatedTransport({ calls, state, gates }));
+
+  await useAppStore.getState().ensureSubagentHistory({
+    sessionId,
+    tabKey: "d1",
+    messageId: "child-11",
+    query: "",
+    requestId: 4,
+  });
+  useAppStore.setState({ activeSessionId: sessionId, messages: [callTask(), liveBash("running")] });
+  const stale = useAppStore.getState().loadLatestSubagentHistory({ sessionId, tabKey: "d1" });
+  await gates[0].started;
+  gates[0].release();
+  await stale;
+  let entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(bashCopies(entry).length, 1, "the live row survives the stale window");
+
+  // The tool ends: the durable row now exists, and a fresh read names it.
+  state.durable = [...state.durable, ROW_BASH];
+  const fresh = useAppStore.getState().loadLatestSubagentHistory({ sessionId, tabKey: "d1" });
+  await gates[1].started;
+  gates[1].release();
+  await fresh;
+  entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(bashCopies(entry).length, 1, "a completed row reconciles exactly once");
+  assert.equal(bashCopies(entry)[0].toolStatus, "success", "the durable value wins");
+  assert.deepEqual(entry.livePending, [], "the confirmed live row retires");
+  assert.equal(entry.finalized, true, "a read that confirmed every live row finalizes");
+  assert.ok(rowIds(entry).includes(STEER_ID));
+
+  // The same completion echoed live afterwards adds nothing.
+  useAppStore.setState({
+    activeSessionId: sessionId,
+    messages: [callTask(), liveBash("success", { content: "suite passed" })],
+  });
+  entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(bashCopies(entry).length, 1, "a replayed completion does not duplicate the row");
+  assert.deepEqual(entry.livePending, [], "a confirmed row never returns to the pending set");
+  assert.equal(calls.filter((call) => call.options.messageAround).length, 1, "one initial read");
+});
+
+test("a durable read that lands after the live completion keeps one row", async (t) => {
+  const sessionId = "topic-delegate-steer-order";
+  seedStore(sessionId);
+  const gates = [];
+  const calls = [];
+  const state = { durable: [...[10, 11], ...gapIndices(), ROW_STEER, ROW_BASH] };
+  t.mock.method(api, "getSession", gatedTransport({ calls, state, gates }));
+
+  await useAppStore.getState().ensureSubagentHistory({
+    sessionId,
+    tabKey: "d1",
+    messageId: "child-11",
+    query: "",
+    requestId: 5,
+  });
+  // The live completion arrives first, then the durable read that names the row.
+  useAppStore.setState({
+    activeSessionId: sessionId,
+    messages: [callTask(), liveBash("success", { content: "suite passed" })],
+  });
+  let entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(bashCopies(entry).length, 1);
+  assert.deepEqual(entry.livePending.map((message) => message.id), [BASH_ID]);
+  const read = useAppStore.getState().loadLatestSubagentHistory({ sessionId, tabKey: "d1" });
+  await gates[0].started;
+  gates[0].release();
+  await read;
+  entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(bashCopies(entry).length, 1, "the order of arrival does not duplicate the row");
+  assert.equal(bashCopies(entry)[0].toolStatus, "success");
+  assert.deepEqual(entry.livePending, []);
+  assert.equal(entry.finalized, true);
+});
+
+test("live rows of another chain neither join nor stale this one", async (t) => {
+  const sessionId = "topic-delegate-isolation";
+  seedStore(sessionId);
+  const gates = [];
+  const calls = [];
+  const state = { durable: [...[10, 11], ...gapIndices(), ROW_STEER] };
+  t.mock.method(api, "getSession", gatedTransport({ calls, state, gates }));
+
+  await useAppStore.getState().ensureSubagentHistory({
+    sessionId,
+    tabKey: "d1",
+    messageId: "child-10",
+    query: "",
+    requestId: 6,
+  });
+  useAppStore.setState({
+    activeSessionId: sessionId,
+    messages: [
+      callTask(),
+      { ...childRow(9, "call-other"), id: "child-other", createdAt: new Date(LIVE_START + 9_000).toISOString() },
+    ],
+  });
+  const entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.deepEqual(
+    entry.livePending,
+    [],
+    "an unrelated chain's rows never become this entry's pending rows",
+  );
+  assert.deepEqual(
+    rowIds(entry),
+    ["child-10", "child-11"],
+    "another chain's row does not join this tab",
+  );
+  assert.equal(calls.length, 1, "an unrelated publication costs no read");
+});
+
+test("repeated live publications of one call hold a single unconfirmed row", async (t) => {
+  const sessionId = "topic-delegate-steer-repeat";
+  seedStore(sessionId);
+  const calls = [];
+  const gates = [];
+  const state = { durable: [...[10, 11], ...gapIndices(), ROW_STEER] };
+  t.mock.method(api, "getSession", gatedTransport({ calls, state, gates }));
+
+  await useAppStore.getState().ensureSubagentHistory({
+    sessionId,
+    tabKey: "d1",
+    messageId: "child-11",
+    query: "",
+    requestId: 7,
+  });
+  const entryOf = () => findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+
+  // The child streams: every event republishes the same running tool.
+  const rounds = 24;
+  for (let round = 0; round < rounds; round += 1) {
+    useAppStore.setState({ activeSessionId: sessionId, messages: [callTask(), liveBash("running")] });
+  }
+  let entry = entryOf();
+  assert.equal(bashCopies(entry).length, 1, "the tab still paints one row for the call");
+  assert.deepEqual(
+    entry.livePending.map((message) => message.id),
+    [BASH_ID],
+    "no publication adds a second unconfirmed copy of the same call",
+  );
+  assert.equal(entry.livePending[0].toolStatus, "running");
+  assert.ok(
+    entry.livePending.length <= entry.messages.length,
+    "the unconfirmed set stays a subset of the tab's own rows",
+  );
+  assert.ok(
+    entry.livePending.length <= SUBAGENT_HISTORY_MESSAGE_LIMIT,
+    "repeat publications stay inside the row budget",
+  );
+
+  // The call ends: the newest live state is the one the tab holds and the one
+  // it will put back if a durable read cannot name the row.
+  useAppStore.setState({
+    activeSessionId: sessionId,
+    messages: [callTask(), liveBash("success", { content: "suite passed" })],
+  });
+  entry = entryOf();
+  assert.equal(bashCopies(entry).length, 1);
+  assert.equal(entry.livePending.length, 1, "the settled call still holds one unconfirmed row");
+  assert.equal(
+    entry.livePending[0].toolStatus,
+    "success",
+    "the newest live state replaces the older one instead of joining it",
+  );
+});
+
+test("a completion that predates any durable page survives the window replacement", async (t) => {
+  const sessionId = "topic-delegate-steer-terminal";
+  seedStore(sessionId);
+  const calls = [];
+  const gates = [];
+  const state = { durable: [...[10, 11], ...gapIndices(), ROW_STEER] };
+  t.mock.method(api, "getSession", gatedTransport({ calls, state, gates }));
+
+  await useAppStore.getState().ensureSubagentHistory({
+    sessionId,
+    tabKey: "d1",
+    messageId: "child-11",
+    query: "",
+    requestId: 8,
+  });
+  const entryOf = () => findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+
+  // tool_start, then tool_end, then a replay of the earlier running frame: the
+  // backend has no durable row for the call yet, so only live rows carry it.
+  useAppStore.setState({ activeSessionId: sessionId, messages: [callTask(), liveBash("running")] });
+  useAppStore.setState({
+    activeSessionId: sessionId,
+    messages: [callTask(), liveBash("success", { content: "suite passed" })],
+  });
+  useAppStore.setState({ activeSessionId: sessionId, messages: [callTask(), liveBash("running")] });
+  let entry = entryOf();
+  assert.equal(bashCopies(entry).length, 1);
+
+  // The read cannot name the call: its pages cover the wide gap but hold no row
+  // for this tool, so the newest window replaces the durable range alone.
+  const stale = useAppStore.getState().loadLatestSubagentHistory({ sessionId, tabKey: "d1" });
+  await gates[0].started;
+  gates[0].release();
+  await stale;
+  entry = entryOf();
+  assert.equal(bashCopies(entry).length, 1, "the settled row survives the window exactly once");
+  assert.deepEqual(
+    bashCopies(entry).map((message) => message.toolStatus),
+    ["success"],
+    "the completed row is not regressed to running by the merge",
+  );
+  assert.deepEqual(
+    entry.livePending.map((message) => message.toolStatus),
+    ["success"],
+    "a replayed unsettled frame never downgrades the settled unconfirmed row",
+  );
+
+  // Entry-only render: no live array to fall back on.
+  useAppStore.setState({ activeSessionId: "some-other-session", messages: [] });
+  assert.deepEqual(
+    subagentHistoryMessages(entryOf(), [])
+      .filter((message) => message.id === BASH_ID)
+      .map((message) => message.toolStatus),
+    ["success"],
+    "the completed row paints from the entry alone",
+  );
+
+  // A later publication of the settled state adds nothing. The stalled running
+  // frame is replayed once more before the next read, and that read joins the
+  // page the entry already reaches: the page merge alone must not resurrect the
+  // older state either.
+  useAppStore.setState({
+    activeSessionId: sessionId,
+    messages: [callTask(), liveBash("success", { content: "suite passed" })],
+  });
+  entry = entryOf();
+  assert.equal(bashCopies(entry).length, 1, "a replayed completion does not duplicate the row");
+  useAppStore.setState({ activeSessionId: sessionId, messages: [callTask(), liveBash("running")] });
+  const next = useAppStore.getState().loadLatestSubagentHistory({ sessionId, tabKey: "d1" });
+  await gates[1].started;
+  gates[1].release();
+  await next;
+  entry = entryOf();
+  assert.deepEqual(
+    bashCopies(entry).map((message) => message.toolStatus),
+    ["success"],
+    "a joined page keeps the completed row once, even after a stalled replay",
+  );
+  assert.ok(
+    entry.livePending.every((message) => message.toolStatus === "success"),
+    "no unsettled version returns to the unconfirmed set",
+  );
+});

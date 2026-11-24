@@ -497,17 +497,59 @@
   whose own tab is open, close the tab, then open it again.
 - **Expected:** A collapsed file row prints the file's own name only — never the
   directory and never an omission the row composed — at every width. The whole
-  raw path stays in the row's hover text and in the row's screen-reader
+  raw path stays in the file name's own hover text and in the row's screen-reader
   description, the name a file's row cannot fit is ellipsized inside the row
   instead of overflowing it, a directory value prints its last segment, and no
-  element exists in a row to measure path candidates. The chips and the
-  `+a/−d` pair keep their place.
+  element exists in a row to measure path candidates. Only the rendered file
+  name preview-opens: clicking it opens the preview exactly once without
+  toggling, while the blank summary area, the tool name and the disclosure
+  keep the toggle. The chips and the `+a/−d` pair keep their place.
 - **Status:** Automated in `pnpm test:e2e:tool-path-name`, which drives the
   rendered tab through the open, narrow, switch, close and reopen sequence.
   `node scripts/e2e-tool-cards.mjs` covers the same hint at 280/340/700 px
   together with the rest of the tool-row cards, and
   `apps/desktop/test/tool-path-display.test.mjs` covers the name for every
   path spelling.
+### E2E-TOOL-ROW-browser-presentation
+
+- **Preconditions:** No live provider, page or network is required; the fixture
+  seeds production `ToolRow` cards over scripted `plugin_pi_browser_Browser`
+  records through the real store and mounts them in a real renderer.
+- **Expected:** A collapsed browser row heads `Browser` plus its per-action label
+  (`Open page`, `Read page`, `Screenshot`, `Click`, `Fill`, `Run script`,
+  `Console`, `CDP`) — never the raw plugin name — with a bounded per-action
+  summary; running calls read arguments only, never scripts, typed text or
+  session ids. An expanded success shows the curated result (page title/address,
+  snapshot tree, screenshot image, click/fill target, evaluate/CDP value with
+  `null`/`false`/`0`/`""` preserved, console entries) beside one closed `Raw`
+  disclosure, and never repeats arguments or raw state as first-level content.
+  A failed or denied row shows exactly one error note — no input, state, result,
+  raw or images — even when the record echoes arguments. A third-party tool
+  whose name ends in `Browser` keeps the generic presentation.
+- **Status:** Automated in `node scripts/e2e-tool-browser-presentation.mjs`,
+  which mounts the production transcript `ToolRow` in a real Electron renderer
+  and asserts the header, expanded successes (navigate, evaluate, screenshot)
+  and the error-only failure with no script text and a closed raw disclosure.
+
+### E2E-TOOL-ROW-tasksteer-row
+
+- **Preconditions:** No live provider is required; the fixture seeds production
+  `ToolRow` cards over scripted `TaskSteer` records through the real store and
+  mounts them in a real renderer.
+- **Expected:** A collapsed row names the tool identity, the recorded agent as
+  plain summary text, and the one live delegation's conversation title in the
+  shared right title tile with a standard `Sent` state — the delivered-wait
+  header, never a generic agent pill, and never a delegation id. An expanded
+  row shows exactly one `Output` block with the sent guidance text: no target
+  field, no receipt, no status, no raw. A failed or denied row shows exactly
+  one error note.
+- **Status:** Automated in `node scripts/e2e-tool-browser-presentation.mjs`
+  (header slots and expanded steer states) and
+  `node scripts/e2e-task-header-presentation.mjs`, which mounts the production
+  transcript `ToolRow` in a real renderer side by side with the delivered
+  `TaskWait` for the same target and asserts the shared slots, tile geometry
+  and ellipsis at wide and narrow widths, independent expand/collapse, and
+  the running/failed/unknown-target states.
 
 ### E2E-ASKTOOL-compact-card-interaction
 
@@ -3701,30 +3743,52 @@ validation still needed.
 - **Milestone**: M4
 - **Status**: Documented
 
-#### E2E-039: Settings titlebar drag moves the window
+#### E2E-039: The secondary window is fixed and its header is not a drag region
 
 - **Preconditions**: App running windowed on macOS with Settings open.
-- **Steps**: 1) Record the window position. 2) Confirm Back to app renders at
-  the rail's top-left inside the 46px drag band and carries focus on entry, and
-  that the rail exposes no page-local search field. 3) Drag the empty 46px band
-  above the settings rail. 4) Drag the same band above the content pane. 5) Use
-  Back, Project archive, and navigation controls. 6) In light and dark themes,
-  sample the top row's color above the rail and above the content pane.
-- **Expected**: Either top-band drag moves the native window; Back, Project
-  archive, and navigation remain interactive and never initiate a window drag.
-  The top row above the rail matches the rail surface (`#f4f4f4` light / `#000`
-  dark) and the top row above the content pane matches the primary surface, so
-  the band never renders a mismatched color over the rail.
+ - **Steps**: 1) Record the native window position. 2) Confirm the plate carries
+  the Settings accessible name with initial focus on the plate container (not
+  the close control, so its tooltip stays hidden), and that the rail exposes
+  no page-local search field and no back-to-app action.
+  3) Drag the plate surface, its edges, and the scrim, then use Project archive
+  and the rail destinations. 4) Resize the app window while Settings is open.
+  5) In light and dark themes, sample the plate, rail, and content surfaces.
+ - **Expected**: Nothing on the plate drags or resizes the native window; the
+  native titlebar outside the plate keeps all window movement. Rail
+  destinations and content controls stay interactive, resizing the app window
+  changes only the plate's available space, and the plate keeps one quiet
+  surface on the Settings content background with a floating close control —
+  no title band, no window-control band, no mismatched rail color.
+- **Specs linked**: `04-ux/06-settings-ia.md`, `04-ux/01-ui-ia.md`
+- **Acceptance**: Quality (key operations feel polished)
+- **Milestone**: M5
+- **Status**: Draft
 - **Specs linked**: `04-ux/06-settings-ia.md`, `04-ux/01-ui-ia.md`
 - **Acceptance**: Quality (key operations feel polished)
 - **Milestone**: M5
 - **Status**: Draft
 
-#### E2E-043: Settings content follows window width
+- **Automated coverage (2026-11-21)**: `scripts/e2e-secondary-windows.mjs`
+  (hidden Electron, `show: false`, throwaway profile, no live APIs) drives the
+  production secondary-window layer over the production Settings, Extensions,
+  and Scheduled modules, and measures at 1200x900 and 800x600: initial focus on
+  the plate container with the close control as the first Tab stop; one shared
+  computed window background equal to `--ds-bg-primary` for all three windows,
+  a transparent content root, and exactly one heading per window (no plate
+  chrome title); Escape precedence over a closed chat-hosted menu, an open chat
+  menu, an open nested menu, and a retained hidden detail sheet; a scheduled
+  open-session closing the window back into chat; and a cold versus warm first
+  open. Recorded limitation: a never-shown window cannot paint tooltips
+  (`document.hasFocus()` is false and the shared tooltip guards suppress
+  painting), so the open-time "no tooltip" measurement is corroborating only.
+  The load-bearing guarantee is the initial-focus contract above, and the probe
+  reports that capability explicitly as `tooltipCapability`.
+
+#### E2E-043: Settings content follows the plate width
 
 - **Preconditions**: App running windowed on macOS with Settings open.
 - **Steps**: 1) Open General at the default window width and record the content-card width. 2) Expand the window to 1600px wide. 3) Open Models, Skills, MCP, and Projects. 4) Shrink the window to the supported 800px minimum.
-- **Expected**: The right-side content cards expand and contract with the available pane at every tested width; the 275px rail and pane gutters remain stable; controls remain visible without clipping or horizontal page scrolling.
+- **Expected**: The plate grows to its 1120x820 preferred size and becomes a near-fullscreen inset below 860px width or 640px height; the rail measures 252px at the preferred size and 216px at small widths while pane gutters stay stable; content cards expand and contract with the available pane at every tested width and controls remain visible without clipping or horizontal page scrolling.
 - **Specs linked**: `04-ux/06-settings-ia.md`, `04-ux/07-ui-design-system.md`
 - **Acceptance**: Quality (key operations feel polished)
 - **Milestone**: M5
@@ -4954,26 +5018,33 @@ window; opening a normal panel afterward must still work.
   generated summary and never the newest line, so it holds still while later
   reasoning streams. Opening the row removes that line and shows the whole
   Markdown body, so the first sentence is not read twice; reasoning with no
-  visible text draws the label alone. The explicit block-level thinking phase
+  visible text draws the label alone. The explicit thinking generation phase
   owns the active indicator: a row whose phase is `complete` stays still even
   while its assistant message still streams — after a tool, after reply text,
   or with nothing following it — and a row whose phase is `streaming` breathes
-  while the turn is active; a newer `thinking_start` breathes again after an
-  earlier `complete`. Rows without the phase field (restored history, legacy
-  frames) keep the streaming-and-content-free fallback. Renderer position of
-  later activity never decides the phase.
+  while the turn is active. The phase reports generation, not open blocks: a
+  real text or tool-call frame stops the indicator even when the provider never
+  closes its thinking block, and only a newer thinking frame breathes again.
+  Rows without the phase field (restored history, legacy frames) keep the
+  streaming-and-content-free fallback. Renderer position of later activity
+  never decides the phase.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md`,
   `04-ux/07-ui-design-system.md`, `04-ux/08-component-spec.md`, ADR 0018
 - **Acceptance**: C (chat and stream), Quality
 - **Milestone**: M5
  - **Status**: Unit-covered (`thinking-ui.test.mjs`,
-   `thinking-row-preview.test.mjs`, agent-runtime event tests) and rendered
-   (`pnpm test:e2e:thinking-row`, whose probe also asserts the four
-   left activity-icon groups — knowledge/read incl search+toolSearch, web
-   access teal (fetch, browser, provider-hosted search), creation gold,
-   execution sage — plus the neutral reasoning/coordination/unknown
-   rows and the boxed run glyph by rendered output in dark and light themes);
-   full streaming scenario Draft
+   `thinking-row-preview.test.mjs`, agent-runtime event tests, plus the
+   runtime-generated wire trace `scripts/e2e/fixtures/thinking-generation-phase.json`
+   asserted by `thinking-status.test.ts`) and rendered
+   (`pnpm test:e2e:thinking-row`, whose probe replays that wire trace through
+   the production projection to assert the dot stops before the tool row
+   appears, and also asserts the five visible left activity-icon groups —
+   knowledge/read (read, list, search), web-access teal (fetch, browser,
+   provider-hosted search), creation gold, execution sage (run, schedule,
+   recognizable user MCP `mcp_` names only) — plus the neutral system rows
+   (thinking, skill, context, todo, mode, fork, delegate, toolSearch,
+   generic `use`/unknown) and the boxed run glyph by rendered output in
+   dark and light themes); full streaming scenario Draft
 
 #### E2E-054: Stored thinking reloads losslessly
 
@@ -5190,8 +5261,20 @@ window; opening a normal panel afterward must still work.
   after `pnpm build:js`; that scenario also drives a real `MV` move, a real
   `REM` delete and a real stale-tag edit carrying a host warning, and asserts
   each expanded body is that record's diff plus, when the host reported one,
-  its warning — with no `Raw` disclosure, no field dump and no `ops` text. Full
-  UI journey Draft.
+  its warning — with no `Raw` disclosure, no field dump and no `ops` text. The
+  same scenario drives a real scratch edit and a real permission-authorized
+  external edit and asserts each shows its own `editDiff` +1/−1 counts, the
+  expanded one-add/one-delete diff, no directory badge in the collapsed head beside the counts,
+  no raw `ops` text, and no review rollback affordance — while the existing
+  workspace assertions (rollback, aggregate totals) keep passing unchanged.
+  The same scenario drives real Writes on workspace (new file), scratch (new
+  file), and external (overwrite) roots and asserts each `editDiff` carries
+  operation `write` (`added` for created files, `modified` for overwrites)
+  with actual +N/−N counts beside the unchanged `Written content` body.
+  Renderer-covered by `edit-diff-preview.test.mjs`: every legal
+  tool/operation/status combination parses on every root, while illegal pairs
+  (`write`/`deleted`, `write`/`moved`, `edit`/`added`) and tool/operation
+  mismatches read as absent. Full UI journey Draft.
 
 #### E2E-058: Built-in interactive terminal is absent
 
@@ -5446,38 +5529,48 @@ window; opening a normal panel afterward must still work.
 
 - **Preconditions**: A session contains a completed user prompt and a
   completed assistant answer; the conversation pane is focused.
-- **Steps**: 1) Right-click the user plate. 2) Choose Copy, then Select
-  message text. 3) Select a phrase in the user plate, right-click that
-  plate, and choose Copy; collapse the caret, right-click again, and
-  choose Copy. 4) Right-click the assistant turn and choose Copy.
-  5) Right-click empty space below the last turn and choose Copy
-  conversation. 6) Press Escape on an open menu, then Tab. 7) Right-click
-  a markdown link in the answer. 8) Edit the user message, replace its content,
-  select a phrase, and right-click Copy. Repeat with a collapsed caret and
-  Select message text, then cancel editing and copy the saved message.
-- **Expected**: The user menu lists Copy, Select message text, Edit, and
-  a separated Delete; the assistant menu lists Copy, Select message text,
-  Regenerate, and Branch. Copy writes the live selection in the
-  right-clicked turn when the menu opened over one; a collapsed caret
-  or a selection outside that row falls back to the whole turn. Copy
-  conversation writes the labelled thread. Both show a toast. Select
-  text highlights the bubble. Escape and Tab dismiss the menu without
+ - **Steps**: 1) Right-click the user plate with no selection: no menu
+  opens and no word is left selected. 2) Select a phrase in the user plate, right-click that
+  plate: the menu lists Copy and Quote only. Right-click unselected words of
+  the same paragraph instead: the old selection is cancelled and no menu
+  opens. Choose Copy and confirm the
+  exact selection lands on the clipboard. 3) Select a phrase, right-click,
+  and choose Quote: the composer draft gains the excerpt as a blockquote
+  and the composer takes focus. 4) Collapse the caret and right-click
+  again: no menu opens. 5) Select text spanning into tool output and
+  right-click: Copy and Quote act on the same selection. 6) Press Escape
+  on an open menu, then Tab. 7) Right-click
+  a markdown link in the answer. 8) Edit the user message via its toolbar,
+  select a phrase in the draft, and right-click Copy; collapse the draft
+  caret and right-click again for no menu. Cancel editing and confirm the
+  saved message is unchanged.
+- **Expected**: The selected-text menu lists Copy and Quote only — never
+  Edit, Delete, Regenerate, Branch, Select text, or conversation actions.
+  Copy writes the exact live selection captured when the menu opened; Quote
+  appends that excerpt to the composer draft as a blockquote without
+  replacing existing draft text. A collapsed caret or a selection outside
+  the right-clicked surface opens no menu at all; a real right-button press
+  with no prior selection leaves no word selected. Copy
+  shows a toast. Escape and Tab dismiss the menu without
   running an item.
   A link still offers Open in default browser, Open in work panel, and
-  Copy link address. Quote, Annotate, and Open side chat are absent
+  Copy link address. Annotate and Open side chat stay absent
   (ADR 0268). The surface is a viewport-fixed body-level layer and does
-  not resize the transcript. During editing, Copy uses the selected draft text
-  or the full draft with a collapsed caret; Select message text selects the
-  draft. Edit, Delete, and revision actions are absent until editing ends.
-  Cancel preserves the original message. Automated Chromium component check:
-  `node scripts/e2e-message-edit-copy.mjs`.
+  not resize the transcript. During editing, the toolbar Edit/Delete and
+  revision actions stay available once editing ends;
+  the menu never carries them. Cancel preserves the original message.
+  Automated Chromium component checks:
+  `node scripts/e2e-message-edit-copy.mjs`,
+  `node scripts/e2e-chat-selection-right-click.mjs`,
+  `node scripts/e2e-transcript-render.mjs`.
 - **Specs linked**: `04-ux/08-component-spec.md` §8.3 / §8.5,
   `04-ux/09-interaction-patterns.md` (floating dropdown surfaces),
   ADR 0268
 - **Acceptance**: C (chat stream), Quality
 - **Milestone**: M5
 - **Status**: Unit-covered (`chat-context-menu.test.mjs`,
-  `chat-context-menu-items.test.mjs`, `chat-context-menu-surface.test.mjs`);
+  `chat-context-menu-items.test.mjs`, `chat-context-menu-surface.test.mjs`,
+  `chat-quote.test.mjs`);
   full UI scenario Draft
 
 ### E2E-CHAT-delete-turn-preserves-other-live-outputs
@@ -6072,7 +6165,8 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   Windows/Linux show no application menu inside the window; navigation and
   right-side controls do not collide with drag regions, keyboard shortcuts
   remain operational, and a viewport-fixed work-panel toggle is present on
-  non-Settings routes (not an application-menu command). While the panel is
+  every route, including behind a presented secondary window (not an
+  application-menu command). While the panel is
   open the native control band and that toggle overlay the panel header; the
   header ends its box before the band, so the resource tabs and close controls stay clear of the
   toggle and neither the window controls nor resource close sit under a drag
@@ -6320,14 +6414,21 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   whose history stops at the selected response; later source turns are absent.
   Source text, version history, token metadata, later turns, runtime, and cache
   state remain unchanged. Continuing the child affects only that child and
-  reseeds from its own remapped transcript.
+  reseeds from its own remapped transcript. The fork targets the reply's own
+  session transcript — the rows the transcript actually renders for that
+  session, including a historical reply its reading view still holds above the
+  loaded window — and never a later-activated session. A reply whose anchor
+  left every rendered snapshot reports through the existing history-unreadable
+  error toast instead of silently doing nothing.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md`,
   `03-runtime/04-data-storage.md`, `03-runtime/06-host-rpc-protocol.md`,
   `04-ux/08-component-spec.md`, `08-meta/decisions-log.md` (D134, D137)
 - **Acceptance**: C (chat stream/sessions), F (persistence), Quality
 - **Milestone**: M5
 - **Status**: Unit-covered (`sessions::tests::message_scoped_fork_stops_at_selected_assistant_response`,
-  `session-fork.test.mjs`, `transcript-style.test.mjs`); full restart UI scenario Draft
+  `session-fork.test.mjs`, `session-fork-source.test.mjs` (reply
+  source/reading-view ownership), `transcript-style.test.mjs`); full restart
+  UI scenario Draft
 
 #### E2E-071b: Forked session retains messages after the first AI turn completes
 
@@ -7460,18 +7561,38 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md` §6,
   `04-ux/07-ui-design-system.md` §8.8, `04-ux/08-component-spec.md` §5.7, §9.2,
   §9.5, §9.7, §9.9.
-- **Status**: Automated by `pnpm test:e2e:tool-preparation`
-  (`scripts/e2e-tool-preparation.mjs`). The probe measures the rendered
+ - **Status**: Automated by `pnpm test:e2e:tool-preparation`
+   (`scripts/e2e-tool-preparation.mjs`). The parallel-pair announcement
+   contract is additionally covered by `transcript-announcement-order`,
+   `transcript-subagent-parallel-order`, and
+   `transcript-subagent-bash-parallel` node tests (real store, real tab
+   render, per-stage `data-message-id` DOM order) plus the Electron
+   `scripts/e2e-subagent-parallel-order.mjs` physical-top fixture. The probe
+   measures the rendered
   geometry: the three line slots and their bars, the pending card's height
   against the full card that replaces it in the same column (and its full
   opacity against the shared disabled dimming kept by the real card), the sweep's
   phases and travel, the card's localized loading name and `aria-busy`, the
   in-place hand-off to the real card and then to the running card, and the
   reduced-motion suppression of both the breath and the shimmer with the
-  skeleton's geometry intact. The parallel pair reads A/B from preparing
-  through running to completion — B never moves ahead even though it starts
-  and finishes first — and a durable refresh that persists completion order
-  keeps the same A/B display.
+   skeleton's geometry intact. The parallel pair reads A/B from preparing
+   through running to completion — B never moves ahead even though it starts
+   and finishes first — and a durable refresh that persists completion order
+   keeps the same A/B display. Position authority is the first announcement,
+   shared by the main transcript and the delegate tab: a live-named tool row
+   keeps the position of its first announcement (`tool_prepare`, else its
+   first start or message) while completion, refresh, replay, or a background
+   reselect only replace values. For those live-announced rows `createdAt` is
+   display metadata, never a position key — completion re-stamps it and
+   durable pages arrive in finish order, so the overlay never re-sorts them
+   by creation time. Rows the live tail does not name stay on the
+   chronological history baseline (`createdAt` order with arrival tiebreak),
+   which keeps the existing paging, focus-island, and context semantics. The delegate tab holds the same
+   A/B order when B ends first while A still runs, when A ends afterwards,
+   when the tab opens late onto a page that already holds durable B, across
+   `latest` refreshes, and when B ends while the parent session is parked on
+   another session (the main view drops delegate rows by design; the tab
+   keeps both rows from the entry until the durable row arrives).
 
 #### E2E-STREAM-long-turn-keeps-realtime
 
@@ -8026,13 +8147,21 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
      then the original card: the strip keeps one tab for the child, focused,
      the mounted panel element is unchanged, the draft and the staged image
      survive, and that tab renders the resumed run.
+  8. While the original delegation is still running, deliver a rejected parent
+    `Task(resume …)` for it (`error`, no delegation handle, no child rows, and
+    the `TaskList` still reporting the original delegation running): the open
+    tab stays on the original run with its prompt rendered once, the rejected
+    brief never renders as a delivered user prompt, and the header keeps reading
+    `Running`.
 - **Expected**: The follow-up renders exactly once (the run's own user row, not
   the `Task` marker's task argument plus the child echo). The tab keeps
   following the chain-latest run through the same tab element — no rebuild, no
   state flip between running and settled, no identity change, no lost draft.
   The live continued run reads `Running` and states no ownership label, keeps
   its input usable, and offers Stop when the draft is empty; Stop names the
-  current run's delegation id. The main session was never busy with the child:
+  current run's delegation id. A rejected resume changes none of this: the tab
+  keeps the original delegation's prompt and rows, renders no turn for the
+  failed request, and stays `Running`. The main session was never busy with the child:
   it carries no running flag or turn identity of the child, and a main prompt
   is admitted meanwhile. After the settle the composer returns to continue
   mode and the same tab continues the chain again with no new card. A run that
@@ -8043,6 +8172,14 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   production tab and store through a parent-issued resume and the original
   card's reopen, asserting one focused tab for the child and the resumed run
   rendered in it;
+  `apps/desktop/test/subagent-rejected-resume.test.mjs` (`node --test`) covers
+  the rejected-resume chain rule at the index/transcript level for both resume
+  shapes, and `apps/desktop/test/subagent-rejected-resume-tab.test.mjs`
+  renders the production `SubagentTranscriptTab` over that fixture, asserting
+  the open tab stays on the running delegation; `apps/desktop/test/subagent-rejected-resume-dock.test.mjs`
+  (isolated Electron, `PI_ELECTRON_BINARY` may reference an existing binary) mounts the
+  production dock and tab over a two-live-run fixture with a rejected resume, asserting
+  two dock entries and a `d1`-targeted stop click;
   `pnpm test:e2e:subagent-lifecycle` asserts the same identity end to end (phase
   3 reads the persisted user-origin marker's `source: "user"` plus `resume`,
   phase 5 covers stop, then direct continuation as an ordinary child run).
@@ -11383,10 +11520,14 @@ This test plan spec is accepted when:
 - Remote and Pi-native sessions retain their existing title behavior. The
   optional Session Titles plugin remains compatible under existing permissions.
 
-### US-UI-08 Shortcut-only destination history
-- Navigate Settings → Project archive → a project session → Plugins.
-- Expect no back/forward buttons in the expanded sidebar or main titlebar.
-- Press `Cmd/Ctrl+[` and `Cmd/Ctrl+]`; expect them to traverse that history.
+### US-UI-08 Shortcut-only conversation history
+ - Open Settings, switch to Extensions and Scheduled, and close each with its
+  floating close control, the scrim, and Escape.
+- Expect no back/forward buttons in the expanded sidebar or main titlebar and no
+  back-to-app control inside any window; opening a destination never appends a
+  history entry.
+- Open two conversations, then press `Cmd/Ctrl+[` and `Cmd/Ctrl+]`: history
+  traverses conversations only and is inert while a window is presented.
 
 ### US-UI-09 First-message title persistence
 - Open an older default-title local session with an existing first user message.
@@ -11528,17 +11669,22 @@ This test plan spec is accepted when:
 - Switch the sort to Name and expect rows to reorder inside every section with
   no row hidden; clear the search and expect the complete index back.
 
-### US-UI-24 Settings full-page shell
-- Open Settings (footer profile → Settings).
-- Expect **full-page** Codex settings (no app sidebar/nav). Left rail has Back
-  to app, search, and exactly General / AI / Shortcuts / Instructions / Models /
-  Skills / MCP / Subagents / Projects, Cloud sync / Remote Hosts / Info in that
-  order; packaged builds show both Cloud sync and Remote Hosts with Experimental
-  badges. The content pane shows the selected destination.
-- Return to the app shell and expect Plugins to remain an independent
-  sidebar-footer destination.
-- Drag the empty 46px top band over either the rail or content pane; the native
-  window moves while Back, search, and navigation remain clickable.
+### US-UI-24 Settings in the single in-app floating window
+ - Open Settings (footer profile → Settings).
+ - Expect a centered 1120x820 plate over the dimmed, inert chat shell (the app
+  sidebar and nav stay mounted behind it). The plate carries the Settings
+  accessible name with initial focus on the plate container; the destination's
+  own section title is the single visible title and the floating close control
+  is the first Tab stop. The rail has exactly General / AI /
+  Shortcuts / Instructions / Models / Skills / MCP / Subagents / Projects, Cloud
+  sync / Remote Hosts / Info in that order; packaged builds show both Cloud sync
+  and Remote Hosts with Experimental badges. The content pane shows the selected
+  destination.
+- Close the window and expect Plugins to remain an independent sidebar-footer
+  destination that toggles its own window.
+ - Drag the plate surface, its edges, and the scrim: the native window does not
+  move, and every control stays clickable; native window drag remains on the
+  titlebar outside the plate.
 
 ### US-UI-27 Dark destination pages
 - Force dark theme and open Plugins and Settings → Project archive.
@@ -11634,10 +11780,13 @@ This test plan spec is accepted when:
 
 ### US-UI-44 Settings compact directory + merged sections
 - Open Settings light theme at ~1200×690.
-- Full-page shell: rail ~260px on `#f3f3f3`, main `#fff`; Back to app at the
-  rail's top-left inside the drag band, carrying the entry focus ring because
-  opening Settings focuses it, and no page-local search field anywhere in the
-  rail; General active pill with icon.
+ - Floating window: a centered 1120x820 plate over the dimmed chat shell with no
+  title band — the section title is the single visible title, the floating
+  close control sits top-right, and initial focus lands on the plate container.
+  A 252px rail on `#f3f3f3` and content on `#fff`, chat visible behind it but
+  inert, and no page-local search field anywhere in the rail; General active
+  pill with icon.
+  pill with icon.
 - Rail order is exactly General / 常规 under muted Preferences / 偏好, then
   Chat / 对话, Models / 模型, Instructions / 指令, Skills / 技能, MCP,
   Subagents / 子智能体 under Agent / 智能体, Projects / 项目 under
@@ -13395,14 +13544,15 @@ This test plan spec is accepted when:
   that has reported only zero counters therefore reads `Context —`, `Spent —`,
   `0 turns · 0 calls` and `—` average TPS; the
   child's model and reasoning level sit on the
-  footer's static model chip. The throughput figure is the summed output tokens
-  of the chain's settled direct-child model responses over their summed model
-  stream durations: wait, tool, and whole-response time never move it, a nested
-  delegate or another child's row never joins it, an in-flight row is not a
-  sample, and a repeated row counts once in its latest settled form. It reads
-  `—` when no row carries usable figures, prefixes `≈` when an interrupted
-  response fell back to its visible-content estimate, and its help names the
-  recorded sample count.
+  footer's static model chip. The throughput figure is the selected chain's one
+  session average from its canonical per-run totals — exact provider output
+  tokens over summed first-generated-content-to-end spans — stated with no
+  estimate prefix, no tooltip, and no sample-count helper. Failed, aborted, and
+  in-flight runs never contribute, usage-less turns never contribute, and child
+  transcript rows never contribute; a re-reported run segment replaces its
+  totals rather than doubling them, and only distinct run segments sum. A real
+  provider zero over a positive span reads `0`; the figure reads `—` when no
+  snapshot in the chain carries totals.
   The card is a single button that activates this tab — there is no second click
   on the card that closes it, no caret and no `aria-expanded` on the card — and
   the tab is closed only through its own close control.
@@ -13431,11 +13581,14 @@ This test plan spec is accepted when:
   opened transcript's metrics, actions and session scoping are rendered by
   `node scripts/e2e-subagent-dock.mjs`, which passed before the current
   detail-copy corrections; their revalidation is pending. Average throughput is
-  covered by `subagent-throughput.test.mjs` (weighting, exclusions, repeated
-  ids, provider zero versus estimate) and by the rendered tab header in
-  `subagent-continue-user-path.test.mjs` (rounded rate, `≈` estimate, `—` with
-  no sample, per-chain isolation, sample count in the help, and the running
-  first frame that states `Context —` beside `Spent —` with no helper icon).
+  covered by `subagent-chain-index.test.mjs` (distinct run segments sum, a
+  same-delegation re-report replaces instead of doubling, chains without totals
+  stay absent, and the one rate function's absent/zero guards) and by the
+  rendered tab header in `subagent-continue-user-path.test.mjs` (canonical
+  totals render, a resume chain's summed average on both the chain and the
+  chain-latest tabs, hostile child rows that must not move it, per-chain
+  isolation, the `—` states, and the running first frame that states
+  `Context —` beside `Spent —` with no helper icon).
 
 #### E2E-SUBAGENT-settlement-updates-before-parent-poll
 
@@ -13465,6 +13618,38 @@ This test plan spec is accepted when:
 - **Status**: Runtime event-order, renderer projection, and host persistence
   regressions automated; desktop journey documented. Required suites:
   `test:e2e`, `test:e2e:subagents`.
+
+#### E2E-SUBAGENT-live-row-survives-a-stale-scoped-read
+
+- **Preconditions**: Working checkout with built workspace packages, a ready
+  Electron build, and an isolated Chromium profile. No host process, provider,
+  account, or user data is involved: the fixture stubs only the preload bridge.
+- **Steps**: Mount the production delegate transcript tab and let it read the
+  chain's durable window. Start its tail read, hold the answer, and while it is
+  in flight publish a tool start (`Bash` running) and then release the answer
+  that was captured before the tool started. Continue until the tool ends and
+  its durable row arrives through another read, then replay the completion live.
+  Repeat with the parent's live array replaced, so the tab renders its entry
+  alone. Publish the same running tool repeatedly, and publish the completion
+  before any durable page names it, then replay the earlier running frame before
+  a read that joins the page the tab already reaches.
+- **Expected**: The in-flight read keeps its own refreshing state through the
+  live publication. The running row stays painted exactly once both while the
+  parent live array still carries it and when only the entry does, the durable
+  steering row next to it stays, and the wide gap's newest window keeps its row
+  budget. Repeated publications hold one unconfirmed row for the call, the
+  completed row stays completed — not regressed to running — through the newest
+  window and the joined page, and paints as completed from the entry alone. The
+  completed durable row replaces the live copy exactly once, the unconfirmed
+  marker retires, and a read that confirmed every live row finalizes the entry;
+  a live completion replayed afterwards adds nothing.
+- **Specs linked**: `04-ux/08-component-spec.md` §5.7, §9.9
+- **Acceptance criterion**: C — Conversation & stream, Quality
+- **Milestone**: M6+
+- **Status**: Automated in `pnpm test:e2e:subagent-steer-live-window` (real
+  Chromium renderer, isolated profile, production tab and store, held
+  `session.get` answer) plus `scoped-subagent-history.test.mjs` (store/event
+  history runtime with a gated transport and controlled promises).
 
 #### E2E-SUBAGENT-resume-a-settled-delegation
 
@@ -17369,7 +17554,7 @@ plugin-form fixtures in an isolated temporary directory at runtime.
 
 #### E2E-LAYOUT-three-column-width-priority
 
-- **Preconditions**: A desktop session is open in a non-Settings route with a
+- **Preconditions**: A desktop session is open with a
   persisted preferred work-panel width, on a window wide enough for the three
   columns.
 - **Steps**:
@@ -17666,24 +17851,28 @@ plugin-form fixtures in an isolated temporary directory at runtime.
 - **Steps**:
   1. In dark/light palettes and darwin/win32/linux CSS branches, compare the
      home sidebar and Settings rail color, image layers, size and position.
-     Inspect transparent ancestors and opaque settings content/titlebar.
+     Inspect transparent ancestors and the opaque settings content/plate header.
   2. Before entering Settings, retain the current .chat-surface DOM node. While
-     Settings is open, verify the chat shell is hidden, inert, and still
-     contains that connected node. Return through Back to app and verify the
-     same node is revealed while tracing sidebar insertion, width and
-     animationstart events. Repeat quick round trips, a previously collapsed
-     sidebar, and settings navigation interrupting an entrance.
+     Settings is open, verify the chat shell is inert, not hidden, and still
+     contains that connected node with its transcript scroll and composer draft
+     intact. Close through the window's close control, the scrim, and Escape, and
+     verify the same node is revealed uninterrupted while tracing sidebar
+     insertion, width and animationstart events. Repeat quick destination
+     switches, a previously collapsed sidebar, and an external close caused by
+     opening a scheduled run into chat.
   3. Explicitly reopen a collapsed sidebar, then repeat settings return with
      reduced motion. Repeat material comparisons with legacy and canonical
      theme color overrides and a sidebar background image.
 - **Expected**: Both navigation surfaces share one material. Settings navigation
   and shell have no entrance animation; only a nested content-enter wrapper
   inside its opaque pane animates, and that motion is opacity-only so it cannot
-  trap `position: fixed` overlays. Settings dialogs cover the full window, including the rail. On macOS
+  trap `position: fixed` overlays. Settings dialogs cover the full app window,
+  including the rail inside the plate. On macOS
   all ancestors behind the rail are transparent, while right
-  content and titlebar stay opaque. Returning to an expanded sidebar starts and
-  stays at 275px without sidebar-in events; a collapsed sidebar stays absent.
-  A real reopen still produces sidebar-in and a width ramp. Legacy theme color
+  content and the plate header stay opaque. Closing the window produces no
+  sidebar-in or width-ramp events: an expanded sidebar stays at 275px and a
+  collapsed sidebar stays absent. A real reopen still produces sidebar-in and a
+  width ramp. Legacy theme color
   input remains supported for both rails, and a canonical override wins.
   Portaled layers owned by the hidden chat surface stay hidden while Settings is
   open; the shared app-level search, toast, and extension-prompt layers remain
@@ -18967,16 +19156,16 @@ the latest destination. These assertions measure work counts, not device FPS.
   Projects, Cloud sync, Remote hosts, and Info under the Preferences / Agent /
   Workspace / System groupings, with plugin destinations last under Extensions.
   There is no in-page search pill, no pinned footer action, no Voice row, and
-  no Shortcuts row: the back-to-app action sits at the rail's top-left above
-  the destination list, and General hosts the Live Voice and Keyboard shortcuts
-  cards below the appearance/storage/network/power sections.
+  no Shortcuts row: the window header carries the Settings title and close
+  control above the destination list, and General hosts the Live Voice and
+  Keyboard shortcuts cards below the appearance/storage/network/power sections.
 - Re-select the active destination and update settings without navigating:
   the content keeps its scroll position.
 - Repeat for built-in → plugin, plugin → plugin, and plugin → the previously
   selected built-in destination. Re-selecting a plugin keeps its position.
 - Follow a global search setting anchor into Chat from another destination,
-  from an open plugin destination, and within Chat: the plugin page is gone and
-  the target row is visible before the next paint. Consuming the anchor keeps
+  from an open plugin destination, and within Chat: the window content switches
+  off the plugin destination and the target row is visible before the next paint. Consuming the anchor keeps
   that position. An external tab change with no anchor also leaves the plugin
   and starts at the top. Entering Live Voice from the composer's prepare menu
   selects General and scrolls the merged Live voice card into view.
@@ -19448,6 +19637,33 @@ host-created files. The full app's file-preview viewer is covered separately.
   isolation and uncooperative cancellation remaining pending;
   `e2e-subagent-parent-error.mjs` covers explicit cancellation/resume semantics.
 
+#### E2E-CHAT-tasksteer-model-steer-loop
+
+- **Preconditions**: Built agent-runtime workspace packages; real
+  `DesktopAgentRuntime`, real `SubagentRun` with the real pi agent loop,
+  real tool execution, and the real delivery coordinator. Only the provider
+  transport is scripted — a localhost OpenAI-chat SSE fixture — and only
+  the delegate's `Read` tool is gated on a barrier so the steer lands
+  mid-tool-call at an explicit sync point instead of racing settlement. No
+  real account, paid provider, or user data is used.
+- **Steps**: Start one delegate whose first provider round answers with a
+  `Read` call that blocks on the barrier. While it is blocked, have the
+  parent model call `TaskSteer` with the delegation id and a follow-up
+  message. Release the barrier and inspect the next assistant request and
+  the `TaskWait` report.
+- **Expected**: The steer receipt says `queued` for the next turn with
+  `source: "model"`, and the blocked tool is not aborted. Releasing the
+  barrier lets the child finish the tool, and the very next assistant
+  request already carries the steered message with the same delegation id
+  — no follow-up run — while `TaskWait` delivers the original run's report.
+- **Specs linked**: 03-runtime/02-agent-runtime.md §5f TaskSteer; ADR 0337.
+- **Acceptance**: C, E, Quality. **Milestone**: Maintenance.
+- **Status**: Automated via `packages/agent-runtime/src/task-steer-loop.test.ts`
+  (vitest, agent-runtime package) against the localhost fixture. The row
+  presentation — fixed identity plus agent badge, target delegation title and
+  `Sent` head, exactly one `Output` block with the guidance text — is covered
+  by `apps/desktop/test/tool-display.test.mjs` and E2E-TOOL-ROW-tasksteer-row.
+
 ## BOM-marked UTF-16 text tools
 
 - Create a UTF-16LE PowerShell build log with a BOM and CRLF, then ask the agent
@@ -19601,6 +19817,27 @@ host-created files. The full app's file-preview viewer is covered separately.
   once with no verdict, diagnostic field or payload drawer, that another failed
   tool still keeps its diagnostics, and that the row is named by its English and
   Chinese catalog names exactly once.
+
+ ### E2E-SUBAGENT-thinking-identity
+
+ - **Preconditions**: A delegate whose historical assistant message carries both
+   reasoning and text, so its transcript emits a thinking row and an answer row
+   for the same message id. No provider, paid API, or user desktop instance is
+   used; the fixture renders the production `SubagentTranscriptTab` over seeded
+   session messages with the real app store.
+ - **Steps**: Expand the historical thinking row, then drive the view rebuilds a
+   live delegate causes — a streaming thinking-only row that gains its answer,
+   later tool and answer appends — and finally reorder the later message ahead
+   of the historical one.
+ - **Expected**: Every rebuild keeps exactly one thinking row per message with
+   its own preview and text, the historical expansion stays on the historical
+   row, answers follow their own messages in order, and the tail content is
+   intact.
+ - **Status**: Automated in `pnpm test:e2e:subagent-thinking-identity`, which
+   mounts the production tab in a real Chromium renderer and asserts the
+   thinking/answer counts, the surviving expansion, and the post-reorder row
+   order; `apps/desktop/test/subagent-thinking-identity.test.mjs` pins the
+   transcript's dual-row shape and per-turn row identity at the unit level.
 
 ### E2E-SUBAGENT-handoff-keeps-steering
 

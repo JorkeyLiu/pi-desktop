@@ -5,6 +5,8 @@ export const enEntries: ChangelogEntry[] = [
     version: "0.20.1",
     date: "2026-10-13",
     highlights: [
+      "Browser tool rows now name the action they ran — open page, snapshot, screenshot, and more — and show the page or result they produced; a failure states its reason alone instead of raw details.",
+      "A steering message to a subagent reads like the wait row for the same task — agent, target task, and sent state — and opens on the guidance text itself.",
       "Relaunching reopens the work panel the way you left it: open or collapsed, at the same width, with each conversation's tabs in order, the selected tab, and the file preview or browser page it was showing.",
       "Relaunching reopens the project and conversation you were last reading, with its transcript; a project you clear explicitly stays cleared.",
       "Reading upward through a long conversation holds your place: an older page or newly mounted history no longer shifts the messages you are reading.",
@@ -32,6 +34,8 @@ export const enEntries: ChangelogEntry[] = [
       "A subagent's report counts as delivered only once it actually reaches the main agent's conversation: if the hand-off is rejected or replaced before that, the report keeps waiting, arrives with the next wait or resume, and is never sent twice.",
       "A subagent's own context handoff and a follow-up you send it now accept text of any length: long continuations reach the delegate whole instead of being refused at a fixed character count.",
       "Plugin and MCP server stdio output is now measured frame by frame in the UTF-8 bytes each frame actually carries: a frame holding multibyte text counts the bytes it really has, and several small frames arriving in one read are measured separately instead of having their sizes added up.",
+      "Edited files show the same line diff in the project, in temporary copies, and in approved outside folders.",
+      "Collapsed tool rows no longer carry a location badge: a file row keeps its name and its change counts, and only the file name itself opens the preview.",
     ],
   },
   {

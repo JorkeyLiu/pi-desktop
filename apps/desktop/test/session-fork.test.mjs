@@ -48,9 +48,9 @@ test("assistant response fork reuses isolated session snapshots", () => {
   const transcript = readTranscriptSourceSync();
 
   assert.match(main, /throughMessageId/);
-  assert.match(store, /forkAssistantMessage:\s*async \(messageId\)/);
+  assert.match(store, /forkAssistantMessage:\s*async \(messageId, sourceSessionId\)/);
   assert.match(store, /api\.forkSession\([\s\S]*?messageId/);
-  assert.match(transcript, /forkAssistantMessage\(actionMessage\.id\)/);
+  assert.match(transcript, /forkAssistantMessage\(actionMessage\.id, paneSessionId \|\| undefined\)/);
   assert.match(transcript, /chat\.forkResponse/);
 });
 

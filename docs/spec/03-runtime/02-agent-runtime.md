@@ -794,15 +794,21 @@ criterion-by-criterion report of what was met and the evidence observed.
   `deltaText`.
 - Both producers fold pi-ai `thinking_start` / `thinking_delta` / `thinking_end`
   frames (one per content block, forwarded by pi-agent-core as `message_update`
-  carriers) into a shared per-bubble tracker. `thinking_start` reports
-  `thinkingStatus: "streaming"` even though its block is still empty;
-  `thinking_end` reports `"complete"` even when the cumulative thinking text
-  did not grow; a duplicate or stray end for a block that is not open is
-  ignored so it can never clear a newer block. Text and tool-call frames never
-  move the phase. A stream that settles without `thinking_end` completes the
-  phase at the terminal boundary (`message_end`, abort, error, run teardown);
-  a fresh bubble resets it. Real thinking deltas that arrive without typed
-  frames still report `streaming` for compatibility.
+  carriers) into a shared per-bubble generation-phase tracker. The phase says
+  what the model is generating now, not which thinking blocks are open:
+  `thinking_start` / `thinking_delta` report `thinkingStatus: "streaming"` even
+  while the block is empty, and a real text or tool-call `*_start` / `*_delta`
+  reports `"complete"` even when the thinking block never ends (Responses can
+  open a tool call before its reasoning item is done; completions stream one
+  final finish block). `thinking_end` ends only the block that is currently
+  generating, so a late end for an older block never closes newer thinking, and
+  text/tool `*_end` markers never move the phase. Every provider-attempt
+  teardown completes still-generating thinking through the tracker —
+  `message_end`, abort, error, run teardown, and the silent-turn,
+  progress-only, overflow, and provider-retry reruns that keep the same visible
+  bubble — and drops the tracked generation, so a retry reopens thinking only
+  on a real thinking frame. A fresh bubble resets it. Real thinking deltas that
+  arrive without typed frames still report `streaming` for compatibility.
 - Append-only `message_update` events set `stream: "delta"` and carry only the
   new chunk. The runtime keeps the full `currentAssistant` in memory, coalesces
   deltas every 16ms, and flushes before tool/terminal/abort/error/retry
@@ -1023,6 +1029,7 @@ core set rather than the on-demand catalog of §7.1:
 - `TaskStop(delegationIds?)` — cancels obsolete work (defaults to all running);
   waits for each abort to settle, then persists `status: "stopped"` with
   `completedAt` on `details.stopped[]`. Stopped delegations read as `stopped`.
+- `TaskSteer(delegationId, message)` — queues one follow-up message into a still-running delegation the parent model started itself (ADR 0337). Agent mode only, parent-model only, current-runtime only, live-only: unknown, settled, stopping, loop-less, delegate-issued, or user-controlled targets fail with a coded tool error and no side effect, and `Task(resume)` stays the settled-chain path. The message reaches the child at its next turn boundary without interrupting its current tool batch; the receipt says `queued` with `delivery: "next_turn"` and `source: "model"`, confirming queueing only, never consumption. The queued row keeps the existing `user` role and steering storage — no migration, no new table — and the provenance rides the receipt, never the persisted row.
 - Direct user intervention — the user can communicate with a child and nothing
   else. A running child is steered (`agent.steerSubagent`) and a settled chain
   is continued (`agent.continueSubagent`, no parent `Task(resume)` needed)
@@ -2221,8 +2228,10 @@ does not dispose, abort, or re-root a runtime belonging to another session.
 - mark turn aborted in UI/storage
 - preserve elapsed response duration; when provider final usage is unavailable,
   estimate visible thinking plus answer output at four Unicode code points per
-  token and persist it as `responseOutputTokens` so stopped-turn throughput is
-  still available and visibly approximate
+  token and persist it as `responseOutputTokens` display metadata only.
+  Aborted, failed, and in-flight turns never contribute generation-throughput
+  samples: average TPS folds exact provider output over settled complete
+  responses only, so a stopped turn shows `—`, never an estimate
 - preserve request-to-first-response wait and streamed thinking/answer duration
   on assistant messages when available; stopped streams retain the elapsed
   streamed duration captured before cancellation

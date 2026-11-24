@@ -106,11 +106,11 @@ test("planHttpUrlOpen falls back to the OS browser without a session or when set
   );
 });
 
-test("openHttpUrl reveals chat without recording a navigation hop", () => {
+test("openHttpUrl closes the secondary window before presenting the work panel", () => {
   reset();
   storeState = sessionState({ page: "plugins" });
   openHttpUrl("https://example.com");
-  assert.deepEqual(calls.pages, [["chat", { record: false }]]);
+  assert.deepEqual(calls.pages, [["chat"]]);
   assert.deepEqual(calls.urls, ["https://example.com"]);
   assert.deepEqual(calls.externals, []);
 });

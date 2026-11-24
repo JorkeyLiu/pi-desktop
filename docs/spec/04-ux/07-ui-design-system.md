@@ -257,7 +257,7 @@ token rather than introducing a decorative palette:
 | State | Semantic color | Shape / motion | Meaning |
 |---|---|---|---|
 | Idle (manual toggle, unpressed) | neutral accent | hollow outlined ring, static, on the selected idle conversation only | no live state; the row is not marked pending. Unselected unmarked rows show no mark and leave the gutter empty |
-| Pending (manual toggle, pressed) | warning orange | filled dot, static — no halo, no animation | the user marked the row as still needing them |
+| Pending (manual toggle, pressed) | pending yellow | filled dot, static — no halo, no animation | the user marked the row as still needing them |
 | In progress | warning orange | filled dot plus a halo ring that animates only while the turn runs; static halo under reduced motion | agent is producing or executing |
 | Permission | purple | dot with two pulse cycles, then steady | the session waits on a tool approval |
 | Completed | success green | check mark | latest unread task turn completed |
@@ -294,7 +294,7 @@ The running halo in a task row is the sidebar's one continuous animation: it
 exists only while that turn is actually in flight and stops as soon as the
 turn settles, so an idle window never keeps submitting frames for it.
 Reduced-motion mode stops the halo and keeps its static ring, so running is
-still distinguishable from the plain orange manual fill by shape, not motion.
+still distinguishable from the plain yellow manual fill by shape, not motion.
 The related-session hover card keeps its bounded two-cycle running mark.
 
 The same bound covers every other idle-reachable status indicator, because any
@@ -1123,7 +1123,7 @@ query still ranks relevance first and uses recency only as a tiebreaker.
 | `z-sticky` | 10 | Sticky headers, topbar |
 | `z-dropdown` | 20 | Dropdown menus, select popovers |
 | `z-overlay` | 30 | Tooltips |
-| `z-dialog` | 40 | Settings and confirmation dialogs |
+| `z-dialog` | 40 | Secondary window layer, settings and confirmation dialogs |
 | `z-toast` | 50 | Toast notifications |
 | `z-command-palette` | 60 | Command palette overlay, body-portaled menus/popovers |
 | `z-devtools` | 100 | DevTools overlay (non-production) |
@@ -1137,11 +1137,12 @@ Rules:
   renderer layer, so no `z-index` in the table above can raise a popover over
   them. A body-portaled popover clamps to the conversation pane, which ends
   where the work panel begins, instead of to the viewport.
-- A route surface holds no stacking context once its entrance animation
-  finishes, so an overlay authored inside a route page — a modal, a sheet, or
-  their scrims — covers the titlebar band without any `z-index` juggling. On
-  Windows/Linux the renderer-drawn window controls stay above renderer overlays.
-  Route overlays therefore sit on `z-dialog` (40): a leaf popup (60) or a toast
+- The secondary-window layer sits on `z-dialog` (40) with a dimmed scrim, and
+  the retained plates hold no stacking context of their own, so an overlay
+  authored inside a plate — a modal, a sheet, or their scrims — covers the
+  plate without any `z-index` juggling. On Windows/Linux the renderer-drawn
+  window controls stay above renderer overlays.
+  Plate overlays therefore stay on `z-dialog` (40): a leaf popup (60) or a toast
   (50) a dialog raises — portaled to `document.body`, so in that same stacking
   context — keeps painting above the dialog's scrim and keeps taking clicks.
 
@@ -1164,6 +1165,9 @@ Codex parity decisions (D034/D070) supersede any older value here.
 | Chat message max width | 760px default band (user-resizable, min 560px) / 600px user plate | Band follows `min(pane, preferred)`; user turns stay compact |
 | Window min width | 800px | Enforced by Electron for the whole app, capped to the current display work area (D635); opening the panel never changes native bounds |
 | Window min height | 560px | Enforced by Electron, capped to the current display work area (D635) |
+| Secondary window size | Settings 1120×820, Extensions 900×700, Scheduled 1200×760 | Preferred plate size; `min(size, viewport - 48px)` per axis, and `viewport - 16px` below 860px width or 640px height |
+| Secondary window chrome | 0px | No title band: the plate paints the Settings content background and its one visible title is the destination's own header. A 28px floating close control sits in reserved top-right content padding, so it never overlaps a page header or toolbar |
+| Settings rail inside the plate | 252px (216px at narrow widths) | `--ds-settings-nav-width` scoped to the plate |
 
 An open work panel is a fixed-width in-flow column inside the existing client
 area (ADR 0033 / ADR 0151). Its flex allocation comes from MainChat, but MainPane
@@ -1294,6 +1298,20 @@ origin tracking protects text selection across content boundaries and nested
 layers. It does not prevent selection or capture the pointer. Callers retain
 busy/saving guards and their existing Escape/close controls. Presses cancelled
 by pointer cancellation or window blur cannot dismiss the surface.
+
+**Secondary-window plate:** `SecondaryWindow` (with the `SecondaryWindows`
+layer) renders the in-app floating window that hosts Settings, Extensions, and
+Scheduled. It is a `section[role="dialog"]` with `aria-modal` only while
+presented, `inert`/`aria-hidden` when retained but hidden, and a scrolling body under a
+single floating `TooltipButton` close control with no separate title band. The
+accessible name lives on the dialog (`aria-label`), and initial focus lands on
+the plate container rather than the close control, so no hover tooltip paints
+before the pointer reaches it. Its size comes from `--sw-width`/`--sw-height` per kind
+(§10 metrics) and never drags, resizes, or becomes a native window. The shared
+`OverlayBackdrop` renders the scrim; the layer owns the single close path,
+focus trap and restore, `Esc` precedence via `lib/secondary-window-context`
+(`claimEscape`/`useEscapeOwner`), and the blocking-overlay counter that detaches
+native plugin surfaces while the window is open.
 
 ### 11.5 Tabs
 
@@ -1562,10 +1580,12 @@ adjacent form inputs; dense surfaces may override that metric locally.
   row is the header of the card that opens under it — so the detail repeats no
   name, path, or tag. It has no hero block, no decorative gradient, and no
   page-level counter run
-- **Settings**: full-page Codex shell per D063/D090/D133/D166 (275px compact
-  navigation rail sharing the main sidebar material, elevated content cards, Back to app);
+- **Settings**: Codex shell per D063/D090/D133/D166, presented in the one
+  in-app floating window per D665 (a 252px compact navigation rail inside the
+  1120x820 plate sharing the main sidebar material, elevated content cards, and
+  the plate's floating close control instead of Back to app);
   per D092, the content cards fill the pane width available from the current
-  window instead of retaining D070's fixed 720px cap — the earlier in-shell
+  plate instead of retaining D070's fixed 720px cap — the earlier in-shell
   200px rail and broad grouped directory are superseded
 - **Inline import workbenches**: model configuration, external skills, and
   external MCP scans live in Models, Skills, and MCP respectively. Each page

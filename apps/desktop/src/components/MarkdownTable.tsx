@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useBlockingOverlay } from "../lib/blocking-overlay";
+import { useEscapeOwner, useSecondaryWindowActive } from "../lib/secondary-window-context";
 import { useAppStore } from "../stores/app-store";
 import { IconClose, IconCopy, IconDownload, IconPanelMaximize } from "./icons";
 import { OverlayBackdrop, portalOverlay, TooltipButton } from "./ui";
@@ -13,6 +14,8 @@ function TablePreview({ children, onClose }: {
   const { t } = useTranslation();
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const secondaryWindowActive = useSecondaryWindowActive();
+  useEscapeOwner(secondaryWindowActive);
   useBlockingOverlay();
   useLayoutEffect(() => {
     const previousFocus = document.activeElement;
@@ -25,6 +28,7 @@ function TablePreview({ children, onClose }: {
     };
   }, []);
   useEffect(() => {
+    if (!secondaryWindowActive) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.stopPropagation();
@@ -49,7 +53,7 @@ function TablePreview({ children, onClose }: {
     };
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [onClose]);
+  }, [onClose, secondaryWindowActive]);
   return portalOverlay(
     <OverlayBackdrop
       className="overlay markdown-table-overlay"

@@ -141,6 +141,9 @@
   --ds-placeholder-ink: color-mix(in oklab, var(--gray-0) 42%, transparent);
   --ds-success: #40c977;
   --ds-warning: #ff8549;
+  /* Manual sidebar pending mark. Yellow so it reads apart from the
+     warning-orange running dot; values track the ANSI yellow pair. */
+  --ds-pending: #e3b341;
   --ds-error: #ff6764;
   /* Terminal ANSI palette: command output may carry SGR colour, which the
      terminal pane paints from these tokens rather than from raw literals. */
@@ -311,6 +314,7 @@
   --ds-switch-knob-on: #ffffff;
   --ds-success: #00a240;
   --ds-warning: #e25507;
+  --ds-pending: #9a6700;
   --ds-error: #e02e2a;
   /* Terminal ANSI palette on the light tool-row surface. */
   --ds-ansi-black: #24292f;

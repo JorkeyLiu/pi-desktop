@@ -12,10 +12,26 @@ import { loadStyles } from "./helpers/styles.mjs";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
-const [app, appShell, chatSurface, pane, transcript, toolRow, transcriptShared, minimap, composer, styles, store] =
+const [
+  app,
+  appShell,
+  secondaryWindows,
+  pageLoaders,
+  chatSurface,
+  pane,
+  transcript,
+  toolRow,
+  transcriptShared,
+  minimap,
+  composer,
+  styles,
+  store,
+] =
   await Promise.all([
     readAppSource(),
     read("../src/features/app/AppShell.tsx"),
+    read("../src/features/app/SecondaryWindows.tsx"),
+    read("../src/lib/secondary-window-pages.ts"),
     read("../src/components/ChatSurface.tsx"),
     read("../src/components/SessionPane.tsx"),
     readTranscriptSource(),
@@ -28,7 +44,8 @@ const [app, appShell, chatSurface, pane, transcript, toolRow, transcriptShared, 
   ]);
 
 test("streaming state stays inside the chat render boundary", () => {
-  assert.match(app, /<ChatSurface visible=\{page === "chat"\} \/>/);
+  assert.match(appShell, /<ChatSurface \/>/);
+  assert.doesNotMatch(appShell, /ChatSurface visible=/);
   assert.doesNotMatch(app, /useAppStore\(\(s\) => s\.messages\)/);
   assert.doesNotMatch(app, /<ChatTranscript/);
   assert.match(chatSurface, /export const ChatSurface = memo/);
@@ -43,10 +60,23 @@ test("chat configuration errors still navigate to agent settings", () => {
 });
 
 test("secondary destinations stay outside the initial shell bundle", () => {
-  assert.match(appShell, /const SettingsPage = lazy/);
-  assert.match(appShell, /import\("\.\.\/\.\.\/pages\/SettingsPage"\)/);
-  assert.match(appShell, /import\("\.\.\/\.\.\/pages\/PluginsPage"\)/);
-  assert.match(appShell, /<Suspense fallback=\{<RoutePending \/>\}>/);
+  // The window layer owns the page modules through one loader table, and both
+  // its `lazy()` wrappers and the idle warmup read that table: the chat shell
+  // never carries a destination in its initial bundle, and no destination has a
+  // second import path.
+  for (const page of ["SettingsPage", "PluginsPage", "ScheduledPage"]) {
+    assert.match(pageLoaders, new RegExp(`import\\("\\.\\./pages/${page}"\\)`));
+  }
+  for (const kind of ["settings", "plugins", "scheduled"]) {
+    assert.match(
+      secondaryWindows,
+      new RegExp(`secondaryWindowPageLoaders\\.${kind}\\(\\)`),
+    );
+  }
+  assert.doesNotMatch(secondaryWindows, /import\("\.\.\/\.\.\/pages\//);
+  assert.doesNotMatch(appShell, /pages\/SettingsPage/);
+  assert.match(secondaryWindows, /<Suspense fallback={\<RoutePending \/>}>/);
+  assert.match(secondaryWindows, /const \[mountedKinds, setMountedKinds\] = useState/);
 });
 
 test("bootstrap cannot replay navigation after destination state changes", () => {

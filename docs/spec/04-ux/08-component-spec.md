@@ -13,7 +13,8 @@
 > updated values: sidebar 240–520px (default 275px), toolbar 46px (not 44px),
 > composer placeholder per D094/D066, home empty stack and bottom composer per
 > D111/D204/D206,
-> Projects index table per D066/D133, settings full-page shell per D063 with the
+> Projects index table per D066/D133, settings in the D063 codex shell presented
+> in the single in-app floating window per D665 with the
 > compact eight-destination directory from D090/D133/D166, and retained path-keyed
 > project groups per D093 (which preserves D088's Temporary/exact-path boundary
 > while restoring scoped project and conversation organization actions), and
@@ -56,16 +57,18 @@ Outer frame that positions Topbar, Sidebar, MainChat, and WorkPanel. Owns resize
   the aside stays in the tree through the exit keyframe, then unmounts
   (`is-exiting` flag + `animationend` guard, with a timeout fallback).
   Entrance requires an explicit `is-entering` phase from a collapsed-to-expanded
-  change on the presented main shell. Initial mounting and return from Settings
-  restore the full retained layout directly. Entering Settings cancels either
-  pending phase, including during rapid navigation; no hidden shell is kept
-  mounted solely to suppress animation.
+  change on the presented main shell. Initial mounting restores the full
+  retained layout directly. A presented secondary window never cancels or
+  delays either phase: the chat shell keeps being mounted behind it, so no
+  hidden shell is kept mounted solely to suppress animation and no return
+  transition plays when the window closes.
 - Sidebar width: the expanded column is user-resizable from 240px to 520px
   (default 275px) via the right-edge handle. Dragging below 160px collapses
   the sidebar and preserves the preferred expanded width (ADR 0141 / ADR 0290).
 - Work panel collapse: the sole control is the viewport-fixed toggle in the
-  window's top-right corner, available on every non-Settings route whether the
-  panel is open or closed. It does not sit in the work-panel content header.
+  window's top-right corner, available on every route whether the
+  panel is open or closed; while a secondary window is presented the dock stays
+  behind that window and the toggle keeps working. It does not sit in the work-panel content header.
   Opening and collapsing change only the shell's internal flex allocation; the
   native window bounds stay unchanged.
 - Work panel preview: the header maximize action temporarily unmounts MainChat
@@ -90,7 +93,9 @@ Outer frame that positions Topbar, Sidebar, MainChat, and WorkPanel. Owns resize
 ### 1.5 Accessibility
 
 - Landmark roles: `<nav>` for sidebar, `<main>` for chat, `<aside>` for work panel, `<header>` for topbar
-- Tab sequence: topbar → sidebar → main chat → work panel → composer
+- Tab sequence: topbar → sidebar → main chat → work panel → composer; while a
+  secondary window is presented, Tab cycles inside the plate and the chat shell
+  is inert, so those landmarks are skipped
 
 ### 1.6 MVP constraints
 
@@ -140,9 +145,10 @@ Outer frame that positions Topbar, Sidebar, MainChat, and WorkPanel. Owns resize
   track; the destination pane is revealed only once it has committed. A warm
   destination is revealed with no busy affordance at all. Nothing is dimmed and no
   skeleton-to-transcript animation is inserted (ADR 0137).
-- Settings, Plugins, and Scheduled are route-level lazy modules.
-  Chat and shell chrome stay in the initial renderer bundle; first entry to a
-  secondary destination shows a compact localized status indicator until its
+- Settings, Plugins, and Scheduled are route-level lazy modules loaded into the
+  secondary window. Chat and shell chrome stay in the initial renderer bundle;
+  the first open of a destination shows a compact localized status indicator
+  inside its plate until the local chunk resolves.
   local chunk resolves.
 - No status bar (deferred)
 
@@ -440,7 +446,7 @@ visually distinct from list content.
 | Active session | Active row background; the selected idle conversation carries the hollow idle mark, while manual, running, and outcome marks show on selected and unselected rows |
 | Selecting session | Destination row receives the active treatment immediately while transcript/workspace resolution continues |
 | Session idle | Hollow accent outlined mark on the selected idle conversation only; it is the manual pending toggle at rest. An unselected unmarked row shows no mark and leaves the 24px gutter empty |
-| Session pending (manual) | Static orange filled mark after the user marks the row, shown whether or not that row is selected; no halo, no animation; device-local preference that survives a run, opening the session, refresh, and relaunch |
+| Session pending (manual) | Static yellow filled mark after the user marks the row, shown whether or not that row is selected; no halo, no animation; device-local preference that survives a run, opening the session, refresh, and relaunch |
 | Session in progress | Orange filled dot with an externally visible halo that animates only while the turn runs; the static halo remains under reduced motion; running outranks the manual mark without clearing it |
 | Session completed | Green check mark from the latest unread task notification, also on the selected row |
 | Session failed | Red circled alert mark from the latest unread task notification, also on the selected row |
@@ -468,7 +474,7 @@ visually distinct from list content.
   disclosure hit area): activate its path when necessary, then toggle only
   that project's conversation group; retain the other project groups
 - Click the session status mark: the hollow mark on the selected idle conversation
-  and the orange marked state on any row toggle the device-local manual pending
+  and the yellow marked state on any row toggle the device-local manual pending
   mark, with `aria-pressed`, a localized accessible name, and Enter/Space
   activation. It never selects the row and never starts a row drag. An
   unselected unmarked row renders no status element, so a click in its gutter
@@ -501,22 +507,24 @@ visually distinct from list content.
 - On Windows/Linux, click the PI-Desktop brand to return the main pane to the
   chat home while preserving the active conversation and workspace; macOS
   intentionally omits this brand control from the sidebar header
-- Click the footer Plugins icon immediately right of Settings to open the
-  Extensions destination; while Plugins is active, click it again to go back
-  one entry in the existing navigation history. If no previous entry exists,
-  open chat instead. The pressed state reflects the current page and the
-  localized label remains available on hover/focus.
-- This shortcut reuses the existing Back action (also bound to `Cmd/Ctrl+[`),
-  including its session selection and loading behavior. It does not skip
-  Settings entries or track a separate return destination. Settings navigation
-  is unchanged; its existing Back to app control opens chat. Both footer
-  destination buttons report their active state to assistive technology.
-- Reopening Plugins retains its Installed/Marketplace tab, both search inputs,
-  and category filter in renderer memory. Detail/settings/permission dialogs,
-  transient menus, and pending-operation UI are not retained. The page still
-  unmounts normally, releasing listeners, and an operation already in flight
-  still completes and reports through the normal toast channel; this is not a
-  hidden live workbench or durable preference across application restart.
+- Click the footer Settings, Extensions, and Scheduled icons to present the one
+  secondary window on that destination; clicking the presented one toggles it
+  closed instead of recording a history entry. The pressed state reflects the
+  presented destination and the localized label remains available on
+  hover/focus.
+- These footer buttons share the window's single dismissal path (floating
+  close control, scrim, Escape) and never traverse conversation history. The chat
+  shell stays mounted behind the window, so no back action or return
+  destination is tracked. Both footer destination buttons report their active
+  state to assistive technology.
+- Switching destinations keeps the Extensions plate mounted, so its
+  Installed/Marketplace tab, both search inputs, and category filter survive.
+  Detail/settings/permission dialogs, transient menus, and pending-operation UI
+  follow their own open state. A retained plate is inert and detached from
+  pointer input while another destination is presented, and an operation
+  already in flight still completes and reports through the normal toast
+  channel; this is not a hidden live workbench or durable preference across
+  application restart.
 - Plugin detail, settings, permission-review, template, and install-progress
   surfaces are viewport-wide overlays. Their backdrops and surfaces mount on
   `#pi-desktop-overlays`, outside the route scroll container and sidebar
@@ -660,8 +668,8 @@ visually distinct from list content.
   keyboard focus, without changing the directory label's position.
 - Sidebar toggle: expanded-header icon + keyboard shortcut; the
   collapsed main titlebar retains an Expand sidebar icon; the work-panel
-  toggle stays viewport-fixed in the window's top-right corner on every
-  non-Settings route
+  toggle stays viewport-fixed in the window's top-right corner on every route
+  and behind a presented secondary window
 - Click the local profile trigger: open or close the identity menu containing
   Settings, Logs, and Theme
 - Click the footer bell: open or close the durable notification inbox
@@ -969,11 +977,13 @@ The explicit thinking phase owns the active indicator. A row whose
 `thinkingStatus` is `complete` stays still even while its assistant message
 still streams — after a tool, after reply text, or with nothing following it
 at all — and a row whose phase is `streaming` breathes while the turn is
-active. A newer `thinking_start` breathes again after an earlier `complete`.
-Rows that predate the phase field (restored history, legacy frames) keep the
-documented fallback: a streaming, content-free row breathes. Delegate rows
-follow the same rule. Later transcript activity never stands in for the
-phase.
+active. The phase names what the model is generating, not which reasoning
+blocks are still open: it turns `complete` as soon as real reply text or a tool
+call starts streaming, even when the provider never closes its thinking block,
+and only a newer thinking frame makes it breathe again. Rows that predate
+the phase field (restored history, legacy frames) keep the documented fallback:
+a streaming, content-free row breathes. Delegate rows follow the same rule.
+Later transcript activity and the newest tool row never stand in for the phase.
 
 Whole process and item are independent controls. Closing the process keeps
 descendant choices and reopening restores them; opening it never expands all
@@ -1453,8 +1463,17 @@ not a working claim, is what the reader sees.
   what it loaded while the main reading window is reduced, replaced, paged, or
   restored. Rows it already displayed stay displayed until the user closes or
   switches the tab: the chain's own cached entry holds them, live child rows
-  are routed into that entry as they are published, and only the panel's own
-  read changes its content. A live row after the last durable read leaves the
+  are routed into that entry as they are published, and a durable read replaces
+  only the durable range it actually read. A row that arrived live and that no
+  durable page has named yet — a tool that started but has not ended — survives
+  that read as well, including the newest-window replacement a gap wider than one
+  synchronization forces; it retires once, when a page names the same id and the
+  durable value replaces the live copy. One version per call is held — the state
+  its latest live event stated — so repeated publications of a streaming tool
+  cannot multiply it, and a replay of an earlier unsettled frame never downgrades
+  a row that already reached its end, on any read path. Live content and read lifecycle have
+  separate owners: a live publication never marks an in-flight read finished,
+  and a read whose answer was captured before a live row arrived leaves the
   entry stale, so a reopen refreshes the tail and merges it over the rows it
   already holds rather than resetting them; a failed read keeps those rows on
   screen with the failure stated inline and a retry. The rows are bounded
@@ -1462,9 +1481,12 @@ not a working claim, is what the reader sees.
   is guaranteed not to. The header and process follow that own source, so a
   running child's thinking, tool calls, and answer fragments arrive and stream
   there, not through the main pane.
-- A chain is read across all of its `Task(resume)` runs, so a delegation opened
+- A chain is read across all of its executed `Task(resume)` runs, so a delegation opened
   by a resumed run is the same child conversation as its original dispatch, and
-  an older caller's `Task` tool-call id resolves to it too. The scoped read
+  an older caller's `Task` tool-call id resolves to it too. A rejected resume —
+  `error`/`denied` with no delegation handle and no child rows — started no run,
+  so it joins no chain, seeds none, and renders no turn: the tab stays on the
+  running delegation and the failed request keeps only its parent tool row.
   answers with the chain's canonical identity — the earliest root dispatch's
   `delegationId` — and returns every `Task` / `Task(resume)` message of that
   chain as history context, so the brief row is readable even when those calls
@@ -1524,17 +1546,17 @@ not a working claim, is what the reader sees.
   the group is explained by a helper icon.
   Long paths, commands, and tool summaries in the live process wrap inside the
   dock instead of becoming one-line ellipses.
-- The metrics group ends with average output throughput (`TPS`). It is the sum of
-  matched settled source-assistant output tokens divided by the sum of those
-  rows' model stream durations, so wait time, tool time, and a whole response's
-  duration never enter the figure. Only the selected chain's direct-child model
-  streams count: a nested delegate, another child, an in-flight row, a row with
-  no positive stream duration, and a row with no usable token figure are not
-  samples, and a repeated message id counts once in its latest settled
-  representation. A provider output count is used whenever it was reported,
-  including a genuine zero; an interrupted response's visible-content estimate is
-  used otherwise and prefixes the figure with `≈`. With no usable sample the
-  value is `—`, and the metric's help names how many model responses it recorded.
+- The metrics group ends with average output throughput (`TPS`): one session
+  average for the selected chain, computed from its canonical per-run totals
+  (exact provider output tokens over summed first-generated-content-to-end
+  spans) and stated with no estimate prefix, no tooltip, and no sample-count
+  helper. Failed, aborted, and in-flight runs never contribute, usage-less
+  turns never contribute, and child transcript rows never contribute no matter
+  what usage or stream figures they carry. A re-reported run segment replaces
+  its totals rather than adding a duplicate; only distinct run segments sum. A
+  real provider zero over a positive span is a genuine `0`; a chain whose
+  snapshots carry no totals reads `—`, never an invented zero or a heuristic
+  estimate.
 - A delegate that settles without completing explains why, because the process
   alone does not: a `Failed`, `Timed out`, or `Aborted` capsule with no reason
   is all a reader gets, and a delegate that dies before emitting a message row
@@ -2156,23 +2178,23 @@ Single message render — either user (plaintext) or assistant (markdown streami
   and owns the pager whenever `revisionCount > 1`; replacing the assistant/tool
   tail must not move or detach that pager from the user bubble. The pager is
   part of the message action toolbar: hidden by default and revealed together
-  with Copy on row hover or keyboard focus. Right-clicking a user message or
-  an assistant turn opens the same action vocabulary as a body-level
-  pointer-anchored menu (Copy, Select text, and the row's own Edit / Delete /
-  Regenerate / Branch / revision items). Right-clicking empty transcript
-  space, a system row, or a permission/outcome card opens a conversation
-  menu: Copy conversation, Select conversation text, Scroll to top, Jump to
-  latest. Quote, Annotate, and Open side chat stay retired (ADR 0268). A
-  streaming or empty assistant turn that would produce no items opens
-  nothing. Copy on a speaking-turn menu writes the live selection in that
-  turn captured when the menu opened; a collapsed caret, or a selection
-  outside the row, falls back to the whole turn.
-  Copy conversation reads the complete session on demand, including unloaded
-  history and untruncated message text, and preserves the visible in-flight
-  tail. It does not change the reading window or scroll position. A failed
-  read reports an error without copying partial history. Copying from the
-  menu reports through the toast host because the surface closes as soon
-  as the item runs.
+  with Copy on row hover or keyboard focus. Right-clicking anywhere in the
+  transcript — a user message, an assistant turn, tool output, or the empty
+  space below the last turn — opens the selected-text menu, and only when a
+  real selection is inside the right-clicked surface: Copy writes the exact
+  selected text, Quote appends it to the composer draft as a blockquote and
+  focuses the composer. An ordinary right-click never fabricates a selection:
+  with no prior selection the gesture leaves the text unselected (the
+  transcript claims the pointer gesture so the platform cannot apply its
+  right-click word selection) and opens no menu. The pointer must land on
+  the selected words themselves: a right-click on unselected words of the
+  same paragraph — or on a button or empty background — cancels the old
+  selection, browser-like, and opens no menu at all, as does a collapsed
+  caret or a selection outside the right-clicked surface. Edit, Delete,
+  Regenerate, Branch, and revision paging stay on the hover toolbar and are
+  never duplicated in the menu; Annotate and Open side chat stay retired
+  (ADR 0268). Copying from the menu reports through the toast host because
+  the surface closes as soon as the item runs.
   Fork creates and activates an independent session whose snapshot ends at the
   selected assistant response, requires an idle source, and leaves that
   source's transcript, live runtime, and provider cache state untouched (D134).
@@ -2239,8 +2261,14 @@ Single message render — either user (plaintext) or assistant (markdown streami
   estimate note are intentionally omitted from the default view. Rows below
   the heading share one muted-label / tabular-value rhythm separated by
   spacing; the popover keeps its floating-layer edge and draws no inner
-  section rules (D297). Generation speed is a completed-turn value in tokens
-  per second and is not updated while a response is streaming. The
+  section rules (D297). Generation speed is one session average in tokens
+  per second across the whole session's settled own assistant responses —
+  the same canonical totals as subagent throughput (exact provider output
+  tokens over summed first-generated-content-to-end spans), never the latest
+  turn alone, never an estimate, and not updated while a response is
+  streaming. Child-stream rows belong to child sessions and never join the
+  parent's figure; failed, aborted, and in-flight turns never contribute.
+  With no usable sample the value is `—`, with no tooltip. The
   context-window total uses the same effective model window as the agent
   sidecar: a published models.dev `limit.context` replaces a legacy 128k
   generic binding seed, while a non-default per-model Advanced value remains
@@ -2368,12 +2396,11 @@ replaced.
 - Timestamps: `aria-label` with full time string, visual shows relative time
 - Right-click menus are `role="menu"` with `role="menuitem"` rows, arrow /
   Home / End navigation, Escape / Tab / outside-press / scroll-behind
-  dismissal, and an accessible name (`chat.messageMenu` or
-  `chat.conversationMenu`). Focus returns to whatever the right-click
-  interrupted. While editing a user message, Copy uses the selected draft text
-  (or the whole draft if the caret is collapsed), and Select message text selects
-  the draft. Saved-message Edit, Delete, and revision actions are not offered
-  until editing ends.
+  dismissal, and an accessible name (`chat.messageMenu`). Focus returns to
+  whatever the right-click interrupted. While editing a user message, Copy
+  and Quote act on the selected draft text; a collapsed draft caret opens no
+  menu. Saved-message Edit, Delete, and revision actions stay on the toolbar
+  and are reachable once editing ends.
 
 ### 8.6 MVP constraints
 
@@ -2731,7 +2758,19 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
   `Failed`, `Denied`), and the identity on the left carries no running colour or
   pulse. A delegate control row (`TaskWait`, `TaskList`, `TaskStop`) keeps its
   own fixed name and puts the subagent count and its wait outcome on the right,
-  the backend-owned outcome outranking the generic lifecycle label.
+  the backend-owned outcome outranking the generic lifecycle label. `TaskSteer`
+  keeps the same fixed-identity rule with its own label (`Task steer`) and a
+  standard `Sent` state: the head names the tool identity, the delegate's agent
+  badge, and the one live delegation's conversation title as its summary —
+  never a delegation id and never a roster count (ADR 0337).
+- The built-in Browser plugin tool (`plugin_pi_browser_Browser`) is the one row
+  whose head names its action: `Browser` plus the per-action label (`Open page`,
+  `Read page`, `Screenshot`, `Click`, `Fill`, `Run script`, `Console`, `CDP`),
+  never the raw plugin name. An unknown action falls back to the plain `Browser`
+  identity, and any other tool whose name ends in `Browser` keeps the generic
+  formatted-name presentation. The collapsed summary is per-action and bounded —
+  a running call reads only its arguments, never scripts, typed text or session
+  ids.
 - A provider-hosted search round follows the same identity rule: the globe and
   the kind's own name (`Web search`, `Open page`, `Find in page`) hold for the
   whole round, the right edge states `Searching the web` while it searches or
@@ -2770,11 +2809,13 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
   paths remain monospace.
 - Result chips follow the hint: exit code (error hue), match/file counts,
   replacement count, Write byte size, Read line count plus its 1-based closed
-  line range (`{lineCount},L{offset+1}-L{offset+lineCount}`), `truncated`, and
-  `scratch`. Read uses `offset` and `lineCount` from the returned window rather
-  than `fileBytes`; if those fields are unavailable, it omits the read-size
-  chip instead of presenting the whole-file size as the amount read. A
-  successful exit earns no chip.
+  line range (`{lineCount},L{offset+1}-L{offset+lineCount}`), and `truncated`.
+  The collapsed head carries no location badge: a scratch or external read
+  still names the file and keeps its counts, and the location stays in the
+  expanded body and the preview target. Read uses `offset` and `lineCount`
+  from the returned window rather than `fileBytes`; if those fields are
+  unavailable, it omits the read-size chip instead of presenting the
+  whole-file size as the amount read. A successful exit earns no chip.
   The `truncated` chip follows `details.truncated` and appears only when this
   result was cut short, not when a Read window of a longer file was filled
   (D306).
@@ -2795,13 +2836,17 @@ seconds when non-zero) from one hour onward. Zero-value units are omitted, so
   what a reader matches on. A name too long for the row ellipsizes at the row's
   own right edge instead of being clipped away or rewritten, and a value that
   ends in a separator prints its last segment with that separator, so a
-  directory never reads as a file. The whole value stays in the row's `title`,
-  its file menu, its preview target and the row's screen-reader description, so
-  hovering the hint still offers the raw absolute or relative spelling with its
-  own separators. Nothing is measured to paint the hint: it is the same text at
-  every column width, which is why a transcript of many file rows costs one line
-  of text per row. A non-path hint is printed whole (clamped like every other
-  hint) and is never reduced to a name.
+  directory never reads as a file. The whole value stays the rendered file
+  name's own `title`, its file menu, its preview target and the row's
+  screen-reader description, so hovering the file name still offers the raw
+  absolute or relative spelling with its own separators. Only the rendered
+  file name preview-opens: the stretching summary span around it carries no
+  hover text and no click of its own, so the blank summary area and every
+  other header cell keep the row's toggle. Nothing is measured to paint the
+  hint: it is the same text at every column width, which is why a transcript
+  of many file rows costs one line of text per row. A non-path hint is
+  printed whole (clamped like every other hint) and is never reduced to a
+  name.
 - Live activity remains in the processing group, its latest row, or the
   dedicated runtime indicator; no additional status capsule is rendered.
 - A workspace mutation's row ends with its own `+a/−d` pair, which is where the
@@ -2839,8 +2884,8 @@ the record it came with.
 | Tool | Blocks |
 |---|---|
 | Read | `File content` — syntax highlighted from the file extension |
-| Write | `Written content` — highlighted from the target extension |
-| Edit | when a ReviewChangeCard owns the change (every workspace mutation, including `MV` and `REM`), the body is that record and nothing else: the card's +a/−d, its diff and its rollback, beside any `Note` the host reported as a warning. The record's own `path`, `root`, `tag`, `deleted` and echoed `ops` are not printed as fields and no `Raw` disclosure is offered, because they restate the change at lower fidelity. A scratch or imported edit has no record, so its stated `ops` appear as `Input`; a failed edit keeps its `Error` plus those `ops` |
+| Write | `Written content` — highlighted from the target extension. A successful Write also carries its own `editDiff` preview (operation `write`, status `added` for a newly-created file and `modified` for an overwrite): the collapsed head shows its +N/−N beside the counts, and the expanded body adds the same diff view an Edit preview shows. Only the `write`/`added` and `write`/`modified` combinations render; any other operation/status pair reads as absent, never as a diff. A workspace Write keeps its durable review record as the preferred evidence; the `Written content` body is unchanged |
+| Edit | when a ReviewChangeCard owns the change (every workspace mutation, including `MV` and `REM`), the body is that record and nothing else: the card's +a/−d, its diff and its rollback, beside any `Note` the host reported as a warning. The record's own `path`, `root`, `tag`, `deleted` and echoed `ops` are not printed as fields and no `Raw` disclosure is offered, because they restate the change at lower fidelity. A scratch or permission-authorized external edit carries no durable record, so the body is the call's own `editDiff` preview instead: the same +a/−d and the same diff view, with no location badge in the collapsed head beside the counts, plus any host warning — and no rollback, which stays owned by the durable workspace record. An edit with neither record nor preview falls back to its stated `ops` as `Input`; a failed edit keeps its `Error` plus those `ops`, never a fabricated diff |
 | Bash | `Command` (shell, highlighted) beside `Output` and `Errors` (error hue) as terminal panes (D226 follow-up, §9.10); each pane is labelled and copies its own bytes, and an empty channel is omitted rather than shown as an empty pane |
 | Glob | `Files` — clickable workspace paths; a pattern that matched nothing states `No files matched` instead of a heading over an empty list |
 | Grep | `Matches` — grouped by file with a `line` gutter and clickable path headings for `outputMode: content`; a clickable path list for `filesWithMatches`; `path` → hit count fields for `count`. An empty array in any of the three modes states `No matches` (or `No files matched`) as the answer: the payload's `count` and `truncated` are never printed in place of a body, and an empty-only list carries no heading above that sentence |
@@ -2851,6 +2896,8 @@ the record it came with.
 | ToolSearch, EnterPlanMode/SubmitPlan, NewContext, BrowserPreview, GenerateImages | the names they activated or matched, each name set listed once and read in the session language (the legacy `addedToolNames` carrier is used only when the row reports no `activated` list), the mode the tool's own name states (`Plan`, `Goal`), or the prompts and written images the call carried |
 | any host `notice` | `Note` — an error, warning or truncation notice stays visible after the blocks it qualifies; a routine informational notice is not printed in a successful row's body |
 | any failure | `Error` — message plus code, listed first. A failure explains itself with the envelope's own sentence when `details` does not restate it; a text block that merely re-serializes `details` is never printed as a reason. The record it came with is listed beside its `Raw` disclosure — except when that record is only the refusal verdict the sentence already states (an all-false `accepted`/`success`/`ok`, nothing else): then the sentence is the whole body, and no verdict field or payload is drawn. A failed `SubagentHandoff` always keeps just that sentence, even when its record carries further diagnostics: for that built-in alone no field, reason code or payload is ever drawn. A failure that recorded no result states the `code` and `message` the row carries, or — recording neither — one localized sentence saying no reason was reported: it never opens on an empty body |
+| Browser plugin (`plugin_pi_browser_Browser` only) | the curated per-action result: `navigate` title/address fields, `snapshot` page tree, `screenshot` captured image, `click`/`fill` target, `evaluate`/`cdp` returned value (`null`/`false`/`0`/`""` preserved), `console` entries — beside one closed `Raw` disclosure of the untouched payload on success (skipped past the size bound). A failed or denied call prints only its `Error` note: never input, state, result, raw or images, even when the record echoes arguments |
+| TaskSteer | exactly one `Output` block with the sent guidance text — no target field, no receipt, no status, no raw. A failed or denied call prints only its `Error` note |
 | TaskWait/List/Stop roster | one table per roster group the runtime returned: `Subagents` for `delegations`, then `Stopped`, `Stop requested — still running` and `Already finished` as the runtime's own `stopped` / `stopPending` / `settled` groups. Each group keeps its heading so a worker whose cancellation was only requested never reads as stopped |
 | Task counters | `Stats` — the delegate's turns, tool calls and usage, after its brief and report |
 | unmapped payload | scalar entries as label/value fields; long or multi-line strings as their own labeled block; nested objects as JSON, all of it beside one explicit `Raw` disclosure of the untouched payload. The disclosure names itself in its own summary, so no second `Details` heading is drawn above it |
@@ -3058,7 +3105,15 @@ projection; terminal Task snapshots still take precedence.
 
 The lifecycle rows (`TaskWait`/`TaskList`/`TaskStop`) stay compact tool rows —
 they are not child cards and must not inflate the delegation count — but they
-are presented as subagent rows rather than as generic tool calls (D269). A
+are presented as subagent rows rather than as generic tool calls (D269).
+`TaskSteer` shares that subagent presentation with its own fixed identity
+(`Task steer`) but is not a lifecycle row: it names the one live delegation it
+queued a message into, never a roster rollup (ADR 0337). A targeted steer
+reuses the delivered-wait header in the shared task cluster: the fixed
+identity, the recorded agent as plain summary text, the target task's own
+title in the right title tile, and the `Sent` state — never a generic agent
+pill beside a text summary. Without a resolvable target the row keeps its
+guidance-text fallback, never the routing id. A
 lifecycle row is called with delegation ids, which read as bare UUIDs, so it
 never summarizes from its own arguments:
 
