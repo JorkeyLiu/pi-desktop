@@ -953,13 +953,19 @@ watching, and the reader's collapse choice for that row survives later streaming
 updates. Compact keeps all tool/search payloads closed and suppresses reasoning
 text and excerpts; only its active thinking indicator remains.
 
-  The leading icon of a tool, thinking, or hosted-search row carries a muted
- category tint for four groups only: muted blue for knowledge (read, list,
- search, toolSearch), muted teal for web access (fetch, browser,
- provider-hosted search), warm gold for creation (write, edit, image), and
- muted sage for execution (run, schedule). Thinking (full and compact),
- skill, context, todo, mode, fork, and delegate rows stay on the neutral
- muted ink, as does the generic `use` action and the Task card avatar. The
+   The leading icon of a tool, thinking, or hosted-search row carries a muted
+ category tint for four colored groups: muted blue for 查阅 knowledge (read,
+ list, search), muted teal for 网页访问 web access (fetch, browser,
+ provider-hosted search), warm gold for 创作 creation (write, edit, image),
+ and muted sage for 执行与自动化 execution and automation (run, schedule,
+ and user-configured MCP tools). The 系统工具 system group stays on the
+ neutral muted ink: thinking (full and compact), skill, context, todo, mode,
+ fork, delegate, toolSearch, and the generic `use` action with unknown or
+ generic plugin tools — as does the Task card avatar. Only the recognizable
+ user MCP namespace (`mcp_<server>_<tool>` per the plugin-SDK
+ userMcpToolName contract) takes the execution sage, even when its derived
+ action is read, fetch, or run; plugin-embedded MCP shares the generic
+ `plugin_` shape and keeps existing handling. The
  run action renders a boxed terminal glyph (a rectangle around `>_`). Only
  the icon ink or glyph differs — names, summaries, state markers,
  disclosure, and animation behavior are unchanged — and the tint holds across

@@ -29,6 +29,7 @@ import {
   getToolSummaryKey,
   isTaskSteerTool,
   isToolPathSummary,
+  isUserMcpToolName,
 } from "../../../lib/tool-display";
 import { ToolPathSummary } from "./ToolPathSummary";
 import { isThinkingActive } from "../../../lib/turn-process";
@@ -598,7 +599,9 @@ function HostToolRow({
             title={preparing ? undefined : summary || rawName}
             onClick={() => hasDetails && toggleRow()}
           >
-            <span className={`tool-row-icon${action === "delegate" ? " is-subagent" : ""}`}>
+             <span
+               className={`tool-row-icon${action === "delegate" ? " is-subagent" : ""}${isUserMcpToolName(message.toolName) ? " is-user-mcp" : ""}`}
+             >
               <ToolActionIcon action={action} />
             </span>
             <span className="tool-row-name" title={waitTitle}>

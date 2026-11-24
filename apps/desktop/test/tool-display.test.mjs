@@ -12,6 +12,7 @@ import {
   isAskToolName,
   isDelegationStartTool,
   isTaskSteerTool,
+  isUserMcpToolName,
   isToolPathSummary,
   delegationLifecycleKind,
   toolSummarySpec,
@@ -115,6 +116,37 @@ test("delegation is its own action, matched exactly", () => {
   assert.equal(getToolAction("CreateTask"), "use");
   assert.equal(getToolAction("plugin_tasks_list"), "list");
   assert.equal(getToolAction("plugin_tasksteer"), "use");
+});
+
+test("recognizes only the user MCP namespace, never changing the derived action", () => {
+  // Canonical plugin-SDK userMcpToolName shape: `mcp_<server>_<tool>`.
+  assert.equal(isUserMcpToolName("mcp_srv_probe"), true);
+  // A historical double underscore still starts with the same prefix.
+  assert.equal(isUserMcpToolName("mcp__legacy_tool"), true);
+  // The existing `functions.` provider-namespace convention still applies.
+  assert.equal(isUserMcpToolName("functions.mcp_srv_probe"), true);
+  // The contract sanitizer keeps server/tool case, so only the literal
+  // lowercase prefix is the boundary.
+  assert.equal(isUserMcpToolName("mcp_MyServer_MyTool"), true);
+  // Negative: plugin names (generic tools and plugin-embedded MCP share the
+  // `plugin_` shape and stay unclaimed), loose `mcp` substrings, builtins,
+  // and empty input.
+  assert.equal(isUserMcpToolName("plugin_mcp_names"), false);
+  assert.equal(isUserMcpToolName("plugin_notes_mcp_lookup"), false);
+  assert.equal(isUserMcpToolName("my_mcp_tool"), false);
+  assert.equal(isUserMcpToolName("amcp_tool"), false);
+  assert.equal(isUserMcpToolName("mcp"), false);
+  assert.equal(isUserMcpToolName("Read"), false);
+  assert.equal(isUserMcpToolName("ToolSearch"), false);
+  assert.equal(isUserMcpToolName("functions.ReadFile"), false);
+  assert.equal(isUserMcpToolName(undefined), false);
+  assert.equal(isUserMcpToolName(""), false);
+  // Presentation-only: the derived action is untouched, so the sage tint
+  // must win by rule order even for read/fetch derivatives.
+  assert.equal(getToolAction("mcp_example_lookup"), "use");
+  assert.equal(getToolAction("mcp_example_read_file"), "read");
+  assert.equal(getToolAction("mcp_docs_webfetch"), "fetch");
+  assert.equal(getToolAction("plugin_notes_mcp_lookup"), "use");
 });
 
 test("a delegation row shows its label, and the agent beside it", () => {

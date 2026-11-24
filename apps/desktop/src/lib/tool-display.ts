@@ -170,6 +170,25 @@ export function delegationLifecycleKind(
 export function isTaskSteerTool(toolName?: string): boolean {
   return bareToolName(toolName) === "tasksteer";
 }
+ /**
+  * A tool on an MCP server the user configured themselves. The name is the
+  * plugin-SDK `userMcpToolName` contract (`mcp_<server>_<tool>`, server and
+  * tool sanitized to `[A-Za-z0-9_]`), so the literal `mcp_` prefix — after an
+  * optional `functions.` provider namespace, per the existing convention —
+  * is the namespace boundary. A historical `mcp__` double underscore still
+  * starts with `mcp_` and matches naturally. A name that merely contains
+  * `mcp` elsewhere, and every `plugin_<id>_<server>_<tool>` name (generic
+  * plugin tools and plugin-embedded MCP share that shape and cannot be
+  * told apart here), are not user MCP. Presentation-only: `getToolAction`
+  * keeps whatever the name derives to, and the sage tint wins by rule order.
+  */
+ export function isUserMcpToolName(toolName?: string): boolean {
+   const raw = toolName || "";
+   const name = raw.toLowerCase().startsWith("functions.")
+     ? raw.slice("functions.".length)
+     : raw;
+   return name.startsWith("mcp_");
+ }
 
 /**
  * The exact names of the built-in tools that carry their own card. They are

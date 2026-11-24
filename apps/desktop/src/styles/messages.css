@@ -2709,21 +2709,25 @@
   * matches the `.tool-row-icon` wrapper against the existing `ToolActionIcon`
   * `data-icon` action hook (see getToolAction in lib/tool-display.ts) — no
   * duplicate name-to-color mapping — so the tint lives on the wrapper and the
-  * glyph inherits it via currentColor. Thinking rows, skill/context, todo,
-  * mode, fork, and delegate rows stay on the neutral muted ink by design;
-  * only the four colored groups below tint. Provider-hosted search matches by
-  * row class into the discovery tint, and the generic `use` action stays on
-  * the neutral `--ds-text-muted` ink. Direct wrapper color beats header-hover
-  * inheritance, so hover, completed, expanded, compact, and preparing states
-  * all keep the tint.
+  * glyph inherits it via currentColor. Thinking, skill, context, todo, mode,
+  * fork, delegate, toolSearch, and unknown/generic-plugin rows stay on the
+  * neutral muted ink by design as the system group; only the four colored
+  * groups below tint. Provider-hosted search matches by row class into the
+  * web-access tint, and the generic `use` action stays on the neutral
+  * `--ds-text-muted` ink. A user-configured MCP tool (`mcp_<server>_<tool>`
+  * per the plugin-SDK userMcpToolName contract, flagged `is-user-mcp` on the
+  * wrapper) takes the execution sage below even when its derived action is
+  * read, fetch, or run; plugin-embedded MCP shares the generic `plugin_`
+  * shape and keeps existing handling. Direct wrapper color beats
+  * header-hover inheritance, so hover, completed, expanded, compact, and
+  * preparing states all keep the tint.
   */
  .tool-row.hosted-search .tool-row-icon {
    color: var(--ds-activity-search);
  }
  .tool-row-icon:has(> [data-icon="read"]),
  .tool-row-icon:has(> [data-icon="list"]),
- .tool-row-icon:has(> [data-icon="search"]),
- .tool-row-icon:has(> [data-icon="toolSearch"]) {
+ .tool-row-icon:has(> [data-icon="search"]) {
    color: var(--ds-activity-read);
  }
  .tool-row-icon:has(> [data-icon="fetch"]),
@@ -2737,6 +2741,9 @@
  }
  .tool-row-icon:has(> [data-icon="run"]),
  .tool-row-icon:has(> [data-icon="schedule"]) {
+   color: var(--ds-activity-run);
+ }
+ .tool-row-icon.is-user-mcp {
    color: var(--ds-activity-run);
  }
 

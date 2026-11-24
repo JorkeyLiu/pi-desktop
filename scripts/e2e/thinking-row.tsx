@@ -500,12 +500,16 @@ globalThis.thinkingRowProbe = async () => {
     await settle();
      // ── 10. Left activity icons carry muted category tints ──
      // Production rows only: one completed row per built-in ToolAction value
-     // (all eighteen), the delegation lifecycle rows, a hosted search, the
-     // thinking rows above, and an actual Task card. Four groups tint by
-     // category (knowledge/read blue incl search and toolSearch, web-access
-     // teal for fetch/browser/hosted-search, write/edit/image gold,
-     // run/schedule sage); thinking, skill, context, todo, mode, fork,
-     // delegate, and the generic `use` action stay on the neutral muted ink.
+     // (all eighteen), the delegation lifecycle rows, a hosted search, three
+     // user-configured MCP rows (`mcp_` names whose derived actions are use,
+     // read, and fetch), the shipped browser plugin, a plugin-embedded MCP
+     // name, the thinking rows above, and an actual Task card. Four groups
+     // tint by category (knowledge/read blue for read/list/search,
+     // web-access teal for fetch/browser/hosted-search, write/edit/image
+     // gold, execution sage for run/schedule plus user MCP); the system
+     // group — thinking, skill, context, todo, mode, fork, delegate,
+     // toolSearch, generic `use`, and unknown/plugin names — stays on the
+     // neutral muted ink.
      // Every check compares rendered ink — never source text — in the dark
      // theme first, then again under the light plate.
      const tintTool = (
@@ -531,6 +535,17 @@ globalThis.thinkingRowProbe = async () => {
          <ToolRow message={tintTool("tint-toolsearch", "ToolSearch", { query: "icon tint" })} />
          <ToolRow message={tintTool("tint-fetch", "WebFetch", { url: "https://example.com" })} />
          <ToolRow message={tintTool("tint-browser", "BrowserPreview", { path: "preview.html" })} />
+         <ToolRow
+           message={tintTool("tint-browser-plugin", "plugin_pi_browser_Browser", { action: "snapshot" })}
+         />
+         <ToolRow message={tintTool("tint-mcp", "mcp_example_lookup", { query: "icon tint" })} />
+         <ToolRow message={tintTool("tint-mcp-read", "mcp_example_read_file", { path: "notes.txt" })} />
+         <ToolRow
+           message={tintTool("tint-mcp-fetch", "mcp_docs_webfetch", { url: "https://example.com" })}
+         />
+         <ToolRow
+           message={tintTool("tint-plugin-mcp", "plugin_notes_mcp_lookup", { query: "icon tint" })}
+         />
          <ToolRow message={tintTool("tint-write", "Write", { path: "src/notes.ts" })} />
          <ToolRow message={tintTool("tint-edit", "Edit", { path: "src/notes.ts" })} />
          <ToolRow
@@ -612,14 +627,17 @@ globalThis.thinkingRowProbe = async () => {
        "tint-read": "--ds-activity-read",
        "tint-list": "--ds-activity-read",
        "tint-search": "--ds-activity-read",
-       "tint-toolsearch": "--ds-activity-read",
        "tint-fetch": "--ds-activity-search",
        "tint-browser": "--ds-activity-search",
+       "tint-browser-plugin": "--ds-activity-search",
        "tint-write": "--ds-activity-edit",
        "tint-edit": "--ds-activity-edit",
        "tint-image": "--ds-activity-edit",
        "tint-run": "--ds-activity-run",
        "tint-schedule": "--ds-activity-run",
+       "tint-mcp": "--ds-activity-run",
+       "tint-mcp-read": "--ds-activity-run",
+       "tint-mcp-fetch": "--ds-activity-run",
      };
      const neutralIds = [
        "tint-skill",
@@ -632,6 +650,8 @@ globalThis.thinkingRowProbe = async () => {
        "tint-tasklist",
        "tint-stop",
        "tint-use",
+       "tint-toolsearch",
+       "tint-plugin-mcp",
      ];
      for (const [id, token] of Object.entries(tintExpect)) {
        const ink = tintIconInk(id);
@@ -650,6 +670,48 @@ globalThis.thinkingRowProbe = async () => {
          mutedInk,
        });
      }
+     // User MCP names take the execution sage even though their derived
+     // actions differ (use, read, fetch): the `is-user-mcp` flag on the icon
+     // wrapper outranks the action tint, while the glyph keeps its derived
+     // action. ToolSearch and plugin-embedded MCP names carry no such flag
+     // and keep existing handling.
+     for (const id of ["tint-mcp", "tint-mcp-read", "tint-mcp-fetch"]) {
+       const icon = tintHost.querySelector(`[data-message-id="${id}"] .tool-row-icon`);
+       check(
+         `the ${id} row flags user MCP on its icon wrapper`,
+         icon !== null && icon.classList.contains("is-user-mcp"),
+         icon?.outerHTML?.slice(0, 160),
+       );
+     }
+     check(
+       "user MCP keeps its derived read glyph under the sage ink",
+       tintHost.querySelector('[data-message-id="tint-mcp-read"] [data-icon="read"]') !== null,
+     );
+     check(
+       "user MCP keeps its derived fetch glyph under the sage ink",
+       tintHost.querySelector('[data-message-id="tint-mcp-fetch"] [data-icon="fetch"]') !== null,
+     );
+     const toolsearchIcon = tintHost.querySelector(
+       '[data-message-id="tint-toolsearch"] .tool-row-icon',
+     );
+     check(
+       "toolSearch carries no user MCP flag",
+       toolsearchIcon !== null && !toolsearchIcon.classList.contains("is-user-mcp"),
+       toolsearchIcon?.outerHTML?.slice(0, 160),
+     );
+     const pluginMcpIcon = tintHost.querySelector(
+       '[data-message-id="tint-plugin-mcp"] .tool-row-icon',
+     );
+     check(
+       "plugin-embedded MCP carries no user MCP flag",
+       pluginMcpIcon !== null && !pluginMcpIcon.classList.contains("is-user-mcp"),
+       pluginMcpIcon?.outerHTML?.slice(0, 160),
+     );
+     check(
+       "the shipped browser plugin keeps its derived fetch glyph",
+       tintHost.querySelector('[data-message-id="tint-browser-plugin"] [data-icon="fetch"]') !==
+         null,
+     );
      // TaskWait rides the default HostToolRow delegate action: the neutral ink
      // comes from the removed is-subagent tint, while the lifecycle hook and
      // the bot glyph stay untouched, and the right status keeps its own style.
