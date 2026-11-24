@@ -5537,7 +5537,9 @@ window; opening a normal panel afterward must still work.
   opens. Choose Copy and confirm the
   exact selection lands on the clipboard. 3) Select a phrase, right-click,
   and choose Quote: the composer draft gains the excerpt as a blockquote
-  and the composer takes focus. 4) Collapse the caret and right-click
+  followed by a fresh unquoted line, and the composer takes focus with the
+  caret on that line so typing continues outside the blockquote. 4) Collapse
+  the caret and right-click
   again: no menu opens. 5) Select text spanning into tool output and
   right-click: Copy and Quote act on the same selection. 6) Press Escape
   on an open menu, then Tab. 7) Right-click
@@ -5549,7 +5551,9 @@ window; opening a normal panel afterward must still work.
   Edit, Delete, Regenerate, Branch, Select text, or conversation actions.
   Copy writes the exact live selection captured when the menu opened; Quote
   appends that excerpt to the composer draft as a blockquote without
-  replacing existing draft text. A collapsed caret or a selection outside
+  replacing existing draft text, leaving a fresh unquoted line below the
+  quote with the caret on it so follow-up typing stays outside the
+  blockquote. A collapsed caret or a selection outside
   the right-clicked surface opens no menu at all; a real right-button press
   with no prior selection leaves no word selected. Copy
   shows a toast. Escape and Tab dismiss the menu without

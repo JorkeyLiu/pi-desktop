@@ -43,8 +43,14 @@ export function buildQuoteText(excerpt: string): string {
 /**
  * Put a quote into an existing draft without discarding what the user already
  * typed: quoting is an addition to the prompt, never a replacement of it.
+ * The quote keeps a fresh unquoted paragraph after it so the composer caret —
+ * which the quote prefill parks at the end of the applied draft — lands on an
+ * empty line below the blockquote, ready for direct follow-up typing. A draft
+ * that already ends in blank lines is trimmed first, so repeated quotes never
+ * stack gaps.
  */
 export function appendQuoteToDraft(draftText: string, quote: string): string {
   const existing = draftText.replace(/\s+$/, "");
-  return existing ? `${existing}\n\n${quote}` : quote;
+  const quoted = existing ? `${existing}\n\n${quote}` : quote;
+  return `${quoted}\n\n`;
 }
