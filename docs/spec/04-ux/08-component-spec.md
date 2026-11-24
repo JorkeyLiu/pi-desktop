@@ -1239,9 +1239,15 @@ entirely inside the plugin's isolated page:
   ordinary in-page navigation stay in the current tab. Website new-window links
   follow Link open destination: another work-panel tab, or the system browser.
 
-- BrowserPreview creates its resource tab before navigating and never rewrites
-  the prior tab. A background navigation is retained for its session's selected
-  tab (or consumed once by its first tab). A new blank tab reports empty state.
+- BrowserPreview reuses the originating session's Browser tab already showing
+  the same current page — activating it with its identity, label, and host
+  page preserved, so no navigation or reload is forced — and creates a resource
+  tab only when no tab shows that page. A page is the tab's current location:
+  a different location (including a different query or hash, or a page the tab
+  navigated to since) opens a separate tab, and manual browser opens keep
+  creating independent tabs. A background navigation is retained for its
+  session's selected tab (or consumed once by its first tab). A new blank tab
+  reports empty state.
 
 - Main-frame same-document navigation (fragment links and History API routes) updates
   the browser address, history controls, and loading state without requiring a
