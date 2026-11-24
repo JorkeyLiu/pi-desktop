@@ -2213,11 +2213,17 @@ Single message render — either user (plaintext) or assistant (markdown streami
   user bubble) so it stays distinct from the pane without an outer shadow.
   Transcript rows paint-contain and the scroller clips overflow, so a
   composer lift would be cut off at the plate edges (D297: in-flow surfaces
-  use tone, not stroke). Focus paints an inset 2px accent ring. The textarea
-  is unboxed inside that plate; localized Retry and Cancel sit in a 28px footer
+  use tone, not stroke). Focus paints an inset 2px accent ring. The editor
+  is the main composer's input surface — atomic inline `@name` chips with
+  the same representation, image hover and modal preview, and shared
+  clipboard, drop, and picker intake — bound to a local edit draft that
+  never reads or writes the main composer draft; Escape or Cancel drops the
+  local draft unchanged. Stored attachments hydrate as chips: a chip that
+  still names its placed marker round-trips at that position, an unnamed one
+  appends as a removable chip, and deleting a chip drops its attachment from
+  the resend. Localized Retry and Cancel sit in a 28px footer
   (Escape cancels, Cmd/Ctrl+Enter retries; both shortcuts are ignored during
-  IME composition, preserving the draft; slash turns seed the typed
-  `command` form so retrying re-expands the template). Opening it widens the
+  IME composition, preserving the draft). Opening it widens the
   user column to the assistant reading width and hides the action toolbar.
   Retry runs the Regenerate path with the current text in the same session,
   even when the text is unchanged, so the replaced prompt and its whole

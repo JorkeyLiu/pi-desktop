@@ -1,5 +1,5 @@
 import { transcriptLongHistoryProbe as runLongHistoryProbe } from "./transcript-long-history";
-import { inlineAttachmentResendProbe, transcriptEditProbe } from "./transcript-edit";
+import { inlineAttachmentResendProbe, transcriptEditProbe, userMessageEditAttachmentsProbe, userMessageEditPasteProbe } from "./transcript-edit";
 import { turnProcessProbe } from "./turn-process";
 import { transcriptStatusProbe } from "./transcript-status";
 import { createRoot } from "react-dom/client";
@@ -483,6 +483,8 @@ globalThis.transcriptRenderProbe = async () => {
       taskTimingUpdated: true,
       turnProcess: await turnProcessProbe(),
       messageEditing: await transcriptEditProbe(),
+      editAttachments: await userMessageEditAttachmentsProbe(),
+      editPaste: await userMessageEditPasteProbe(),
       inlineResend,
       textUpdateDurationMs,
     };
