@@ -35,11 +35,37 @@ test("a quote is a markdown blockquote of the excerpt", () => {
   );
 });
 
+test("a quote leaves a fresh unquoted paragraph after it for the follow-up", () => {
+  assert.equal(
+    appendQuoteToDraft("keep me", "> quoted"),
+    "keep me\n\n> quoted\n\n",
+  );
+  assert.equal(appendQuoteToDraft("", "> quoted"), "> quoted\n\n");
+});
+
+test("a repeated quote trims the trailing blank line instead of stacking gaps", () => {
+  assert.equal(
+    appendQuoteToDraft("> first\n\n", "> second"),
+    "> first\n\n> second\n\n",
+  );
+  assert.equal(
+    appendQuoteToDraft("keep me\n\n> first\n\n", "> second"),
+    "keep me\n\n> first\n\n> second\n\n",
+  );
+});
+
+test("a multiline quote keeps its blockquote grammar before the fresh paragraph", () => {
+  assert.equal(
+    appendQuoteToDraft("", buildQuoteText("first\n\nsecond")),
+    "> first\n>\n> second\n\n",
+  );
+});
+
 test("quoting adds to the existing draft instead of replacing it", () => {
   assert.equal(
     appendQuoteToDraft("keep me", "> quoted"),
-    "keep me\n\n> quoted",
+    "keep me\n\n> quoted\n\n",
   );
-  assert.equal(appendQuoteToDraft("", "> quoted"), "> quoted");
-  assert.equal(appendQuoteToDraft("keep me   ", "> quoted"), "keep me\n\n> quoted");
+  assert.equal(appendQuoteToDraft("", "> quoted"), "> quoted\n\n");
+  assert.equal(appendQuoteToDraft("keep me   ", "> quoted"), "keep me\n\n> quoted\n\n");
 });

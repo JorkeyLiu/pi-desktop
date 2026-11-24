@@ -2187,7 +2187,8 @@ Single message render — either user (plaintext) or assistant (markdown streami
   space below the last turn — opens the selected-text menu, and only when a
   real selection is inside the right-clicked surface: Copy writes the exact
   selected text, Quote appends it to the composer draft as a blockquote and
-  focuses the composer. An ordinary right-click never fabricates a selection:
+  focuses the composer with the caret on a fresh unquoted line below the
+  quote, ready for follow-up typing without touching the quoted lines. An ordinary right-click never fabricates a selection:
   with no prior selection the gesture leaves the text unselected (the
   transcript claims the pointer gesture so the platform cannot apply its
   right-click word selection) and opens no menu. The pointer must land on
