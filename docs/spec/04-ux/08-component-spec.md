@@ -1314,7 +1314,8 @@ entirely inside the plugin's isolated page:
   no number: the totals then read as a lower bound, and its row states the specific
   reason (file too large, change too large to compare, earlier bytes not retained,
   folder no longer available, or the request's comparison budget already spent)
-  instead of a zero. A record the host could not read at all also makes the totals a
+  instead of a zero, and the row's header renders no counts element at all.
+  A record the host could not read at all also makes the totals a
   lower bound and disables rollback, because the missing record could be an earlier
   edit of the same file. Each row is collapsed by default and expands to the hunks
   and one rollback action. Rollback restores that file's first recorded bytes: the

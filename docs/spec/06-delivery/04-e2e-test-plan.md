@@ -5255,7 +5255,9 @@ window; opening a normal panel afterward must still work.
   renderer-covered by `chat-review-entry.test.mjs` (contract and pre-contract
   operation spellings); the panel's rendered rows, root labels, lower-bound
   totals, reason copy, session-switch clearing and file rollback are driven by
-  `node scripts/e2e-review-files.mjs` after `pnpm build:js`. The inline
+  `node scripts/e2e-review-files.mjs` after `pnpm build:js`; that run also asserts
+  the uncounted fileTooLarge row's header renders no counts element with no
+  ellipsis and names the reason on expand. The inline
   +additions/−deletions and the expanded diff on the transcript row and on the
   delegate row, taken from a real host `tools.execute` record and its
   pre-contract spelling, are driven by `node scripts/e2e-tool-review-inline.mjs`
