@@ -5308,3 +5308,18 @@ Input, selection, submission and dismissal semantics remain unchanged.
 Project-delete descriptions and plugin dialog headings/outcomes also wrap long
 project or plugin names instead of overflowing their existing widths. Project
 instructions, memory and OAuth dialogs retain their existing bounded layouts.
+
+## 22. Browser preview focus
+
+Opening, reusing, or live-reloading the work-panel browser preview never
+moves keyboard focus: the composer's caret, selection, and draft stay exactly
+where the user left them, and the next keystroke still lands in the composer.
+A preview that loads while the user works in the preview's own address bar
+returns focus there instead of the composer. Navigating while the user works
+inside the preview never pulls focus back out. Pressing or tapping into the
+preview hands it focus, and keyboard traversal (Tab / F6) from the shell into
+the preview is honored as the user's own move and is never undone. Browser
+chrome actions (back, forward, reload, stop) count as the user driving the
+preview. Hovering, scrolling, or a load finishing without a focus change move
+nothing. In short: programmatic preview work never steals focus; direct user
+input always wins and keeps it.

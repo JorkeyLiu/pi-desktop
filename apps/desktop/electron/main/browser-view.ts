@@ -1,4 +1,12 @@
-import { shell, View, WebContentsView, type BrowserWindow, type WebContents } from "electron";
+import {
+  shell,
+  View,
+  WebContentsView,
+  type BrowserWindow,
+  type InputEvent,
+  type MouseInputEvent,
+  type WebContents,
+} from "electron";
 import { realpathSync, statSync, watch, type FSWatcher } from "node:fs";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -18,9 +26,57 @@ import { isAllowedHttpUrl, parseAllowedExternalUrl } from "./safe-open-external"
  * reload: the loaded file's directory is watched so edits to the page or its
  * sibling assets refresh the preview.
  */
-
 const PARTITION = "persist:work-browser";
+
 const LIVE_RELOAD_DEBOUNCE_MS = 250;
+
+/**
+ * Focus keys that move keyboard focus between panes instead of producing
+ * text. A real press of one of these in the focus owner just before it loses
+ * focus is user-driven traversal (Tab / F6 toward the preview), never
+ * programmatic theft.
+ */
+const TRAVERSAL_KEYS = new Set(["Tab", "F6"]);
+
+/**
+ * Watch against the native focus theft a programmatic preview navigation
+ * performs.
+ *
+ * Runtime evidence (isolated Electron fixture, real BrowserHost +
+ * BrowserPane): committing `loadURL` or a live `reloadIgnoringCache` in the
+ * visible attached guest moves `webContents.isFocused()` from the shell
+ * window contents to the guest after a variable delay, while the shell
+ * document keeps reporting its editor as `activeElement` (stale:
+ * `document.hasFocus()` is false). Hidden navigations, view attach, and
+ * show/hide move no focus. The theft lands after the navigation settles,
+ * so the watch reacts to the guest's own focus event instead of the commit.
+ *
+ * Event shapes follow the installed Electron 43 types: keyboard arrives on
+ * `before-input-event`, mouse on `before-mouse-event`, touch and tap gestures
+ * on `input-event`. The watch restores whoever actually owned focus when
+ * armed (shell editor, preview chrome URL bar, or nothing). The native theft
+ * can re-assert guest focus several times per navigation, so the watch keeps
+ * restoring until a real user press into the preview hands focus back and
+ * disarms, or owner traversal keys followed by owner blur mark user-driven
+ * traversal and disarm without restoring; each restore is skipped once the
+ * owner is focused again, so there is no yank loop and no permanent watch
+ * that could shadow later user intent. Arming snapshots the focused contents
+ * without consulting window activation (which flickers in headless runs);
+ * the restore itself still requires an active window. No timers; all
+ * listeners detach on takeover/traversal/hide/replace/action/dispose.
+ */
+interface PreviewFocusWatch {
+  guest: WebContents;
+  owner: WebContents | null;
+  interacted: boolean;
+  traversed: boolean;
+  lastOwnerKey: string | null;
+  onGuestFocus: () => void;
+  onGuestMouse: (event: unknown, mouse: MouseInputEvent) => void;
+  onGuestTouch: (event: unknown, inputEvent: InputEvent) => void;
+  onOwnerKey: (event: unknown, input: { type: string; key: string }) => void;
+  onOwnerBlur: () => void;
+}
 
 export function normalizeUrl(raw: string): string | null {
   const trimmed = raw.trim();
@@ -135,6 +191,7 @@ export class BrowserPane {
   private pendingTarget: string | null = null;
   private loadError: { url: string; message: string } | null = null;
   private cancelPending: (() => void) | null = null;
+  private focusWatch: PreviewFocusWatch | null = null;
 
   private readonly onOpenUrl?: (url: string) => void;
 
@@ -247,6 +304,7 @@ export class BrowserPane {
     else this.clearLiveReload();
     const view = this.ensureView();
     const wc = view.webContents;
+    this.watchPreviewFocus(wc);
     const loading = this.getState();
     if (loading) this.onState(loading);
     if (this.visible) this.attach();
@@ -297,10 +355,234 @@ export class BrowserPane {
       );
     });
   }
+  /**
+   * Arm the theft watch on the navigation's guest: snapshot whoever actually
+   * holds keyboard focus right now (shell editor, preview chrome URL bar, or
+   * nothing when the user already works inside the
+   * preview), and listen for the guest's own focus event plus real input
+   * reaching it. Re-arming replaces the previous watch, so at most one
+   * listener pair is ever attached per pane.
+   */
+  private watchPreviewFocus(wc: WebContents): void {
+    this.unwatchPreviewFocus();
+    if (this.isGone(wc)) return;
+    const watch: PreviewFocusWatch = {
+      guest: wc,
+      owner: null,
+      interacted: false,
+      traversed: false,
+      lastOwnerKey: null,
+      onGuestFocus: () => {},
+      onGuestMouse: () => {},
+      onGuestTouch: () => {},
+      onOwnerKey: () => {},
+      onOwnerBlur: () => {},
+    };
+    watch.owner = this.focusedPreviewOwner(wc);
+    watch.onGuestFocus = () => this.onPreviewGuestFocus(watch);
+    watch.onGuestMouse = (_event: unknown, mouse: MouseInputEvent) => this.onPreviewGuestMouse(watch, mouse);
+    watch.onGuestTouch = (_event: unknown, inputEvent: InputEvent) => this.onPreviewGuestTouch(watch, inputEvent);
+    wc.on("focus", watch.onGuestFocus);
+    wc.on("before-mouse-event", watch.onGuestMouse);
+    wc.on("input-event", watch.onGuestTouch);
+    const owner = watch.owner;
+    if (owner && !this.isGone(owner)) {
+      watch.onOwnerKey = (_event: unknown, input: { type: string; key: string }) =>
+        this.onPreviewOwnerKey(watch, input);
+      watch.onOwnerBlur = () => this.onPreviewOwnerBlur(watch);
+      owner.on("before-input-event", watch.onOwnerKey);
+      owner.on("blur", watch.onOwnerBlur);
+    }
+    this.focusWatch = watch;
+  }
 
+  /**
+   * Remove the theft watch's listeners. Called on hide, view replacement,
+   * window changes, disposal, and once the user takes the preview over.
+   */
+  private unwatchPreviewFocus(): void {
+    const watch = this.focusWatch;
+    this.focusWatch = null;
+    if (!watch) return;
+    // Literal event names keep Electron 43's typed removeListener overloads;
+    // isGone guards swallow the known destroy/teardown races, and anything
+    // else stays diagnosable below.
+    const guestGone = this.isGone(watch.guest);
+    const owner = watch.owner;
+    const ownerGone = !owner || this.isGone(owner);
+    try {
+      if (!guestGone) {
+        watch.guest.removeListener("focus", watch.onGuestFocus);
+        watch.guest.removeListener("before-mouse-event", watch.onGuestMouse);
+        watch.guest.removeListener("input-event", watch.onGuestTouch);
+      }
+      if (!ownerGone) {
+        owner.removeListener("before-input-event", watch.onOwnerKey);
+        owner.removeListener("blur", watch.onOwnerBlur);
+      }
+    } catch (error) {
+      if (!this.isGone(watch.guest) || (watch.owner && !this.isGone(watch.owner))) {
+        console.error("[browser] preview focus detach failed", error);
+      }
+    }
+  }
+
+  /** Destroyed-or-neutered contents: never touch, whatever the caller holds. */
+  private isGone(wc: WebContents): boolean {
+    try {
+      return wc.isDestroyed();
+    } catch {
+      // Neutered mid-teardown throws on access: treat as gone (known race).
+      return true;
+    }
+  }
+
+  /** A window torn down mid-check throws on access: treat as gone. */
+  private windowGone(): boolean {
+    try {
+      const win = this.window;
+      return !win || win.isDestroyed();
+    } catch {
+      return true;
+    }
+  }
+
+  /**
+   * Whoever holds keyboard focus now, excluding the given guest: the shell
+   * window contents or any other attached plugin view (e.g. the preview
+   * chrome's URL bar). Null when the window is gone or the user is already
+   * inside this guest. Window activation is not consulted (see body).
+   */
+  private focusedPreviewOwner(guest: WebContents): WebContents | null {
+    // Best-effort snapshot: focus preservation must never break the
+    // navigation it protects, whatever partial window shape a caller passes.
+    // Window activation is deliberately NOT consulted here: in headless and
+    // CI runs the window can report inactive at arm time while the shell
+    // editor genuinely owns keyboard focus, and arming ownerless would leave
+    // the coming theft unrestored. The restore itself still requires an
+    // active window, so a backgrounded app is never yanked forward.
+    try {
+      const win = this.window;
+      if (!win || win.isDestroyed()) return null;
+      const shell = win.webContents;
+      if (shell && !shell.isDestroyed() && shell.isFocused()) return shell;
+      const visit = (views: readonly View[]): WebContents | null => {
+        for (const child of views) {
+          if (child instanceof WebContentsView) {
+            const contents = child.webContents;
+            if (contents && !contents.isDestroyed() && contents !== guest && contents.isFocused()) {
+              return contents;
+            }
+          }
+          const nested = visit(child.children);
+          if (nested) return nested;
+        }
+        return null;
+      };
+      return visit(win.contentView.children);
+    } catch (error) {
+      // A window torn down mid-snapshot is a known race: stay unarmed.
+      // Anything else is unexpected and must stay diagnosable.
+      if (!this.windowGone()) console.error("[browser] preview focus snapshot failed", error);
+      return null;
+    }
+  }
+
+  /**
+   * The guest took keyboard focus. Restore the recorded owner whenever the
+   * watch is still current, the window is active, the owner is intact and
+   * unfocused, the guest is really focused, and no real user action reached
+   * the guest first: that combination is the programmatic theft, not the
+   * user. The native theft can re-assert focus several times after one
+   * navigation (measured seconds apart), so the focus listener stays
+   * attached across restores; each restore is a no-op once the owner is
+   * focused again, so there is no yank loop. User takeover (press into the
+   * preview) or user traversal (traversal key in the owner before it lost
+   * focus) disarms without restoring. An inactive window skips the restore
+   * but stays armed, so a backgrounded app is never yanked forward.
+   */
+  private onPreviewGuestFocus(watch: PreviewFocusWatch): void {
+    if (watch !== this.focusWatch) return;
+    if (watch.interacted || watch.traversed || !watch.owner || this.isGone(watch.owner)) {
+      this.unwatchPreviewFocus();
+      return;
+    }
+    let win: BrowserWindow | null = null;
+    try {
+      win = this.window;
+      if (!win || win.isDestroyed() || !win.isFocused()) return;
+    } catch (error) {
+      if (!this.windowGone()) console.error("[browser] preview focus guard failed", error);
+      return;
+    }
+    if (watch.owner.isFocused()) return;
+    if (this.isGone(watch.guest) || !watch.guest.isFocused()) return;
+    watch.owner.focus();
+    // No detach here: a later theft wave re-fires this same listener and is
+    // restored the same way, while a racing real click still hands focus
+    // back through before-mouse-event/input-event and detaches everything.
+    // Every listener detaches on takeover, traversal, replacement, hide,
+    // action, window change, or dispose — never a permanent lock.
+  }
+
+  /**
+   * A real mouse press reached the guest. The native focus transfer lands
+   * ahead of the input event, so an eager restore may have run first: hand
+   * focus back to the user's press and detach. Hover, scroll, movement, and
+   * releases alone never take ownership, so the watch stays armed for a
+   * later programmatic navigation.
+   */
+  private onPreviewGuestMouse(watch: PreviewFocusWatch, mouse: MouseInputEvent): void {
+    if (watch !== this.focusWatch) return;
+    if (mouse.type !== "mouseDown") return;
+    watch.interacted = true;
+    const guest = watch.guest;
+    this.unwatchPreviewFocus();
+    // Unconditional: the eager restore above may have run a tick earlier, so
+    // the guest can report either state here. Focusing an already-focused
+    // guest is a harmless no-op; the watch is already detached, so no focus
+    // event it emits can restore again.
+    if (!this.isGone(guest)) guest.focus();
+  }
+
+  /**
+   * A real touch press or tap gesture reached the guest: same ownership
+   * transfer as a mouse press. Touch comes through `input-event`, whose
+   * union carries these types; other gestures (scroll, pinch, fling) and
+   * pointer hover never take ownership.
+   */
+  private onPreviewGuestTouch(watch: PreviewFocusWatch, inputEvent: InputEvent): void {
+    if (watch !== this.focusWatch) return;
+    if (inputEvent.type !== "touchStart" && inputEvent.type !== "gestureTapDown") return;
+    watch.interacted = true;
+    const guest = watch.guest;
+    this.unwatchPreviewFocus();
+    if (!this.isGone(guest)) guest.focus();
+  }
+
+  /** Record the owner's latest key press while the watch is armed. */
+  private onPreviewOwnerKey(watch: PreviewFocusWatch, input: { type: string; key: string }): void {
+    if (watch !== this.focusWatch) return;
+    if (input.type !== "keyDown") return;
+    watch.lastOwnerKey = typeof input.key === "string" ? input.key : null;
+  }
+
+  /**
+   * The owner lost focus. When its latest key press was a traversal key, the
+   * user is moving focus between panes (Tab / F6 toward the preview): mark
+   * the traversal so the following guest focus disarms instead of restoring.
+   * Any other key (typing, Enter, shortcuts) leaves the watch armed.
+   */
+  private onPreviewOwnerBlur(watch: PreviewFocusWatch): void {
+    if (watch !== this.focusWatch) return;
+    if (watch.lastOwnerKey && TRAVERSAL_KEYS.has(watch.lastOwnerKey)) watch.traversed = true;
+  }
   action(action: "back" | "forward" | "reload" | "stop"): void {
     const wc = this.view?.webContents;
     if (!wc || wc.isDestroyed()) return;
+    // Back/forward/reload/stop only run from the preview chrome UI: the user
+    // is driving the preview, so focus ownership transfers to them.
+    this.unwatchPreviewFocus();
     if (action === "stop" && this.pendingTarget) {
       const url = this.pendingTarget;
       this.cancelPending?.();
@@ -354,8 +636,16 @@ export class BrowserPane {
     if (!this.view) return;
     this.surface?.setVisible(visible);
     this.view.setVisible?.(visible);
-    if (visible) this.attach();
-    else this.detach();
+    if (visible) {
+      this.attach();
+      // A show without a new navigation (tab switch back, overlay lifted)
+      // re-arms the theft watch with whoever owns focus now — but never
+      // replaces an armed watch, so a user's takeover is never cleared.
+      if (!this.focusWatch) {
+        const current = this.getWebContents();
+        if (current) this.watchPreviewFocus(current);
+      }
+    } else this.detach();
   }
 
   openExternal(): void {
@@ -403,6 +693,7 @@ export class BrowserPane {
   }
 
   private detach(): void {
+    this.unwatchPreviewFocus();
     if (!this.window || this.window.isDestroyed() || !this.surface) return;
     const children = this.window.contentView.children;
     if (children.includes(this.surface)) {
@@ -429,6 +720,10 @@ export class BrowserPane {
       this.reloadTimer = null;
       const wc = this.view?.webContents;
       if (wc && !wc.isDestroyed() && wc.getURL().startsWith("file:")) {
+        // The user may have moved into the preview chrome since the last
+        // navigation armed the watch: re-snapshot whoever owns focus now so
+        // a reload theft restores them, not a stale earlier owner.
+        this.watchPreviewFocus(wc);
         wc.reloadIgnoringCache();
       }
     }, LIVE_RELOAD_DEBOUNCE_MS);
