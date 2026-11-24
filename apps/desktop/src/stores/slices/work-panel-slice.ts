@@ -20,6 +20,7 @@ import {
   focusWorkPanelTabState,
   newWorkPanelTab,
   nextWorkPanelFileRequestSeq,
+  openBrowserPreviewTabState,
   openWorkPanelTabState,
   reorderWorkPanelTabsState,
   replaceWorkPanelTabState,
@@ -204,6 +205,7 @@ export function createWorkPanelSlice({
   | "openNewWorkPanelTab"
   | "replaceWorkPanelTab"
   | "openWorkPanelTabForSession"
+  | "openBrowserPreviewTabForSession"
   | "activateWorkPanelTab"
   | "reorderWorkPanelTabs"
   | "closeWorkPanelTab"
@@ -289,6 +291,47 @@ export function createWorkPanelSlice({
               workPanelTabs: next.tabs,
               activeWorkPanelTabId: next.activeTabId,
               workPanelFileRequest: fileRequest,
+            }
+          : {}),
+      };
+    });
+  },
+  openBrowserPreviewTabForSession: (sessionId, location) => {
+    if (!sessionId) return;
+    if (isRemoteSession(get().sessions.find((session) => session.id === sessionId)) || sessionId.startsWith("remote:")) return;
+    // One atomic update: the match reads the latest retained or visible
+    // context inside `set`, so a navigation landing between the preview event
+    // and this open cannot interleave a duplicate tab.
+    set((state) => {
+      const affectsVisibleSession =
+        state.activeSessionId === sessionId &&
+        (!isSessionSelectionPending(sessionId));
+      const context = affectsVisibleSession
+        ? currentWorkPanelContext(state)
+        : state.workPanelContexts[sessionId] ?? emptyWorkPanelContext();
+      const strip = {
+        tabs: context.tabs,
+        activeTabId: context.activeTabId,
+      };
+      const next = (location ?? "").trim()
+        ? openBrowserPreviewTabState(strip, location)
+        : openWorkPanelTabState(strip, browserPluginTab());
+      const nextContext: WorkPanelContext = {
+        tabs: next.tabs,
+        activeTabId: next.activeTabId,
+        fileRequest: context.fileRequest,
+      };
+      return {
+        workPanelContexts: {
+          ...state.workPanelContexts,
+          [sessionId]: nextContext,
+        },
+        ...(affectsVisibleSession
+          ? {
+              workPanelOpen: true,
+              workPanelTabs: next.tabs,
+              activeWorkPanelTabId: next.activeTabId,
+              workPanelFileRequest: context.fileRequest,
             }
           : {}),
       };

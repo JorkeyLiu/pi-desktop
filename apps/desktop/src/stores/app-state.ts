@@ -456,6 +456,12 @@ export type AppState = {
   /** Open a tool from a blank launcher page, reusing an existing tool tab. */
   replaceWorkPanelTab: (sourceTabId: string, tab: WorkPanelTab) => void;
   openWorkPanelTabForSession: (sessionId: string, tab: WorkPanelTab) => void;
+  /**
+   * Agent preview open in one originating session: activate the tab already
+   * showing `location`, otherwise open a new browser tab. Preview events for
+   * a background session update only that session's retained context.
+   */
+  openBrowserPreviewTabForSession: (sessionId: string, location: string | undefined) => void;
   activateWorkPanelTab: (tabId: string) => void;
   reorderWorkPanelTabs: (
     sourceTabId: string,

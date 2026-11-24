@@ -260,6 +260,101 @@ export function browserTabLabel(location: string): string {
 }
 
 /**
+ * Compare key for one agent-previewed page.
+ *
+ * A preview event carries an absolute workspace file path while the tab's
+ * current location is the committed `file://` URL after load (or a URL the
+ * page navigated to since), so both sides normalize through the same file
+ * canonicalization before comparing. `file:` URLs decode to their local
+ * path: a `/C:/…` drive prefix meets the raw `C:/…` spelling, the drive
+ * letter folds case, and the remainder keeps its case. A `file:` URL naming
+ * another machine keeps its authority in the key, so it never meets the
+ * local path with the same remainder. Anything else — notably `http(s)`
+ * URLs — compares verbatim, so distinct query/hash pairs never collapse
+ * into one tab.
+ */
+export function normalizeBrowserPreviewLocation(location: string): string {
+  const trimmed = location.trim();
+  if (/^file:/i.test(trimmed)) {
+    try {
+      const url = new URL(trimmed);
+      if (url.protocol.toLowerCase() !== "file:") return trimmed;
+      const host = url.hostname.toLowerCase();
+      const key = `${normalizePreviewFilePath(decodeURIComponent(url.pathname))}${url.search}${url.hash}`;
+      if (host && host !== "localhost") {
+        return `//${host}${key.startsWith("/") ? key : `/${key}`}`;
+      }
+      return key;
+    } catch {
+      return trimmed;
+    }
+  }
+  if (/^\\\\/.test(trimmed) || /^\/\//.test(trimmed)) {
+    return normalizePreviewUncPath(trimmed);
+  }
+  if (/^\//.test(trimmed) || /^[A-Za-z]:[\\/]/.test(trimmed) || /^\/[A-Za-z]:\//.test(trimmed)) {
+    return normalizePreviewFilePath(trimmed);
+  }
+  return trimmed;
+}
+
+/**
+ * Local file path compare key: separators and `.`/`..` canonicalize through
+ * the shared helper, a `file:`-URL `/C:/…` drive prefix meets the raw
+ * `C:/…` spelling, and only the drive letter folds case.
+ */
+function normalizePreviewFilePath(path: string): string {
+  const withSeparators = path.replace(/\\/g, "/");
+  const withoutDriveSlash = withSeparators.replace(/^\/([A-Za-z]:)/, "$1");
+  const withDriveCase = withoutDriveSlash.replace(/^([A-Za-z]:)/, (drive) => drive.toUpperCase());
+  return normalizeWorkPanelFilePath(withDriveCase);
+}
+
+/**
+ * UNC compare key: the server keeps authority in the key (folded case, like
+ * a `file:` host), while share and path keep their case.
+ */
+function normalizePreviewUncPath(path: string): string {
+  const withoutLeading = path.replace(/\\/g, "/").replace(/^\/+/, "");
+  const separator = withoutLeading.indexOf("/");
+  const server = (separator < 0 ? withoutLeading : withoutLeading.slice(0, separator)).toLowerCase();
+  const rest = separator < 0 ? "" : withoutLeading.slice(separator + 1);
+  const normalizedRest = normalizeWorkPanelFilePath(rest);
+  return `//${server}/${normalizedRest}`;
+}
+
+/** The session's browser tab already showing `location`, if one is open. */
+export function findBrowserPreviewTab(
+  tabs: readonly WorkPanelTab[],
+  location: string | undefined,
+): WorkPanelTab | undefined {
+  const target = (location ?? "").trim();
+  if (!target) return undefined;
+  const key = normalizeBrowserPreviewLocation(target);
+  const resource = `${BROWSER_PLUGIN_TAB.pluginId}/${BROWSER_PLUGIN_TAB.viewId}`;
+  return tabs.find((tab) => {
+    if (tab.kind !== "plugin" || tab.resource !== resource || !tab.location) return false;
+    return normalizeBrowserPreviewLocation(tab.location) === key;
+  });
+}
+
+/**
+ * Open state for one agent preview: activate the tab already showing the page
+ * (identity, metadata, and host page untouched — live reload covers edits),
+ * otherwise append a new browser tab. The generic manual factory is unchanged.
+ */
+export function openBrowserPreviewTabState(
+  state: WorkPanelTabsState,
+  location: string | undefined,
+): WorkPanelTabsState {
+  const existing = findBrowserPreviewTab(state.tabs, location);
+  if (existing) {
+    return state.activeTabId === existing.id ? state : { ...state, activeTabId: existing.id };
+  }
+  return openWorkPanelTabState(state, browserPluginTab(location));
+}
+
+/**
  * The bundled file view (ADR 0241). A chat file reference prefers it, because
  * the file belongs beside the conversation that named it and the view can edit
  * as well as read.

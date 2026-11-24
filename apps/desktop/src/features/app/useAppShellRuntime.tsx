@@ -29,7 +29,7 @@ import {
   MAIN_PANE_MIN_WIDTH,
   workPanelWidthForSidebarReopen,
 } from "../../lib/work-panel-resize";
-import { browserPluginTab, browserPluginTabForReveal } from "../../lib/work-panel-tabs";
+import { browserPluginTabForReveal } from "../../lib/work-panel-tabs";
 import { useAppStore } from "../../stores/app-store";
 import { useSidebarTransition } from "./useSidebarTransition";
 import { useStartupWatchdog } from "./useStartupWatchdog";
@@ -618,9 +618,10 @@ export function useAppShellRuntime() {
         );
         return;
       }
-      state.openWorkPanelTabForSession(event.sessionId, {
-        ...browserPluginTab(event.path ?? event.url),
-      });
+      // Repeat previews reuse the session's tab already showing the page.
+      // The store matches on the tab's current location atomically, so a
+      // navigation landing between the event and this open cannot duplicate.
+      state.openBrowserPreviewTabForSession(event.sessionId, event.path ?? event.url);
     });
     const offHostStatus = api.onHostStatus((status) => {
       if (status.archMismatch) setArchMismatch(status.archMismatch);

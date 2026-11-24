@@ -1974,7 +1974,8 @@ validation still needed.
 - **Steps**: 1) Confirm Plugins lists `pi.browser`, enabled, not uninstallable.
   2) With the work panel closed, ask the agent to preview a workspace HTML
   file (`BrowserPreview`) and verify the Browser tab opens in the visible work
-  panel. 3) Use ToolSearch `cdp` / `Browser` to snapshot and interact while the
+  panel; preview the same file again and verify the existing tab activates
+  without opening a duplicate. 3) Use ToolSearch `cdp` / `Browser` to snapshot and interact while the
   panel remains visible. 4) With the work panel closed, call the plugin
   Browser tool for an HTTP(S) URL and verify it activates the existing Browser
   tab before navigating. 5) Switch to a second session and call Browser;

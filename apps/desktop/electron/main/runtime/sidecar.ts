@@ -611,7 +611,7 @@ export function createSidecarRuntime({
     });
     return {
       ok: true,
-      content: `Requested a new Browser tab for ${raw}. Once loaded, live reload updates the page when the file or sibling assets change.`,
+      content: `Opened ${raw} in the Browser panel, reusing the tab when the page is already previewing. Live reload updates the page when the file or sibling assets change.`,
     };
   });
   // Plugin skills (D174): the model loads a declared skill document by id.
