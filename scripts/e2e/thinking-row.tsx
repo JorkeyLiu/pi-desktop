@@ -500,7 +500,8 @@ globalThis.thinkingRowProbe = async () => {
      // Production rows only: one completed row per built-in ToolAction value
      // (all eighteen), the delegation lifecycle rows, a hosted search, the
      // thinking rows above, and an actual Task card. Four groups tint by
-     // category (read/list blue, search-family teal, write/edit/image gold,
+     // category (knowledge/read blue incl search and toolSearch, web-access
+     // teal for fetch/browser/hosted-search, write/edit/image gold,
      // run/schedule sage); thinking, skill, context, todo, mode, fork,
      // delegate, and the generic `use` action stay on the neutral muted ink.
      // Every check compares rendered ink — never source text — in the dark
@@ -608,8 +609,8 @@ globalThis.thinkingRowProbe = async () => {
      const tintExpect: Record<string, string> = {
        "tint-read": "--ds-activity-read",
        "tint-list": "--ds-activity-read",
-       "tint-search": "--ds-activity-search",
-       "tint-toolsearch": "--ds-activity-search",
+       "tint-search": "--ds-activity-read",
+       "tint-toolsearch": "--ds-activity-read",
        "tint-fetch": "--ds-activity-search",
        "tint-browser": "--ds-activity-search",
        "tint-write": "--ds-activity-edit",
@@ -666,7 +667,7 @@ globalThis.thinkingRowProbe = async () => {
      );
      const hostedInk = rowIconInk(tintHost, ".tool-row.hosted-search");
      check(
-       "provider-hosted search wears the discovery tint",
+       "provider-hosted search wears the web access tint",
        hostedInk === tokenInk("--ds-activity-search"),
        { hostedInk },
      );
@@ -812,7 +813,7 @@ globalThis.thinkingRowProbe = async () => {
        });
      }
      check(
-       "light hosted search wears the discovery tint",
+       "light hosted search wears the web access tint",
        rowIconInk(tintHost, ".tool-row.hosted-search") === tokenInk("--ds-activity-search"),
        { hosted: rowIconInk(tintHost, ".tool-row.hosted-search") },
      );

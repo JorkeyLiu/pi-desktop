@@ -2721,11 +2721,11 @@
    color: var(--ds-activity-search);
  }
  .tool-row-icon:has(> [data-icon="read"]),
- .tool-row-icon:has(> [data-icon="list"]) {
+ .tool-row-icon:has(> [data-icon="list"]),
+ .tool-row-icon:has(> [data-icon="search"]),
+ .tool-row-icon:has(> [data-icon="toolSearch"]) {
    color: var(--ds-activity-read);
  }
- .tool-row-icon:has(> [data-icon="search"]),
- .tool-row-icon:has(> [data-icon="toolSearch"]),
  .tool-row-icon:has(> [data-icon="fetch"]),
  .tool-row-icon:has(> [data-icon="browser"]) {
    color: var(--ds-activity-search);

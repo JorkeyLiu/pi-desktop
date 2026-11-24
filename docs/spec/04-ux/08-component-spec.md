@@ -946,8 +946,8 @@ updates. Compact keeps all tool/search payloads closed and suppresses reasoning
 text and excerpts; only its active thinking indicator remains.
 
   The leading icon of a tool, thinking, or hosted-search row carries a muted
- category tint for four groups only: muted blue for knowledge (read, list),
- muted teal for discovery (search, toolSearch, fetch, browser,
+ category tint for four groups only: muted blue for knowledge (read, list,
+ search, toolSearch), muted teal for web access (fetch, browser,
  provider-hosted search), warm gold for creation (write, edit, image), and
  muted sage for execution (run, schedule). Thinking (full and compact),
  skill, context, todo, mode, fork, and delegate rows stay on the neutral

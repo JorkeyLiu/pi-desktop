@@ -4969,7 +4969,9 @@ window; opening a normal panel afterward must still work.
  - **Status**: Unit-covered (`thinking-ui.test.mjs`,
    `thinking-row-preview.test.mjs`, agent-runtime event tests) and rendered
    (`pnpm test:e2e:thinking-row`, whose probe also asserts the four
-   left activity-icon groups plus the neutral reasoning/coordination/unknown
+   left activity-icon groups — knowledge/read incl search+toolSearch, web
+   access teal (fetch, browser, provider-hosted search), creation gold,
+   execution sage — plus the neutral reasoning/coordination/unknown
    rows and the boxed run glyph by rendered output in dark and light themes);
    full streaming scenario Draft
 
