@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
-import type { UiMessage } from "@pi-desktop/shared";
+import type { MessageAttachment, UiMessage } from "@pi-desktop/shared";
 import { splitInlineContent } from "@pi-desktop/shared";
 import { useOpenChatFileRef } from "../../../hooks/use-preview-target";
 import { sessionAllows } from "../../../lib/remote-session-safety";
@@ -23,6 +23,7 @@ import {
 } from "../../../components/icons";
 import { TooltipButton } from "../../../components/ui";
 import { ActionSlotSide } from "./ActionBarSlots";
+import { UserMessageEditor } from "./UserMessageEditor";
 import { slotMessage } from "../../../plugins/renderer-slots/slot-message";
 import { SessionMessageOrigin } from "./SessionMessageOrigin";
 import {
@@ -90,15 +91,12 @@ export const MessageRow = memo(function MessageRow({
   const openFileRef = useOpenChatFileRef();
   // userAction belongs to user cards; other rows keep a plugin-free bar.
   const slotUser = isUser ? slotMessage("user", message) : undefined;
-  // Slash prompts are stored expanded; editing works on the typed form so the
-  // resent turn re-expands the template (D123).
-  const editSeed =
-    (editableUserMessage && message.command) || (message.content || "");
   const [editing, setEditing] = useState(false);
   const [loadingEdit, setLoadingEdit] = useState(false);
   const editRequest = useRef<AbortController | null>(null);
   useEffect(() => () => editRequest.current?.abort(), []);
-  const [editValue, setEditValue] = useState(editSeed);
+  // The canonical full message hydration seeds; never clipped display text.
+  const [editFull, setEditFull] = useState<UiMessage | null>(null);
   const [retryingEdit, setRetryingEdit] = useState(false);
   const copyLabel = t("chat.copy");
   const editLabel = t("chat.editMessage");
@@ -190,7 +188,7 @@ export const MessageRow = memo(function MessageRow({
     try {
       const full = await prepareUserMessageEdit(message.id, request.signal);
       if (!full || request.signal.aborted || editRequest.current !== request) return;
-      setEditValue(full.command || full.content || "");
+      setEditFull(full);
       setEditing(true);
     } finally {
       unsubscribe();
@@ -201,16 +199,21 @@ export const MessageRow = memo(function MessageRow({
     }
   };
   const cancelEdit = () => {
-    setEditValue(editSeed);
+    // The draft is local to the editor: cancelling drops it without touching
+    // the main composer draft or the session.
+    setEditFull(null);
     setEditing(false);
   };
-  const retryEdit = async () => {
-    const next = editValue.trim();
-    if (!editableUserMessage || retryingEdit || (!next && !message.attachments?.length)) return;
+  const retryEdit = async (content: string, attachments: MessageAttachment[]) => {
+    const next = content.trim();
+    if (!editableUserMessage || retryingEdit || (!next && !attachments.length)) return;
     setRetryingEdit(true);
-    const saved = await editUserMessage(message.id, next, message.attachments);
+    const saved = await editUserMessage(message.id, next, attachments);
     setRetryingEdit(false);
-    if (saved) setEditing(false);
+    if (saved) {
+      setEditFull(null);
+      setEditing(false);
+    }
   };
   /*
     A human turn opens the shared selected-text menu: a selection in the bubble
@@ -237,54 +240,18 @@ export const MessageRow = memo(function MessageRow({
         {message.sessionMessage ? <SessionMessageOrigin origin={message.sessionMessage} /> : null}
         {isUser || displayed ? (
           <div className="message-bubble">
-            {editing && editableUserMessage ? (
-              <form
-                className="message-edit"
-                aria-busy={retryingEdit || undefined}
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void retryEdit();
-                }}
-              >
-                <textarea
-                  className="message-edit-input selectable"
-                  value={editValue}
-                  rows={Math.min(12, Math.max(3, editValue.split("\n").length))}
-                  aria-label={editLabel}
-                  autoFocus
-                  spellCheck={false}
-                  autoCorrect="off"
-                  autoCapitalize="off"
-                  disabled={retryingEdit}
-                  onChange={(event) => setEditValue(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-                    if (event.key === "Escape") {
-                      cancelEdit();
-                    } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                      event.preventDefault();
-                      void retryEdit();
-                    }
-                  }}
-                />
-                <div className="message-edit-actions">
-                  <button
-                    type="button"
-                    className="icon-btn message-edit-cancel"
-                    disabled={retryingEdit}
-                    onClick={cancelEdit}
-                  >
-                    {t("chat.cancelEdit")}
-                  </button>
-                  <button
-                    type="submit"
-                    className="send-btn message-edit-submit"
-                    disabled={retryingEdit || (!editValue.trim() && !message.attachments?.length)}
-                  >
-                    {retryingEdit ? t("chat.retryingEdit") : t("chat.retryEdit")}
-                  </button>
-                </div>
-              </form>
+            {editing && editableUserMessage && editFull ? (
+              <UserMessageEditor
+                message={editFull}
+                sessionId={paneSessionId}
+                attachmentsAllowed={sessionAllows(
+                  session ?? (paneSessionId.startsWith("remote:") ? { id: paneSessionId } : undefined),
+                  "canAttach",
+                )}
+                busy={retryingEdit}
+                onCancel={cancelEdit}
+                onSubmit={(content, attachments) => void retryEdit(content, attachments)}
+              />
             ) : isUser ? (
               <>
                 {message.content ? (

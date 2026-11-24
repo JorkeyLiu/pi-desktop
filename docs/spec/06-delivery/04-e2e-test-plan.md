@@ -6742,9 +6742,15 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   `08-meta/decisions-log.md` (D137, D274)
 - **Acceptance**: C (chat stream), F (persistence), Quality
 - **Milestone**: M5
-- **Status**: Unit-covered (`transcript-style.test.mjs`); full UI scenario Draft,
-  with the Edit → resend rendering regression (long text, attachments, inline
-  image placement, switch/round-trip) automated in `pnpm test:e2e:transcript`
+- **Status**: Unit-covered (`transcript-style.test.mjs`,
+   `user-message-edit-draft.test.mjs` for the slash seed and chip
+   hydration/serialization round-trips); the Edit → resend rendering regression
+   (long text, slash seed, read/session-switch guards, attachments, inline
+   image placement, switch/round-trip isolation) is automated in
+   `pnpm test:e2e:transcript` (`messageEditing`, `editAttachments`,
+   `inlineResend` probes in `scripts/e2e/transcript-edit.tsx`). The suite's
+   four status-lane geometry checks fail identically on the base commit and are
+   unrelated to this change.
 
 - **Long-message regression**: Send a log longer than 65,536 characters as
   message text, reopen the saved chat, then Edit and resend with a short

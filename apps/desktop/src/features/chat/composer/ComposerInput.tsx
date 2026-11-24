@@ -29,6 +29,8 @@ export type ComposerInputProps = {
   composerAc?: CompletionController;
   /** Hover text for a blocked editor explaining why it cannot be typed into. */
   title?: string;
+  /** Accessible name for the editable; the main composer is labelled by context. */
+  ariaLabel?: string;
   /** A selection holding attachment chips describes its own clipboard content. */
   onCopy?: (event: ClipboardEvent<HTMLDivElement>) => void;
   onCut?: (event: ClipboardEvent<HTMLDivElement>) => void;
@@ -71,6 +73,7 @@ export function ComposerInput({
   runActive,
   composerAc,
   title,
+  ariaLabel,
   onCopy,
   onCut,
   onPaste,
@@ -116,6 +119,7 @@ export function ComposerInput({
           title={title}
           role="textbox"
           aria-multiline="true"
+          aria-label={ariaLabel}
           aria-readonly={inputBlocked}
           aria-busy={pasting}
           aria-placeholder={placeholderText}

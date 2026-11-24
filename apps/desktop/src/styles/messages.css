@@ -1612,8 +1612,9 @@
    containment and has no horizontal padding, and the transcript scroller clips
    overflow. Separate from the pane with the
    same 8% mix as a user bubble (`--ds-tile-deep`); focus uses an inset ring
-   so it stays inside the plate. The textarea is unboxed; actions sit in a
-   28px footer. */
+   so it stays inside the plate. The input is the main composer's editable —
+   same inline chips, hover, and modal preview — unboxed in the plate with the
+   same sizing the textarea had; actions sit in a 28px footer. */
 .message-edit {
   display: flex;
   width: min(100%, var(--chat-prose-max-width, 720px));
@@ -1645,27 +1646,21 @@
   padding: 0;
 }
 
-.message-edit-input {
-  display: block;
-  width: 100%;
+.message-edit .composer-input-wrap {
+  padding: 12px 14px 8px;
+}
+
+.message-edit .composer-input {
   min-height: 3lh;
   max-height: min(12lh, 50vh);
-  resize: none;
   overflow-y: auto;
-  border: 0;
-  background: transparent;
-  padding: 12px 14px 8px;
-  color: var(--ds-text-primary);
   font: inherit;
   font-size: var(--text-base);
   line-height: var(--leading-chat);
-  outline: none;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
 }
 
-.message-edit-input:focus,
-.message-edit-input:focus-visible {
+.message-edit .composer-input:focus,
+.message-edit .composer-input:focus-visible {
   outline: none;
   box-shadow: none;
 }
@@ -1689,14 +1684,8 @@
   white-space: nowrap;
 }
 
-.send-btn.message-edit-submit {
-  width: auto;
-  min-width: 28px;
+.message-edit-submit {
   flex: 0 0 auto;
-  padding: 0 12px;
-  font-size: var(--text-sm);
-  font-weight: var(--font-weight-medium);
-  line-height: var(--leading-compact);
   white-space: nowrap;
 }
 

@@ -28,10 +28,15 @@ import {
   insertClipboardText,
   nextChipToken,
   normalizeClipboardLineEndings,
-  preferClipboardText,
   readEditorValue,
   type ComposerFileReference,
 } from "../editor";
+import {
+  classifyClipboardIntake,
+  clipboardFilePayload,
+  insertStagedReferences,
+  largeTextPayload,
+} from "../attachment-intake";
 import {
   COMPOSER_CLIPBOARD_MIME,
   allocateChipTokens,
@@ -124,43 +129,34 @@ export function useComposerAttachments({
       const sessionId = sourceSessionId ?? (await materializeDraftSession());
       if (!sessionId) throw new Error("session unavailable");
       const imported = await api.importFiles(sessionId, result.token);
-      const chips = imported.files.map((file) => {
-        const token = nextChipToken();
-        return {
-          token,
-          reference: createFileReference(file.path, file.name, sessionId, {
-            kind: file.kind,
-            mimeType: file.mimeType,
-            token,
-          }),
-        };
+      if (!imported.files.length) return;
+      const placed = insertStagedReferences({
+        text: sourceValue,
+        references: previousReferences,
+        start: selectionStart,
+        end: selectionEnd,
+        staged: imported.files,
+        sessionId,
+        rebindSessionId: sessionId,
       });
-      if (!chips.length) return;
-      const inserted = chips.map((chip) => chip.token).join("");
-      const nextText =
-        sourceValue.slice(0, selectionStart) +
-        inserted +
-        sourceValue.slice(selectionEnd);
-      const nextReferences = [
-        ...previousReferences.map((reference) =>
-          createFileReference(reference.path, reference.name, sessionId, reference),
-        ),
-        ...chips.map((chip) => chip.reference),
-      ];
+      const nextText = placed.text;
+      const nextReferences = placed.references;
+      // `placed.references` already carries the retained references, so
+      // persisting the previous list again would duplicate every kept chip
+      // on the next draft restore.
       writeComposerDraft(sessionId, {
         text: nextText,
-        fileReferences: [
-          ...previousReferences,
-          ...chips.map((chip) => draftFileReference(chip.reference)),
-        ],
+        fileReferences: placed.references.map((reference) =>
+          draftFileReference(reference),
+        ),
       });
       const currentSessionId = useAppStore.getState().activeSessionId;
       if (currentSessionId === sessionId) {
-        draft.applyEditorDraft(nextText, nextReferences, selectionStart + inserted.length);
+        draft.applyEditorDraft(nextText, nextReferences, placed.caret);
       } else if (sourceDraftKey === HOME_DRAFT_KEY) {
         deleteComposerDraft(HOME_DRAFT_KEY);
       }
-      showToast(t, "chat.filesAttached", { count: chips.length }, "success");
+      showToast(t, "chat.filesAttached", { count: imported.files.length }, "success");
     } catch (error) {
       showErrorToast(error);
     } finally {
@@ -300,11 +296,14 @@ export function useComposerAttachments({
     }
     const text = event.clipboardData.getData("text/plain");
     const pastedFiles = clipboardFiles(event.clipboardData);
-    const files = preferClipboardText(text, pastedFiles, api.getDroppedFilePath)
-      ? []
-      : pastedFiles;
-    const textLength = Array.from(text).length;
-    const isLargeTextPaste = !files.length && textLength > largePasteThreshold;
+    const intake = classifyClipboardIntake({
+      text,
+      files: pastedFiles,
+      largePasteThreshold,
+      resolveNativePath: api.getDroppedFilePath,
+    });
+    const files = intake === "files" ? pastedFiles : [];
+    const isLargeTextPaste = intake === "large-text";
     if (isLargeTextPaste || files.length) {
       event.preventDefault();
       const editor = event.currentTarget;
@@ -316,68 +315,36 @@ export function useComposerAttachments({
       setPasting(true);
       try {
         const payload = files.length
-          ? await Promise.all(
-              files.map(async (file) => ({
-                name: file.name || undefined,
-                mimeType: file.type || undefined,
-                data: await file.arrayBuffer(),
-              })),
-            )
-          : (() => {
-              const bytes = new TextEncoder().encode(text);
-              return [
-                {
-                  name: `pasted-text-${crypto.randomUUID().slice(0, 8)}.txt`,
-                  mimeType: "text/plain",
-                  recordHistory: true,
-                  // The paste is the user's own words: main files it in the
-                  // session's owned auto-text directory, which is what lets the
-                  // send and history paths carry its text instead of a path.
-                  origin: "auto-text" as const,
-                  data: bytes.buffer.slice(
-                    bytes.byteOffset,
-                    bytes.byteOffset + bytes.byteLength,
-                  ) as ArrayBuffer,
-                },
-              ];
-            })();
+          ? await clipboardFilePayload(files)
+          : largeTextPayload(text);
         let sessionId = sourceSessionId;
         if (!sessionId) sessionId = (await materializeDraftSession()) ?? "";
         if (!sessionId) throw new Error("session unavailable");
 
         const result = await api.pasteFiles(sessionId, payload);
-        const chips = result.files.map((file) => {
-          const token = nextChipToken();
-          return {
-            token,
-            reference: createFileReference(file.path, file.name, sessionId, {
-              kind: file.kind,
-              mimeType: file.mimeType,
-              token,
-            }),
-          };
+        const placed = insertStagedReferences({
+          text: sourceValue,
+          references: previousReferences,
+          start: selectionStart,
+          end: selectionEnd,
+          staged: result.files,
+          sessionId: sessionId!,
+          rebindSessionId: sessionId!,
         });
-        const inserted = chips.map((chip) => chip.token).join("");
-        const nextText =
-          sourceValue.slice(0, selectionStart) +
-          inserted +
-          sourceValue.slice(selectionEnd);
-        const nextReferences = [
-          ...previousReferences.map((reference) =>
-            createFileReference(reference.path, reference.name, sessionId!, reference),
-          ),
-          ...chips.map((chip) => chip.reference),
-        ];
+        const nextText = placed.text;
+        const nextReferences = placed.references;
+        // `placed.references` already carries the retained references (see
+        // the pick path above): persisting the previous list again would
+        // duplicate every kept chip on the next draft restore.
         writeComposerDraft(sessionId, {
           text: nextText,
-          fileReferences: [
-            ...previousReferences,
-            ...chips.map((chip) => draftFileReference(chip.reference)),
-          ],
+          fileReferences: placed.references.map((reference) =>
+            draftFileReference(reference),
+          ),
         });
         const currentSessionId = useAppStore.getState().activeSessionId;
         if (currentSessionId === sessionId) {
-          draft.applyEditorDraft(nextText, nextReferences, selectionStart + inserted.length);
+          draft.applyEditorDraft(nextText, nextReferences, placed.caret);
         } else if (sourceDraftKey === HOME_DRAFT_KEY) {
           deleteComposerDraft(HOME_DRAFT_KEY);
         }
@@ -445,13 +412,7 @@ export function useComposerAttachments({
         ? await api
             .pasteFiles(
               sessionId!,
-              await Promise.all(
-                fileItems.map(async ({ file }) => ({
-                  name: file.name || undefined,
-                  mimeType: file.type || undefined,
-                  data: await file.arrayBuffer(),
-                })),
-              ),
+              await clipboardFilePayload(fileItems.map(({ file }) => file)),
             )
             .then((result) => result.files)
         : [];
