@@ -1045,7 +1045,11 @@ core set rather than the on-demand catalog of §7.1:
   restarts, or re-prompts no parent, and the next main execution reads its
   latest status, report and usage through the ordinary subagent interfaces
   (status, `TaskList`, `TaskWait` by id, delegation history) without a provider
-  request being fired for it.
+  request being fired for it. The continued run's host-bound tool calls carry
+  the run's own `delegationId` as an independent execution identity (`childRunId`
+  on `tools.execute`, forwarded to `plugins.execute`): plugin dispatch succeeds
+  while the run is live and is revoked when it settles, without opening a
+  parent turn or reusing the ended parent's turn gate.
   The child run opens no parent turn and reserves no durable turn row: it
   neither blocks nor is blocked by a main prompt, so a user message to main is
   accepted concurrently with a running child and neither turn cancels or

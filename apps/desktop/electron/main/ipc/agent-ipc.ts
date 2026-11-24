@@ -35,6 +35,18 @@ export type AgentIpcDependencies = {
   activeTurns: Map<string, string>;
   /** Whether the named turn can still start or steer host work. */
   isTurnDispatchable: (sessionId: string, turnId: string | null | undefined) => boolean;
+  /**
+   * Authorize one independent child run's plugin tools until its terminal
+   * settlement revokes it. Called only for the run the sidecar just accepted.
+   */
+  registerIndependentChildRun: (sessionId: string, childRunId: string) => void;
+  /**
+   * Publish an in-flight `agent.continueSubagent` acceptance so the plugins
+   * gate can await the authoritative registration instead of failing a
+   * first tool call that arrives on the host channel before the sidecar
+   * response reaches main.
+   */
+  trackPendingChildAcceptance: (sessionId: string, pending: Promise<unknown>) => void;
   activeTurnUsages: Map<string, MessageUsage>;
   approvedExecutionIdsBySession: Map<string, string>;
   claimedExecutionSessions: Map<string, string>;
@@ -95,6 +107,8 @@ export function registerAgentIpc({
   dataDir,
   activeTurns,
   isTurnDispatchable,
+  registerIndependentChildRun,
+  trackPendingChildAcceptance,
   activeTurnUsages,
   approvedExecutionIdsBySession,
   claimedExecutionSessions,
@@ -329,7 +343,7 @@ export function registerAgentIpc({
         // A live parent turn: the sidecar decides from the child's own spawn
         // whether the run reports back to it. `expectedTurnId` is
         // informational — a stale one never rejects the user's intervention.
-        return sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
+        const acceptance = sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
           sessionId: req.sessionId,
           delegationId,
           ...(expectedTurnId ? { expectedTurnId } : {}),
@@ -337,6 +351,20 @@ export function registerAgentIpc({
           ...childImages,
           ...(messageId ? { messageId } : {}),
         });
+        // Published before the first await: a first tool call arriving on the
+        // host channel while the acceptance is in flight awaits this entry
+        // instead of failing closed.
+        trackPendingChildAcceptance(req.sessionId, acceptance);
+        const response = await acceptance;
+        // The run starts with no durable parent turn, so its tools cannot use
+        // turn gating: authorize exactly this run id before its first tool
+        // invocation. A settled idempotent retry reports itself as not live
+        // and is never (re-)registered: its terminal settlement already
+        // revoked it, and re-adding it would authorize a dead run.
+        if (response.live !== false) {
+          registerIndependentChildRun(req.sessionId, response.delegationId);
+        }
+        return response;
       }
       if (!host) throw new Error("host unavailable");
       // Idle path: carry the normal launch preparation so a restarted sidecar
@@ -359,7 +387,7 @@ export function registerAgentIpc({
         settings,
       );
       sidecar.setProjectInstructionRoot(req.sessionId, launch.workspaceRoot ?? launch.projectPath);
-      return sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
+      const acceptance = sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
         ...launch.sidecarParams,
         sessionId: req.sessionId,
         delegationId,
@@ -368,6 +396,16 @@ export function registerAgentIpc({
         ...childImages,
         ...(messageId ? { messageId } : {}),
       });
+      trackPendingChildAcceptance(req.sessionId, acceptance);
+      const response = await acceptance;
+      // Same independent-run authorization as the live-parent branch above:
+      // the new run's tools carry its own id, never a durable parent turn.
+      // A settled idempotent retry reports itself as not live and is never
+      // (re-)registered; see the live-parent branch above.
+      if (response.live !== false) {
+        registerIndependentChildRun(req.sessionId, response.delegationId);
+      }
+      return response;
     } finally {
       releaseSessionOperation();
     }

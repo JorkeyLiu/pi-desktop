@@ -134,6 +134,13 @@ function fixture({ activeTurn } = {}) {
     togglePluginLauncher: async () => undefined,
     finishTurn: async () => undefined,
     isTurnDispatchable: coordination.isTurnDispatchable,
+    // The combined dispatch predicate main passes in production: a live
+    // parent turn dispatches, and so does a live independent child run the
+    // continuation path registered. Inert until host.ts consults it.
+    isPluginDispatchable: coordination.isPluginDispatchable,
+    // The in-flight acceptance a continuation published: the gate awaits it
+    // before failing a first tool call that beat the sidecar response.
+    pendingChildAcceptance: coordination.pendingChildAcceptance,
     finishApprovedExecution: async () => undefined,
     activeTurns,
     approvedExecutionIdsBySession: new Map(),
@@ -148,6 +155,7 @@ function fixture({ activeTurn } = {}) {
   return {
     calls,
     invocations,
+    coordination,
     notify: (method, params) => notification(method, params),
   };
 }
@@ -267,4 +275,178 @@ test("an mcprefixed tool keeps its own path", async () => {
   assert.equal(resolved.length, 1);
   assert.equal(resolved[0].params.ok, true);
   assert.equal(f.invocations.length, 0, "an mcp tool never reaches the plugin runtime");
+});
+
+// A manually continued child runs with no live parent turn: the runtime
+// stamps the retained (ended) parent turn for attribution and the run's own
+// `childRunId` as the dispatch identity. Main dispatches exactly the child
+// runs the continuation path registered — never a stale or missing parent,
+// never an unknown or revoked child.
+
+function childPayload(childRunId) {
+  return { ...fullPayload(), childRunId };
+}
+
+test("the forwarded payload carries the independent child identity", () => {
+  assert.ok(
+    FIELDS.includes("childRunId"),
+    "plugins.execute must forward the continued run's childRunId",
+  );
+});
+
+test("a live independent child dispatches while its parent turn stays ended", async () => {
+  const f = fixture();
+  f.coordination.registerIndependentChildRun(SESSION_ID, "child-run-1");
+  const payload = childPayload("child-run-1");
+
+  const resolved = await dispatch(f, payload);
+
+  assert.equal(resolved.length, 1, "host-core must be answered exactly once");
+  assert.equal(resolved[0].params.ok, true, `the live child must run: ${JSON.stringify(resolved[0].params)}`);
+  assert.equal(f.invocations.length, 1, "the plugin tool must be executed once");
+  // The stamped turn is preserved for attribution; it authorizes nothing.
+  assert.equal(f.invocations[0].ctx.turnId, TURN_ID);
+});
+
+test("a revoked child is refused even though its parent turn already ended", async () => {
+  const f = fixture();
+  f.coordination.registerIndependentChildRun(SESSION_ID, "child-run-1");
+  f.coordination.revokeIndependentChildRun(SESSION_ID, "child-run-1");
+
+  assertRefused(await dispatch(f, childPayload("child-run-1")), "exec-1");
+  assert.equal(f.invocations.length, 0, "a settled child must not start a plugin side effect");
+});
+
+test("an unknown child identity is refused", async () => {
+  const f = fixture();
+  f.coordination.registerIndependentChildRun(SESSION_ID, "child-run-1");
+
+  assertRefused(await dispatch(f, childPayload("child-run-other")), "exec-1");
+  assert.equal(f.invocations.length, 0);
+});
+
+test("two child identities do not interfere", async () => {
+  const f = fixture();
+  f.coordination.registerIndependentChildRun(SESSION_ID, "child-run-1");
+  f.coordination.registerIndependentChildRun(SESSION_ID, "child-run-2");
+  f.coordination.revokeIndependentChildRun(SESSION_ID, "child-run-1");
+
+  assertRefused(await dispatch(f, childPayload("child-run-1")), "exec-1");
+  const resolved = await dispatch(f, childPayload("child-run-2"));
+  assert.equal(resolved[resolved.length - 1].params.ok, true);
+  assert.equal(f.invocations.length, 1);
+});
+
+test("parent turn finalization does not revoke the independent child", async () => {
+  const f = fixture({ activeTurn: "parent-turn-live" });
+  f.coordination.registerIndependentChildRun(SESSION_ID, "child-run-1");
+  // A parent turn begins and ends while the child keeps running.
+  f.coordination.releaseTurnClaims(SESSION_ID, "parent-turn-live");
+
+  const resolved = await dispatch(f, childPayload("child-run-1"));
+  assert.equal(resolved[0].params.ok, true, "the live child survives parent finalization");
+  assert.equal(f.invocations.length, 1);
+});
+
+test("another live parent turn lends no identity to the child", async () => {
+  const f = fixture({ activeTurn: "parent-turn-other" });
+  f.coordination.registerIndependentChildRun(SESSION_ID, "child-run-1");
+  f.coordination.revokeIndependentChildRun(SESSION_ID, "child-run-1");
+
+  assertRefused(await dispatch(f, childPayload("child-run-1")), "exec-1");
+  assert.equal(f.invocations.length, 0);
+});
+
+// F1: the acceptance and the first tool call travel different channels — the
+// sidecar response and the host notification — so the tool call can arrive
+// before the registration. The gate awaits the in-flight acceptance instead
+// of failing closed; the wait is bounded by that call, never a grace window.
+
+async function pollResolved(f, tries = 100) {
+  for (let index = 0; index < tries; index += 1) {
+    const resolved = f.calls.filter((call) => call.method === "plugins.resolveExecution");
+    if (resolved.length > 0) return resolved;
+    await setImmediate();
+  }
+  return f.calls.filter((call) => call.method === "plugins.resolveExecution");
+}
+
+test("a first tool call that beats the acceptance dispatches once registered", async () => {
+  const f = fixture();
+  let resolveAcceptance;
+  const acceptance = new Promise((resolve) => {
+    resolveAcceptance = resolve;
+  });
+  // The continuation path publishes its acceptance before the sidecar
+  // response lands; the registration below runs in the acceptance's own
+  // continuation, exactly as the agent-ipc handler does.
+  f.coordination.trackPendingChildAcceptance(SESSION_ID, acceptance);
+  const registered = acceptance.then((response) => {
+    f.coordination.registerIndependentChildRun(SESSION_ID, response.delegationId);
+  });
+  f.notify("plugins.execute", childPayload("child-run-9"));
+  resolveAcceptance({ accepted: true, delegationId: "child-run-9" });
+  await registered;
+
+  const resolved = await pollResolved(f);
+  assert.equal(resolved.length, 1, "host-core must be answered exactly once");
+  assert.equal(
+    resolved[0].params.ok,
+    true,
+    `the live child must run: ${JSON.stringify(resolved[0].params)}`,
+  );
+  assert.equal(resolved[0].params.executionId, "exec-1");
+  assert.equal(f.invocations.length, 1, "the plugin tool must be executed once");
+});
+
+test("an acceptance that registers nothing still fails closed", async () => {
+  const f = fixture();
+  let resolveAcceptance;
+  const acceptance = new Promise((resolve) => {
+    resolveAcceptance = resolve;
+  });
+  f.coordination.trackPendingChildAcceptance(SESSION_ID, acceptance);
+  f.notify("plugins.execute", childPayload("child-run-9"));
+  await setImmediate();
+  // A settled idempotent retry resolves the acceptance without registering:
+  // main refused the dead run, so the gate must too.
+  resolveAcceptance({ accepted: true, delegationId: "child-run-9", live: false });
+
+  const resolved = await pollResolved(f);
+  assertRefused(resolved, "exec-1");
+  assert.equal(f.invocations.length, 0, "an unregistered child must not start a plugin side effect");
+});
+
+test("a pending acceptance for another session does not authorize the call", async () => {
+  const f = fixture();
+  let resolveOther;
+  const other = new Promise((resolve) => {
+    resolveOther = resolve;
+  });
+  f.coordination.trackPendingChildAcceptance("session-other", other);
+  try {
+    assertRefused(await dispatch(f, childPayload("child-run-9")), "exec-1");
+    assert.equal(f.invocations.length, 0);
+  } finally {
+    resolveOther({});
+  }
+});
+
+// A rejected continuation acceptance still settles the tracked entry: the
+// tracker converts the rejection to a settled void and cleans up, so the
+// gate wakes, rechecks an unregistered run, and fails closed.
+test("a rejected acceptance cleans up and still refuses the child call", async () => {
+  const f = fixture();
+  const acceptance = Promise.reject(new Error("sidecar gone"));
+  f.coordination.trackPendingChildAcceptance(SESSION_ID, acceptance);
+  f.notify("plugins.execute", childPayload("child-run-9"));
+  const resolved = await pollResolved(f);
+  assertRefused(resolved, "exec-1");
+  assert.equal(f.invocations.length, 0, "a rejected acceptance registers nothing to dispatch");
+  await setImmediate();
+  assert.equal(
+    f.coordination.pendingChildAcceptance(SESSION_ID),
+    undefined,
+    "the rejected acceptance must not linger",
+  );
 });

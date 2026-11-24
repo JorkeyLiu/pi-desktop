@@ -424,7 +424,18 @@ parent turn is never charged retroactively. Legacy persisted
 `details.delivery` / `details.executionTurnId` fields stay readable and map to
 these same ordinary-child semantics; nothing is rewritten or reset. Only an
 explicit parent `Task(resume)` starts the chain's next run from the parent's
-side. This is an additive desktop channel; it does not change RACP, the host
+side.
+
+A continuation accepted after the parent turn ended carries its own
+execution identity: the runtime stamps every host-bound `tools.execute` of the
+continued run with the run's own `delegationId` (`childRunId`), registered as
+live when the continuation is accepted and revoked when the run settles, is
+cancelled, or the runtime is disposed. Plugin tool dispatch succeeds while the
+child is live without opening a parent turn; the plugin context `turnId` keeps
+the retained parent turn identity unchanged for `session:turnEnded`
+correlation. Late tool calls from an ended run, calls naming another live run,
+and ordinary stale or missing parent turns are still refused.
+This is an additive desktop channel; it does not change RACP, the host
 RPC version, or the storage schema.
 
 ### 5.3 abort

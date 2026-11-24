@@ -36,6 +36,25 @@ export type HostRuntimeDependencies = {
    * dispatch.
    */
   isTurnDispatchable: (sessionId: string, turnId: string | null | undefined) => boolean;
+  /**
+   * Combined dispatch predicate main passes in production: a live parent turn
+   * dispatches, and so does a live independent child run the continuation path
+   * registered. Optional so older callers keep turn-only gating; when absent
+   * a payload carrying a child identity is refused rather than downgraded to
+   * the turn gate.
+   */
+  isPluginDispatchable?: (
+    sessionId: string,
+    turnId: string | null | undefined,
+    childRunId?: string | null,
+  ) => boolean;
+  /**
+   * In-flight `agent.continueSubagent` acceptance for the session, if any.
+   * The plugins gate awaits it before failing a child-identified call closed,
+   * so the authoritative registration lands before the first tool dispatches.
+   * Optional so older callers keep turn-only gating.
+   */
+  pendingChildAcceptance?: (sessionId: string) => Promise<void> | undefined;
   /** Identity of the turn a host crash interrupted, captured before teardown. */
   activeTurns: Map<string, string>;
   approvedExecutionIdsBySession: Map<string, string>;
@@ -62,6 +81,8 @@ export function createHostRuntime({
   togglePluginLauncher,
   finishTurn,
   isTurnDispatchable,
+  isPluginDispatchable,
+  pendingChildAcceptance,
   finishApprovedExecution,
   activeTurns,
   approvedExecutionIdsBySession,
@@ -74,6 +95,23 @@ export function createHostRuntime({
   wireHost: (host: HostProcess) => void;
   startHost: () => Promise<void>;
 } {
+  /**
+   * The synchronous dispatch decision. Main owns it: a payload carrying an
+   * explicit child identity is judged only by that identity, never by the
+   * transcript row turn it also names. Without the combined predicate the
+   * decision degrades to refusing identified child calls, never to treating
+   * them as parent-turn calls.
+   */
+  const isDispatchable = (
+    sessionId: string,
+    turnId: string | null | undefined,
+    childRunId?: string | null,
+  ): boolean => {
+    if (childRunId !== undefined && childRunId !== null && String(childRunId).trim() !== "") {
+      return isPluginDispatchable?.(sessionId, turnId, childRunId) ?? false;
+    }
+    return isTurnDispatchable(sessionId, turnId);
+  };
   /**
    * Stop the agent runs whose turn belonged to the host process that just died.
    *
@@ -209,6 +247,13 @@ export function createHostRuntime({
            * carries. Absent for callers that predate turn tracking.
            */
           turnId?: string;
+          /**
+           * Independent execution identity of a manually continued child run
+           * (its own delegation id), forwarded unchanged from the host. Main
+           * validates it against the live child it registered; it is never
+           * joined with the turn above, which stays attribution-only.
+           */
+          childRunId?: string;
           toolCallId?: string;
           toolName: string;
           args: unknown;
@@ -288,20 +333,35 @@ export function createHostRuntime({
             }
             // Last synchronous gate before dispatch: a turn that was cancelled or
             // began finalizing while the session read above was awaited must not
-            // start a plugin side effect. No await may sit between this check and
-            // the dispatch, and the rejection is answered on the original
-            // execution id rather than dropped.
+            // start a plugin side effect. No await may sit between the final
+            // check and the dispatch, and the rejection is answered on the
+            // original execution id rather than dropped.
             //
-            // The gate is closed rather than best-effort: a payload that names no
-            // turn cannot be attributed to one this process knows about, so it is
-            // indistinguishable from a call belonging to a turn that already ended
-            // (its cancel lock may be gone, its `session:turnEnded` already sent)
-            // and any resource it started could never be related to that event.
-            // The runtime always stamps both halves of the identity on
-            // `tools.execute`, so a call without one is not a supported shape; a
-            // standalone caller that ever needs the channel must be distinguished
-            // by an explicit origin instead of by an absent identity.
-            if (!isTurnDispatchable(q.sessionId ?? "", q.turnId)) {
+            // A first tool call travels the host channel while the
+            // continuation acceptance that registers it is still in flight
+            // on the sidecar channel. When the payload carries a child
+            // identity and an acceptance is pending for the session, await
+            // that authoritative acceptance — bounded by the call itself,
+            // never a grace window — and judge the rechecked table. Anything
+            // else (no pending acceptance, unknown or revoked id, settled
+            // retry) still fails closed here.
+            // The gate stays closed rather than best-effort: a payload that
+            // names no turn cannot be attributed to one this process knows
+            // about, so it is indistinguishable from a call belonging to a
+            // turn that already ended — any resource it started could never
+            // be related to that turn's `session:turnEnded`.
+            let dispatchable = isDispatchable(q.sessionId ?? "", q.turnId, q.childRunId);
+            if (
+              !dispatchable &&
+              q.childRunId !== undefined &&
+              q.childRunId !== null &&
+              String(q.childRunId).trim() !== "" &&
+              q.sessionId
+            ) {
+              await pendingChildAcceptance?.(q.sessionId);
+              dispatchable = isDispatchable(q.sessionId ?? "", q.turnId, q.childRunId);
+            }
+            if (!dispatchable) {
               payload = {
                 executionId: q.executionId,
                 ok: false,

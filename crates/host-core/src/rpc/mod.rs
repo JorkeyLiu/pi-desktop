@@ -1578,6 +1578,9 @@ async fn execute_plugin_tool(
             // (ADR 0211).
             "mode": session_mode,
             "planSafeActions": p.plan_safe_actions,
+            // Independent child identity for the desktop runner's dispatch
+            // gate; forwarded unchanged, never interpreted here.
+            "childRunId": p.child_run_id,
         }),
     )
     .await;

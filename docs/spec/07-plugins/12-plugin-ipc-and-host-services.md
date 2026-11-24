@@ -251,9 +251,15 @@ permission gate and result envelope stay in host-core:
 2. host-core resolves the durable operating mode first. In Agent it runs the
    normal permission flow (risk, session grants, no automatic deadline), then emits
    notification `plugins.execute`
-   `{ executionId, sessionId, toolCallId, toolName, args, turnId }`. `turnId` is
+   `{ executionId, sessionId, toolCallId, toolName, args, turnId, childRunId? }`. `turnId` is
    the runtime turn identity, forwarded unchanged so the plugin tool context can
-   be matched against the `session:turnEnded` event.
+   be matched against the `session:turnEnded` event. `childRunId` is present only
+   on tool calls of a directly continued (`agent.continueSubagent`) child run
+   whose parent turn already ended, naming the continued run's own `delegationId`.
+   Electron main dispatches only for a live turn in `activeTurns` or a live
+   independently-continued child run: when `childRunId` is present it is judged
+   solely by the live-child registry and never borrows the turn gate, so stale
+   or missing turns stay refused.
 3. Plan calls fail at the host policy step with `PLUGIN_DISABLED_IN_PLAN`; they
    never reach Electron or the plugin runtime. Agent calls continue with
    Electron main executing the registered plugin tool JS and answering via RPC

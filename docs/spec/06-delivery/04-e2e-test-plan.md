@@ -13376,7 +13376,15 @@ This test plan spec is accepted when:
   replaced tool result, and an assembled result that is not yet history — is
   automated over the real pi loop in
   `packages/agent-runtime/src/delivery-acceptance.test.ts`, with the model
-  gateway and the delegate loop as the only faked boundaries. The renderer
+  gateway and the delegate loop as the only faked boundaries. Continued-child
+  plugin dispatch from a detached continue — live child executes with no parent
+  turn, settled-child late calls and ordinary stale/missing turns stay refused,
+  two child identities do not interfere — is module-covered in
+  `apps/desktop/test/session-turn-ended.test.mjs` (live-child registry),
+  `apps/desktop/test/plugin-execute-notification.test.mjs` (`plugins.execute`
+  fields including `childRunId`), and runtime stamping in
+  `packages/agent-runtime/src/subagent-continue-execution.test.ts`; the
+  lifecycle harness registers the continued run for dispatch. The renderer
   journey (steps 2/3/7) stays pending over a capable environment.
 
 #### E2E-162 / E2E-173: Delegate workflow scrolling

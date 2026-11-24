@@ -942,6 +942,12 @@ type ToolsExecuteParams = {
   /** Isolated `Write`/`Edit` delegate chain id; re-roots the call to that
    * delegate's worktree (ADR 0329). Omitted for every other call. */
   delegationId?: string
+  /** Independent execution identity of a directly continued (`agent.continueSubagent`)
+   * child run: the continued run's own `delegationId`, stamped by the runtime on
+   * every host-bound `tools.execute` of that run. Forwarded into the
+   * `plugins.execute` notification for dispatch liveness; never used for
+   * mode/workspace authorization. Omitted for every other call. */
+  childRunId?: string
 }
 ```
 

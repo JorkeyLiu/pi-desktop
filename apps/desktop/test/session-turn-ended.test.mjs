@@ -222,3 +222,88 @@ test("a cancellation lock is scoped to its own turn and never inferred", () => {
   f.coordination.clearAbortReason(SESSION, LIVE_TURN);
   assert.equal(f.coordination.peekAbortReason(SESSION, LIVE_TURN), undefined);
 });
+
+// An independent child run is liveness-tracked per run, never per turn: the
+// registry below is the only thing that can authorize a `childRunId`, and a
+// terminal delegation settlement observed on the event channel revokes it.
+
+function childSettlementEnvelope(delegationId, status = "completed") {
+  return {
+    sessionId: SESSION,
+    turnId: "row-turn-1",
+    ts: 2,
+    event: {
+      type: "message_end",
+      message: {
+        id: "task-row-1",
+        role: "tool",
+        toolName: "Task",
+        toolCallId: "task-1",
+        toolResult: {
+          details: { delegationId, agent: "explorer", status, turns: 2, toolCalls: 1 },
+        },
+        toolStatus: "success",
+      },
+    },
+    parentToolCallId: "task-1",
+    agentName: "explorer",
+  };
+}
+
+test("independent child runs register, report liveness, and revoke by identity", () => {
+  const f = fixture();
+  assert.equal(f.coordination.isIndependentChildRunLive(SESSION, "child-1"), false);
+  f.coordination.registerIndependentChildRun(SESSION, "child-1");
+  assert.equal(f.coordination.isIndependentChildRunLive(SESSION, "child-1"), true);
+  // Another session or run id lends nothing.
+  assert.equal(f.coordination.isIndependentChildRunLive("other", "child-1"), false);
+  assert.equal(f.coordination.isIndependentChildRunLive(SESSION, "child-2"), false);
+  // Revoking one run leaves a sibling untouched, and revoking twice is safe.
+  f.coordination.registerIndependentChildRun(SESSION, "child-2");
+  f.coordination.revokeIndependentChildRun(SESSION, "child-1");
+  assert.equal(f.coordination.isIndependentChildRunLive(SESSION, "child-1"), false);
+  assert.equal(f.coordination.isIndependentChildRunLive(SESSION, "child-2"), true);
+  f.coordination.revokeIndependentChildRun(SESSION, "child-1");
+  assert.equal(f.coordination.isIndependentChildRunLive(SESSION, "child-2"), true);
+});
+
+test("a terminal delegation settlement revokes exactly its own run", () => {
+  const f = fixture();
+  f.coordination.registerIndependentChildRun(SESSION, "child-1");
+  f.coordination.registerIndependentChildRun(SESSION, "child-2");
+  // Progress snapshots are not terminal: the run stays live.
+  f.coordination.noteChildRunEvent(childSettlementEnvelope("child-1", "running"));
+  assert.equal(f.coordination.isIndependentChildRunLive(SESSION, "child-1"), true);
+  // A non-delegation message changes nothing.
+  f.coordination.noteChildRunEvent(f.envelope({ type: "message_end", message: { id: "m", role: "assistant", content: "hi" } }, LIVE_TURN));
+  assert.equal(f.coordination.isIndependentChildRunLive(SESSION, "child-1"), true);
+  // Terminal status revokes exactly the run it names.
+  f.coordination.noteChildRunEvent(childSettlementEnvelope("child-1", "completed"));
+  assert.equal(f.coordination.isIndependentChildRunLive(SESSION, "child-1"), false);
+  assert.equal(f.coordination.isIndependentChildRunLive(SESSION, "child-2"), true);
+  // A delayed duplicate of the settled run cannot reopen it.
+  f.coordination.noteChildRunEvent(childSettlementEnvelope("child-1", "completed"));
+  assert.equal(f.coordination.isIndependentChildRunLive(SESSION, "child-1"), false);
+});
+
+test("the combined dispatch predicate keeps turn and child liveness apart", () => {
+  const f = fixture();
+  // Live parent turn dispatches on its own identity...
+  assert.equal(f.coordination.isPluginDispatchable(SESSION, LIVE_TURN), true);
+  // ...but an explicit child identity is judged only by itself: an
+  // unregistered run never borrows the live parent turn's authority.
+  assert.equal(f.coordination.isPluginDispatchable(SESSION, LIVE_TURN, "child-1"), false);
+  // An ended parent dispatches nothing by itself...
+  assert.equal(f.coordination.isPluginDispatchable(SESSION, OLD_TURN), false);
+  assert.equal(f.coordination.isPluginDispatchable(SESSION, OLD_TURN, "child-unknown"), false);
+  assert.equal(f.coordination.isPluginDispatchable(SESSION, OLD_TURN, ""), false);
+  // ...until its live child is registered, and only for that child.
+  f.coordination.registerIndependentChildRun(SESSION, "child-1");
+  assert.equal(f.coordination.isPluginDispatchable(SESSION, OLD_TURN, "child-1"), true);
+  assert.equal(f.coordination.isPluginDispatchable(SESSION, LIVE_TURN, "child-1"), true);
+  assert.equal(f.coordination.isPluginDispatchable(SESSION, OLD_TURN, "child-2"), false);
+  // Revocation restores the refusal; a live turn elsewhere changes nothing.
+  f.coordination.revokeIndependentChildRun(SESSION, "child-1");
+  assert.equal(f.coordination.isPluginDispatchable(SESSION, OLD_TURN, "child-1"), false);
+  assert.equal(f.coordination.isPluginDispatchable(SESSION, LIVE_TURN), true);
+});
