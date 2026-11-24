@@ -5928,8 +5928,7 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 - **Acceptance**: C (chat stream), Quality (completion and recovery)
 - **Milestone**: M5
 - **Status**: Unit-covered (`assistant-turns.test.mjs`,
-  `interaction-performance.test.mjs`, `turn-outcome-card.test.mjs`); full UI
-  scenario Draft
+  `interaction-performance.test.mjs`); full UI scenario Draft
 
 #### E2E-064: Durable notification inbox records terminal task outcomes
 
@@ -8351,9 +8350,9 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
     eleventh retry occurs after the eleven provider attempts. The structured
     assistant error card remains the only failure
     surface, exposing one localized **Continue** action and no **Regenerate**
-    action; the generic TurnOutcomeCard is omitted. Activating **Continue**
-    appends the localized continuation prompt (`Continue the user's unfinished
-    task.` / `继续用户未完成的任务`) to the same session and starts the next turn
+    action. Activating **Continue**
+    appends the localized continuation prompt (`Continue the current task` /
+    `继续当前任务`) to the same session and starts the next turn
     without discarding the failed turn.
   - The subagent uses the same ten-retry budget and one visible child bubble;
     its final report is failed only after the budget is exhausted, while
@@ -12220,9 +12219,9 @@ This test plan spec is accepted when:
 - For a terminal `PROVIDER_RATE_LIMITED` (including HTTP 429), expect the
   structured assistant error card to remain the only failure surface: it
   exposes exactly one localized **Continue** action and no **Regenerate**
-  action, while the generic TurnOutcomeCard is omitted.
+  action.
 - Click **Continue** and expect the app to append the localized continuation
-  prompt (`Continue the user's unfinished task.` / `继续用户未完成的任务`) to the
+  prompt (`Continue the current task` / `继续当前任务`) to the
   same session and start the next turn without truncating the failed turn.
 - Activate the localized **Dismiss** action. Expect the error card to disappear
   from the current transcript view while its underlying error message and raw

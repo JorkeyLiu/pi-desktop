@@ -265,7 +265,6 @@ test("decision and outcome cards follow the responsive transcript band", () => {
   const cardRules = [
     stylesSource.match(/\n\.permission-card \{([^}]*)\}/)?.[1],
     stylesSource.match(/\n\.asktool-card \{([^}]*)\}/)?.[1],
-    stylesSource.match(/\n\.turn-outcome-card \{([^}]*)\}/)?.[1],
   ];
   for (const rule of cardRules) {
     assert.ok(rule);

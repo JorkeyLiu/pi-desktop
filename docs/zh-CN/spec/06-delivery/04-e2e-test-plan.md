@@ -2986,9 +2986,8 @@ Markdown 源码，不是 `text/html` 负载；对禁用行内 HTML 的外部编�
   ADR 0069
 - **验收**：C（聊天流）、质量（完成和恢复）
 - **里程碑**：M5
-- **状态**：单位覆盖（`assistant-turns.test.mjs`，
-  `interaction-performance.test.mjs`、`turn-outcome-card.test.mjs`)；完整的用户界面
-  场景草稿
+- **状态**：单位覆盖（`assistant-turns.test.mjs`、
+  `interaction-performance.test.mjs`）；完整的用户界面场景草稿
 
 #### E2E-064：持久通知收件箱记录终端任务结果
 
@@ -6641,8 +6640,8 @@ eleven-tool-round desktop paths are verified by
 ### US-UI-60c 紧凑的助理错误卡
 - 在浅色和深色主题中触发可重试的提供商/模型失败。
 - 期望助理错误使用带细错误轨的克制内联表面；本地化摘要、稳定错误码和详情披露共用紧凑标头，卡片不渲染第二个底部操作行。
-- 对终态 `PROVIDER_RATE_LIMITED`（包括 HTTP 429），期望 TurnOutcomeCard 只显示一个本地化的“继续”操作，不显示“重新生成”。
-- 点击“继续”，期望应用把本地化继续指令（`Continue the user's unfinished task.` / `继续用户未完成的任务`）追加到同一会话并开始新一轮，不截断失败轮次。
+- 对终态 `PROVIDER_RATE_LIMITED`（包括 HTTP 429），期望结构化助理错误卡是唯一的失败表面：它只显示一个本地化的“继续”操作，不显示“重新生成”。
+- 点击“继续”，期望应用把本地化继续指令（`Continue the current task` / `继续当前任务`）追加到同一会话并开始新一轮，不截断失败轮次。
 
 
 ### US-UI-61 助理上下文摘要 + 重试（D103、D184、D244、D347）

@@ -815,7 +815,6 @@ reading surface of the workstation.
 | ChatTranscript (scrollable, flex-1)  |
 |   MessageBubble (user/assistant)     |
 |   ToolCallCard                       |
-|   TurnOutcomeCard (one Continue)     |
 |   InlineReviewCard · M App.tsx +8 −2 |
 |   PermissionCard                     |
 |   ...                                |
@@ -841,16 +840,9 @@ reading surface of the workstation.
 - The transcript keeps one stable scrollbar gutter on the trailing edge. It
   never reserves a matching left gutter, so the minimap and first message do
   not leave a decorative blank strip beside the session.
-- A failed TurnOutcomeCard without a structured assistant error exposes one
-  primary **Continue** action and no regenerate action. It appends the current
-  locale's continuation prompt to the same session and starts a new turn,
-  preserving the failed turn and completed work in the transcript. When the
-  failed turn already has a structured assistant error, that inline error card
-  owns the summary, details, and **Continue** action; the TurnOutcomeCard is not
-  rendered, so the same failure is not presented twice. Continue remains
-  available after a terminal parent error (including HTTP 429) even if leftover
-  subagents were still running; those delegates are aborted and must not leave
-  the session `AGENT_BUSY` (D352).
+- Continue remains available after a terminal parent error (including HTTP 429)
+  even if leftover subagents were still running; those delegates are aborted
+  and must not leave the session `AGENT_BUSY` (D352).
 - Scroll behavior: auto-scroll to bottom on new message while pinned; the first
   upward manual movement pauses auto-scroll without a snap-back; send / retry /
   regenerate re-pins and positions the latest content during the layout phase,
@@ -2728,8 +2720,8 @@ after completion, plus one tool count and a bounded issue count when the turn ha
 issues. Expanding it reveals the ordered activity rows and their independent
 result disclosures. A failed child
 remains an error on its own ToolCallRow but does not make the group or whole turn
-terminally failed; terminal agent errors remain owned by the assistant error or
-TurnOutcomeCard surface. A user action on an item or the process collapse rail
+terminally failed; terminal agent errors remain owned by the assistant error
+surface. A user action on an item or the process collapse rail
 claims that level without toggling it, so streaming and completion
 never reverse the chosen state or close around focused/selected content.
 Elapsed labels use compact automatically carried units: seconds below one

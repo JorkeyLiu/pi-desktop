@@ -5,7 +5,6 @@ import { proposalKindForMode } from "@pi-desktop/shared";
 import { ConversationMinimap } from "../../../components/ConversationMinimap";
 import { PermissionCard } from "../../../components/PermissionCard";
 import { Button, TooltipButton } from "../../../components/ui";
-import { TurnOutcomeCard } from "../../../components/TurnOutcomeCard";
 import { IconArrowDown } from "../../../components/icons";
 import { useAppStore } from "../../../stores/app-store";
 import type { PendingPermission } from "../../../lib/pending-permissions";
@@ -101,9 +100,6 @@ function TranscriptBody({
   const { t } = useTranslation();
   const openSelectedTextMenu = useTranscriptMenu();
   const transcriptRunning = isRunning && !readingWindow;
-  const latestTurnResult = useAppStore((state) =>
-    sessionId ? state.latestTurnResults[sessionId] : undefined,
-  );
   const approvalPending = useAppStore((state) =>
     Boolean(
       sessionId && state.pendingPlans[sessionId]?.status === "pending",
@@ -301,12 +297,6 @@ function TranscriptBody({
                 {t("chat.laterFailedRetry")}
               </Button>
             </div>
-          ) : null}
-          {!readingWindow ? (
-            <TurnOutcomeCard
-              messages={messages}
-              result={latestTurnResult}
-            />
           ) : null}
           {pendingPermission ? (
             <PermissionCard
