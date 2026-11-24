@@ -7,10 +7,13 @@
  *   Legacy per-call controls (`TaskWait timeoutSeconds`, per-call
  *   `subagentWakeup`) have no parameter here and are structurally ignored:
  *   a query carries only `{ids, mode, minCompleted}`.
- * - One global time checkpoint anchors monotonic cadence from the first
- *   active running delegation. Every new query reuses it (never restarts or
- *   shortens); a granted `time` wake advances it by one period; no running
- *   delegates disarms it.
+ * - One global time checkpoint anchors monotonic cadence, shared by every
+ *   program wait and never restarted or shortened by a new query. It arms
+ *   from the running targets of the query being planned, so an explicit wait
+ *   observes its own targets for completion, progress, and time alike; a
+ *   granted `time` wake advances it by one period. It disarms only when
+ *   neither the query's scope nor the default (id-less, current-turn) scope
+ *   still runs.
  * - Threshold watermarks stay on the record-owned `wake` objects (same
  *   references), so consecutive waits never spin on one progress twice.
  * - Completion always wins (via `evaluateSubagentWake` /
@@ -135,10 +138,15 @@ export function markProgramDelivery(
 
 export function createDelegationCoordinator(options: {
   getSelectedWake: () => ResolvedSubagentWakeupSettings;
-  getRecords: () => readonly CoordinatorRecord[];
+  /**
+   * Record view for one wait query, resolved by the host: explicit ids
+   * reach the live run whichever turn or input started it; an id-less query
+   * is the host's default (current-turn pending) set.
+   */
+  getRecords: (query: ProgramWaitQuery) => readonly CoordinatorRecord[];
   now?: () => number;
 }): {
-  /** Expected (parent-owned) targets for one query; TaskWait uses this. */
+  /** Host-resolved targets for one query; TaskWait uses this. */
   selectProgramTargets: (query?: ProgramWaitQuery) => CoordinatorRecord[];
   planProgramWait: (
     query?: ProgramWaitQuery,
@@ -163,28 +171,34 @@ export function createDelegationCoordinator(options: {
     ...options.getSelectedWake(),
   };
 
-  const expectedRunning = (): CoordinatorRecord[] =>
-    options.getRecords().filter((record) => record.status === "running");
+  // The checkpoint is session-global and shared by every program wait, but it
+  // arms from the query being planned: an explicit wait observes its own
+  // targets for completion, progress, and time alike, while the id-less
+  // default (and the idle auto-resume) keeps converging on current-turn
+  // pending only. It disarms only when neither the query's scope nor the
+  // default scope still runs.
+  const expectedRunning = (query: ProgramWaitQuery = {}): CoordinatorRecord[] =>
+    options.getRecords(query).filter((record) => record.status === "running");
 
   const rebaseForWake = (
     now: number,
     wake: ResolvedSubagentWakeupSettings,
+    query: ProgramWaitQuery = {},
   ): void => {
     const period = wakePeriodSeconds(wake);
-    if (period === null || expectedRunning().length === 0) {
+    if (period === null || expectedRunning(query).length === 0) {
       timeCheckpoint = null;
       return;
     }
     timeCheckpoint = now + period * 1000;
   };
 
+  // The host resolves the query; the coordinator never re-filters it, so an
+  // explicit id and the wait below always name the same runs.
   const selectProgramTargets = (
     query: ProgramWaitQuery = {},
   ): CoordinatorRecord[] => {
-    const records = [...options.getRecords()];
-    if (!query.ids || query.ids.length === 0) return [...records];
-    const wanted = new Set(query.ids.map(String));
-    return records.filter((record) => wanted.has(record.delegationId));
+    return [...options.getRecords(query)];
   };
 
   const planProgramWait = (
@@ -198,12 +212,12 @@ export function createDelegationCoordinator(options: {
     if (!sameWake(wake, cachedWake)) {
       // Selected config changed: atomic rebase at update time.
       cachedWake = { ...wake };
-      rebaseForWake(now, wake);
+      rebaseForWake(now, wake, query);
     } else if (timeCheckpoint === null) {
       // Anchor once from the first active expected delegation; later
       // same-config queries reuse the checkpoint (never restart/shorten).
-      rebaseForWake(now, wake);
-    } else if (expectedRunning().length === 0) {
+      rebaseForWake(now, wake, query);
+    } else if (expectedRunning(query).length === 0 && expectedRunning().length === 0) {
       timeCheckpoint = null;
     }
     const deadline = timeCheckpoint;
@@ -280,7 +294,7 @@ export function createDelegationCoordinator(options: {
     const outcome = waitForWakeTargets(
       () =>
         options
-          .getRecords()
+          .getRecords(query)
           .filter((record) => liveIds.has(record.delegationId))
           .map(toWakeTarget),
       states,
@@ -318,7 +332,9 @@ export function createDelegationCoordinator(options: {
           timeCheckpoint = result.firedDeadline + period * 1000;
         }
       }
-      if (expectedRunning().length === 0) timeCheckpoint = null;
+      if (expectedRunning(query).length === 0 && expectedRunning().length === 0) {
+        timeCheckpoint = null;
+      }
       return result;
     });
   };

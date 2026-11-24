@@ -312,7 +312,13 @@ describe("delegation coordinator completion and delivery marking", () => {
     ];
     const coordinator = createDelegationCoordinator({
       getSelectedWake: () => ({ ...selected }),
-      getRecords: () => records,
+      // The host resolves the query: explicit ids select among live runs,
+      // never filtered by who started them; id-less is the default set.
+      getRecords: (query) => {
+        if (!query.ids || query.ids.length === 0) return records;
+        const wanted = new Set(query.ids.map(String));
+        return records.filter((entry) => wanted.has(entry.delegationId));
+      },
     });
     expect(
       coordinator.selectProgramTargets({}).map((entry) => entry.delegationId),

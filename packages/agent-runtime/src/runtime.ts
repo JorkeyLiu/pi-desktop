@@ -5399,6 +5399,25 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     );
   }
 
+  /**
+   * The coordinator's record view for one wait query — the single place
+   * that maps a query to runs, so the outer `TaskWait` snapshot and the
+   * inner wait always name the same targets. Explicit ids resolve through
+   * the live registry whichever turn or input started the run (a settled
+   * report stays a cheap re-read by id); an id-less query keeps the
+   * current-turn pending set, so independent runs never leak into the
+   * default wait or the idle auto-resume.
+   */
+  private recordsForProgramWait(query: { ids?: readonly string[] }): DelegationRecord[] {
+    if (query.ids && query.ids.length > 0) {
+      const wanted = new Set(query.ids.map(String));
+      return [...this.delegations.values()].filter((record) =>
+        wanted.has(record.delegationId),
+      );
+    }
+    return this.pendingCurrentTurnDelegations();
+  }
+
   private abortDelegationsFromPreviousTurns(): void {
     for (const record of this.runningDelegations()) {
       // A run with no live parent turn is independent: new parent work must
@@ -5713,8 +5732,16 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         >[] = [];
         let historicalNote: string | undefined;
         if (ids.length) {
+          // The live half of the explicit mapping comes from the same entry
+          // the coordinator waits on, so the snapshot and the wait cannot name
+          // different runs; order and duplicates still follow the call's ids.
+          const liveById = new Map(
+            this.recordsForProgramWait({ ids }).map(
+              (entry) => [entry.delegationId, entry] as const,
+            ),
+          );
           const named = ids
-            .map((id) => this.delegations.get(id))
+            .map((id) => liveById.get(id))
             .filter((entry): entry is DelegationRecord => entry !== undefined);
           // Historical ids answer from the recovered catalog: the stored
           // report is readable, and nothing here is waiting or runnable. A
@@ -7093,7 +7120,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
   private programCoordinator(): ReturnType<typeof createDelegationCoordinator> {
     this.delegationCoordinator ??= createDelegationCoordinator({
       getSelectedWake: () => this.sessionWakeup,
-      getRecords: () => this.pendingCurrentTurnDelegations() as CoordinatorRecord[],
+      getRecords: (query) => this.recordsForProgramWait(query) as CoordinatorRecord[],
     });
     return this.delegationCoordinator;
   }
