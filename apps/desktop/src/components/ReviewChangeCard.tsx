@@ -52,7 +52,7 @@ function rootName(root: string | undefined): string | undefined {
  * The `+a/−d` pair a change reports, shared by the standalone card's header and
  * the tool row that produced the change (which shows them at its end instead of
  * repeating the file name in a second collapsed row). A change the host could
- * not count shows a marker instead of a false zero.
+ * not count renders no counts element at all instead of a false zero.
  */
 export function ReviewChangeCounts({
   change,
@@ -64,15 +64,7 @@ export function ReviewChangeCounts({
   const { t } = useTranslation();
   const { additions, deletions } = change;
   if (additions === undefined || deletions === undefined) {
-    return (
-      <span
-        className={cx("review-change-card-counts", "diff-counts", className)}
-        aria-label={t("panel.review.countsUnknown")}
-        title={t("panel.review.countsUnknown")}
-      >
-        <span className="diff-count-unknown">…</span>
-      </span>
-    );
+    return null;
   }
   return (
     <span
@@ -224,12 +216,20 @@ export const ReviewChangeCard = memo(function ReviewChangeCard({
   if (!change) return null;
 
   const statusLabel = t(`panel.review.status.${change.status}`);
-  const baseLabel = t(open ? "chat.reviewChangeHide" : "chat.reviewChangeShow", {
-    status: statusLabel,
-    path: change.path,
-    additions: change.additions ?? "…",
-    deletions: change.deletions ?? "…",
-  });
+  // Without counts the header renders no counts element, so the accessible
+  // name states the change without inventing numbers either.
+  const baseLabel =
+    change.additions === undefined || change.deletions === undefined
+      ? t(open ? "panel.review.fileHide" : "panel.review.fileShow", {
+          status: statusLabel,
+          path: change.path,
+        })
+      : t(open ? "chat.reviewChangeHide" : "chat.reviewChangeShow", {
+          status: statusLabel,
+          path: change.path,
+          additions: change.additions,
+          deletions: change.deletions,
+        });
   // The collapsed row shows a rolled-back change struck through, so the state
   // has to reach the accessible name too.
   const accessibleLabel =

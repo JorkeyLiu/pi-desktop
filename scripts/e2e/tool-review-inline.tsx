@@ -659,6 +659,59 @@ globalThis.toolReviewProbe = async (payloads: ToolReviewPayloads) => {
       },
     );
 
+    // ── 5. A completed Edit the host could not count shows no counts ──
+    // A file above the byte ceiling keeps its review record (so the reason
+    // survives) but carries no counts: the transcript header renders no
+    // counts element at all, and expanding names the reason instead of
+    // fabricating +N/−N.
+    const tooLargeHost = mount(
+      column,
+      <ToolRow
+        message={toolMessageFromContent(
+          "edit-too-large",
+          "Edit",
+          {
+            root: "workspace",
+            review: {
+              version: 1,
+              snapshotId: "snapshot-too-large",
+              messageId: "edit-too-large",
+              path: "docs/spec/06-delivery/04-e2e-test-plan.md",
+              operation: "edit",
+              status: "modified",
+              state: "active",
+              truncated: true,
+              reason: "fileTooLarge",
+              hunks: [],
+              reversible: false,
+            },
+          },
+          {},
+          { path: "docs/spec/06-delivery/04-e2e-test-plan.md" },
+        )}
+      />,
+    );
+    await settle();
+    const tooLargeCounts = countsText(tooLargeHost);
+    check(
+      "a too-large Edit row renders no counts, not +0/−0",
+      tooLargeCounts === "",
+      tooLargeCounts,
+    );
+    check(
+      "a too-large Edit header shows no ellipsis",
+      !(tooLargeHost.textContent ?? "").includes("…"),
+      tooLargeHost.textContent?.slice(0, 200),
+    );
+    await expand(tooLargeHost);
+    check(
+      "expanding the too-large Edit row names its reason",
+      (tooLargeHost.textContent ?? "").includes(
+        "This file is too large to compare here",
+      ),
+      tooLargeHost.textContent?.slice(0, 200),
+    );
+
     stage.scrollIntoView({ block: "start" });
     await settle(2);
     check("no render error escaped", renderErrors.length === 0, renderErrors.length);

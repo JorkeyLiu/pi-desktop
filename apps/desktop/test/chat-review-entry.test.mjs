@@ -283,10 +283,18 @@ test("a file rollback restores the first baseline and mirrors the marks", () => 
   assert.match(cardSource, /panel\.review\.limit\.requestBudgetExceeded/);
 });
 
-test("unknown counts are never rendered as zero", () => {
+test("unknown counts render no counts element instead of a zero", () => {
   assert.match(cardSource, /panel\.review\.countsUnknown/);
-  assert.match(cardSource, /diff-count-unknown/);
   assert.match(cardSource, /additions === undefined \|\| deletions === undefined/);
+  assert.doesNotMatch(cardSource, /diff-count-unknown/);
+  assert.doesNotMatch(cardSource, /"…"/);
+  assert.doesNotMatch(cardSource, />…</);
+});
+
+test("an uncounted transcript header carries no counts and no ellipsis", () => {
+  assert.match(cardSource, /open \? "panel\.review\.fileHide" : "panel\.review\.fileShow"/);
+  assert.doesNotMatch(cardSource, /\?\? "…"/);
+  assert.doesNotMatch(cardSource, />…</);
 });
 
 test("review surfaces keep visual state, focus, and motion feedback", () => {

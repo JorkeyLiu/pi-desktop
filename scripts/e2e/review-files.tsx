@@ -290,12 +290,23 @@ globalThis.reviewFilesProbe = async () => {
     );
     // 3. A row states the real limit instead of a zero count.
     const specRow = rowFor("app/docs/spec/08-component-spec.md");
-    check(
-      "an uncounted row shows a marker, not +0/−0",
-      Boolean(specRow?.querySelector(".diff-count-unknown")),
-    );
     const specHeader = specRow?.querySelector<HTMLElement>(
       ".review-change-card-header",
+    );
+    check(
+      "an uncounted row renders no counts element, not +0/−0",
+      Boolean(specRow) &&
+        specRow.querySelector(".review-change-card-counts") === null,
+      specRow?.textContent?.slice(0, 120),
+    );
+    check(
+      "the uncounted header shows no ellipsis",
+      !(specHeader?.textContent ?? "").includes("…") &&
+        !(specHeader?.getAttribute("aria-label") ?? "").includes("…"),
+      {
+        text: specHeader?.textContent,
+        label: specHeader?.getAttribute("aria-label"),
+      },
     );
     check(
       "the uncounted row names the reason in its accessible name",
