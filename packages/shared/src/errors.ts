@@ -95,6 +95,20 @@ export const ErrorCodes = {
   AGENT_NOT_FOUND: "AGENT_NOT_FOUND",
   TURN_NOT_FOUND: "TURN_NOT_FOUND",
   TURN_ABORTED: "TURN_ABORTED",
+  /**
+   * A new turn was refused before it was opened because this session's already
+   * queued transcript appends have not reached a final disposition. The direct
+   * user-row append would otherwise overtake an older turn's rows and write
+   * them out of order; retrying after the queue drains succeeds.
+   */
+  PERSISTENCE_BACKLOG: "PERSISTENCE_BACKLOG",
+  /**
+   * A new turn was refused because a queued transcript append of this session
+   * was quarantined: the host refused it and it stays in the dead-letter file
+   * for offline recovery. The refusal is reported once so the row is never
+   * mistaken for written; a retry proceeds without it.
+   */
+  PERSISTENCE_QUARANTINED: "PERSISTENCE_QUARANTINED",
   MODEL_NOT_CONFIGURED: "MODEL_NOT_CONFIGURED",
   PROVIDER_ERROR: "PROVIDER_ERROR",
   PROVIDER_UNAUTHORIZED: "PROVIDER_UNAUTHORIZED",

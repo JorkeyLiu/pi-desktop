@@ -68,7 +68,7 @@ export async function createProductionWorkHarness(t, server, options = {}) {
     logger: { app() {} },
     vendorOAuth: { async resolveAuth() { throw new Error("OAuth is not used by this fixture"); } },
     agentExtensions: { cancelPrompts() {} }, cancelSessionTools() {},
-    persistenceOutbox: { async flush() {} },
+    persistenceOutbox: { async flush() {}, waitForSession: async () => ({ remaining: 0, paused: false, failed: 0 }) },
     dataDir: "/tmp/pi-live-work-production-fixture-data",
     activeTurns: new Map(), isTurnDispatchable: () => true, activeTurnUsages: new Map(),
     approvedExecutionIdsBySession: new Map(), claimedExecutionSessions: new Map(),

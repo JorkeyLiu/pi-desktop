@@ -2944,6 +2944,8 @@ importConfirm: "İçe aktarılan uzantılar ajan sürecinde, ajanın kendi araç
       "Bir alt ajanın görevi, modelinin bağlam sınırını aştı. Görevi daraltın, alt ajana daha büyük bağlam penceresi olan bir model verin veya bir defada daha az okumasını sağlayın.",
     AGENT_BUSY: "Bu sohbet zaten çalışıyor. Bitmesini bekleyin veya önce durdurun.",
     TURN_ABORTED: "Durduruldu.",
+    PERSISTENCE_BACKLOG: "Önceki bir yanıt hâlâ kaydediliyor. Biraz sonra tekrar deneyin.",
+    PERSISTENCE_QUARANTINED: "Bazı önceki mesajlar kaydedilemedi. Kurtarma için saklanıyor; bunlar olmadan devam etmek için yeniden deneyin.",
     AGENT_SIDECAR_CRASHED: "AI çalışma ortamı bu işlem sırasında çöktü. Tur durduruldu; tekrar deneyin.",
     AGENT_SIDECAR_OOM: "Bu sohbet AI çalışma ortamının bellek sınırını aştı. Yeni bir sohbet başlatın veya aracının işlediği içeriği azaltıp tekrar deneyin.",
     workspaceActivationFailed: "Proje çalışma alanı etkinleştirilemedi",

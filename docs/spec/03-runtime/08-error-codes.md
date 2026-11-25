@@ -96,6 +96,8 @@ does not turn temporary thread pressure into a host process exit.
 | `AGENT_NOT_FOUND` | no | session missing |
 | `TURN_NOT_FOUND` | no | turn id invalid |
 | `TURN_ABORTED` | no | turn aborted by user/system |
+| `PERSISTENCE_BACKLOG` | yes | a new turn was refused before it was opened because this session's already-queued transcript appends had not reached a final disposition (host restarting, a head in bounded retry); the direct user-row append would otherwise write an older turn's rows out of order. Retrying after the queue drains succeeds |
+| `PERSISTENCE_QUARANTINED` | maybe | a new turn was refused because one of this session's queued appends was quarantined by the host and now lives only in `session-message-outbox.dead-letter.json`. Reported once so the row is never mistaken for written; the queue entry is gone, so a retry proceeds without it, and the lost row needs offline recovery (`06-delivery/08-message-durability-recovery-runbook.md`) |
 | `AGENT_SIDECAR_CRASHED` | no | the Node agent sidecar process died mid-turn; the owning turn settles as aborted with this code instead of an unrelated plan-approval code (issue #1077) |
 | `AGENT_SIDECAR_OOM` | no | the sidecar died after its JavaScript heap hit the configured cap, diagnosed from the V8 fatal-error banner in its stderr tail; the same turn fails the same way until the input shrinks (issue #1077) |
 | `MODEL_NOT_CONFIGURED` | no | no usable model selected, or provider rejects the selected model as unknown |

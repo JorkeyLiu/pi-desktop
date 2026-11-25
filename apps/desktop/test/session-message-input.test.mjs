@@ -85,7 +85,7 @@ test("prompt IPC persists original session text, skips slash expansion and binds
     }),
     getAgentHostBridge: () => null,
     logger: { app() {} }, vendorOAuth: {}, agentExtensions: {}, cancelSessionTools() {},
-    persistenceOutbox: {}, dataDir: "/unused-for-no-attachments",
+    persistenceOutbox: { waitForSession: async () => ({ remaining: 0, paused: false, failed: 0 }) }, dataDir: "/unused-for-no-attachments",
     activeTurns: new Map(), activeTurnUsages: new Map(), approvedExecutionIdsBySession: new Map(), claimedExecutionSessions: new Map(),
     resolveAgentRuntimeLaunch: async () => ({
       providerId: "provider", modelId: "model",
@@ -149,7 +149,7 @@ test("abort waits for prompt admission before dispatching to the sidecar", async
     }),
     getAgentHostBridge: () => null,
     logger: { app() {} }, vendorOAuth: {}, agentExtensions: { cancelPrompts() {} }, cancelSessionTools() {},
-    persistenceOutbox: {}, dataDir: "/unused-for-no-attachments",
+    persistenceOutbox: { waitForSession: async () => ({ remaining: 0, paused: false, failed: 0 }) }, dataDir: "/unused-for-no-attachments",
     activeTurns, activeTurnUsages: new Map(), approvedExecutionIdsBySession: new Map(), claimedExecutionSessions: new Map(),
     resolveAgentRuntimeLaunch: async () => ({
       providerId: "provider", modelId: "model",

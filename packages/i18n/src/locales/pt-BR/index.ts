@@ -2879,6 +2879,8 @@ export const ptBR = {
     SUBAGENT_CONTEXT_OVERFLOW: "A tarefa de um subagente ultrapassou o limite de contexto do modelo. Reduza o escopo, escolha para ele um modelo com uma janela de contexto maior ou peça que leia menos conteúdo por vez.",
     AGENT_BUSY: "Já há uma tarefa em andamento nesta conversa. Aguarde a conclusão ou interrompa-a primeiro.",
     TURN_ABORTED: "Interrompida.",
+    PERSISTENCE_BACKLOG: "Uma resposta anterior ainda está sendo salva. Tente novamente em instantes.",
+    PERSISTENCE_QUARANTINED: "Algumas mensagens anteriores não puderam ser salvas. Elas são mantidas para recuperação; tente novamente para continuar sem elas.",
     AGENT_SIDECAR_CRASHED: "O runtime de IA falhou durante o processamento. O turno foi interrompido; tente novamente.",
     AGENT_SIDECAR_OOM: "Esta conversa ultrapassou a memória do runtime de IA. Inicie uma nova conversa ou reduza o que o agente está processando e tente novamente.",
     workspaceActivationFailed: "Não foi possível ativar o espaço de trabalho do projeto",
