@@ -45,6 +45,13 @@ const createdAt = "2026-10-18T00:00:00.000Z";
 const OLDER_PAGE = ["child-20", "child-21"];
 const FIRST_PAGE = ["child-30", "child-31", "child-32", "child-33"];
 const LIVE_ROW = "live-41";
+// A chain the parent opened from a `Task` card while its durable row is still
+// in the persistence outbox: the scoped read cannot resolve it yet.
+const FRESH_DELEGATION = "d-fresh";
+const FRESH_CALL = "call-fresh";
+const FRESH_PAGE = ["child-50", "child-51"];
+const FRESH_LIVE = "live-52";
+let freshDurable = false;
 
 type ReadRecord = {
   id: string;
@@ -101,11 +108,46 @@ function childRow(id: string, content: string, extra: Partial<UiMessage> = {}): 
   });
 }
 
+/** The running/settled `Task` card of the chain whose durable row is queued. */
+function freshTaskRecord(settled: boolean): UiMessage {
+  return message("fresh-task-row", "tool", "", {
+    toolName: "Task",
+    toolCallId: FRESH_CALL,
+    toolStatus: settled ? "success" : "running",
+    status: settled ? "complete" : "streaming",
+    toolArgs: {
+      agent: "explorer",
+      description: "Fresh chain",
+      task: "Explain the fresh chain.",
+    },
+    toolResult: {
+      details: {
+        delegationId: FRESH_DELEGATION,
+        agent: "explorer",
+        status: settled ? "completed" : "running",
+        startedAt: 1_000,
+        ...(settled ? { completedAt: 42_000 } : {}),
+      },
+    },
+  });
+}
+
+function freshChildRow(id: string): UiMessage {
+  return message(id, "assistant", `fresh chain row ${id}`, {
+    parentToolCallId: FRESH_CALL,
+    agentName: "explorer",
+  });
+}
+
 /** One delegation-scoped page, shaped like the host's answer. */
 function delegationDetail(
   sessionId: string,
   messageBefore: number | undefined,
-): SessionDetail {
+  scopeId: string | undefined,
+): SessionDetail | null {
+  // The chain's `Task` card is live while its durable row is still queued:
+  // the scoped read cannot resolve the chain yet.
+  if (sessionId === SESSION && scopeId === FRESH_DELEGATION && !freshDurable) return null;
   const base = {
     id: sessionId,
     title: sessionId === SESSION ? "Scoped history fixture" : "Other session",
@@ -113,8 +155,19 @@ function delegationDetail(
     mode: "agent",
     createdAt,
     updatedAt: createdAt,
-    historyScope: { kind: "delegation" as const, id: DELEGATION },
+    historyScope: { kind: "delegation" as const, id: scopeId ?? DELEGATION },
   };
+  if (sessionId === SESSION && scopeId === FRESH_DELEGATION) {
+    return {
+      ...base,
+      messages: FRESH_PAGE.map((id) => freshChildRow(id)),
+      historyContext: [freshTaskRecord(true)],
+      messageStart: 50,
+      messageEnd: 51,
+      messageCount: 3,
+      hasMoreBefore: false,
+    } as unknown as SessionDetail;
+  }
   if (sessionId === OTHER_SESSION) {
     return {
       ...base,
@@ -171,7 +224,10 @@ window.piDesktop = {
       messageLimit: request.messageLimit,
       contentLimit: request.contentLimit,
     });
-    return { ok: true, data: { session: delegationDetail(id, request.messageBefore) } };
+    return {
+      ok: true,
+      data: { session: delegationDetail(id, request.messageBefore, request.historyScope?.id) },
+    };
   },
   on: () => () => undefined,
 } as unknown as typeof window.piDesktop;
@@ -243,13 +299,13 @@ body.append(pane);
 
 let root: Root | null = null;
 
-function mountTab() {
+function mountTab(delegationId: string = DELEGATION) {
   root = createRoot(pane);
   const mounted = root;
   flushSync(() => {
     mounted.render(
       <I18nextProvider i18n={i18n}>
-        <SubagentTranscriptTab delegationId={DELEGATION} />
+        <SubagentTranscriptTab delegationId={delegationId} />
       </I18nextProvider>,
     );
   });
@@ -301,8 +357,8 @@ const statusLabel = () =>
   document.querySelector<HTMLElement>(".subagent-transcript-status")?.textContent ?? "";
 
 const store = () => useAppStore.getState();
-const entry = (sessionId = SESSION) =>
-  store().subagentHistory[sessionId]?.[DELEGATION];
+const entry = (sessionId = SESSION, delegationId = DELEGATION) =>
+  store().subagentHistory[sessionId]?.[delegationId];
 
 const scopedReads = () => reads.filter((read) => read.scope?.kind === "delegation");
 
@@ -533,6 +589,89 @@ globalThis.scopedHistoryProbe = async () => {
       [same(assistantIds(), [...OLDER_PAGE, ...FIRST_PAGE, LIVE_ROW]), "a parent window without live rows keeps the chain's rows"],
     ]),
   );
+
+  // 8. A chain opened from a `Task` card that is live while host-core has not
+  //    yet appended its durable row. The first scoped read cannot resolve the
+  //    chain; the panel keeps the live conversation instead of declaring the
+  //    chain unavailable, and converges on its durable page when the dispatch
+  //    settles.
+  flushSync(() => {
+    root?.unmount();
+    root = null;
+  });
+  freshDurable = false;
+  flushSync(() => {
+    useAppStore.setState({
+      activeSessionId: SESSION,
+      messages: [freshTaskRecord(false), freshChildRow(FRESH_LIVE)],
+    } as never);
+  });
+  mountTab(FRESH_DELEGATION);
+  const freshEntry = () => entry(SESSION, FRESH_DELEGATION);
+  const freshScopedReads = () =>
+    scopedReads().filter((read) => read.scope?.id === FRESH_DELEGATION);
+  await until(
+    () => freshScopedReads().length === 1 && freshEntry()?.status === "ready",
+    "the pending chain's first scoped answer",
+  );
+  await frames(2);
+  failures.push(
+    ...failuresOf([
+      [
+        freshEntry()?.error === undefined && errorState() === null,
+        `a chain whose durable Task row is still queued is not reported unavailable (error ${String(freshEntry()?.error)})`,
+      ],
+      [freshEntry()?.pendingDurable === true, "the panel records that its first durable page is still owed"],
+      [emptyState() === null, "the pending chain is not an empty history"],
+      [assistantIds().includes(FRESH_LIVE), "the live child row renders while the durable page is owed"],
+      [freshScopedReads().length === 1, "the pending answer costs one scoped read"],
+      [freshScopedReads()[0]?.scope?.id === FRESH_DELEGATION, "the pending answer addresses the chain's own scope"],
+    ]),
+  );
+  facts.freshPending = {
+    status: freshEntry()?.status,
+    pendingDurable: freshEntry()?.pendingDurable,
+    error: freshEntry()?.error ?? null,
+    rows: assistantIds(),
+  };
+
+  // The completion event publishes the settled `Task` card; its durable row is
+  // appended behind it. That transition is what the panel reads on.
+  freshDurable = true;
+  flushSync(() => {
+    useAppStore.setState({
+      messages: [freshTaskRecord(true), freshChildRow(FRESH_LIVE)],
+    } as never);
+  });
+  await until(
+    () =>
+      freshEntry()?.pendingDurable === false &&
+      freshEntry()?.scoped === true &&
+      assistantIds().includes(FRESH_PAGE[0] ?? ""),
+    "the chain's first durable page",
+  );
+  await frames(2);
+  failures.push(
+    ...failuresOf([
+      [
+        freshEntry()?.error === undefined && errorState() === null,
+        "the durable page replaces the pending state without an error",
+      ],
+      [same(assistantIds().slice(0, FRESH_PAGE.length), FRESH_PAGE), `the durable page renders its rows (${assistantIds().join(",")})`],
+      [assistantIds().filter((id) => id === FRESH_LIVE).length === 1, "the live row stays one row over the durable page"],
+      [
+        freshScopedReads().length === 2,
+        `settling converges with one more scoped read, not a poll (${freshScopedReads().length})`,
+      ],
+    ]),
+  );
+  facts.freshSettled = {
+    status: freshEntry()?.status,
+    pendingDurable: freshEntry()?.pendingDurable,
+    scoped: freshEntry()?.scoped,
+    reads: freshScopedReads().length,
+    rows: assistantIds(),
+  };
   facts.channels = channels.length;
   facts.scopedReads = scopedReads();
   facts.finalRows = assistantIds();

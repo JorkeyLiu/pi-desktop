@@ -126,6 +126,15 @@ export type SubagentHistoryEntry = {
   focus: { messageId: string; query: string; requestId: number } | null;
   /** False when the backend answered the legacy physical transcript. */
   scoped: boolean;
+  /**
+   * True while the chain's first durable page is still owed: a delegation read
+   * answered with no session even though the parent already published the
+   * chain's live `Task` dispatch, whose durable record the persistence outbox
+   * has not appended yet. The live rows are the panel's source meanwhile, and
+   * the dispatch settling is what retries the first durable page. A page, a
+   * definitive miss, or a failed read clears it.
+   */
+  pendingDurable?: boolean;
   error?: string;
   /** The read a failure belongs to, so a retry repeats the same page. */
   retryDirection?: SubagentHistoryDirection;
@@ -307,6 +316,48 @@ export function subagentHistoryTouchesLive(
     if (row.parentToolCallId && liveIds.has(row.parentToolCallId)) return true;
   }
   return false;
+}
+
+/** How the live tail names a delegate's own `Task` dispatch. */
+export type SubagentLiveTaskState = "absent" | "running" | "settled";
+
+/**
+ * Whether the live tail holds the chain's own `Task` dispatch, and whether
+ * that call has already reached a terminal state.
+ *
+ * A running dispatch has no durable row yet: the parent publishes the `Task`
+ * card on `tool_start`, while host-core receives the row only when the call
+ * ends and the persistence outbox drains it. A delegation read therefore
+ * cannot tell a not-yet-durable chain from an unknown one by its own answer
+ * alone, and `absent` is what keeps an empty answer a real miss.
+ */
+export function subagentHistoryLiveTaskState(
+  entry: SubagentHistoryEntry,
+  live: readonly UiMessage[],
+): SubagentLiveTaskState {
+  if (!live.length) return "absent";
+  const chain = subagentChainCallIds(
+    [...entry.context, ...entry.messages, ...live],
+    entry.tabKey || entry.canonicalId,
+  );
+  let matched = false;
+  let settled = true;
+  for (const message of live) {
+    if (message.role !== "tool" || !isDelegationStartTool(message.toolName)) continue;
+    const callId = message.toolCallId;
+    const namesChain =
+      (typeof callId === "string" &&
+        (chain.has(callId) || entry.tabKey === callId ||
+          entry.canonicalId === callId || entry.aliases.includes(callId))) ||
+      chain.has(delegationIdForMessage(message));
+    if (!namesChain) continue;
+    matched = true;
+    // One unsettled dispatch is enough: the chain is still being created, so
+    // no durable record of the whole conversation can exist yet.
+    if (!isSettledChildRow(message)) settled = false;
+  }
+  if (!matched) return "absent";
+  return settled ? "settled" : "running";
 }
 
  /**
@@ -691,7 +742,10 @@ export function applySubagentHistoryPage(
       finalized: entry.liveDuringRead !== true,
       liveDuringRead: false,
       refreshing: false,
-      scoped: initial ? detail.historyScope !== undefined : entry.scoped || detail.historyScope !== undefined,
+      scoped: initial
+        ? detail.historyScope !== undefined
+        : entry.scoped || detail.historyScope !== undefined,
+      pendingDurable: false,
       error: undefined,
       retryDirection: undefined,
       touched,
@@ -792,6 +846,7 @@ export function applySubagentHistoryTailWindow(
     liveDuringRead: false,
     refreshing: false,
     scoped,
+    pendingDurable: false,
     error: undefined,
     retryDirection: undefined,
     touched,
@@ -818,6 +873,7 @@ export function applySubagentHistoryFailure(
     retryDirection: direction,
     finalized: false,
     refreshing: false,
+    pendingDurable: false,
   };
 }
 

@@ -1447,6 +1447,12 @@ sweep promotes a leftover checkpoint whose final row never landed: as
 checkpoint. A user Stop does not touch the checkpoint, because the runtime's
 own aborted final row is still on its way and removes it on arrival.
 Electron handshake awaits the outbox drain before a cold `session.get`.
+A delegation-scoped `session/get` first waits for a session fence: the appends
+that session already had queued are written, and the drain stops at that
+snapshot instead of following the queue's tail, so a chain the renderer already
+draws a `Task` card for is not answered as missing while its durable rows are
+still queued. The fence reports a paused or quarantined append instead of hiding
+it; `main` and unscoped reads do not wait.
 Renderer-side Stop never rewrites a transcript that has a
 started reply (spec 01 §5.3); its only rewrite is the undo of an unanswered
 prompt, computed from the full durable transcript merged with the live rows.

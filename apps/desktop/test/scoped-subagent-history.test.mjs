@@ -406,6 +406,222 @@ test("an unopened chain is not read and the cache stays bounded", async (t) => {
   assert.equal(bucket.c1, undefined, "the least recently read chain is evicted");
   assert.ok(bucket[`c${SUBAGENT_HISTORY_LIMIT + 1}`], "the newest chain stays");
 });
+test("a live Task whose durable row has not landed yet stays pending, then loads it", async (t) => {
+  const sessionId = "topic-delegate-live-durable-race";
+  seedStore(sessionId);
+  const runningTask = { ...taskRow("call-1", "d1"), toolStatus: "running", status: "streaming" };
+  const settledTask = { ...taskRow("call-1", "d1"), toolStatus: "success", status: "complete" };
+  // The parent published the running `Task` card and its first child row before
+  // host-core appended the `Task` row: the live tab exists, the durable chain
+  // does not yet.
+  useAppStore.setState({
+    activeSessionId: sessionId,
+    messages: [runningTask, childRow(10, "call-1")],
+  });
+  let reads = 0;
+  t.mock.method(api, "getSession", async (id) => {
+    reads += 1;
+    if (reads === 1) return { session: null };
+    return page(id, [childRow(10, "call-1")], {
+      messageStart: 10,
+      hasMoreBefore: true,
+      scope: delegation("d1"),
+      context: [taskRow("call-1", "d1")],
+    });
+  });
+
+  await useAppStore.getState().ensureSubagentHistory({ sessionId, tabKey: "d1" });
+  let entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(reads, 1);
+  assert.equal(entry.status, "ready", "live rows are the delegate's own conversation");
+  assert.equal(
+    entry.error,
+    undefined,
+    "a chain whose durable Task row is still queued is not unavailable",
+  );
+  assert.equal(entry.pendingDurable, true, "the first durable read is still owed");
+  assert.deepEqual(
+    subagentHistoryMessages(entry, useAppStore.getState().messages).map((message) => message.id),
+    ["call-1-row", "child-10"],
+    "the text the reader sees is the live dispatch and its first row",
+  );
+
+  // The `Task` call settles. Its durable row is appended behind the completion
+  // event; the tab reads its first durable page on that transition instead of
+  // waiting for the reader to reopen it.
+  useAppStore.setState({ messages: [settledTask, childRow(10, "call-1"), childRow(20, "call-1")] });
+  await new Promise((resolve) => setImmediate(resolve));
+  entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(reads, 2, "the settled Task converges the panel to its durable page");
+  assert.equal(entry.error, undefined);
+  assert.equal(entry.pendingDurable, false);
+  assert.equal(entry.scoped, true, "the durable page replaced the pending live-only range");
+  assert.equal(entry.messageStart, 10, "the first durable page adopts the chain's own cursor");
+  assert.deepEqual(
+    entry.messages.map((message) => message.id),
+    ["child-10", "child-20"],
+    "the durable row and the live row that outran it are one conversation, not duplicates",
+  );
+});
+
+test("a settled live Task the host still cannot resolve is unavailable", async (t) => {
+  const sessionId = "topic-delegate-live-settled-unknown";
+  seedStore(sessionId);
+  const settledTask = { ...taskRow("call-1", "d1"), toolStatus: "success", status: "complete" };
+  useAppStore.setState({
+    activeSessionId: sessionId,
+    messages: [settledTask, childRow(10, "call-1")],
+  });
+  t.mock.method(api, "getSession", async () => ({ session: null }));
+
+  await useAppStore.getState().ensureSubagentHistory({ sessionId, tabKey: "d1" });
+  const entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(entry.status, "error", "a settled chain the transcript lacks is a real miss");
+  assert.equal(
+    entry.error,
+    "Subagent transcript is no longer available.",
+    "a settled chain the durable transcript does not hold is a real miss",
+  );
+  assert.equal(entry.pendingDurable, false);
+});
+test("a pending chain survives the main window moving and converges on reactivation", async (t) => {
+  const sessionId = "topic-delegate-live-window-move";
+  seedStore(sessionId);
+  const runningTask = { ...taskRow("call-1", "d1"), toolStatus: "running", status: "streaming" };
+  useAppStore.setState({
+    activeSessionId: sessionId,
+    messages: [runningTask, childRow(10, "call-1")],
+  });
+  let reads = 0;
+  t.mock.method(api, "getSession", async (id) => {
+    reads += 1;
+    if (reads === 1) return { session: null };
+    return page(id, [childRow(10, "call-1")], {
+      messageStart: 10,
+      scope: delegation("d1"),
+      context: [taskRow("call-1", "d1")],
+    });
+  });
+
+  await useAppStore.getState().ensureSubagentHistory({ sessionId, tabKey: "d1" });
+  let entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(entry.status, "ready");
+  assert.equal(entry.pendingDurable, true);
+  assert.equal(reads, 1);
+
+  // The reader pages the main transcript to an older range, so the dispatch that
+  // proves the chain exists is no longer in the window. That is not evidence the
+  // chain is gone: the pending state stands and no row-by-row read is spent.
+  useAppStore.setState({ messages: [{ ...childRow(60, "seed"), toolCallId: "seed-60" }] });
+  await new Promise((resolve) => setImmediate(resolve));
+  entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(reads, 1, "a window move is not a reason to read again");
+  assert.equal(entry.status, "ready", "the live rows stay readable");
+  assert.equal(entry.pendingDurable, true, "the first durable page is still owed");
+
+  // Leaving the conversation and coming back re-offers it: the dispatch may have
+  // settled while it was off screen and its durable row is on disk now.
+  useAppStore.setState({ activeSessionId: "another-session", messages: [] });
+  await new Promise((resolve) => setImmediate(resolve));
+  useAppStore.setState({
+    activeSessionId: sessionId,
+    messages: [{ ...childRow(61, "seed"), toolCallId: "seed-61" }],
+  });
+  for (let step = 0; step < 4; step += 1) await new Promise((resolve) => setImmediate(resolve));
+  entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(reads, 2, "one read per reactivation, not one per publication");
+  assert.equal(entry.status, "ready");
+  assert.equal(entry.error, undefined);
+  assert.equal(entry.pendingDurable, false);
+  assert.equal(entry.scoped, true, "the owed first durable page finally lands");
+});
+
+test("a reopened tab retries the owed page without the parent's window", async (t) => {
+  const sessionId = "topic-delegate-live-reopen";
+  seedStore(sessionId);
+  const runningTask = { ...taskRow("call-1", "d1"), toolStatus: "running", status: "streaming" };
+  useAppStore.setState({
+    activeSessionId: sessionId,
+    messages: [runningTask, childRow(10, "call-1")],
+  });
+  let reads = 0;
+  t.mock.method(api, "getSession", async (id) => {
+    reads += 1;
+    if (reads === 1) return { session: null };
+    return page(id, [childRow(10, "call-1"), childRow(20, "call-1")], {
+      messageStart: 10,
+      scope: delegation("d1"),
+      context: [taskRow("call-1", "d1")],
+    });
+  });
+
+  await useAppStore.getState().ensureSubagentHistory({ sessionId, tabKey: "d1" });
+  let entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(reads, 1);
+  assert.equal(entry.pendingDurable, true);
+
+  // The reader pages the main transcript past the dispatch, then closes and
+  // reopens the tab. That lifecycle point retries the owed page without
+  // consulting the parent's window, and only once.
+  useAppStore.setState({ messages: [{ ...childRow(60, "seed"), toolCallId: "seed-60" }] });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reads, 1, "a window move is not a reopen");
+  await useAppStore.getState().ensureSubagentHistory({ sessionId, tabKey: "d1" });
+  entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(reads, 2, "a reopen retries the owed page once, never per row");
+  assert.equal(entry.status, "ready");
+  assert.equal(entry.error, undefined);
+  assert.equal(entry.pendingDurable, false);
+  assert.equal(entry.scoped, true, "the reopened tab adopts the durable page");
+});
+
+test("a dispatch that settles while the first read is in flight rereads once", async (t) => {
+  const sessionId = "topic-delegate-live-settle-during-read";
+  seedStore(sessionId);
+  const runningTask = { ...taskRow("call-1", "d1"), toolStatus: "running", status: "streaming" };
+  const settledTask = { ...taskRow("call-1", "d1"), toolStatus: "success", status: "complete" };
+  useAppStore.setState({
+    activeSessionId: sessionId,
+    messages: [runningTask, childRow(10, "call-1")],
+  });
+  let reads = 0;
+  let releaseFirst;
+  const firstAnswer = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  t.mock.method(api, "getSession", async (id) => {
+    reads += 1;
+    if (reads === 1) return firstAnswer;
+    return page(id, [childRow(10, "call-1"), childRow(20, "call-1")], {
+      messageStart: 10,
+      scope: delegation("d1"),
+      context: [taskRow("call-1", "d1")],
+    });
+  });
+
+  const opening = useAppStore.getState().ensureSubagentHistory({ sessionId, tabKey: "d1" });
+  await new Promise((resolve) => setImmediate(resolve));
+  // The dispatch ends while that read is still unanswered.
+  useAppStore.setState({
+    messages: [settledTask, childRow(10, "call-1"), childRow(20, "call-1")],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  releaseFirst({ session: null });
+  await opening;
+
+  const entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(reads, 2, "one more read for the settlement the first answer never saw");
+  assert.equal(entry.status, "ready");
+  assert.equal(entry.error, undefined);
+  assert.equal(entry.pendingDurable, false);
+  assert.equal(entry.scoped, true);
+  assert.deepEqual(
+    subagentHistoryMessages(entry, useAppStore.getState().messages).map((message) => message.id),
+    ["call-1-row", "child-10", "child-20"],
+    "the durable page and the live tail are one conversation",
+  );
+});
+
 
 test("a continuation opened after the page was read joins the open tab without a reread", async (t) => {
   const sessionId = "topic-delegate-continuation";
