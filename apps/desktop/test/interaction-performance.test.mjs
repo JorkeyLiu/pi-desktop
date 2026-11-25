@@ -159,7 +159,14 @@ test("tool errors stay local to their rows instead of failing the activity group
   );
   assert.doesNotMatch(toolRow, /useAutomaticDisclosure\(\s*(failed|status)\b/);
   assert.match(transcript, /bodyEvents: \{ onPointerDownCapture: claim, onFocusCapture: claim \}/);
-  assert.match(toolRow, /status === "error"\s*\? t\("chat.toolFailed"\)/);
+  // A failed call keeps its own row wording: a run reads its outcome, and a
+  // runtime error or failed browser/steer payload reads as Failed.
+  assert.match(toolRow, /const run = action === "run" \? runOutcome\(message\) : null/);
+  assert.match(toolRow, /run === "failed"\s*\?\s*t\("chat\.toolFailed"\)/);
+  assert.match(
+    toolRow,
+    /status === "error" \|\| browserFailedCall \|\| steerFailedCall\s*\?\s*t\("chat\.toolFailed"\)/,
+  );
 });
 
 test("manual upward scrolling cancels pending transcript follow work", () => {

@@ -128,6 +128,9 @@ const { MessageRow } = load(new URL("../src/features/chat/transcript/MessageRow.
   "./menu-items": { userMessageMenuItems: () => [] },
   "./ActionBarSlots": { ActionSlotSide: () => null },
   "./SessionMessageOrigin": { SessionMessageOrigin: () => null },
+  // The reference chip scenarios render rows without entering the edit state;
+  // the editor is dormant here, and its own behavior is covered elsewhere.
+  "./UserMessageEditor": { UserMessageEditor: () => null },
   "./extra-attachments": { getExtraMessageAttachments },
   "./TranscriptMenu": {
     useTranscriptMenu: () => () => {},

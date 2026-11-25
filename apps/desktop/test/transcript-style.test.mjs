@@ -384,18 +384,31 @@ test("editing a user prompt regenerates it and keeps the old branch reachable", 
   const storeSource = await readStoreSource();
   // Edit lives on the user turn (the prompt is what gets rewritten), not on
   // the assistant answer.
-  assert.match(transcriptSource, /editUserMessage\(message\.id, next, message\.attachments\)/);
-  assert.match(transcriptSource, /className="message-edit-input selectable"/);
+  assert.match(
+    transcriptSource,
+    /const saved = await editUserMessage\(message\.id, next, attachments\)/,
+  );
+  assert.match(transcriptSource, /className="message-edit-input-host"/);
   assert.match(transcriptSource, /chat\.editMessage/);
-  assert.match(transcriptSource, /const retryEdit = async \(\)/);
-  assert.match(transcriptSource, /void retryEdit\(\)/);
+  assert.match(
+    transcriptSource,
+    /const retryEdit = async \(content: string, attachments: MessageAttachment\[\]\)/,
+  );
+  assert.match(transcriptSource, /\(!next && !attachments\.length\)\) return;/);
+  assert.match(
+    transcriptSource,
+    /onSubmit=\{\(content, attachments\) => void retryEdit\(content, attachments\)\}/,
+  );
   assert.match(transcriptSource, /chat\.retryEdit/);
   assert.match(transcriptSource, /chat\.retryingEdit/);
   assert.doesNotMatch(transcriptSource, /next === editSeed\.trim\(\)/);
   assert.doesNotMatch(transcriptSource, /editAssistantMessage/);
   assert.doesNotMatch(storeSource, /editAssistantMessage/);
   // Slash prompts edit their typed form so the resend re-expands the template.
-  assert.match(transcriptSource, /const editSeed =\s*\(editableUserMessage && message\.command\) \|\| \(message\.content \|\| ""\);/);
+  assert.match(
+    transcriptSource,
+    /editSeedContent\(message\.command, message\.content \|\| ""\)/,
+  );
   // Same branch mechanics as regenerate, so main archives the replaced turn
   // as a revision the pager can walk back to.
   assert.match(storeSource, /editUserMessage:\s*async \(messageId, content, attachments\)/);
@@ -411,7 +424,6 @@ test("editing a user prompt regenerates it and keeps the old branch reachable", 
     storeSource,
     /editUserMessage\(root\.id, root\.content, root\.attachments\)/,
   );
-  assert.match(stylesSource, /\.message-edit-input/);
   assert.match(
     stylesSource,
     /\.message-row\.user \.message-col:has\(\.message-edit\)/,
@@ -424,8 +436,8 @@ test("editing a user prompt regenerates it and keeps the old branch reachable", 
     stylesSource,
     /\.message-edit:focus-within \{[\s\S]*?box-shadow:\s*inset/,
   );
-  assert.match(transcriptSource, /className="icon-btn message-edit-cancel"/);
-  assert.match(transcriptSource, /className="send-btn message-edit-submit"/);
+  assert.match(transcriptSource, /className="message-edit-cancel"/);
+  assert.match(transcriptSource, /className="message-edit-submit"/);
 });
 
 test("message toolbars are icon-only with hover tooltips", () => {

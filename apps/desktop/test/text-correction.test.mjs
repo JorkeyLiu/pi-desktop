@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { readComposerSource } from "./helpers/composer-source.mjs";
-import { readTranscriptSource } from "./helpers/transcript-source.mjs";
 
 const read = (rel) => readFile(new URL(rel, import.meta.url), "utf8");
 
@@ -31,7 +30,12 @@ test("shared Input/Textarea primitives default text correction off", async () =>
 test("primary editable surfaces disable browser text correction", async () => {
   const files = [
     ["../src/components/Composer.tsx", await readComposerSource()],
-    ["../src/components/ChatTranscript.tsx", await readTranscriptSource()],
+    // The transcript's user-message editor renders the shared ComposerInput,
+    // so the control itself carries the no-correction contract.
+    [
+      "../src/features/chat/composer/ComposerInput.tsx",
+      await read("../src/features/chat/composer/ComposerInput.tsx"),
+    ],
     ["../src/components/SearchDialog.tsx", await read("../src/components/SearchDialog.tsx")],
     ["../src/pages/SettingsPage.tsx", await readSettingsSource()],
     ["../src/pages/ProjectsPage.tsx", await read("../src/pages/ProjectsPage.tsx")],
