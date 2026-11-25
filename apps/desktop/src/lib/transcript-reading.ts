@@ -1,4 +1,5 @@
 import type { SessionDetail, SessionHistoryScope, UiMessage } from "@pi-desktop/shared";
+import { mergePageWindow, type PageWindow, type PageWindowPage } from "./page-window";
 import { dedupeSessionMessages, mergeLiveSessionMessages, upsertLiveSessionMessage } from "./session-transcript";
 import {
   getSessionMessageSnapshot,
@@ -177,14 +178,34 @@ export function extendTranscriptView(
   // merged again instead of staying behind a historical snapshot. A search
   // snapshot keeps its own contract and is never thawed this way.
   const atTail = direction === "after" && session.hasMoreAfter !== true && !view.focus;
+  // The main window keeps every page it read (no row budget), so the shared
+  // page-window arithmetic only decides its cursors and flags: they are the
+  // union of the range the view held and the page this answer added.
+  const heldPage: PageWindowPage = {
+    start: view.messageStart,
+    end: view.messageEnd ?? 0,
+    ids: view.messages.map((message) => message.id),
+  };
+  const page: PageWindowPage = {
+    start: session.messageStart ?? 0,
+    end: session.messageEnd ?? 0,
+    ids: session.messages.map((message) => message.id),
+    hasMoreBefore: session.hasMoreBefore === true,
+    hasMoreAfter: session.hasMoreAfter === true,
+  };
+  const window: PageWindow = {
+    pages: [heldPage],
+    hasMoreBefore: view.hasMoreBefore,
+    hasMoreAfter: view.hasMoreAfter,
+  };
+  const merged0 = mergePageWindow({ window, page, direction });
   return {
     ...view,
     messages,
-    messageStart: Math.min(view.messageStart, session.messageStart ?? 0),
-    messageEnd: Math.max(view.messageEnd ?? 0, session.messageEnd ?? 0),
-    hasMoreBefore: direction === "before" ? session.hasMoreBefore === true : view.hasMoreBefore,
-    hasMoreAfter:
-      direction === "after" ? !atTail && session.hasMoreAfter === true : view.hasMoreAfter,
+    messageStart: merged0.messageStart,
+    messageEnd: merged0.messageEnd,
+    hasMoreBefore: merged0.hasMoreBefore,
+    hasMoreAfter: merged0.hasMoreAfter,
     restored: atTail ? undefined : view.restored,
     loading: null,
   };

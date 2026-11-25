@@ -1739,3 +1739,53 @@ test("a completion that predates any durable page survives the window replacemen
     "no unsettled version returns to the unconfirmed set",
   );
 });
+/*
+ * A completed child chain's ShowEarlier click can land while the entry already
+ * holds its full row budget: the older page it read is then 100 rows wider than
+ * the room left. Whatever the window keeps, the rows the click asked for must
+ * stay reachable and the older cursor must name the oldest row the entry still
+ * holds. A cursor that moves below rows the trim dropped makes the next click
+ * skip a whole physical page while the button still promises "earlier".
+ */
+test("ShowEarlier after a full cache keeps the requested older page reachable", async (t) => {
+  const sessionId = "topic-delegate-full-cache-older";
+  seedStore(sessionId);
+  const calls = [];
+  const selected = Array.from({ length: 1000 }, (_, index) => index);
+  t.mock.method(api, "getSession", sparseTransport({ calls, selected }));
+
+  await useAppStore.getState().ensureSubagentHistory({ sessionId, tabKey: "d1" });
+  for (let page = 0; page < 3; page += 1) {
+    await useAppStore.getState().loadOlderSubagentHistory({ sessionId, tabKey: "d1" });
+  }
+  const entryOf = () =>
+    findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  let entry = entryOf();
+  assert.equal(
+    entry.messages.length,
+    SUBAGENT_HISTORY_MESSAGE_LIMIT,
+    "the entry holds its full row budget before the click",
+  );
+  assert.equal(entry.messages[0].id, "child-600", "the oldest retained row is the cursor");
+  assert.equal(entry.messageStart, 600, "the entry's older cursor is the oldest row it holds");
+  assert.equal(entry.hasMoreBefore, true);
+
+  await useAppStore.getState().loadOlderSubagentHistory({ sessionId, tabKey: "d1" });
+  assert.equal(calls.at(-1).options.messageBefore, 600, "the click pages backward from the oldest retained row");
+  entry = entryOf();
+  const view = subagentHistoryMessages(entry, []).map((message) => message.id);
+  const oldestPhysical = Number(entry.messages[0].id.slice("child-".length));
+  assert.ok(
+    view.includes("child-500") && view.includes("child-599"),
+    `the older page the click read is reachable afterwards (oldest held ${entry.messages[0].id}, cursor ${entry.messageStart}, rows ${entry.messages.length})`,
+  );
+  assert.ok(
+    entry.messages.length <= SUBAGENT_HISTORY_MESSAGE_LIMIT,
+    "the reachable window stays inside the row budget",
+  );
+  assert.equal(
+    entry.messageStart,
+    oldestPhysical,
+    "the older cursor names the oldest row the entry actually holds",
+  );
+});

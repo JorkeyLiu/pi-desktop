@@ -1,9 +1,16 @@
 import type { SessionDetail, SessionHistoryScope, UiMessage } from "@pi-desktop/shared";
 import { delegationHistoryScope } from "@pi-desktop/shared";
- import { dedupeSessionMessages, orderRowsByLiveAnnouncement, upsertLiveSessionMessage } from "./session-transcript";
+import { dedupeSessionMessages, orderRowsByLiveAnnouncement, upsertLiveSessionMessage } from "./session-transcript";
 import { subagentChainCallIds } from "./subagent-chain";
 import { delegationIdForMessage } from "./subagent-panel";
 import { isDelegationStartTool } from "./tool-display";
+import {
+  emptyPageWindow,
+  mergePageWindow,
+  withoutPageWindowRows,
+  type PageWindow,
+  type PageWindowPage,
+} from "./page-window";
 
 /**
  * One delegate's conversation, read from its own scoped history page instead
@@ -38,13 +45,23 @@ export const SUBAGENT_HISTORY_LIMIT = 12;
 export const SUBAGENT_HISTORY_PAGE_SIZE = 100;
 export const SUBAGENT_HISTORY_CONTENT_LIMIT = 64 * 1024;
 /**
- * Rows one cached chain keeps before its oldest rows are trimmed. It sits well
- * above one page, so ordinary paging and a live tail never touch it; only a
- * chain whose live stream grew far past its page budget is trimmed, oldest
- * non-focus rows first, and the entry's older cursor is kept so paging can
- * still re-read what was trimmed.
+ * Rows one cached chain's *reading window* keeps. The window is a set of
+ * physical pages, and a page that would overflow the budget is dropped from the
+ * side the reader is not reading: an older read keeps the older page it just
+ * asked for and drops the newest one, and a forward read does the reverse. The
+ * cursors and flags therefore always describe the pages the entry still holds.
+ * It sits well above one page, so ordinary paging and a live tail never touch
+ * it; only a chain whose live stream grew far past its page budget is trimmed,
+ * and the dropped side stays reachable through the matching control.
  */
 export const SUBAGENT_HISTORY_MESSAGE_LIMIT = 400;
+/**
+ * Live rows one chain may hold past its reading window. Live rows are the
+ * parent's publication tail, not a physical page: they never evict a page the
+ * reader is reading, so they are bounded on their own instead of sharing the
+ * window budget.
+ */
+export const SUBAGENT_HISTORY_LIVE_TAIL_LIMIT = 100;
 /**
  * Backward reads one tail synchronization issues before it stops joining the
  * gap and keeps only the newest pages. A gap wider than this is not abandoned
@@ -79,6 +96,15 @@ export type SubagentHistoryEntry = {
   messageStart: number;
   /** Last physical index of the rows this entry holds, when the backend says. */
   messageEnd?: number;
+  /**
+   * The physical pages this entry's reading window holds, oldest first. Each
+   * page carries its exclusive physical bounds and the rows it contributed, so
+   * the older cursor is the oldest retained page's own start and the newest
+   * bound is the newest retained page's own end. Rows the budget dropped are
+   * not in the window, which is what keeps the cursor from naming a range the
+   * entry cannot show.
+   */
+  pages: PageWindowPage[];
   hasMoreBefore: boolean;
   /**
    * Whether the scope has selected rows after the newest row this entry holds.
@@ -162,6 +188,7 @@ export function createSubagentHistoryEntry(
     messages: [],
     context: [],
     messageStart: 0,
+    pages: [],
     hasMoreBefore: false,
     hasMoreAfter: false,
     finalized: false,
@@ -438,7 +465,6 @@ export function subagentHistoryLiveTaskState(
   * keeps the range contiguous, and no marker is set.
   */
 function limitRows(entry: SubagentHistoryEntry, limit: number): SubagentHistoryEntry {
-  if (limit <= 0 || entry.messages.length <= limit) return entry;
   const focusId = entry.focus?.messageId;
   const focusIndex = focusId ? entry.messages.findIndex((row) => row.id === focusId) : -1;
   const kept: UiMessage[] = [];
@@ -464,6 +490,36 @@ function limitRows(entry: SubagentHistoryEntry, limit: number): SubagentHistoryE
   const following = island >= 0 ? kept[island + 1] : undefined;
   if (!following) return trimmed;
   return { ...trimmed, omittedAfterId: focusId };
+}
+
+/**
+ * Bound the live tail without touching the reading window.
+ *
+ * Live rows are the parent's publication tail: they carry no physical page
+ * bounds, and they are always newer than the pages the entry read. Sharing the
+ * window budget with them is what used to let a background publication evict
+ * the page a reader was reading, so the live tail is bounded on its own. The
+ * rows it drops stay recoverable: they sit after the window, and the forward
+ * control re-reads them from the durable transcript.
+ */
+function limitLiveRows(
+  entry: SubagentHistoryEntry,
+  limit: number,
+): SubagentHistoryEntry {
+  if (limit <= 0) return entry;
+  const focusId = entry.focus?.messageId;
+  const pageIds = new Set((entry.pages ?? []).flatMap((page) => page.ids));
+  const live = entry.messages.filter((row) => !pageIds.has(row.id) && row.id !== focusId);
+  if (live.length <= limit) return entry;
+  const dropped = new Set(live.slice(0, live.length - limit).map((row) => row.id));
+  return {
+    ...entry,
+    messages: entry.messages.filter((row) => !dropped.has(row.id)),
+    livePending: (entry.livePending ?? []).filter((row) => !dropped.has(row.id)),
+    // Rows newer than the window exist beyond what the entry now holds, so the
+    // forward control stays available until a durable read states the tail.
+    hasMoreAfter: true,
+  };
 }
 
 /** Tool states that are still in flight, so a later one may still replace them. */
@@ -582,7 +638,7 @@ function reconcileLiveRows(
 export function applySubagentLiveRows(
   entry: SubagentHistoryEntry,
   live: readonly UiMessage[],
-  limit = SUBAGENT_HISTORY_MESSAGE_LIMIT,
+  limit = SUBAGENT_HISTORY_LIVE_TAIL_LIMIT,
 ): SubagentHistoryEntry | undefined {
   if (!live.length) return undefined;
   const owned = ownedChainRows(entry, live);
@@ -627,7 +683,8 @@ export function applySubagentLiveRows(
     entry.liveDuringRead !== liveDuringRead ||
     entry.finalized;
   if (!changed) return undefined;
-  return limitRows(
+  if (!changed) return undefined;
+  return limitLiveRows(
     {
       ...entry,
       messages,
@@ -701,25 +758,44 @@ export function applySubagentHistoryPage(
   let aliases = aliasesWith(entry.aliases, canonicalId);
   for (const row of context) aliases = aliasesWith(aliases, delegationIdForMessage(row));
   const pageStart = detail.messageStart;
-  let messageStart = entry.messageStart;
-  if (initial) {
-    messageStart = pageStart ?? entry.messageStart;
-  } else if (pageStart !== undefined) {
-    // The older cursor follows the oldest row actually known; a tail read
-    // must not move it forward and strand the rows already loaded.
-    messageStart = entry.messages.length ? Math.min(pageStart, entry.messageStart) : pageStart;
-  }
-  const hasMoreBefore = initial
-    ? detail.hasMoreBefore === true
-    : direction === "before"
-      ? detail.hasMoreBefore === true
-      : entry.messages.length
-        ? entry.hasMoreBefore
-        : detail.hasMoreBefore === true;
-  // Only the read that moved forward knows what follows it: an older page keeps
-  // the entry's own forward knowledge, and a tail read states the real tail.
-  const hasMoreAfter =
-    direction === "before" ? entry.hasMoreAfter : detail.hasMoreAfter === true;
+  // The answer is one physical page of the chain's sparse selection: its own
+  // bounds and the rows it contributed. A cursor derived from row order cannot
+  // be honest here, because a sparse page has no per-row physical index.
+  const page: PageWindowPage = {
+    start: pageStart ?? entry.messageStart,
+    end: detail.messageEnd ?? entry.messageEnd ?? pageStart ?? entry.messageStart,
+    ids: rows.map((row) => row.id),
+    hasMoreBefore: detail.hasMoreBefore === true,
+    hasMoreAfter: detail.hasMoreAfter === true,
+  };
+  // An initial read adopts the answer's own window; every other read merges
+  // the page onto the pages the entry already holds.
+  const window: PageWindow = initial
+    ? {
+        pages: [],
+        hasMoreBefore: page.hasMoreBefore === true,
+        hasMoreAfter: page.hasMoreAfter === true,
+      }
+    : {
+        pages: entry.pages ?? [],
+        hasMoreBefore: entry.hasMoreBefore,
+        hasMoreAfter: entry.hasMoreAfter,
+      };
+  const windowed = mergePageWindow({
+    window,
+    page,
+    direction: initial ? "after" : direction === "before" ? "before" : "after",
+    limit: SUBAGENT_HISTORY_MESSAGE_LIMIT,
+  });
+  const focusId = entry.focus?.messageId;
+  // Rows of the pages the budget dropped leave with their page. Keeping a row
+  // whose physical range is not in the window is exactly what would let the
+  // cursor skip it later; the retained pages are the window the entry claims.
+  const retained = withoutPageWindowRows(messages, windowed.droppedIds, focusId);
+  const omittedAfterId =
+    entry.omittedAfterId && retained.some((row) => row.id === entry.omittedAfterId)
+      ? entry.omittedAfterId
+      : undefined;
   return limitRows(
     {
       ...entry,
@@ -728,14 +804,16 @@ export function applySubagentHistoryPage(
       // The status describes the delegate's own conversation: root `Task`
       // records identify the chain, but a chain with no child row yet has no
       // messages to show.
-      status: messages.length ? "ready" : "empty",
-      messages,
+      status: retained.length ? "ready" : "empty",
+      messages: retained,
       context,
       livePending,
-      messageStart,
-      messageEnd: detail.messageEnd ?? entry.messageEnd,
-      hasMoreBefore,
-      hasMoreAfter,
+      messageStart: windowed.messageStart,
+      messageEnd: windowed.messageEnd,
+      pages: windowed.pages,
+      hasMoreBefore: windowed.hasMoreBefore,
+      hasMoreAfter: windowed.hasMoreAfter,
+      omittedAfterId,
       // A live row that arrived while this read was in flight is not in its
       // answer, so the entry stays stale and the next open refreshes the tail
       // instead of trusting this read.
@@ -801,6 +879,13 @@ export function applySubagentHistoryTailWindow(
   }
   const oldest = retained[0] ?? pages[0];
   const newest = retained[retained.length - 1] ?? pages[pages.length - 1];
+  const retainedPages: PageWindowPage[] = retained.map((page) => ({
+    start: page.messageStart ?? 0,
+    end: page.messageEnd ?? page.messageStart ?? 0,
+    ids: (page.messages ?? []).map((row) => row.id),
+    hasMoreBefore: page.hasMoreBefore === true,
+    hasMoreAfter: page.hasMoreAfter === true,
+  }));
   let context = entry.context;
   let aliases = entry.aliases;
   let canonicalId = entry.canonicalId;
@@ -836,8 +921,10 @@ export function applySubagentHistoryTailWindow(
     context,
     livePending: reconciled.livePending,
     omittedAfterId,
-    messageStart: oldest?.messageStart ?? entry.messageStart,
-    messageEnd: newest?.messageEnd ?? entry.messageEnd,
+    messageStart: retainedPages[0]?.start ?? oldest?.messageStart ?? entry.messageStart,
+    messageEnd:
+      retainedPages[retainedPages.length - 1]?.end ?? newest?.messageEnd ?? entry.messageEnd,
+    pages: retainedPages,
     hasMoreBefore: true,
     hasMoreAfter: false,
     // A window that predates a live row does not finalize the entry: the next
