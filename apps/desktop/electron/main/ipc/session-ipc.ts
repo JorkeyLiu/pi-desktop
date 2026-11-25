@@ -278,6 +278,36 @@ export function registerSessionIpc({
         const { historyScope: _nativeScope, ...nativeRequest } = request;
         return sidecar.call("native.session.get", { id, ...nativeRequest });
       }
+      const historyScope = historyScopeForwarding(request.historyScope, "host");
+      // The renderer publishes a delegate's live `Task` dispatch immediately,
+      // while host-core receives that row only when the persistence outbox
+      // drains it. A delegation-scoped read issued in that window would answer
+      // "no such chain" for a chain the app is already showing, so wait for the
+      // appends this session already had queued before reading. The fence is
+      // per session: work queued ahead of it still drains in order, but an
+      // unrelated conversation, or a row appended afterwards, cannot extend the
+      // read. A pause or a quarantined append is logged rather than raised: a
+      // persistence problem must not turn a readable session into a failed read.
+      if (historyScope.historyScope?.kind === "delegation") {
+        try {
+          const fence = await persistenceOutbox.waitForSession(id, () => host);
+          if (fence.remaining > 0 || fence.failed > 0) {
+            logger.app("session", "warn", "scoped history outbox fence incomplete", {
+              sessionId: id,
+              data: {
+                pending: fence.remaining,
+                failed: fence.failed,
+                paused: fence.paused,
+              },
+            });
+          }
+        } catch (error) {
+          logger.app("session", "warn", "scoped history outbox fence failed", {
+            sessionId: id,
+            data: String(error),
+          });
+        }
+      }
       const [result, { providers, defaults }] = await Promise.all([
         host.call<{ session?: RuntimeSession | null }>("session.get", {
           id,
@@ -293,7 +323,7 @@ export function registerSessionIpc({
           ...(Number.isInteger(request.contentLimit) && request.contentLimit! > 0
             ? { contentLimit: request.contentLimit }
             : {}),
-          ...historyScopeForwarding(request.historyScope, "host"),
+          ...historyScope,
         }),
         sessionCapabilityContext(),
       ]);

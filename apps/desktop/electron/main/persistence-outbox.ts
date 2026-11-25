@@ -29,6 +29,29 @@ type OutboxOptions = {
   maxDeadLetters?: number;
 };
 
+/**
+ * How one session-scoped read fence ended: the appends that session had queued
+ * when the fence started, and whether the host paused the drain before they
+ * were written. A reader reports a `remaining` count instead of hiding it.
+ */
+export type OutboxFence = {
+  /** The session's appends that are still queued after the fence waited. */
+  remaining: number;
+  /** True when the drain paused on the host before the snapshot was written. */
+  paused: boolean;
+  /** Snapshot appends the host refused into the dead letters during the wait. */
+  failed: number;
+};
+
+/** Why one drain pass stopped. */
+type FlushEnd = "empty" | "paused" | "fenced";
+
+/** A waiting session fence and its queue snapshot. */
+type SessionFence = {
+  keys: ReadonlySet<string>;
+  /** A pass already stopped for this fence, so the next one continues. */
+  consumed: boolean;
+};
 const MAX_ENTRIES = 1024;
 /**
  * Consecutive unclassified failures allowed on one queued head before it is
@@ -58,8 +81,11 @@ export class PersistenceOutbox {
   private readonly maxDeadLetters: number;
   private entries: MessageAppend[] = [];
   private deadLetters: QuarantinedAppend[] = [];
-  private flushing: Promise<void> | null = null;
+  private flushing: Promise<FlushEnd> | null = null;
   private persistChain = Promise.resolve();
+  private fence: SessionFence | null = null;
+  /** Session fences run one at a time, in arrival order. */
+  private fenceQueue: Promise<unknown> = Promise.resolve();
   private headRetry: {
     entry: MessageAppend;
     attempts: number;
@@ -105,11 +131,78 @@ export class PersistenceOutbox {
 
   async flush(getHost: () => HostProcess | null): Promise<void> {
     await this.loaded;
+    // A session fence may end a drain pass before the queue is empty; a caller
+    // that asked for the whole queue keeps draining what the pass left behind.
+    let end: FlushEnd;
+    do {
+      end = await this.drain(getHost);
+    } while (end === "fenced");
+  }
+
+  /**
+   * Wait until the appends one session already had queued have been written.
+   *
+   * A scoped transcript read needs its own session's rows on disk, not the
+   * whole application queue: this fence snapshots that session's queued keys and
+   * ends the drain pass as soon as they are written, so a busy unrelated
+   * conversation or a tail appended afterwards cannot extend the read. Work
+   * queued ahead of the snapshot still drains first, because the queue writes in
+   * order. The returned counts are the honest outcome — a paused host and a
+   * quarantined append are reported instead of being hidden — and the rest of
+   * the queue keeps draining on its own.
+   */
+  async waitForSession(
+    sessionId: string,
+    getHost: () => HostProcess | null,
+  ): Promise<OutboxFence> {
+    await this.loaded;
+    const keys = new Set(
+      this.entries.filter((entry) => entry.sessionId === sessionId).map((entry) => entry.key),
+    );
+    if (!keys.size) return { remaining: 0, paused: false, failed: 0 };
+    // One fence at a time: a second read waits for the first snapshot rather
+    // than competing with it for the same single write pass.
+    const run = this.fenceQueue.then(() => this.fenceSession(keys, getHost));
+    this.fenceQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  /** One drain pass; a fence may end it once its snapshot is written. */
+  private drain(getHost: () => HostProcess | null): Promise<FlushEnd> {
     if (this.flushing) return this.flushing;
-    this.flushing = this.flushLoop(getHost).finally(() => {
-      this.flushing = null;
-    });
-    return this.flushing;
+    const pass = (async () => {
+      try {
+        return await this.flushLoop(getHost);
+      } finally {
+        this.flushing = null;
+      }
+    })();
+    this.flushing = pass;
+    return pass;
+  }
+
+  private async fenceSession(
+    keys: ReadonlySet<string>,
+    getHost: () => HostProcess | null,
+  ): Promise<OutboxFence> {
+    const satisfied = () => !this.entries.some((entry) => keys.has(entry.key));
+    if (satisfied()) return { remaining: 0, paused: false, failed: 0 };
+    this.fence = { keys, consumed: false };
+    let end: FlushEnd;
+    try {
+      end = await this.drain(getHost);
+    } finally {
+      this.fence = null;
+    }
+    const remaining = this.entries.filter((entry) => keys.has(entry.key)).length;
+    // A snapshot entry the host refused into the dead letters is a genuine
+    // persistence failure; reporting it keeps a zero remaining count from
+    // looking like a successful write.
+    const failed = this.deadLetters.filter((entry) => keys.has(entry.key)).length;
+    // The tail this fence did not wait for continues on its own, exactly like
+    // the drain every enqueue already schedules.
+    void this.flush(getHost);
+    return { remaining, paused: remaining > 0 && end !== "empty", failed };
   }
 
   /**
@@ -147,11 +240,15 @@ export class PersistenceOutbox {
     return this.entries.length;
   }
 
-  private async flushLoop(getHost: () => HostProcess | null): Promise<void> {
+  private async flushLoop(getHost: () => HostProcess | null): Promise<FlushEnd> {
     while (this.entries.length > 0) {
+      // A waiting session fence ends this pass as soon as its snapshot is
+      // written; the caller that asked for the pass decides whether the tail
+      // keeps draining.
+      if (this.fenceStop()) return "fenced";
       const current = this.entries[0];
       const currentHost = getHost();
-      if (!currentHost || !currentHost.isAvailable()) return;
+      if (!currentHost || !currentHost.isAvailable()) return "paused";
       // Bounded backoff: a head that just failed is not retried on every
       // enqueue, so a struggling host is not hammered by a burst. A restarted
       // host is a new generation and retries at once (#1560).
@@ -160,7 +257,7 @@ export class PersistenceOutbox {
         this.headRetry.host === currentHost &&
         this.headRetry.nextAttemptAt > this.now()
       ) {
-        return;
+        return "paused";
       }
       try {
         await currentHost.call(current.usage ? "session.recordUsage" : "session.appendMessage", {
@@ -206,7 +303,7 @@ export class PersistenceOutbox {
               retryInMs: this.headRetry ? this.headRetry.nextAttemptAt - this.now() : 0,
               data: String(error),
             });
-            return;
+            return "paused";
           }
           // An error the outbox cannot classify as permanent or as a
           // duplicate recurs on every retry. Quarantine the head instead of
@@ -221,8 +318,23 @@ export class PersistenceOutbox {
       this.headRetry = null;
       await this.persist();
     }
+    return "empty";
   }
 
+  /**
+   * Whether a waiting fence ends this pass: its snapshot is written and no
+   * earlier pass already stopped for it. One stop per fence keeps a re-driven
+   * full drain moving through the tail instead of stopping again immediately.
+   */
+  private fenceStop(): boolean {
+    const fence = this.fence;
+    if (!fence || fence.consumed) return false;
+    for (const entry of this.entries) {
+      if (fence.keys.has(entry.key)) return false;
+    }
+    fence.consumed = true;
+    return true;
+  }
   /** Count one failure of the given head and schedule its next attempt. */
   private noteTransientFailure(entry: MessageAppend, host: HostProcess): number {
     const attempts = (this.headRetry?.entry === entry ? this.headRetry.attempts : 0) + 1;

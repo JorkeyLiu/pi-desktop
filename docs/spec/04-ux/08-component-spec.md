@@ -1500,7 +1500,16 @@ not a working claim, is what the reader sees.
   session instead of a page with empty context. Three states stay distinct: loading while the
   scoped read is in flight, unavailable for an id that resolves to no chain at
   all (the host returns no session, with a retry) or a read failure, and empty
-  for a chain that exists but has produced no child row yet.
+  for a chain that exists but has produced no child row yet. A live `Task`
+  dispatch whose durable row is still queued in the persistence outbox is none
+  of those: the tab is ready with the live rows it already holds, states
+  nothing missing, and takes one first durable page once that dispatch is
+  observed settled, when the session is read again after another, or when the
+  tab is reopened. A main window that has moved past the dispatch keeps that
+  ready state rather than guessing from rows; the first read its next
+  reactivation or reopen makes resolves it. Unavailable is reserved for an id
+  with neither a durable chain nor a live `Task` row, and for a dispatch
+  observed settled whose transcript still lacks the chain.
 - A search hit inside a child's rows is a nested target. Search stays a
   physical read: it locates the row and returns `navigationParent`, the direct
   parent `Task` call, and the reader's existing main range is restored exactly

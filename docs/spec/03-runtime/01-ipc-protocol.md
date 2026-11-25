@@ -1255,6 +1255,14 @@ Minimal interface:
   one. A delegation id is trimmed and limited to 512 characters; an empty or
   otherwise invalid id falls back to the legacy read instead of an empty
   delegation page.
+  A delegation-scoped read first waits for a session fence: the appends this
+  session already had queued are written before the host read, and the drain
+  stops once that snapshot is written, so an unrelated conversation's queue or a
+  row appended afterwards cannot extend the read. Work queued ahead of the
+  snapshot still drains first, because the queue writes in order. The fence
+  reports appends it could not write — a paused host or a quarantined append —
+  and the read still answers, with that outcome logged; `main` and unscoped reads
+  are not fenced this way.
 - `session/search({ query, offset? }) -> SessionSearchPage` forwards to
   `search.sessions`; host-core owns discovery, counts, filtering, and pagination.
 - `session/searchContext(SessionSearchContextRequest) -> SessionSearchContext`

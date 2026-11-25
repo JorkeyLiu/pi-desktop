@@ -502,3 +502,84 @@ test("a restarted host retries the paused head without waiting out the backoff (
   assert.equal(outbox.size(), 0, "a fresh host generation drains the paused head at once");
   assert.equal(calls.length, paused + 1);
 });
+
+test("a session fence waits for that session's queued rows, not for the queue's tail", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-outbox-"));
+  const outbox = new PersistenceOutbox(dir, silent);
+  let available = false;
+  const writes = [];
+  let releaseOther;
+  const otherGate = new Promise((resolve) => {
+    releaseOther = resolve;
+  });
+  const host = {
+    isAvailable: () => true,
+    call: async (_method, params) => {
+      writes.push(params.sessionId);
+      if (params.sessionId === "other") await otherGate;
+    },
+  };
+  const getHost = () => (available ? host : null);
+  await outbox.enqueue(
+    { key: "message:target:1", sessionId: "target", message: { id: "target-1" } },
+    getHost,
+  );
+  await outbox.enqueue(
+    { key: "message:other:1", sessionId: "other", message: { id: "other-1" } },
+    getHost,
+  );
+  assert.equal(outbox.size(), 2, "a host that is not running keeps both appends queued");
+  const fence = outbox.waitForSession("target", getHost);
+  available = true;
+  const result = await fence;
+  assert.deepEqual(result, { remaining: 0, paused: false, failed: 0 });
+  assert.equal(writes[0], "target", "the pass writes this session's row first");
+  assert.equal(
+    outbox.size(),
+    1,
+    "the unrelated tail is still queued, so the read never waited for it",
+  );
+  releaseOther();
+  await outbox.flush(getHost);
+  assert.equal(outbox.size(), 0, "the tail keeps draining after the read");
+});
+
+test("a session fence with nothing of its own queued reads at once", async () => {
+  const outbox = new PersistenceOutbox(await mkdtemp(join(tmpdir(), "pi-outbox-")), silent);
+  const result = await outbox.waitForSession("target", () => null);
+  assert.deepEqual(result, { remaining: 0, paused: false, failed: 0 });
+});
+
+test("a session fence reports a paused host instead of a clean write", async () => {
+  const outbox = new PersistenceOutbox(await mkdtemp(join(tmpdir(), "pi-outbox-")), silent);
+  await outbox.enqueue(
+    { key: "message:s1:1", sessionId: "s1", message: { id: "s1-1" } },
+    () => null,
+  );
+  const result = await outbox.waitForSession("s1", () => null);
+  assert.deepEqual(result, { remaining: 1, paused: true, failed: 0 });
+});
+
+test("a session fence reports a quarantined append instead of a clean write", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-outbox-"));
+  const now = { value: 0 };
+  const outbox = new PersistenceOutbox(dir, silent, { now: () => now.value });
+  const host = mockHost(async () => {
+    throw new Error("Error: stream did not contain valid UTF-8");
+  });
+  await outbox.enqueue(
+    { key: "message:s1:torn", sessionId: "s1", message: { id: "torn" } },
+    () => null,
+  );
+  // Four failed passes spend most of the retry budget; the fifth attempt,
+  // inside the fence's own pass, quarantines the head.
+  await drain(outbox, host, now, 4);
+  assert.equal(outbox.size(), 1);
+  now.value += 60_000;
+  const fence = await outbox.waitForSession("s1", () => host);
+  assert.deepEqual(
+    fence,
+    { remaining: 0, paused: false, failed: 1 },
+    "a quarantined append is a genuine persistence failure, not a written row",
+  );
+});

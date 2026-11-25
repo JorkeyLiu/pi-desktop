@@ -17,6 +17,7 @@ import {
   subagentHistoryLiveIds,
   subagentHistoryScope,
   subagentHistoryTouchesLive,
+  subagentHistoryLiveTaskState,
   type SubagentHistoryBuckets,
   type SubagentHistoryDirection,
   type SubagentHistoryEntry,
@@ -93,11 +94,43 @@ export function createSubagentHistoryRuntime(
   function entryFor(input: SubagentHistoryInput): SubagentHistoryEntry | undefined {
     return findSubagentHistoryEntry(get().subagentHistory, input.sessionId, input.tabKey);
   }
+  /** The live array of the conversation a read belongs to, if it is on screen. */
+  function liveOf(sessionId: string): readonly UiMessage[] {
+    const state = get();
+    return state.activeSessionId === sessionId ? state.messages : [];
+  }
+
+  /**
+   * Whether an empty answer is a chain still being created rather than a miss.
+   *
+   * The backend selects a delegation chain from durable `Task` rows, and the
+   * parent publishes that dispatch live before the persistence outbox appends
+   * it. A running dispatch is therefore a chain that is still being created, not
+   * a chain the transcript no longer holds, and `false` keeps every other empty
+   * answer a real miss.
+   *
+   * Once an entry is already owed its first durable page, an answer that cannot
+   * observe the dispatch at all (`absent`) keeps it owed too: the reader's own
+   * window may have moved past the `Task` row while the chain is still live, and
+   * the chain demonstrably existed. Ending that state needs the dispatch observed
+   * settled, which is what makes a still-empty transcript a real miss.
+   */
+  function firstPagePending(entry: SubagentHistoryEntry, live: readonly UiMessage[]): boolean {
+    if (entry.scoped === true) return false;
+    const task = subagentHistoryLiveTaskState(entry, live);
+    if (task === "running") return true;
+    return task === "absent" && entry.pendingDurable === true;
+  }
 
   function beginRead(key: string): number {
     const generation = (generations.get(key) ?? 0) + 1;
     generations.set(key, generation);
     return generation;
+  }
+
+  /** Whether this entry holds live rows but has never had a durable page. */
+  function firstDurablePageOwed(entry: SubagentHistoryEntry): boolean {
+    return entry.pendingDurable === true && entry.scoped !== true;
   }
 
   /**
@@ -159,12 +192,30 @@ export function createSubagentHistoryRuntime(
     options: SubagentHistoryReadOptions,
     seed?: Partial<SubagentHistoryEntry>,
   ) {
+    const live = liveOf(input.sessionId);
     const { current } = openRead(input, seed);
     try {
       const { session } = await read(input.sessionId, options);
       const entry = current();
       if (!entry) return;
       if (!session) {
+        // A live dispatch whose durable record is still in the persistence
+        // outbox is not a missing chain: keep the live rows and read the first
+        // durable page once that dispatch settles.
+        if (firstPagePending(entry, live)) {
+          publish({
+            ...entry,
+            // The live dispatch and its rows are already readable, so this is
+            // not a loading panel: the durable page is merely still owed.
+            status: "ready",
+            error: undefined,
+            retryDirection: undefined,
+            pendingDurable: true,
+            finalized: false,
+            refreshing: false,
+          });
+          return;
+        }
         publish(applySubagentHistoryFailure(entry, SUBAGENT_HISTORY_UNAVAILABLE, direction));
         return;
       }
@@ -298,7 +349,7 @@ export function createSubagentHistoryRuntime(
       publish({ ...current, focus });
       return;
     }
-    if (current?.status === "loading") return;
+    if (current?.status === "loading" && !firstDurablePageOwed(current)) return;
     if (current && current.status !== "error" && current.finalized) {
       // Nothing happened to this chain since its last durable read, so a
       // reopened tab costs nothing and main-window browsing never triggers a
@@ -319,16 +370,29 @@ export function createSubagentHistoryRuntime(
         { ...pageOptions(base), messageAround: focus.messageId },
         { focus },
       );
-      return;
-    }
-    // Sending a refresh rather than a reset keeps everything the entry already
-    // holds: a stale entry refreshes its tail, an empty one starts there.
-    if (subagentHistoryHasRows(base)) {
+    } else if (subagentHistoryHasRows(base) && !firstDurablePageOwed(base)) {
+      // Sending a refresh rather than a reset keeps everything the entry already
+      // holds: a stale entry refreshes its tail, an empty one starts there.
       await readPage(input, "latest", pageOptions(base));
-      return;
+    } else {
+      // Live rows are not a physical range, so the chain's first durable page
+      // must adopt the page's own cursor instead of refining one it never read.
+      await readPage(input, "initial", pageOptions(base));
     }
-    await readPage(input, "initial", pageOptions(base));
+    // A dispatch that settled while the read was in flight is exactly the
+    // transition that puts its durable row in the outbox. Read the first durable
+    // page once more instead of leaving the pending answer on screen until the
+    // reader reopens the tab.
+    const afterRead = entryFor(input);
+    if (
+      afterRead?.pendingDurable === true &&
+      afterRead.scoped !== true &&
+      subagentHistoryLiveTaskState(afterRead, liveOf(input.sessionId)) === "settled"
+    ) {
+      await readPage(input, "initial", pageOptions(afterRead));
+    }
   }
+
 
   async function older(input: SubagentHistoryInput) {
     const current = entryFor(input);
@@ -391,26 +455,55 @@ export function createSubagentHistoryRuntime(
   function ingest(state: AppState) {
     const sessionId = state.activeSessionId;
     const live = state.messages;
-    if (!sessionId || !live.length) return;
-    if (ingestedSessionId === sessionId && ingestedLive === live) return;
+    if (!sessionId) return;
+    // Reading this session again after another one is the lifecycle point that
+    // re-offers its pending chains: the dispatch may have settled while it was
+    // off screen, and its durable row is on disk now. It is one read per
+    // activation, not a poll.
+    const activated = ingestedSessionId !== sessionId;
+    if (!activated && ingestedLive === live) return;
     ingestedSessionId = sessionId;
     ingestedLive = live;
     const bucket = get().subagentHistory[sessionId];
     if (!bucket) return;
-    const liveIds = subagentHistoryLiveIds(live);
+    const liveIds = live.length ? subagentHistoryLiveIds(live) : new Set<string>();
     let buckets: SubagentHistoryBuckets | undefined;
+    const convergences: SubagentHistoryInput[] = [];
     for (const entry of Object.values(bucket)) {
-      if (!subagentHistoryTouchesLive(entry, liveIds)) continue;
-      const applied = applySubagentLiveRows(entry, live);
-      if (!applied) continue;
-      touched += 1;
-      buckets = setSubagentHistoryEntry(buckets ?? get().subagentHistory, {
-        ...applied,
-        touched,
-      });
+      // Without a live row of its own, a chain still owes its durable page on an
+      // activation or on a dispatch the tail no longer names; both are handled
+      // below, so an unrelated publication keeps costing nothing.
+      const touches = live.length > 0 && subagentHistoryTouchesLive(entry, liveIds);
+      let next = entry;
+      if (touches) {
+        const applied = applySubagentLiveRows(entry, live);
+        if (applied) {
+          touched += 1;
+          next = { ...applied, touched };
+          buckets = setSubagentHistoryEntry(buckets ?? get().subagentHistory, next);
+        }
+      }
+      // A dispatch settling is exactly the transition that appends its durable
+      // `Task` row behind the persistence outbox. An entry still waiting for its
+      // first durable page reads it once at that transition instead of leaving
+      // the live-only view on screen until the tab reopens. The two transitions
+      // are terminal for that wait — the read either adopts a durable page or
+      // states a miss — so a stream of live rows cannot become a stream of reads,
+      // and a dispatch the tail can no longer name is not guessed at from rows.
+      if (!next.refreshing && next.pendingDurable === true && next.scoped !== true) {
+        if (activated || subagentHistoryLiveTaskState(next, live) === "settled") {
+          convergences.push({ sessionId, tabKey: entry.tabKey });
+        }
+      }
     }
     if (buckets) set({ subagentHistory: buckets });
+    if (convergences.length) {
+      queueMicrotask(() => {
+        for (const input of convergences) void actions.ensureSubagentHistory(input);
+      });
+    }
   }
+
 
   /** Drop every cached delegate page of one session (session delete). */
   function releaseSession(sessionId: string) {
