@@ -172,6 +172,13 @@ pub(super) fn relative_path(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// Hash of bytes already read, with the same algorithm [`hash_file`] streams,
+/// so a record's guard and a comparison can come from one read.
+pub(super) fn hash_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
 pub(super) fn hash_file(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path)
         .with_context(|| format!("open file for review hash: {}", path.display()))?;

@@ -5249,9 +5249,15 @@ window; opening a normal panel afterward must still work.
 - **Acceptance**: D (workspace), Quality
 - **Milestone**: M5
 - **Status**: Host-covered by the `review` unit tests and the real-host
-  `review.*` RPC tests in `crates/host-core` (bounded long-file diff, exact and
-  unknown counts, session-scanned per-file baseline, per-root rows and rollback,
-  record row cap and aggregate work budget, unreadable records, lock scope);
+  `review.*` RPC tests in `crates/host-core` (bounded long-file diff — 16 MiB
+  and 500,000 lines per side, 200 ms per file, 1 s / 64 MiB / 2,000,000 input
+  lines per request — with `diffTooComplex` and `requestBudgetExceeded` rows
+  that carry no counts, exact and unknown counts, session-scanned per-file
+  baseline, per-root rows and rollback, record row cap and aggregate work
+  budget, one comparison per mutation where the tool's evidence is reused
+  only for identical before/after hashes and recomputed when the file changed
+  after the tool or the retained baseline no longer matched, unreadable
+  records, lock scope);
   renderer-covered by `chat-review-entry.test.mjs` (contract and pre-contract
   operation spellings); the panel's rendered rows, root labels, lower-bound
   totals, reason copy, session-switch clearing and file rollback are driven by
@@ -5274,6 +5280,17 @@ window; opening a normal panel afterward must still work.
   file), and external (overwrite) roots and asserts each `editDiff` carries
   operation `write` (`added` for created files, `modified` for overwrites)
   with actual +N/−N counts beside the unchanged `Written content` body.
+  The same scenario also drives the large-file route end to end: a real
+  `tools.execute` `Write` creates a 40,000-line, 1,348,890-byte workspace
+  document, a real `Edit` changes one line of it, and the run asserts the
+  durable record and the per-call preview agree on +1/−1 with one real hunk,
+  that neither states `fileTooLarge` under the 16 MiB side ceiling, that the
+  `review.files` row keeps the creation's exact +40,000 with `diffTooLarge`
+  (the hunk body cap, not a size gate) and the overwrite's real +2/−2 with a
+  rendered hunk, that the transcript row and the session Review panel render
+  those same counts (the row states the body cap instead of missing line
+  details), and that `review.rollbackFile` removes the created file and restores
+  the user's own 1.34 MB baseline byte for byte.
   Renderer-covered by `edit-diff-preview.test.mjs`: every legal
   tool/operation/status combination parses on every root, while illegal pairs
   (`write`/`deleted`, `write`/`moved`, `edit`/`added`) and tool/operation
@@ -16589,7 +16606,11 @@ browser milestones are scheduled.
 - **Expected**: Import preserves the default and is idempotent. The command and
   turn execute once, in the Host project only; stale routing never falls back
   locally. Snapshot recovery restores pending requests and clears peer-resolved
-  cards. Local workspace/model state is unchanged.
+  cards. Local workspace/model state is unchanged. The diff answer stays inside
+  its §12 limits (8 s request, 2 MiB aggregate stdout, 256 KiB status, 100
+  files, 200 KiB patch per file); a file the Host could not count keeps its
+  required numeric fields and sets `countsKnown: false`, so the row states an
+  unknown count instead of a placeholder zero.
 - **Compatibility coverage**: Existing remote Agent session routing remains
   covered by `remote-mvp-renderer.test.mjs`; the Settings inventory exposes no
   session-list or new-session controls. New projects follow E2E-REMOTE-HOME.

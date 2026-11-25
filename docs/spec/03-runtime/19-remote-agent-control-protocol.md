@@ -592,7 +592,7 @@ session root as working directory and stream through `terminal.output`.
 | `session/compact` | controller | Run a manual context checkpoint on the active session |
 | `workspace/list` | viewer | List entries under the session root, bounded, honoring the Host ignore rules |
 | `workspace/read` | viewer | Read one bounded file under the session root; images as data URLs |
-| `workspace/diff` | viewer | Return the working-tree diff of the session root |
+| `workspace/diff` | viewer | Return the working-tree diff of the session root, bounded by §12; each `DiffFile` keeps its required numeric `additions`/`deletions` and sets the additive `countsKnown: false` when a limit or a comparison failure left the numbers as placeholders; a root with no repository is `repo: false, clean: true` only when Git's own non-work-tree diagnostic and the absence of a `.git` marker agree, and every ambiguous refusal reports `repo: false, clean: false, reason: unreadable` |
 | `terminal/open` | controller | Open a pty on the Host with the session root as cwd; returns a terminal id and the bounded replay ring; policy-gated (security §4.1) |
 | `terminal/input` | controller | Write bytes to an open terminal |
 | `terminal/resize` | controller | Resize an open terminal |
@@ -1195,6 +1195,11 @@ The initial target limits are:
 | Terminal output replay ring | 128 KiB per terminal |
 | Open terminals per session | 2 |
 | Relayed tool execution deadline | The tool's own timeout |
+| `workspace/diff` request deadline | 8 seconds |
+| `workspace/diff` aggregate stdout | 2 MiB |
+| `workspace/diff` status payload | 256 KiB |
+| Files per `workspace/diff` answer | 100 |
+| Patch text per `workspace/diff` file | 200 KiB |
 
 The Host MAY advertise stricter limits. It MUST return a structured limit
 error rather than truncating a command silently.

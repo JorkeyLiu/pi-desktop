@@ -1,11 +1,36 @@
 import assert from "node:assert/strict";
+import { execFile as execFileCallback } from "node:child_process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import {
   MAX_PATCH_BYTES,
+  collectWorkspaceDiff,
   parseFilePatch,
   parseStatusZ,
-  splitUnifiedDiff,
 } from "../../../packages/host-runtime/src/workspace-diff.ts";
+
+const execFile = promisify(execFileCallback);
+
+async function git(cwd, args) {
+  await execFile(
+    "git",
+    [
+      "-c",
+      "user.name=Workspace diff test",
+      "-c",
+      "user.email=workspace-diff@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "core.autocrlf=false",
+      ...args,
+    ],
+    { cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+  );
+}
 
 test("parses porcelain -z status including renames and untracked", () => {
   const raw = [
@@ -17,34 +42,81 @@ test("parses porcelain -z status including renames and untracked", () => {
   ].join("\0") + "\0";
   const entries = parseStatusZ(raw);
   assert.deepEqual(entries, [
-    { path: "apps/a.ts", untracked: false },
-    { path: "notes.md", untracked: true },
-    { path: "new-name.ts", oldPath: "old-name.ts", untracked: false },
-    { path: "added.ts", untracked: false },
+    { path: "apps/a.ts", status: "modified", untracked: false },
+    { path: "notes.md", status: "untracked", untracked: true },
+    {
+      path: "new-name.ts",
+      oldPath: "old-name.ts",
+      status: "renamed",
+      untracked: false,
+    },
+    { path: "added.ts", status: "added", untracked: false },
   ]);
 });
 
-test("splits a multi-file unified diff into per-file chunks", () => {
-  const raw = [
-    "diff --git a/a.ts b/a.ts",
-    "index 111..222 100644",
-    "--- a/a.ts",
-    "+++ b/a.ts",
-    "@@ -1,2 +1,2 @@",
-    "-old",
-    "+new",
-    "diff --git a/b.ts b/b.ts",
-    "--- a/b.ts",
-    "+++ b/b.ts",
+test("splits a multi-file git diff into per-file rows from a real work tree", async () => {
+  // The chunk splitter is internal to the bounded collector, so the multiple
+  // `diff --git` boundaries are exercised through the collector itself: one
+  // patch command covers both files and the answer still carries one row per
+  // file with its own path, status, counts and hunks.
+  const root = await mkdtemp(join(tmpdir(), "pi-git-diff-parse-"));
+  try {
+    await git(root, ["init", "--quiet"]);
+    for (const name of ["a.ts", "b.ts"]) {
+      await writeFile(join(root, name), "old\ncontext\n", "utf8");
+    }
+    await git(root, ["add", "-A"]);
+    await git(root, ["commit", "--quiet", "-m", "initial"]);
+    await writeFile(join(root, "a.ts"), "new\ncontext\n", "utf8");
+    await writeFile(join(root, "b.ts"), "y\ncontext\n", "utf8");
+
+    const diff = await collectWorkspaceDiff(root);
+    assert.equal(diff.repo, true);
+    assert.equal(diff.clean, false);
+    assert.deepEqual(
+      diff.files.map((file) => [file.path, file.status]),
+      [
+        ["a.ts", "modified"],
+        ["b.ts", "modified"],
+      ],
+    );
+    for (const file of diff.files) {
+      assert.equal(file.additions, 1);
+      assert.equal(file.deletions, 1);
+      assert.equal(file.tooLarge, undefined);
+      assert.deepEqual(
+        file.hunks.map((hunk) => hunk.header),
+        ["@@ -1,2 +1,2 @@"],
+      );
+      assert.deepEqual(
+        file.hunks[0].lines.map((line) => line.type),
+        ["del", "add", "context"],
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a chunk parse rejects text that is not a file patch", () => {
+  // Whitespace-only and header-less text carries no file chunk; a trailing
+  // blank line is not an empty context line either.
+  assert.equal(parseFilePatch("  \n"), null);
+  const chunk = [
+    "diff --git a/tail.txt b/tail.txt",
+    "--- a/tail.txt",
+    "+++ b/tail.txt",
     "@@ -1 +1 @@",
-    "-x",
-    "+y",
+    "-a",
+    "+b",
+    "",
   ].join("\n");
-  const chunks = splitUnifiedDiff(raw);
-  assert.equal(chunks.length, 2);
-  assert.match(chunks[0], /^diff --git a\/a\.ts/);
-  assert.match(chunks[1], /^diff --git a\/b\.ts/);
-  assert.deepEqual(splitUnifiedDiff("  \n"), []);
+  const file = parseFilePatch(chunk);
+  assert.equal(file?.path, "tail.txt");
+  assert.deepEqual(
+    file?.hunks[0].lines.map((line) => line.type),
+    ["del", "add"],
+  );
 });
 
 test("parses a modified file patch with counts and hunks", () => {
@@ -122,6 +194,7 @@ test("detects added, deleted, renamed, and binary patches", () => {
     ].join("\n"),
   );
   assert.equal(binary.binary, true);
+  assert.equal(binary.countsKnown, false);
   assert.deepEqual(binary.hunks, []);
 });
 
@@ -150,6 +223,7 @@ test("untracked hint overrides derived status and large patches drop hunks", () 
     ].join("\n"),
   );
   assert.equal(big.tooLarge, true);
+  assert.equal(big.reason, "diffTooLarge");
   assert.deepEqual(big.hunks, []);
   assert.equal(big.additions, 1);
 });

@@ -26,6 +26,7 @@ pub use model::{
     ReviewFileRollbackMark, ReviewFilesOutcome, RollbackOutcome, WritePreviewStatus,
 };
 pub use session::{file_changes, remove_session, rollback_file, sweep};
+pub use snapshot::FileMutationEvidence;
 #[allow(unused_imports)]
 pub use snapshot::PendingChange;
 pub use snapshot::{discard_change, finalize_change, prepare_change, rollback_change};
@@ -48,10 +49,9 @@ pub fn preview_edit_diff(
     before: &[u8],
     after: Option<&[u8]>,
 ) -> FileMutationPreview {
-    use diff::{
-        make_preview, DiffBudget, DiffSide, MAX_DIFF_BYTES, MAX_DIFF_WORK, MAX_RECORD_HUNK_CHARS,
-    };
+    use diff::{make_preview, DiffSide, PreviewLimits, MAX_DIFF_BYTES, MAX_RECORD_HUNK_CHARS};
     use model::ReviewDiffLimit;
+    use std::time::Instant;
     let preview = if before.len() as u64 > MAX_DIFF_BYTES
         || after.is_some_and(|bytes| bytes.len() as u64 > MAX_DIFF_BYTES)
     {
@@ -63,7 +63,7 @@ pub fn preview_edit_diff(
                 DiffSide::Present(bytes.to_vec())
             }),
             MAX_RECORD_HUNK_CHARS,
-            &mut DiffBudget::new(MAX_DIFF_WORK),
+            &mut PreviewLimits::file(Instant::now()),
         )
     };
     assemble_preview(
@@ -94,10 +94,9 @@ pub fn preview_write_diff(
     before: Option<&[u8]>,
     after: &[u8],
 ) -> FileMutationPreview {
-    use diff::{
-        make_preview, DiffBudget, DiffSide, MAX_DIFF_BYTES, MAX_DIFF_WORK, MAX_RECORD_HUNK_CHARS,
-    };
+    use diff::{make_preview, DiffSide, PreviewLimits, MAX_DIFF_BYTES, MAX_RECORD_HUNK_CHARS};
     use model::ReviewDiffLimit;
+    use std::time::Instant;
     let preview = match before {
         None => diff::ReviewPreview::limited(ReviewDiffLimit::BaselineUnavailable),
         Some(before)
@@ -109,7 +108,7 @@ pub fn preview_write_diff(
             DiffSide::Present(before.to_vec()),
             DiffSide::Present(after.to_vec()),
             MAX_RECORD_HUNK_CHARS,
-            &mut DiffBudget::new(MAX_DIFF_WORK),
+            &mut PreviewLimits::file(Instant::now()),
         ),
     };
     assemble_preview(
@@ -143,5 +142,21 @@ fn assemble_preview(
     }
 }
 
+/// The hunk-char ceiling a durable record's preview is rendered under. A
+/// tool's per-call evidence is only reusable while it was rendered under the
+/// same ceiling.
+pub(crate) fn record_hunk_char_budget() -> usize {
+    diff::MAX_RECORD_HUNK_CHARS
+}
+
+/// The hash one review record keeps as its guard, so a tool's evidence and the
+/// record's own read-once bytes agree without a second read.
+pub(crate) fn content_hash(bytes: &[u8]) -> String {
+    layout::hash_bytes(bytes)
+}
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod diff_bench;

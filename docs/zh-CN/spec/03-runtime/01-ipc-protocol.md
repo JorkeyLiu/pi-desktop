@@ -1524,7 +1524,18 @@ type AgentCapabilityQuery = {
   此遗留诊断通道可以检查当前工作树，但它
   不是评论的真实来源。评论 UI 读取消息拥有的评论
   相反，来自转录工具结果的记录，因此提交无法删除
-  记录的变化。
+  记录的变化。`DiffFile` 为早于附加字段 `countsKnown` 的消费者保留必需的数字
+  字段 `additions`/`deletions`：该字段缺省表示主机早于本字段（除二进制内容外
+  计数总是已计算），`false` 表示这些数字只是兼容占位值——输出、显示或时间上限
+  截断了补丁，或比较本身失败——两种情况下 `binary` 都仍表示未知。
+  `packages/shared` 中的 `knownDiffLineCounts` 是唯一的读取辅助函数，因此任何
+  消费者都不会把未知计数呈现为 0。
+  位于仓库之外的根目录只有在 Git 自身如此说明时才是已知答案：退出码 128、stdout
+  为空、C 区域设置的 stderr 中出现 `not a git repository`，且根目录没有 `.git`
+  标记；该答案是 `repo: false, clean: true`。其余任何探测拒绝——可疑的属主、
+  损坏的 `HEAD`、不可读的 `.git`，或没有该诊断的非零退出——都表示比较结果未知，
+  返回 `repo: false, clean: false, reason: "unreadable"`，且不回显 Git 的 stderr。
+  被请求期限截断的探测或状态查询报告 `reason: "requestBudgetExceeded"`。
 - `workspace/review/rollback({sessionId, snapshotId})` →
   `ReviewRollbackResult`。主机在恢复快照前验证当前的工具后哈希；
   它返回 `rolledBack`、`alreadyRolledBack`、`conflict` 或 `unavailable`，
@@ -1541,7 +1552,11 @@ type AgentCapabilityQuery = {
   `workspaceUnavailable`，不做猜测。主机无法计数时 `additions`/`deletions`
   缺省；`truncated` 与 `reason`（`fileTooLarge`、`diffTooComplex`、
   `diffTooLarge`、`baselineUnavailable`、`unreadable`、`workspaceUnavailable`、
-  `requestBudgetExceeded`）说明原因，未知计数绝不会序列化为 0。`truncated`
+  `requestBudgetExceeded`）说明原因，未知计数绝不会序列化为 0。比较工作量按
+  文件与请求双层有界：单侧最多 16 MiB、500,000 行，单文件最多比较 200 ms，单次
+  请求共享 1 s、64 MiB 输入字节与 2,000,000 输入行，并按被接纳的文件只记账一次
+  （ADR 0339）。请求账本无法负担的行报告 `requestBudgetExceeded`；超过自己被裁
+  短期限的行报告 `diffTooComplex`；两种情况下计数都保持缺省。`truncated`
   同时标记被主机限界的应答（行数上限、合计比较工作量、合计差异文本）；
   `unreadableRecords` 统计本会话下完全无法读取的记录，非零时所有行都不可回滚，
   因为缺失的记录可能正是该文件更早的一次修改。

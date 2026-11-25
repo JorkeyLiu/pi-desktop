@@ -8,9 +8,9 @@ import type { UiMessage } from "@pi-desktop/shared";
 import { ToolRow } from "../../apps/desktop/src/features/chat/transcript/ToolRow";
 import { AssistantTurn } from "../../apps/desktop/src/features/chat/transcript/AssistantTurn";
 import { buildTranscriptEntries } from "../../apps/desktop/src/lib/assistant-turns";
-import { buildSubagentTranscript } from "../../apps/desktop/src/lib/subagent-transcript";
 import { TranscriptDisclosureProvider } from "../../apps/desktop/src/features/chat/transcript/disclosure";
-
+import { probeLargeRoutes } from "./tool-review-large";
+import { buildSubagentTranscript } from "../../apps/desktop/src/lib/subagent-transcript";
 declare global {
   var toolReviewProbe: (payloads: ToolReviewPayloads) => Promise<unknown>;
 }
@@ -40,7 +40,16 @@ type ToolReviewPayloads = {
   /** A real scratch `Write` that created its file: preview only, no record. */
   scratchWrite: HostContent;
   /** A real external `Write` that overwrote its file: preview only, no record. */
-  externalWrite: HostContent;
+  /** A real workspace `Write` of a 1.34 MB, 40,000-line file. */
+  largeWrite: HostContent;
+  /** A real workspace `Edit` of one line inside that 1.34 MB file. */
+  largeEdit: HostContent;
+  /** The session's own rows for those files, as `review.files` returned them. */
+  largeSession: {
+    sessionId: string;
+    files: unknown[];
+    truncated?: boolean;
+  };
 };
 
 const createdAt = "2026-10-18T00:00:00.000Z";
@@ -612,6 +621,19 @@ globalThis.toolReviewProbe = async (payloads: ToolReviewPayloads) => {
         );
       }
     }
+
+    // ── 3b. The real 1.34 MB create-then-edit route ──
+    // One module owns that section; it renders the same production rows and
+    // reads the same host payloads, with only the IPC transport replaced.
+    await probeLargeRoutes(payloads, {
+      mountRow: (node) => mount(column, node),
+      settle,
+      check,
+      countsText,
+      expand,
+      toolMessage: (id, toolName, content, args) =>
+        toolMessageFromContent(id, toolName, content, {}, args ?? {}),
+    });
 
     // ── 4. Anything the record does not prove states nothing ──
     const unknownHost = mount(

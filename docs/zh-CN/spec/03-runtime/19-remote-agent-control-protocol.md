@@ -210,7 +210,7 @@ owner，工作区读取都按会话持久根、Host 忽略规则和 `PATH_OUTSID
 | `session/compact` | controller | 对活动会话执行手动上下文检查点 |
 | `workspace/list` | viewer | 有界列出会话根下的条目，遵守 Host 忽略规则 |
 | `workspace/read` | viewer | 读取会话根下的一个有界文件，图片以 data URL 返回 |
-| `workspace/diff` | viewer | 返回会话根的工作树 diff |
+| `workspace/diff` | viewer | 返回会话根的工作树 diff，受 §6 上限约束；每个 `DiffFile` 保留必需的数字字段 `additions`/`deletions`，当上限或比较失败使这些数字只是占位值时设置附加字段 `countsKnown: false`；仅当 Git 自身的非工作树诊断与缺少 `.git` 标记一致时，无仓库的根才报告 `repo: false, clean: true`，其余任何模糊拒绝都报告 `repo: false, clean: false, reason: unreadable` |
 | `terminal/open` | controller | 在 Host 上以会话根为 cwd 打开 pty；返回终端 id 与有界回放环；受策略限制 |
 | `terminal/input` | controller | 向已打开终端写入字节 |
 | `terminal/resize` | controller | 调整已打开终端尺寸 |
@@ -323,6 +323,11 @@ Plan/Goal 审批为带显式 `permissionMode` 的 `approve` 或 `reject`，且�
 | Terminal output replay ring | 每终端 128 KiB |
 | Open terminals per session | 2 |
 | Relayed tool execution deadline | 工具自身超时 |
+| `workspace/diff` request deadline | 8 seconds |
+| `workspace/diff` aggregate stdout | 2 MiB |
+| `workspace/diff` status payload | 256 KiB |
+| Files per `workspace/diff` answer | 100 |
+| Patch text per `workspace/diff` file | 200 KiB |
 
 | Code | Retriable | Meaning |
 |---|---:|---|

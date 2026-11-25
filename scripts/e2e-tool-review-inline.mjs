@@ -145,6 +145,226 @@ async function runHost() {
         "the real workspace Write carries no per-call diff: " + shortJson(written.content),
       );
 
+      // ── A real 1.34 MB file through the same tools ──
+      // Far above the old 512 KiB gate, far below the 16 MiB per-side ceiling:
+      // the mutation tools must count it and keep a hunk, not refuse it.
+      const bigDoc = Array.from(
+        { length: 40_000 },
+        (_, index) => `long line ${index} with some payload\n`,
+      ).join("");
+      assert(
+        bigDoc.length > 1_000_000 && bigDoc.length < 16 * 1024 * 1024,
+        `the large fixture is 1.34 MB: ${bigDoc.length}`,
+      );
+      const bigWrite = await host.call(
+        "tools.execute",
+        {
+          sessionId: session.id,
+          toolCallId: "write-big",
+          toolName: "Write",
+          args: { path: "big.txt", content: bigDoc },
+          mode: "agent",
+        },
+        60_000,
+      );
+      assertToolSuccess(bigWrite, "write-big");
+      const bigWriteReview = bigWrite.content?.review;
+      assert(
+        bigWriteReview?.operation === "write" &&
+          bigWriteReview.status === "added" &&
+          bigWriteReview.additions === 40_000 &&
+          bigWriteReview.deletions === 0,
+        "the 1.34 MB Write record lost its exact counts: " +
+          shortJson(bigWriteReview),
+      );
+      // The body of a 40,000-line creation exceeds the record's hunk cap, so
+      // the record keeps its exact counts and states that reason — but the
+      // size gate is what must not appear here.
+      for (const [label, preview] of [
+        ["review", bigWriteReview],
+        ["editDiff", bigWrite.content?.editDiff],
+      ]) {
+        assert(
+          preview?.truncated === true &&
+            preview.reason === "diffTooLarge" &&
+            Array.isArray(preview.hunks) &&
+            preview.hunks.length === 0,
+          `the 1.34 MB Write ${label} did not state its body cap: ` +
+            shortJson(preview),
+        );
+        assert(
+          preview.reason !== "fileTooLarge",
+          `the 1.34 MB Write ${label} fell behind the old size gate: ` +
+            shortJson(preview),
+        );
+      }
+
+      const bigEdit = await host.call(
+        "tools.execute",
+        {
+          sessionId: session.id,
+          toolCallId: "edit-big",
+          toolName: "Edit",
+          args: {
+            path: "big.txt",
+            tag: bigWrite.content.tag,
+            ops: "PUT 20001.=20001:\n+long line 20000 edited\n",
+          },
+          mode: "agent",
+        },
+        60_000,
+      );
+      assertToolSuccess(bigEdit, "edit-big");
+      assert.equal(
+        (await readFile(join(workspace, "big.txt"), "utf8")).split("\n")[20_000],
+        "long line 20000 edited",
+      );
+      const bigEditReview = bigEdit.content?.review;
+      assert(
+        bigEditReview?.operation === "edit" &&
+          bigEditReview.status === "modified" &&
+          bigEditReview.additions === 1 &&
+          bigEditReview.deletions === 1 &&
+          bigEditReview.reason === undefined &&
+          Array.isArray(bigEditReview.hunks) &&
+          bigEditReview.hunks.length === 1,
+        "the 1.34 MB Edit record lost its one-line hunk: " +
+          shortJson(bigEditReview),
+      );
+      assert(
+        bigEdit.content?.editDiff?.additions === 1 &&
+          bigEdit.content.editDiff?.deletions === 1 &&
+          bigEdit.content.editDiff.reason === undefined &&
+          Array.isArray(bigEdit.content.editDiff.hunks) &&
+          bigEdit.content.editDiff.hunks.length === 1,
+        "the 1.34 MB Edit per-call preview lost its one-line hunk: " +
+          shortJson(bigEdit.content?.editDiff),
+      );
+      // The durable record and the per-call preview describe the same change.
+      assert.deepEqual(
+        {
+          additions: bigEditReview.additions,
+          deletions: bigEditReview.deletions,
+          hunks: bigEditReview.hunks,
+        },
+        {
+          additions: bigEdit.content.editDiff.additions,
+          deletions: bigEdit.content.editDiff.deletions,
+          hunks: bigEdit.content.editDiff.hunks,
+        },
+        "the durable record and the per-call preview disagree about the 1.34 MB edit",
+      );
+
+      // A 1.34 MB file the user already had, overwritten by Write and then
+      // edited: its session row is the net change from the user's own bytes, so
+      // it keeps exact counts and a real hunk instead of only the creation cap.
+      await writeFile(join(workspace, "big-over.txt"), bigDoc, "utf8");
+      const overwrite = await host.call(
+        "tools.execute",
+        {
+          sessionId: session.id,
+          toolCallId: "write-big-over",
+          toolName: "Write",
+          args: {
+            path: "big-over.txt",
+            content: bigDoc.replace(
+              "long line 5000 with some payload",
+              "long line 5000 revised",
+            ),
+          },
+          mode: "agent",
+        },
+        60_000,
+      );
+      assertToolSuccess(overwrite, "write-big-over");
+      assert(
+        overwrite.content?.review?.additions === 1 &&
+          overwrite.content?.review?.deletions === 1 &&
+          overwrite.content?.review?.hunks?.length === 1,
+        "the 1.34 MB overwrite record lost its one-line hunk: " +
+          shortJson(overwrite.content?.review),
+      );
+      const overwriteEdit = await host.call(
+        "tools.execute",
+        {
+          sessionId: session.id,
+          toolCallId: "edit-big-over",
+          toolName: "Edit",
+          args: {
+            path: "big-over.txt",
+            tag: overwrite.content.tag,
+            ops: "PUT 30001.=30001:\n+long line 30000 edited\n",
+          },
+          mode: "agent",
+        },
+        60_000,
+      );
+      assertToolSuccess(overwriteEdit, "edit-big-over");
+      assert(
+        overwriteEdit.content?.editDiff?.additions === 1 &&
+          overwriteEdit.content?.editDiff?.deletions === 1,
+        "the 1.34 MB overwrite edit lost its counts: " +
+          shortJson(overwriteEdit.content?.editDiff),
+      );
+
+      // The session review reads the same bytes from the session's own records.
+      const largeFiles = await host.call("review.files", {
+        sessionId: session.id,
+      });
+      const bigRow = (largeFiles.files ?? []).find((file) => file.path === "big.txt");
+      const overRow = (largeFiles.files ?? []).find(
+        (file) => file.path === "big-over.txt",
+      );
+      assert(
+        bigRow?.additions === 40_000 &&
+          bigRow.deletions === 0 &&
+          bigRow.reason === "diffTooLarge" &&
+          bigRow.truncated === true &&
+          Array.isArray(bigRow.hunks) &&
+          bigRow.hunks.length === 0,
+        "the session row for the 1.34 MB creation lost its exact net counts: " +
+          shortJson(bigRow),
+      );
+      assert(
+        overRow?.additions === 2 &&
+          overRow.deletions === 2 &&
+          overRow.reason === undefined &&
+          overRow.truncated === undefined &&
+          Array.isArray(overRow.hunks) &&
+          overRow.hunks.length > 0,
+        "the session row for the 1.34 MB overwrite lost its counted hunk: " +
+          shortJson(overRow),
+      );
+
+      // Rollback safety on the same 1.34 MB files: the file the session created
+      // is removed, and the user's own 1.34 MB file is restored byte for byte.
+      const bigRollback = await host.call("review.rollbackFile", {
+        sessionId: session.id,
+        path: "big.txt",
+      });
+      assert.equal(bigRollback.status, "rolledBack", shortJson(bigRollback));
+      await assert.rejects(readFile(join(workspace, "big.txt"), "utf8"));
+      const overRollback = await host.call("review.rollbackFile", {
+        sessionId: session.id,
+        path: "big-over.txt",
+      });
+      assert.equal(overRollback.status, "rolledBack", shortJson(overRollback));
+      assert.equal(
+        await readFile(join(workspace, "big-over.txt"), "utf8"),
+        bigDoc,
+        "rollback did not restore the 1.34 MB baseline byte for byte",
+      );
+      const afterRollback = await host.call("review.files", {
+        sessionId: session.id,
+      });
+      assert(
+        !(afterRollback.files ?? []).some(
+          (file) => file.path === "big.txt" || file.path === "big-over.txt",
+        ),
+        "a rolled-back 1.34 MB file is still listed as changed: " +
+          shortJson(afterRollback.files?.map((file) => file.path)),
+      );
+
       // What the host stores next to the record uses the same vocabulary.
       const editMeta = metaPath(dataDir, session.id, editReview.snapshotId);
       const writeMeta = metaPath(dataDir, session.id, writeReview.snapshotId);
@@ -440,6 +660,15 @@ async function runHost() {
         legacyEdit: withOperation("Edit"),
         // The same real record with an operation no contract names.
         unknownOperation: withOperation("wipe"),
+        // The real 1.34 MB route: far above the old 512 KiB gate, and the
+        // session rows exactly as the panel receives them before rollback.
+        largeWrite: bigWrite.content,
+        largeEdit: bigEdit.content,
+        largeSession: {
+          sessionId: session.id,
+          files: largeFiles.files,
+          truncated: largeFiles.truncated,
+        },
       };
     },
     resolveHostBinary(),
@@ -588,7 +817,7 @@ try {
   const payloads = await runHost();
   await runRenderer(payloads);
   console.log(
-    "PASS E2E-tool-review-inline: real tools.execute Write/Edit records render their +a/−d and diff on the main and delegate rows, including pre-contract records and the per-call preview on workspace, scratch, and external Writes and on scratch and external edits",
+    "PASS E2E-tool-review-inline: real tools.execute Write/Edit records render their +a/−d and diff on the main and delegate rows, including pre-contract records, the per-call preview on workspace, scratch, and external Writes and on scratch and external edits, and a real 1.34 MB create-then-edit path whose counts, hunk, and session rows survive the old size gate",
   );
 } finally {
   await rm(tempRoot, { recursive: true, force: true });

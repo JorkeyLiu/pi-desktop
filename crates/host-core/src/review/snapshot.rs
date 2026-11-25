@@ -2,21 +2,26 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::workspace::{self, ToolRoot};
 
-use super::diff::{make_preview, read_diff_side, DiffBudget, MAX_DIFF_WORK, MAX_RECORD_HUNK_CHARS};
+use super::diff::{
+    make_preview, DiffSide, PreviewLimits, ReviewPreview, MAX_DIFF_BYTES, MAX_RECORD_HUNK_CHARS,
+};
 use super::layout::{
-    before_path, hash_file, metadata_path, now_micros, read_meta, relative_path, root_identity,
-    snapshot_dir, snapshot_location, write_meta, SessionRoots,
+    before_path, hash_bytes, hash_file, metadata_path, now_micros, read_meta, relative_path,
+    root_identity, snapshot_dir, snapshot_location, write_meta, SessionRoots,
 };
 use super::model::{
-    ReviewChange, ReviewChangeOperation, ReviewChangeState, ReviewChangeStatus, RollbackOutcome,
-    SnapshotMeta,
+    FileMutationPreview, ReviewChange, ReviewChangeOperation, ReviewChangeState,
+    ReviewChangeStatus, ReviewDiffLimit, RollbackOutcome, SnapshotMeta,
 };
 
-pub(super) const MAX_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024;
+/// The bytes one record retains. It matches the comparison ceiling, so a file
+/// small enough to compare is also small enough to roll back.
+pub(super) const MAX_SNAPSHOT_BYTES: u64 = MAX_DIFF_BYTES;
 
 #[derive(Debug)]
 pub struct PendingChange {
@@ -32,6 +37,26 @@ pub struct PendingChange {
     before_exists: bool,
     before_hash: Option<String>,
     before_copied: bool,
+}
+
+/// What one `Write` or `Edit` call already observed about the file it changed,
+/// so the durable record can reuse that comparison instead of repeating it.
+///
+/// The evidence is internal to the host: it never crosses the IPC boundary.
+/// It is only trusted when both hashes match the record's own captured state
+/// and the preview was rendered under the same hunk cap (see
+/// [`finalize_change`]); otherwise the record is computed from a fresh read.
+#[derive(Debug, Clone)]
+pub struct FileMutationEvidence {
+    /// The bytes the tool observed before it wrote; `None` when the file did
+    /// not exist, which is also what the record stores.
+    pub before_hash: Option<String>,
+    /// The hash of the bytes the tool wrote; `None` when it deleted the file.
+    pub after_hash: Option<String>,
+    /// The hunk-char ceiling the preview was rendered under.
+    pub hunk_char_budget: usize,
+    /// The per-call preview the tool already computed for its own result.
+    pub preview: FileMutationPreview,
 }
 
 pub(super) fn tool_operation(tool_name: &str) -> Option<ReviewChangeOperation> {
@@ -76,16 +101,30 @@ pub fn prepare_change(
     let before_path = before_path(&snapshot_dir);
     let metadata = fs::metadata(&resolved).ok();
     let before_exists = metadata.as_ref().is_some_and(|value| value.is_file());
-    let before_hash = if before_exists {
-        hash_file(&resolved).ok()
-    } else {
-        None
-    };
-    let before_copied = before_exists
-        && metadata
+    // One read provides both the hash and the snapshot copy, so a write
+    // between them cannot make the record describe bytes it never retained.
+    let mut before_hash = None;
+    let mut before_copied = false;
+    if before_exists {
+        if metadata
             .as_ref()
             .is_some_and(|value| value.len() <= MAX_SNAPSHOT_BYTES)
-        && fs::copy(&resolved, &before_path).is_ok();
+        {
+            if let Ok(bytes) = fs::read(&resolved) {
+                if bytes.len() as u64 <= MAX_SNAPSHOT_BYTES {
+                    if let Ok(()) = fs::write(&before_path, &bytes) {
+                        before_hash = Some(hash_bytes(&bytes));
+                        before_copied = true;
+                    }
+                }
+            }
+        }
+        if before_hash.is_none() {
+            // Too large to retain, or unreadable for the copy: the guard still
+            // describes the bytes the tool is about to act on.
+            before_hash = hash_file(&resolved).ok();
+        }
+    }
     let path = relative_path(root, &resolved);
 
     Ok(Some(PendingChange {
@@ -110,24 +149,110 @@ pub fn discard_change(pending: PendingChange) {
     let _ = fs::remove_dir_all(pending.snapshot_dir);
 }
 
-pub fn finalize_change(pending: &PendingChange) -> Result<ReviewChange> {
-    let after_exists = pending.resolved.is_file();
-    let after_hash = if after_exists {
-        Some(hash_file(&pending.resolved)?)
-    } else {
-        None
+/// What one read of a side produced: the bytes retained for the comparison
+/// when they fit, and the hash of the file that was actually read.
+enum SideBytes {
+    /// The side does not exist, so it reads as no lines at all.
+    Absent,
+    Retained(Vec<u8>),
+    /// The side exists but is over the comparison ceiling, so only its hash is
+    /// known.
+    Oversize(String),
+    Unreadable,
+}
+
+impl SideBytes {
+    fn hash(&self) -> Option<String> {
+        match self {
+            SideBytes::Retained(bytes) => Some(hash_bytes(bytes)),
+            SideBytes::Oversize(hash) => Some(hash.clone()),
+            SideBytes::Absent | SideBytes::Unreadable => None,
+        }
+    }
+
+    fn diff_side(self) -> DiffSide {
+        match self {
+            SideBytes::Retained(bytes) => DiffSide::Present(bytes),
+            SideBytes::Absent => DiffSide::Present(Vec::new()),
+            SideBytes::Oversize(_) => DiffSide::TooLarge,
+            SideBytes::Unreadable => DiffSide::Missing,
+        }
+    }
+}
+
+fn read_side(path: Option<&Path>, exists: bool) -> SideBytes {
+    if !exists {
+        return SideBytes::Absent;
+    }
+    let Some(path) = path else {
+        return SideBytes::Unreadable;
     };
-    let preview = make_preview(
-        read_diff_side(
-            pending
-                .before_copied
-                .then_some(pending.before_path.as_path()),
-            pending.before_exists,
-        ),
-        read_diff_side(Some(pending.resolved.as_path()), after_exists),
-        MAX_RECORD_HUNK_CHARS,
-        &mut DiffBudget::new(MAX_DIFF_WORK),
+    let Ok(metadata) = fs::metadata(path) else {
+        return SideBytes::Unreadable;
+    };
+    if !metadata.is_file() {
+        return SideBytes::Unreadable;
+    }
+    if metadata.len() > MAX_SNAPSHOT_BYTES {
+        return match hash_file(path) {
+            Ok(hash) => SideBytes::Oversize(hash),
+            Err(_) => SideBytes::Unreadable,
+        };
+    }
+    match fs::read(path) {
+        Ok(bytes) if bytes.len() as u64 <= MAX_SNAPSHOT_BYTES => SideBytes::Retained(bytes),
+        // The file grew past the ceiling between the metadata read and the
+        // read itself, so only its hash is retained.
+        Ok(_) => match hash_file(path) {
+            Ok(hash) => SideBytes::Oversize(hash),
+            Err(_) => SideBytes::Unreadable,
+        },
+        Err(_) => SideBytes::Unreadable,
+    }
+}
+
+pub fn finalize_change(
+    pending: &PendingChange,
+    evidence: Option<&FileMutationEvidence>,
+) -> Result<ReviewChange> {
+    let after_exists = pending.resolved.is_file();
+    let after = read_side(Some(pending.resolved.as_path()), after_exists);
+    let after_hash = after.hash();
+    if after_exists && after_hash.is_none() {
+        return Err(anyhow!("read review target after tool execution"));
+    }
+    let before = read_side(
+        pending
+            .before_copied
+            .then_some(pending.before_path.as_path()),
+        pending.before_exists,
     );
+    // The retained copy has to hold the bytes the record claims to have
+    // captured; otherwise the record would describe a baseline that never
+    // existed and the row says so instead of inventing a comparison. A file
+    // too large to retain has no copy to check, so the comparison reports its
+    // size limit instead of claiming the baseline raced.
+    let baseline_raced = pending.before_copied
+        && pending.before_exists
+        && pending.before_hash.is_some()
+        && before.hash().as_deref() != pending.before_hash.as_deref();
+    let preview = match evidence {
+        Some(evidence)
+            if !baseline_raced
+                && evidence.before_hash == pending.before_hash
+                && evidence.after_hash == after_hash
+                && evidence.hunk_char_budget == MAX_RECORD_HUNK_CHARS =>
+        {
+            preview_of(evidence)
+        }
+        _ if baseline_raced => ReviewPreview::limited(ReviewDiffLimit::BaselineUnavailable),
+        _ => make_preview(
+            before.diff_side(),
+            after.diff_side(),
+            MAX_RECORD_HUNK_CHARS,
+            &mut PreviewLimits::file(Instant::now()),
+        ),
+    };
     let status = match (pending.before_exists, after_exists) {
         (false, true) => ReviewChangeStatus::Added,
         (true, false) => ReviewChangeStatus::Deleted,
@@ -172,6 +297,18 @@ pub fn finalize_change(pending: &PendingChange) -> Result<ReviewChange> {
         reason: preview.reason,
         reversible,
     })
+}
+
+/// The comparison a tool call already performed, in the shape a record stores.
+fn preview_of(evidence: &FileMutationEvidence) -> ReviewPreview {
+    ReviewPreview {
+        binary: evidence.preview.binary,
+        truncated: evidence.preview.truncated,
+        reason: evidence.preview.reason,
+        additions: evidence.preview.additions,
+        deletions: evidence.preview.deletions,
+        hunks: evidence.preview.hunks.clone(),
+    }
 }
 
 pub(super) fn restore_before(target: &Path, before: &Path) -> Result<()> {

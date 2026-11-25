@@ -197,6 +197,30 @@ test("remote Files and Review always send session identity and relative paths to
   assert.deepEqual(calls.map((call) => call.input), [{ sessionId: session.id, path: "" }, { sessionId: session.id, path: "readme.md" }, { sessionId: session.id }]);
 });
 
+test("remote Review passes bounded workspace-diff fields through untouched", async () => {
+  initialize();
+  // A Host may answer with per-request and per-file limits, and with numeric
+  // fields that are compatibility placeholders only; the IPC boundary must not
+  // normalize, drop, or rewrite any of them.
+  const payload = {
+    repo: true,
+    clean: false,
+    truncated: true,
+    reason: "requestBudgetExceeded",
+    files: [
+      { path: "legacy.txt", status: "modified", additions: 3, deletions: 1, hunks: [] },
+      { path: "clipped.txt", status: "modified", additions: 0, deletions: 0, countsKnown: false, reason: "diffTooLarge", hunks: [] },
+      { path: "image.bin", status: "modified", additions: 0, deletions: 0, binary: true, countsKnown: false, hunks: [] },
+    ],
+  };
+  const calls = bridge((channel) => {
+    if (channel === IPC.invoke.workspaceDiff) return payload;
+    throw new Error("Unexpected channel");
+  });
+  assert.deepEqual(await api.remoteWorkspaceDiff(session.id), payload);
+  assert.deepEqual(calls.map((call) => call.input), [{ sessionId: session.id }]);
+});
+
 test("a slow remote detail cannot replace a later selected conversation", async () => {
   initialize();
   const slow = deferred();

@@ -1048,6 +1048,23 @@ pub async fn execute_tool_with_options(
     .await
 }
 
+/// One file tool's result plus the internal evidence a durable review record
+/// may reuse instead of repeating the same comparison. The evidence never
+/// serializes: it stays inside the host.
+pub struct FileToolOutcome {
+    content: Value,
+    evidence: Option<crate::review::FileMutationEvidence>,
+}
+
+impl FileToolOutcome {
+    fn plain(content: Value) -> Self {
+        Self {
+            content,
+            evidence: None,
+        }
+    }
+}
+
 /// Run a synchronous file-tool body on Tokio's blocking pool so a long
 /// traversal, read, or rg child wait cannot occupy an async worker (#1071).
 async fn run_file_tool(
@@ -1057,7 +1074,7 @@ async fn run_file_tool(
     args: &Value,
     allow_external_paths: bool,
     hashline: Option<&HashlineContext<'_>>,
-) -> Result<Value, hashline::ToolError> {
+) -> Result<FileToolOutcome, hashline::ToolError> {
     let workspace = workspace.map(Path::to_path_buf);
     let scratch = scratch.map(Path::to_path_buf);
     let tool_name = tool_name.to_string();
@@ -1079,9 +1096,13 @@ async fn run_file_tool(
         let args = &args;
         match tool_name.as_str() {
             "Read" => tool_read(workspace, scratch, args, allow_external_paths, hashline)
+                .map(FileToolOutcome::plain)
                 .map_err(Into::into),
-            "Glob" => tool_glob(workspace, scratch, args, allow_external_paths).map_err(Into::into),
+            "Glob" => tool_glob(workspace, scratch, args, allow_external_paths)
+                .map(FileToolOutcome::plain)
+                .map_err(Into::into),
             "Grep" => tool_grep(workspace, scratch, args, allow_external_paths, hashline)
+                .map(FileToolOutcome::plain)
                 .map_err(Into::into),
             "Write" => tool_write(workspace, scratch, args, allow_external_paths, hashline)
                 .map_err(Into::into),
@@ -1093,6 +1114,14 @@ async fn run_file_tool(
     .map_err(|error| hashline::ToolError::new("INTERNAL", format!("tool task failed: {error}")))?
 }
 
+/// One builtin tool call's serialized result plus the internal evidence a
+/// durable review record may reuse. `evidence` is host-internal and never
+/// serializes.
+pub struct ToolExecutionOutcome {
+    pub result: ToolsExecuteResult,
+    pub evidence: Option<crate::review::FileMutationEvidence>,
+}
+
 /// Execute a builtin tool after the host permission gate has decided whether
 /// an explicit outside-workspace path is allowed for this call.
 pub async fn execute_tool_with_path_access(
@@ -1102,6 +1131,21 @@ pub async fn execute_tool_with_path_access(
     args: &Value,
     options: ToolExecutionOptions<'_>,
 ) -> ToolsExecuteResult {
+    execute_tool_with_evidence_path_access(workspace, scratch, tool_name, args, options)
+        .await
+        .result
+}
+
+/// The same call as [`execute_tool_with_path_access`], also returning the
+/// per-call mutation evidence so one caller can hand it to the review record
+/// it already owns instead of recomputing the comparison.
+pub async fn execute_tool_with_evidence_path_access(
+    workspace: Option<&Path>,
+    scratch: Option<&Path>,
+    tool_name: &str,
+    args: &Value,
+    options: ToolExecutionOptions<'_>,
+) -> ToolExecutionOutcome {
     let ToolExecutionOptions {
         timeout_ms: requested_timeout_ms,
         bash_options,
@@ -1125,10 +1169,12 @@ pub async fn execute_tool_with_path_access(
             let _ = std::fs::create_dir_all(dir);
         }
     }
-    let result: Result<Value, hashline::ToolError> = match tool_name {
+    let result: Result<FileToolOutcome, hashline::ToolError> = match tool_name {
         // Authorize the desktop-owned image request through the normal host gate.
         // Only the trusted desktop runner performs the external call.
-        "GenerateImages" => Ok(serde_json::json!({ "authorized": true })),
+        "GenerateImages" => Ok(FileToolOutcome::plain(serde_json::json!({
+            "authorized": true
+        }))),
         "Read" | "Glob" | "Grep" | "Write" | "Edit" => {
             run_file_tool(
                 workspace,
@@ -1150,6 +1196,7 @@ pub async fn execute_tool_with_path_access(
             });
             tool_bash(workspace, scratch, args, options)
                 .await
+                .map(FileToolOutcome::plain)
                 .map_err(Into::into)
         }
         other if is_desktop_dispatched(other) => Err(hashline::ToolError::new(
@@ -1163,7 +1210,7 @@ pub async fn execute_tool_with_path_access(
     };
 
     match result {
-        Ok(content) => {
+        Ok(FileToolOutcome { content, evidence }) => {
             // Preserve Bash stdout/stderr/exitCode for the model, but still
             // surface a non-zero command as a failed tool result. Previously
             // the shell process could exit 1/128 while the outer tool stayed
@@ -1175,15 +1222,18 @@ pub async fn execute_tool_with_path_access(
                     Some(Value::Null) => true,
                     _ => false,
                 };
-            ToolsExecuteResult {
-                tool_call_id,
-                ok: !command_failed,
-                is_error: command_failed.then_some(true),
-                content,
-                duration_ms: started.elapsed().as_millis() as u64,
-                denied: None,
-                error_code: command_failed.then_some("TOOL_FAILED".into()),
-                command_shell_id,
+            ToolExecutionOutcome {
+                result: ToolsExecuteResult {
+                    tool_call_id,
+                    ok: !command_failed,
+                    is_error: command_failed.then_some(true),
+                    content,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    denied: None,
+                    error_code: command_failed.then_some("TOOL_FAILED".into()),
+                    command_shell_id,
+                },
+                evidence,
             }
         }
         Err(err) => {
@@ -1208,17 +1258,20 @@ pub async fn execute_tool_with_path_access(
                     "pattern": "**/*",
                 });
             }
-            ToolsExecuteResult {
-                tool_call_id,
-                ok: false,
-                is_error: Some(true),
-                content,
-                duration_ms: started.elapsed().as_millis() as u64,
-                denied: Some(
-                    public_code == "TOOL_DENIED" || public_code == "PATH_OUTSIDE_WORKSPACE",
-                ),
-                error_code: Some(public_code),
-                command_shell_id,
+            ToolExecutionOutcome {
+                result: ToolsExecuteResult {
+                    tool_call_id,
+                    ok: false,
+                    is_error: Some(true),
+                    content,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    denied: Some(
+                        public_code == "TOOL_DENIED" || public_code == "PATH_OUTSIDE_WORKSPACE",
+                    ),
+                    error_code: Some(public_code),
+                    command_shell_id,
+                },
+                evidence: None,
             }
         }
     }
@@ -1244,6 +1297,23 @@ fn root_label(root_kind: ToolRoot) -> &'static str {
         ToolRoot::Scratch => "scratch",
         ToolRoot::External => "external",
     }
+}
+
+/// The evidence a durable review record may reuse for one workspace mutation.
+/// Scratch and explicitly approved external writes produce a per-call preview
+/// but no record, so they carry no evidence.
+fn file_evidence(
+    root_kind: ToolRoot,
+    before_hash: Option<String>,
+    after_hash: Option<String>,
+    preview: &crate::review::FileMutationPreview,
+) -> Option<crate::review::FileMutationEvidence> {
+    (root_kind == ToolRoot::Workspace).then(|| crate::review::FileMutationEvidence {
+        before_hash,
+        after_hash,
+        hunk_char_budget: crate::review::record_hunk_char_budget(),
+        preview: preview.clone(),
+    })
 }
 
 /// Image extensions Read returns as an inline image block instead of refusing
@@ -1479,7 +1549,7 @@ fn tool_write(
     args: &Value,
     allow_external_paths: bool,
     hashline: Option<&HashlineContext<'_>>,
-) -> Result<Value, (String, String)> {
+) -> Result<FileToolOutcome, (String, String)> {
     let root = require_workspace(workspace)?;
     let path = args
         .get("path")
@@ -1527,13 +1597,18 @@ fn tool_write(
     let tag = hashline::tag_of_lf_text(&file.text);
     let display = display_tool_path(root_kind, root, &resolved);
     hashline::record_write(hashline, &hashline::canonical_key(&resolved), &file, &tag);
-    let (status, before) = match &baseline {
-        WriteBaseline::Absent => (crate::review::WritePreviewStatus::Added, Some(&[][..])),
+    let (status, before, before_hash) = match &baseline {
+        WriteBaseline::Absent => (
+            crate::review::WritePreviewStatus::Added,
+            Some(&[][..]),
+            None,
+        ),
         WriteBaseline::Present(bytes) => (
             crate::review::WritePreviewStatus::Modified,
             Some(&bytes[..]),
+            Some(crate::review::content_hash(bytes)),
         ),
-        WriteBaseline::Unknown => (crate::review::WritePreviewStatus::Modified, None),
+        WriteBaseline::Unknown => (crate::review::WritePreviewStatus::Modified, None, None),
     };
     let edit_diff = crate::review::preview_write_diff(
         display.clone(),
@@ -1542,14 +1617,23 @@ fn tool_write(
         before,
         &landed,
     );
-    Ok(json!({
-        "path": display,
-        "root": root_label(root_kind),
-        "bytes": content.len(),
-        "tag": tag,
-        "header": hashline::section_header(&display, &tag),
-        "editDiff": edit_diff,
-    }))
+    let evidence = file_evidence(
+        root_kind,
+        before_hash,
+        Some(crate::review::content_hash(&landed)),
+        &edit_diff,
+    );
+    Ok(FileToolOutcome {
+        content: json!({
+            "path": display,
+            "root": root_label(root_kind),
+            "bytes": content.len(),
+            "tag": tag,
+            "header": hashline::section_header(&display, &tag),
+            "editDiff": edit_diff,
+        }),
+        evidence,
+    })
 }
 
 /// Lower a legacy `old_string`/`new_string` replacement to one line-anchored op.
@@ -1603,7 +1687,7 @@ fn tool_edit(
     args: &Value,
     allow_external_paths: bool,
     hashline: Option<&HashlineContext<'_>>,
-) -> Result<Value, hashline::ToolError> {
+) -> Result<FileToolOutcome, hashline::ToolError> {
     let root = require_workspace(workspace).map_err(|(c, m)| hashline::ToolError::new(c, m))?;
     let path = args
         .get("path")
@@ -1676,6 +1760,7 @@ fn tool_edit(
         }
     };
     let display = display_tool_path(root_kind, root, &resolved);
+    let before_hash = crate::review::content_hash(&live);
     let canonical = hashline::canonical_key(&resolved);
     let (file, success) = hashline::apply_edit(
         &display,
@@ -1698,14 +1783,18 @@ fn tool_edit(
             &live,
             None,
         );
-        return Ok(json!({
-            "path": display,
-            "root": root_label(root_kind),
-            "deleted": true,
-            "ops": success.ops_echo,
-            "warnings": success.warnings,
-            "editDiff": edit_diff,
-        }));
+        let evidence = file_evidence(root_kind, Some(before_hash), None, &edit_diff);
+        return Ok(FileToolOutcome {
+            content: json!({
+                "path": display,
+                "root": root_label(root_kind),
+                "deleted": true,
+                "ops": success.ops_echo,
+                "warnings": success.warnings,
+                "editDiff": edit_diff,
+            }),
+            evidence,
+        });
     }
 
     let bytes = hashline::encode_success(&file);
@@ -1743,42 +1832,62 @@ fn tool_edit(
             &dest_file,
             &success.tag,
         );
-        return Ok(json!({
-            "path": dest_display.clone(),
-            "root": root_label(dest_root),
-            "tag": success.tag,
-            "header": hashline::section_header(&dest_display, &success.tag),
-            "movedFrom": display,
-            "ops": success.ops_echo,
-            "warnings": success.warnings,
-            "editDiff": crate::review::preview_edit_diff(
-                dest_display,
-                root_label(dest_root).to_string(),
-                crate::review::EditPreviewStatus::Moved,
-                &live,
-                Some(&bytes),
-            ),
-        }));
+        let edit_diff = crate::review::preview_edit_diff(
+            dest_display.clone(),
+            root_label(dest_root).to_string(),
+            crate::review::EditPreviewStatus::Moved,
+            &live,
+            Some(&bytes),
+        );
+        let evidence = file_evidence(
+            dest_root,
+            Some(before_hash),
+            Some(crate::review::content_hash(&bytes)),
+            &edit_diff,
+        );
+        return Ok(FileToolOutcome {
+            content: json!({
+                "path": dest_display,
+                "root": root_label(dest_root),
+                "tag": success.tag,
+                "header": hashline::section_header(&dest_display, &success.tag),
+                "movedFrom": display,
+                "ops": success.ops_echo,
+                "warnings": success.warnings,
+                "editDiff": edit_diff,
+            }),
+            evidence,
+        });
     }
 
     std::fs::write(&resolved, &bytes)
         .map_err(|e| hashline::ToolError::new("TOOL_FAILED", format!("write failed: {e}")))?;
     hashline::record_write(hashline, &canonical, &file, &success.tag);
-    Ok(json!({
-        "path": display.clone(),
-        "root": root_label(root_kind),
-        "tag": success.tag,
-        "header": hashline::section_header(&display, &success.tag),
-        "ops": success.ops_echo,
-        "warnings": success.warnings,
-        "editDiff": crate::review::preview_edit_diff(
-            display,
-            root_label(root_kind).to_string(),
-            crate::review::EditPreviewStatus::Modified,
-            &live,
-            Some(&bytes),
-        ),
-    }))
+    let edit_diff = crate::review::preview_edit_diff(
+        display.clone(),
+        root_label(root_kind).to_string(),
+        crate::review::EditPreviewStatus::Modified,
+        &live,
+        Some(&bytes),
+    );
+    let evidence = file_evidence(
+        root_kind,
+        Some(before_hash),
+        Some(crate::review::content_hash(&bytes)),
+        &edit_diff,
+    );
+    Ok(FileToolOutcome {
+        content: json!({
+            "path": display,
+            "root": root_label(root_kind),
+            "tag": success.tag,
+            "header": hashline::section_header(&display, &success.tag),
+            "ops": success.ops_echo,
+            "warnings": success.warnings,
+            "editDiff": edit_diff,
+        }),
+        evidence,
+    })
 }
 
 fn build_glob_set(pattern: &str) -> Result<globset::GlobSet, (String, String)> {
@@ -5890,7 +5999,10 @@ mod tests {
     #[tokio::test]
     async fn large_edit_reports_limit_without_false_zero_counts() {
         let harness = EditDiffHarness::setup();
-        let big = "line\n".repeat(200_000);
+        // Beyond the per-side line ceiling: refused before the differ allocates
+        // one token per line, so the answer is deterministic and never waits on
+        // a clock.
+        let big = "x\n".repeat(600_000);
         std::fs::write(harness.workspace.path().join("big.txt"), &big).unwrap();
         let tag = harness.read_tag("Read", "big.txt", false).await;
         let result = harness
@@ -6106,7 +6218,8 @@ mod tests {
     #[tokio::test]
     async fn large_write_reports_limit_without_false_zero_counts() {
         let harness = EditDiffHarness::setup();
-        let big = "line\n".repeat(200_000);
+        // Beyond the per-side line ceiling, refused before tokenization.
+        let big = "x\n".repeat(600_000);
         std::fs::write(harness.workspace.path().join("big.txt"), &big).unwrap();
         let changed = format!("{big}EXTRA\n");
         let result = harness.write("big.txt", &changed, false).await;

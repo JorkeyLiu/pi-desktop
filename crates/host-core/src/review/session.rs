@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 use super::diff::{
-    make_preview, read_diff_side, DiffBudget, DiffSide, ReviewPreview, MAX_DIFF_WORK,
+    make_preview, read_diff_side, side_bytes, DiffRequest, DiffSide, PreviewLimits, ReviewPreview,
     MAX_RECORD_HUNK_CHARS,
 };
 use super::layout::{
@@ -18,8 +19,6 @@ use super::snapshot::restore_before;
 
 /// Hunk text one `review.files` response may carry across all rows.
 pub(super) const MAX_RESPONSE_HUNK_CHARS: usize = 512 * 1024;
-/// Line work one `review.files` request may spend across all files.
-pub(super) const MAX_REQUEST_DIFF_WORK: usize = 48_000_000;
 /// Snapshot directories one request may scan.
 pub(super) const MAX_SESSION_SNAPSHOTS: usize = 8_192;
 /// File rows one request may return.
@@ -161,6 +160,22 @@ pub(super) fn hunk_chars(hunks: &[ReviewDiffHunk]) -> usize {
 /// oldest record this session wrote for it, so a long conversation that has
 /// scrolled out of the transcript is still compared from its first bytes.
 pub fn file_changes(data_dir: &Path, session_id: &str, roots: &SessionRoots) -> ReviewFilesOutcome {
+    file_changes_with_request(
+        data_dir,
+        session_id,
+        roots,
+        DiffRequest::new(Instant::now()),
+    )
+}
+
+/// [`file_changes`] over a caller-provided ledger: the seam tests use to drive
+/// an exhausted request without sleeping or allocating a whole request's inputs.
+pub(super) fn file_changes_with_request(
+    data_dir: &Path,
+    session_id: &str,
+    roots: &SessionRoots,
+    mut request: DiffRequest,
+) -> ReviewFilesOutcome {
     let scan = scan_session(data_dir, session_id);
     let unreadable_records = scan.unreadable;
     let mut truncated = scan.truncated;
@@ -169,10 +184,10 @@ pub fn file_changes(data_dir: &Path, session_id: &str, roots: &SessionRoots) -> 
         truncated = true;
     }
 
-    // Both budgets are shared by the whole answer: one pathological file cannot
-    // starve every later row, and no request may spend unbounded work or send
+    // One ledger carries the whole answer's deadline and input accounting: one
+    // pathological file cannot starve every later row, no file's bytes or lines
+    // are counted twice, and no request may spend unbounded work or send
     // unbounded hunk text.
-    let mut work = DiffBudget::new(MAX_REQUEST_DIFF_WORK);
     let mut hunk_chars_left = MAX_RESPONSE_HUNK_CHARS;
     let mut files = Vec::new();
     // An unreadable record means the session's history is incomplete, so no row
@@ -214,6 +229,30 @@ pub fn file_changes(data_dir: &Path, session_id: &str, roots: &SessionRoots) -> 
         };
 
         let after_exists = target.is_file();
+        let reversible = if baseline.before_exists {
+            baseline.reversible
+        } else {
+            after_exists
+        } && baseline_verified;
+        // The request ledger is consulted before this file is hashed or read:
+        // with no time, bytes, or lines left, another file's I/O cannot be
+        // afforded, so the row states that limit instead of reading first and
+        // discovering afterwards that it should not have.
+        if request.is_exhausted(Instant::now()) {
+            if let Some(row) = budget_row(
+                group.root,
+                &baseline,
+                unread_status(baseline.before_exists, after_exists),
+                reversible,
+                rolled_back,
+                snapshot_ids,
+            ) {
+                truncated = true;
+                files.push(row);
+            }
+            continue;
+        }
+
         let current_hash = if after_exists {
             hash_file(&target).ok()
         } else {
@@ -227,37 +266,76 @@ pub fn file_changes(data_dir: &Path, session_id: &str, roots: &SessionRoots) -> 
             continue;
         }
 
-        let preview = if work.remaining == 0 {
-            truncated = true;
-            ReviewPreview::limited(ReviewDiffLimit::RequestBudgetExceeded)
+        // What each side is expected to hold comes from metadata alone and is
+        // reserved before either side is read, so one request's reads stay
+        // inside its input ceiling instead of overshooting and only noticing
+        // that afterwards.
+        let baseline_path = if baseline.before_exists && baseline.reversible {
+            snapshot_dir(data_dir, session_id, &baseline_id)
+                .ok()
+                .map(|dir| before_path(&dir))
         } else {
-            let before_side = if !baseline.before_exists {
-                DiffSide::Present(Vec::new())
-            } else if baseline.reversible {
-                match snapshot_dir(data_dir, session_id, &baseline_id) {
-                    Ok(dir) => read_diff_side(Some(&before_path(&dir)), true),
-                    Err(_) => DiffSide::Missing,
-                }
-            } else {
-                DiffSide::Missing
-            };
-            // A file may use the whole per-file ceiling only while the request
-            // still has it; otherwise the aggregate budget is the constraint and
-            // the row names that instead of blaming the file's own size.
-            let request_was_short = work.remaining < MAX_DIFF_WORK;
-            let mut child = work.capped(MAX_DIFF_WORK);
-            let preview = make_preview(
-                before_side,
-                read_diff_side(Some(&target), after_exists),
-                hunk_chars_left.min(MAX_RECORD_HUNK_CHARS),
-                &mut child,
-            );
-            work.settle(child);
-            if request_was_short && preview.reason == Some(ReviewDiffLimit::DiffTooComplex) {
-                ReviewPreview::limited(ReviewDiffLimit::RequestBudgetExceeded)
-            } else {
-                preview
+            None
+        };
+        let expected = baseline_path
+            .as_deref()
+            .map(|path| side_bytes(Some(path), true))
+            .unwrap_or(0)
+            + side_bytes(Some(&target), after_exists);
+        let Some(work) = request.admit(Instant::now(), expected) else {
+            if let Some(row) = budget_row(
+                group.root,
+                &baseline,
+                unread_status(baseline.before_exists, after_exists),
+                reversible,
+                rolled_back,
+                snapshot_ids,
+            ) {
+                truncated = true;
+                files.push(row);
             }
+            continue;
+        };
+        let before_side = if !baseline.before_exists {
+            DiffSide::Present(Vec::new())
+        } else if baseline.reversible {
+            match baseline_path {
+                Some(path) => read_diff_side(Some(&path), true),
+                None => DiffSide::Missing,
+            }
+        } else {
+            DiffSide::Missing
+        };
+        let after_side = read_diff_side(Some(&target), after_exists);
+        // The reservation is exact unless a file grew between its metadata and
+        // its read; that overshoot is reconciled against the same ledger before
+        // any comparison runs, and a request that cannot absorb it reports the
+        // budget instead of comparing bytes it never reserved.
+        if !request.settle(
+            expected,
+            before_side.charged_bytes() + after_side.charged_bytes(),
+        ) {
+            if let Some(row) = budget_row(
+                group.root,
+                &baseline,
+                unread_status(baseline.before_exists, after_exists),
+                reversible,
+                rolled_back,
+                snapshot_ids,
+            ) {
+                truncated = true;
+                files.push(row);
+            }
+            continue;
+        }
+        let preview = {
+            let mut limits = PreviewLimits::request(work, &mut request);
+            make_preview(
+                before_side,
+                after_side,
+                hunk_chars_left.min(MAX_RECORD_HUNK_CHARS),
+                &mut limits,
+            )
         };
         if matches!(
             preview.reason,
@@ -266,7 +344,7 @@ pub fn file_changes(data_dir: &Path, session_id: &str, roots: &SessionRoots) -> 
                     | ReviewDiffLimit::RequestBudgetExceeded
                     | ReviewDiffLimit::WorkspaceUnavailable
             )
-        ) || work.remaining == 0
+        ) || request.is_exhausted(Instant::now())
         {
             truncated = true;
         }
@@ -279,11 +357,6 @@ pub fn file_changes(data_dir: &Path, session_id: &str, roots: &SessionRoots) -> 
         } else {
             ReviewChangeStatus::Modified
         };
-        let reversible = if baseline.before_exists {
-            baseline.reversible
-        } else {
-            after_exists
-        } && baseline_verified;
         files.push(
             FileRow {
                 root: group.root,
@@ -334,6 +407,42 @@ impl FileRow {
             snapshot_ids: self.snapshot_ids,
         }
     }
+}
+
+/// The status a row can state from existence alone. A file that is absent both
+/// before and after the conversation did not change, so it has no row; without
+/// a read, a file present both times is only known to be at least modified.
+fn unread_status(before_exists: bool, after_exists: bool) -> Option<ReviewChangeStatus> {
+    match (before_exists, after_exists) {
+        (false, false) => None,
+        (false, true) => Some(ReviewChangeStatus::Added),
+        (true, false) => Some(ReviewChangeStatus::Deleted),
+        (true, true) => Some(ReviewChangeStatus::Modified),
+    }
+}
+
+/// A row the request's budget stopped: it states the limit and carries no line
+/// evidence, because its bytes were never read.
+fn budget_row(
+    root: Option<String>,
+    baseline: &SnapshotMeta,
+    status: Option<ReviewChangeStatus>,
+    reversible: bool,
+    rolled_back: bool,
+    snapshot_ids: Vec<String>,
+) -> Option<ReviewFileChange> {
+    Some(
+        FileRow {
+            root,
+            path: baseline.path.clone(),
+            status: status?,
+            preview: ReviewPreview::limited(ReviewDiffLimit::RequestBudgetExceeded),
+            reversible,
+            rolled_back,
+            snapshot_ids,
+        }
+        .into_change(),
+    )
 }
 
 /// Restore one file to the bytes the conversation first recorded for it.

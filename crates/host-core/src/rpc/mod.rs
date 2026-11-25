@@ -4465,19 +4465,35 @@ async fn handle_request(
                     session_id: p.session_id.as_str(),
                     store: &hashline_store,
                 };
+                // Snapshot capture hashes and copies the target, so it runs on
+                // the blocking pool instead of an async worker.
                 let pending_review = if remote_workspace.is_some() {
                     None
                 } else {
-                    review::prepare_change(
-                        &data_dir,
-                        &p.session_id,
-                        &p.tool_call_id,
-                        ws_path.as_deref(),
-                        scratch_path.as_deref(),
-                        &p.tool_name,
-                        &p.args,
-                    )
-                    .unwrap_or_else(|error| {
+                    let capture = (
+                        data_dir.clone(),
+                        p.session_id.clone(),
+                        p.tool_call_id.clone(),
+                        ws_path.clone(),
+                        scratch_path.clone(),
+                        p.tool_name.clone(),
+                        p.args.clone(),
+                    );
+                    let captured = tokio::task::spawn_blocking(move || {
+                        let (data_dir, session, message, workspace, scratch, tool, args) = capture;
+                        review::prepare_change(
+                            &data_dir,
+                            &session,
+                            &message,
+                            workspace.as_deref(),
+                            scratch.as_deref(),
+                            &tool,
+                            &args,
+                        )
+                    })
+                    .await
+                    .map_err(|error| rpc_err(1000, error.to_string(), "INTERNAL"))?;
+                    captured.unwrap_or_else(|error| {
                         tracing::warn!(
                             session_id = %p.session_id,
                             tool_call_id = %p.tool_call_id,
@@ -4542,6 +4558,7 @@ async fn handle_request(
                     });
                 }
 
+                let mut tool_evidence: Option<review::FileMutationEvidence> = None;
                 let mut result = if p.tool_name == "TodoWrite" {
                     // The checklist body owns its own trusted-transport checks,
                     // the atomic write, and the after-commit notification.
@@ -4571,7 +4588,7 @@ async fn handle_request(
                     )
                     .await
                 } else {
-                    tools::execute_tool_with_path_access(
+                    let outcome = tools::execute_tool_with_evidence_path_access(
                         ws_path.as_deref(),
                         scratch_path.as_deref(),
                         &p.tool_name,
@@ -4583,13 +4600,28 @@ async fn handle_request(
                             hashline: Some(hashline_ctx),
                         },
                     )
-                    .await
+                    .await;
+                    tool_evidence = outcome.evidence;
+                    outcome.result
                 };
                 result.tool_call_id = p.tool_call_id.clone();
 
                 if let Some(pending) = pending_review {
                     if result.ok {
-                        match review::finalize_change(&pending) {
+                        // The record resolves hashes and comparisons from
+                        // one read each, so it runs on the blocking pool.
+                        let finalized = tokio::task::spawn_blocking(move || {
+                            match review::finalize_change(&pending, tool_evidence.as_ref()) {
+                                Ok(change) => Ok(change),
+                                Err(error) => {
+                                    review::discard_change(pending);
+                                    Err(error)
+                                }
+                            }
+                        })
+                        .await
+                        .map_err(|error| rpc_err(1000, error.to_string(), "INTERNAL"))?;
+                        match finalized {
                             Ok(change) => {
                                 if let Some(object) = result.content.as_object_mut() {
                                     object.insert(
@@ -4607,11 +4639,12 @@ async fn handle_request(
                                     error = %error,
                                     "review snapshot finalization failed"
                                 );
-                                review::discard_change(pending);
                             }
                         }
                     } else {
-                        review::discard_change(pending);
+                        tokio::task::spawn_blocking(move || review::discard_change(pending))
+                            .await
+                            .map_err(|error| rpc_err(1000, error.to_string(), "INTERNAL"))?;
                     }
                 }
 
@@ -6454,7 +6487,7 @@ mod tests {
         .unwrap()
         .expect("a workspace edit captures a review record");
         fs::write(root.join(path), next).unwrap();
-        crate::review::finalize_change(&pending).unwrap();
+        crate::review::finalize_change(&pending, None).unwrap();
     }
 
     fn review_session(app_state: &mut AppState, project_path: &std::path::Path) -> String {
@@ -6587,7 +6620,7 @@ mod tests {
         .unwrap()
         .unwrap();
         fs::remove_file(member.join("gone.ts")).unwrap();
-        crate::review::finalize_change(&pending).unwrap();
+        crate::review::finalize_change(&pending, None).unwrap();
 
         let files = handle_request(
             state.clone(),
@@ -6712,7 +6745,7 @@ mod tests {
                 format!("first\n{}last\n", "shared\n".repeat(1_200)),
             )
             .unwrap();
-            crate::review::finalize_change(&pending).unwrap();
+            crate::review::finalize_change(&pending, None).unwrap();
         }
 
         // The order the two requests finish in is the evidence: a review that

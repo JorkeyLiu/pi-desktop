@@ -1,16 +1,46 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
-import type { FsEntry, FsReadResult, SessionSummary, WorkspaceDiff } from "@pi-desktop/shared";
+import {
+  knownDiffLineCounts,
+  type DiffFile,
+  type FsEntry,
+  type FsReadResult,
+  type ReviewDiffReason,
+  type SessionSummary,
+  type WorkspaceDiff,
+} from "@pi-desktop/shared";
 import { api } from "../../lib/api";
 import { sessionAllows } from "../../lib/remote-session-safety";
 import { useAppStore } from "../../stores/app-store";
 import { Button, SegmentedControl } from "../ui";
 import "../../styles/remote-mvp.css";
 
+/**
+ * The review vocabulary already owns one honest sentence per limit; the
+ * remote Review tab reuses it instead of inventing a parallel set, and the
+ * exhaustive record keeps a new reason from silently rendering nothing.
+ */
+const REVIEW_LIMIT_KEYS: Record<ReviewDiffReason, string> = {
+  fileTooLarge: "panel.review.limit.fileTooLarge",
+  diffTooComplex: "panel.review.limit.diffTooComplex",
+  diffTooLarge: "panel.review.tooLarge",
+  baselineUnavailable: "panel.review.limit.baselineUnavailable",
+  unreadable: "panel.review.limit.unreadable",
+  workspaceUnavailable: "panel.review.limit.workspaceUnavailable",
+  requestBudgetExceeded: "panel.review.limit.requestBudgetExceeded",
+};
+
+/** Why this file's line evidence is limited, or `null` when it is complete. */
+function diffFileLimitKey(file: DiffFile): string | null {
+  if (file.reason) return REVIEW_LIMIT_KEYS[file.reason];
+  return file.tooLarge ? "panel.review.tooLarge" : null;
+}
+
 export function RemoteWorkspace({ session, width, exiting, onExitAnimationEnd }: {
   session: SessionSummary; width: number; exiting?: boolean; onExitAnimationEnd?: () => void;
 }) {
   const { t } = useTranslation("remote");
+  const { t: tApp } = useTranslation();
   const [tab, setTab] = useState<"files" | "review">("files");
   const [directory, setDirectory] = useState("");
   const [entries, setEntries] = useState<FsEntry[]>([]);
@@ -85,13 +115,24 @@ export function RemoteWorkspace({ session, width, exiting, onExitAnimationEnd }:
             : <p>{t(file.read.kind === "tooLarge" ? "truncated" : "binary")}</p>}</section>}
         </>}
         {tab === "review" && diff && <>
-          {diff.files.length === 0 && <p>{t("noChanges")}</p>}
+          {diff.files.length === 0 && (diff.reason
+            ? <p>{tApp(REVIEW_LIMIT_KEYS[diff.reason])}</p>
+            : !diff.repo ? <p>{t("notRepository")}</p>
+              : <p>{t("noChanges")}</p>)}
+          {diff.reason && diff.files.length > 0 && <p>{tApp(REVIEW_LIMIT_KEYS[diff.reason])}</p>}
           {diff.truncated && <p>{t("truncated")}</p>}
-          {diff.files.map((item) => <section key={item.path}>
-            <h3>{item.path} (+{item.additions} / -{item.deletions})</h3>
-            {item.binary && <p>{t("binary")}</p>}{item.tooLarge && <p>{t("truncated")}</p>}
-            <pre>{item.hunks.map((hunk) => `${hunk.header}\n${hunk.lines.map((line) => `${line.type === "add" ? "+" : line.type === "del" ? "-" : " "}${line.text}`).join("\n")}`).join("\n")}</pre>
-          </section>)}
+          {diff.files.map((item) => {
+            const counts = knownDiffLineCounts(item);
+            const limitKey = diffFileLimitKey(item);
+            return <section key={item.path}>
+              <h3>{item.path}{counts && <span className="diff-counts" aria-label={tApp("chat.reviewChangeCounts", counts)}>
+                {` (+${counts.additions} / -${counts.deletions})`}</span>}</h3>
+              {item.binary && <p>{t("binary")}</p>}
+              {limitKey && <p>{tApp(limitKey)}</p>}
+              {item.hunks.length > 0 && <pre>{item.hunks.map((hunk) => `${hunk.header}\n${hunk.lines.map((line) => `${line.type === "add" ? "+" : line.type === "del" ? "-" : " "}${line.text}`).join("\n")}`).join("\n")}</pre>}
+              {!counts && !item.binary && !limitKey && <p>{tApp("panel.review.noLineDetails")}</p>}
+            </section>;
+          })}
         </>}
       </div>
     </aside>

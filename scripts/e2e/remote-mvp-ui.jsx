@@ -8,6 +8,7 @@ import { useAppStore } from "../../apps/desktop/src/stores/app-store";
 import { RemoteHostSessions } from "../../apps/desktop/src/components/settings/RemoteHostSessions";
 import { RemoteHostsPage } from "../../apps/desktop/src/components/settings/RemoteHostsPage";
 import { ChatSurface } from "../../apps/desktop/src/components/ChatSurface";
+import { RemoteWorkspace } from "../../apps/desktop/src/components/remote/RemoteWorkspace";
 import { catalogs } from "@pi-desktop/i18n";
 import { api } from "../../apps/desktop/src/lib/api";
 import { subscribeRemoteInteractions } from "../../apps/desktop/src/lib/remote-interactions";
@@ -19,6 +20,7 @@ const provider = { id: "fixture-provider", name: "Fixture provider", enabled: tr
 const calls = [];
 const listeners = new Map();
 let reconnects = 0;
+let workspaceDiffPayload = { repo: true, clean: true, files: [] };
 window.piDesktop = {
   platform: "linux",
   on(channel, listener) {
@@ -41,6 +43,8 @@ window.piDesktop = {
       queueMicrotask(() => useAppStore.setState({ isRunning: false, runningSessions: {}, messages: [{ id: "remote-u1", role: "user", content: input.content, createdAt: Date.now() }] }));
       data = { accepted: true };
     }
+    else if (channel === IPC.invoke.workspaceDiff) data = workspaceDiffPayload;
+    else if (channel === IPC.invoke.fsList) data = { entries: [] };
     else if (channel === IPC.invoke.plansPending) data = { plans: [] };
     else if (channel === IPC.invoke.remoteHostReconnect) {
       if (++reconnects === 1) return { ok: false, error: { message: "Fixture reconnect failure", code: "AGENT_UNAVAILABLE" } };
@@ -68,6 +72,19 @@ function type(node, value) {
   const proto = node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
   Object.getOwnPropertyDescriptor(proto, "value").set.call(node, value);
   node.dispatchEvent(new Event("input", { bubbles: true }));
+}
+/**
+ * A real press-and-release on a backdrop: `OverlayBackdrop` dismisses only an
+ * intentional primary-pointer press/release whose target is the backdrop
+ * itself, so a bare `.click()` (a mouse event with no pointerId) is not a
+ * dismissal. Dispatch the pointer pair the component records, then the click
+ * Chromium derives from it.
+ */
+function clickBackdrop(node) {
+  const pointer = { pointerId: 1, pointerType: "mouse", button: 0, buttons: 1, isPrimary: true, bubbles: true, cancelable: true };
+  node.dispatchEvent(new PointerEvent("pointerdown", pointer));
+  node.dispatchEvent(new PointerEvent("pointerup", { ...pointer, buttons: 0 }));
+  node.click();
 }
 function emit(payload) { for (const listener of listeners.get(IPC.event.remoteInteractions) ?? []) listener(payload); }
 function waitForFocus(target, message) {
@@ -228,7 +245,7 @@ globalThis.remoteMvpProbe = async () => {
   await until(() => sshPasswordInput(), "SSH password field did not reopen");
   assert(sshPasswordInput().value === "", "Cancel retained the SSH password draft");
   type(sshPasswordInput(), "temporary-backdrop-password");
-  document.querySelector(".settings-remote-host-add-overlay").click();
+  clickBackdrop(document.querySelector(".settings-remote-host-add-overlay"));
   await until(() => !dialog(), "Backdrop click did not close the dialog");
   await waitForFocus(sshAction, "Backdrop dismissal did not restore SSH trigger focus");
   sshAction.click();
@@ -241,5 +258,63 @@ globalThis.remoteMvpProbe = async () => {
   await waitForFocus(sshAction, "Final Escape did not restore SSH trigger focus");
   settingsRoot.unmount();
   assert(listeners.size === 0, "remote hosts page listeners leaked");
-  return { ok: true, scenarios: ["history without model transfer", "open", "send", "approve", "peer resolution", "reconnect without replay", "local isolation", "Add actions precede inventory", "SSH and Pair dialog flows", "success and cancel clear drafts", "Escape and backdrop dismissal", "focus restoration", "cleanup"] };
+
+  // Remote Review must show honest line evidence: an old Host's numeric counts
+  // still render, unknown counts never render as zero, and every limit keeps its
+  // catalog sentence. Payloads are the workspace/diff replies the desktop already
+  // receives; no Host, SSH, or Git runs here.
+  await i18n.changeLanguage("en");
+  useAppStore.setState({ activeSessionId: session.id });
+  const workspaceRoot = createRoot(document.getElementById("root"));
+  workspaceRoot.render(<RemoteWorkspace session={session} width={320} />);
+  const reviewContent = () => document.querySelector(".remote-workspace-content");
+  const workspaceAction = label => [...document.querySelectorAll(".remote-workspace .remote-actions button")]
+    .find(action => action.textContent.trim() === label);
+  await until(() => reviewContent()?.getAttribute("aria-busy") === "false" && workspaceAction(remoteEn.review), "remote workspace did not load");
+  workspaceAction(remoteEn.review).click();
+  const rowCounts = () => [...document.querySelectorAll(".diff-counts")].map(node => node.textContent.trim());
+  async function loadDiff(payload, marker) {
+    workspaceDiffPayload = payload;
+    await until(() => workspaceAction(remoteEn.refresh) && !workspaceAction(remoteEn.refresh).disabled, "review refresh stayed disabled");
+    workspaceAction(remoteEn.refresh).click();
+    await until(() => reviewContent().textContent.includes(marker), `review never showed ${marker}: ${reviewContent().textContent}`);
+  }
+
+  await loadDiff({ repo: true, clean: false, files: [{ path: "old-host.txt", status: "modified", additions: 3, deletions: 1, hunks: [] }] }, "old-host.txt");
+  assert(rowCounts().includes("(+3 / -1)"), "counts from a Host without the new fields stopped rendering");
+  assert(
+    document.querySelector(".diff-counts").getAttribute("aria-label")
+      === catalogs.en.chat.reviewChangeCounts.replace("{{additions}}", "3").replace("{{deletions}}", "1"),
+    "review counts lost their accessible label",
+  );
+
+  await loadDiff({ repo: true, clean: false, files: [{ path: "unknown-count.txt", status: "modified", additions: 0, deletions: 0, countsKnown: false, hunks: [] }] }, "unknown-count.txt");
+  assert(!document.querySelector(".diff-counts"), "unknown counts rendered the legacy zero placeholder");
+  assert(reviewContent().textContent.includes(catalogs.en.panel.review.noLineDetails), "a row without line evidence did not explain itself");
+
+  await loadDiff({ repo: true, clean: false, files: [{ path: "image.bin", status: "modified", additions: 0, deletions: 0, binary: true, hunks: [] }] }, "image.bin");
+  assert(reviewContent().textContent.includes(remoteEn.binary), "binary row did not say its preview is unavailable");
+  assert(!document.querySelector(".diff-counts"), "binary row rendered zero line counts");
+
+  await loadDiff({ repo: true, clean: false, files: [{ path: "clipped.txt", status: "modified", additions: 0, deletions: 0, countsKnown: false, reason: "diffTooLarge", hunks: [] }] }, "clipped.txt");
+  assert(reviewContent().textContent.includes(catalogs.en.panel.review.tooLarge), "a clipped patch did not explain its missing counts");
+  assert(!document.querySelector(".diff-counts"), "a clipped patch rendered placeholder counts");
+
+  await loadDiff({ repo: true, clean: false, truncated: true, files: [{ path: "display-cap.txt", status: "modified", additions: 20000, deletions: 7, tooLarge: true, reason: "diffTooLarge", hunks: [] }] }, "display-cap.txt");
+  assert(rowCounts().includes("(+20000 / -7)"), "exact counts were lost at the per-file display cap");
+  assert(reviewContent().textContent.includes(remoteEn.truncated), "a truncated file list was not disclosed");
+
+  await loadDiff({ repo: true, clean: false, reason: "requestBudgetExceeded", files: [{ path: "budget.txt", status: "modified", additions: 0, deletions: 0, countsKnown: false, reason: "requestBudgetExceeded", hunks: [] }] }, "budget.txt");
+  assert(reviewContent().textContent.includes(catalogs.en.panel.review.limit.requestBudgetExceeded), "a spent request budget was not surfaced");
+  assert(!reviewContent().textContent.includes(remoteEn.noChanges), "a failed comparison read as a clean workspace");
+
+  await loadDiff({ repo: true, clean: true, files: [] }, remoteEn.noChanges);
+  assert(!reviewContent().textContent.includes(catalogs.en.panel.review.limit.requestBudgetExceeded), "a clean workspace kept a stale failure");
+
+  await loadDiff({ repo: false, clean: true, files: [] }, remoteEn.notRepository);
+  assert(!reviewContent().textContent.includes(remoteEn.noChanges), "a non-repository workspace read as no changes");
+
+  workspaceRoot.unmount();
+  assert(listeners.size === 0, "remote workspace listeners leaked");
+  return { ok: true, scenarios: ["history without model transfer", "open", "send", "approve", "peer resolution", "reconnect without replay", "local isolation", "Add actions precede inventory", "SSH and Pair dialog flows", "success and cancel clear drafts", "Escape and backdrop dismissal", "focus restoration", "remote review honest counts", "remote review limits and request reasons", "remote review clean and non-repository", "cleanup remote workspace", "cleanup"] };
 };

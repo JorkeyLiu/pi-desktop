@@ -210,22 +210,70 @@ export type DiffFile = {
   path: string;
   oldPath?: string;
   status: DiffFileStatus;
+  /**
+   * Line counts when `countsKnown` is not `false`. A file the host could not
+   * count keeps the legacy numeric fields as compatibility placeholders: they
+   * are not line evidence, and an updated consumer must ignore them.
+   */
   additions: number;
   deletions: number;
   binary?: boolean;
-  /** Patch exceeded the per-file cap; hunks are omitted. */
+  /**
+   * Whether `additions`/`deletions` are trustworthy line counts.
+   *
+   * Absent on hosts written before this field: their counts were always
+   * computed except for binary content, so consumers default to `true` and
+   * still treat `binary` as unknown. A new host sets `false` when an output,
+   * display, or time limit cut the file's patch, or when the comparison
+   * itself failed, so its numeric fields are placeholders only.
+   */
+  countsKnown?: boolean;
+  /**
+   * Why this file carries no line evidence. `diffTooLarge`, `unreadable`,
+   * `requestBudgetExceeded`, and `fileTooLarge` may also omit hunks while
+   * keeping exact counts; `tooLarge` marks only the per-file display cap.
+   */
+  reason?: ReviewDiffReason;
+  /** Patch exceeded the per-file display cap; hunks are omitted. */
   tooLarge?: boolean;
   hunks: DiffHunk[];
 };
 
+/**
+ * Line counts one diff row may present as evidence, or `null` when the host
+ * could not count the file. Never returns the legacy placeholder zero, so a
+ * renderer that uses this helper cannot show an unknown count as zero.
+ */
+export function knownDiffLineCounts(
+  file: Pick<DiffFile, "additions" | "deletions" | "binary" | "countsKnown">,
+): { additions: number; deletions: number } | null {
+  // Binary patches carry no line counts Git can derive; hosts before
+  // `countsKnown` reported their placeholder zero there.
+  if (file.binary) return null;
+  if (file.countsKnown === false) return null;
+  const { additions, deletions } = file;
+  if (!Number.isInteger(additions) || additions < 0) return null;
+  if (!Number.isInteger(deletions) || deletions < 0) return null;
+  return { additions, deletions };
+}
+
 export type WorkspaceDiff = {
   /** Workspace root is a git work tree. */
   repo: boolean;
-  /** No pending changes (only meaningful when repo). */
+  /**
+   * No pending changes. `false` also means the answer is unknown — the host
+   * could not run or finish the comparison — so an empty file list must not
+   * be presented as a clean workspace.
+   */
   clean: boolean;
   files: DiffFile[];
-  /** File list hit the cap; more changes exist than listed. */
+  /** The file list hit its cap; more changes exist than listed. */
   truncated?: boolean;
+  /**
+   * The whole request failed or ran out of its budget. Per-file limits stay in
+   * `DiffFile.reason`, and this reason may accompany a partial file list.
+   */
+  reason?: ReviewDiffReason;
 };
 
 export type BrowserAction = "back" | "forward" | "reload" | "stop";

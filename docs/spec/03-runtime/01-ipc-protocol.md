@@ -2044,7 +2044,22 @@ entry or local-page navigation, which follow its existing local-file policy.
   This legacy diagnostics channel may inspect the current working tree, but it
   is not the Review source of truth. The Review UI reads message-owned review
   records from transcript tool results instead, so a commit cannot erase a
-  recorded change.
+  recorded change. `DiffFile` keeps its required numeric `additions`/`deletions`
+  for consumers written before the additive `countsKnown` field: absent means
+  the host predates the field (its counts were always computed except for binary
+  content), `false` means the numbers are compatibility placeholders only —
+  an output, display, or time limit cut the patch, or the comparison failed —
+  and `binary` stays unknown in either case. `knownDiffLineCounts` in
+  `packages/shared` is the one reader helper, so no consumer presents an unknown
+  count as zero.
+  A root outside a repository is a known answer only when Git itself says so:
+  exit code 128, empty stdout, `not a git repository` in the C-locale stderr,
+  and no `.git` marker in the root. That answer is `repo: false, clean: true`.
+  Every other probe refusal — dubious ownership, a corrupt `HEAD`, an
+  unreadable `.git`, or a non-zero exit without that diagnostic — leaves the
+  comparison unknown and reports `repo: false, clean: false, reason:
+  "unreadable"` without echoing Git's stderr. A probe or status cut by the
+  request deadline reports `reason: "requestBudgetExceeded"`.
 - `workspace/review/rollback({sessionId, snapshotId})` →
   `ReviewRollbackResult`. The host verifies the current post-tool hash before
   restoring the snapshot; it returns `rolledBack`, `alreadyRolledBack`,
@@ -2067,7 +2082,13 @@ entry or local-page navigation, which follow its existing local-file policy.
   change; `truncated` plus `reason` (`fileTooLarge`, `diffTooComplex`,
   `diffTooLarge`, `baselineUnavailable`, `unreadable`, `workspaceUnavailable`,
   `requestBudgetExceeded`) say why, and an unknown count is never serialized as
-  zero. `truncated` also marks an answer the host bounded (row cap, aggregate
+  zero. Comparison work is bounded per file and per request: one side may hold
+  at most 16 MiB and 500,000 lines, one file compares for at most 200 ms, and
+  one request shares 1 s, 64 MiB of input bytes and 2,000,000 input lines,
+  charged once per admitted file (ADR 0339). A row the request's ledger cannot
+  afford reports `requestBudgetExceeded`; a row over its own clipped deadline
+  reports `diffTooComplex`; either way counts stay absent. `truncated` also
+  marks an answer the host bounded (row cap, aggregate
   comparison work, aggregate hunk text), and `unreadableRecords` counts records
   under the session that could not be read at all — a non-zero value makes every
   row non-reversible because an earlier edit of that file may be the missing one.

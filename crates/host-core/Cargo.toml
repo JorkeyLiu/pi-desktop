@@ -22,6 +22,9 @@ ring = "0.17"
 rusqlite = { version = "0.40", features = ["bundled", "functions"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Line comparison engine for review diffs. `std` is required: without it the
+# crate swaps `Instant` for `()` and the deadline silently never fires.
+similar = { version = "3.2.1", default-features = false, features = ["std"] }
 sha2 = "0.11"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }

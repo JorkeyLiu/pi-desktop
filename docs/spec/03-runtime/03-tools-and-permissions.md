@@ -368,6 +368,51 @@ type ReviewChange = {
 - Review snapshot files live outside the workspace and are removed with their
   session; orphaned session directories are swept on host startup.
 
+### 4c.1 Bounded comparison limits (ADR 0339)
+
+One comparison is bounded by five independent ceilings. Each owns one unit of
+work, so a pathological file states its limit instead of stalling the host:
+
+| Ceiling | Limit | Enforced by |
+|---|---:|---|
+| One side, bytes | 16 MiB | the side reader, before decoding |
+| One side, lines | 500,000 | the comparison, before one token per line is allocated |
+| One file | 200 ms | the per-file deadline (a request may clip it shorter) |
+| One `review.files` request | 1 s, 64 MiB input bytes, 2,000,000 input lines | one request ledger, charged once per admitted file |
+| Record hunk body | 8,000 lines / 48 KiB chars | counting first, then hunk rendering |
+
+- Counts are the comparison's own edit-script lengths, taken from the completed
+  operation ranges before any hunk line is allocated. A complete coarse script
+  is a valid description of the change, so its counts and hunks are accepted;
+  the contract does not claim global minimality.
+- The engine deadline is cooperative, never a real-time guarantee. The host
+  reads the clock around tokenization and around the engine call and discards
+  counts and hunks if the deadline passed; a coarse script returned after
+  expiry is never trusted as evidence.
+- A per-file comparison over its own deadline reports `diffTooComplex`; one
+  whose deadline or input the request clipped reports `requestBudgetExceeded`;
+  a side over a machine ceiling reports `fileTooLarge`; a change larger than a
+  record carries reports `diffTooLarge` with exact counts and no hunks; a
+  retained baseline that no longer hashes to the recorded bytes reports
+  `baselineUnavailable`. Unknown counts stay absent and are never serialized as
+  zero.
+- The request ledger is consulted before the next file is hashed or read: with
+  no time, bytes, or lines left, the row reports `requestBudgetExceeded`
+  without opening the file. Each side's expected size is reserved from
+  metadata before either side is read, and the reservation is reconciled with
+  the bytes actually read, so one request's I/O stays inside its input ceiling
+  instead of overshooting and only noticing afterwards.
+- Snapshot capture, hashing, comparison, and rollback run on blocking workers,
+  not on the async RPC workers that serve the channel.
+- One mutation compares its bytes once. The tool call may hand the record an
+  internal, never-serialized `FileMutationEvidence`, and the record reuses it
+  only when its own captured before/after hashes and its hunk cap match the
+  evidence; otherwise — no evidence, a concurrent edit between snapshot and
+  tool, or a retained copy that no longer matches — it recomputes from the
+  bytes it read once. Only workspace mutations produce evidence: scratch and
+  permission-authorized external writes keep their per-call preview and gain
+  no record, no snapshot, and no rollback.
+
 ## 4d. Mutation ordering and edit recovery
 
 `Write` and `Edit` are serialized within each session. Read/search tools may

@@ -1,13 +1,17 @@
-use super::diff::MAX_DIFF_BYTES;
+use super::diff::{
+    make_preview, DiffRequest, DiffSide, DiffWork, PreviewLimits, MAX_DIFF_BYTES, MAX_DIFF_LINES,
+    MAX_RECORD_HUNK_CHARS, MAX_REQUEST_DIFF_BYTES, MAX_REQUEST_DIFF_TOKENS,
+};
 use super::layout::{
     metadata_path, now_micros, read_meta, root_identity, session_review_dir, snapshot_dir,
     write_meta,
 };
-use super::session::MAX_REVIEW_FILES;
+use super::session::{file_changes_with_request, MAX_REVIEW_FILES};
 use super::*;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
+use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
 fn prepare(
@@ -46,7 +50,7 @@ fn records_line_changes_and_rolls_back_without_git() {
     fs::write(&target, "one\ntwo\n").unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
     fs::write(&target, "one\nthree\n").unwrap();
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     assert_eq!(change.status, ReviewChangeStatus::Modified);
     assert_eq!(change.additions, Some(1));
     assert_eq!(change.deletions, Some(1));
@@ -86,7 +90,7 @@ fn refuses_to_overwrite_a_later_edit() {
     fs::write(&target, "before\n").unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
     fs::write(&target, "after\n").unwrap();
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     fs::write(&target, "later\n").unwrap();
     let result = rollback_change(
         data.path(),
@@ -105,7 +109,7 @@ fn added_file_rollback_removes_the_file() {
     let workspace = tempdir().unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "new.txt");
     fs::write(workspace.path().join("new.txt"), "new\n").unwrap();
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     assert_eq!(change.status, ReviewChangeStatus::Added);
     let result = rollback_change(
         data.path(),
@@ -126,7 +130,7 @@ fn deleted_file_rollback_restores_previous_bytes() {
     fs::write(&target, "keep me\n").unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "removed.txt");
     fs::remove_file(&target).unwrap();
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     assert_eq!(change.status, ReviewChangeStatus::Deleted);
     assert_eq!(change.additions, Some(0));
     assert_eq!(change.deletions, Some(1));
@@ -156,7 +160,7 @@ fn a_long_file_with_one_edited_line_reports_its_real_hunk() {
     )
     .unwrap();
 
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     assert!(!change.truncated, "a bounded change is not truncated");
     assert!(!change.binary);
     assert_eq!(change.additions, Some(1));
@@ -185,7 +189,7 @@ fn separated_edits_in_a_long_file_keep_exact_counts() {
         .replace("line 7900\n", "line 7900 changed\n");
     fs::write(&target, edited).unwrap();
 
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     assert!(!change.truncated);
     assert_eq!(change.additions, Some(2));
     assert_eq!(change.deletions, Some(2));
@@ -207,7 +211,7 @@ fn adjacent_edits_share_one_hunk_and_distant_ones_do_not() {
             .replace("line 11\n", "line 11 changed\n"),
     )
     .unwrap();
-    let adjacent = finalize_change(&pending).unwrap();
+    let adjacent = finalize_change(&pending, None).unwrap();
     assert_eq!(adjacent.additions, Some(2));
     assert_eq!(adjacent.deletions, Some(2));
     assert_eq!(adjacent.hunks.len(), 1);
@@ -224,12 +228,12 @@ fn adjacent_edits_share_one_hunk_and_distant_ones_do_not() {
             .replace("line 60\n", "line 60 changed\n"),
     )
     .unwrap();
-    let distant = finalize_change(&pending).unwrap();
+    let distant = finalize_change(&pending, None).unwrap();
     assert_eq!(distant.hunks.len(), 2);
 }
 
 #[test]
-fn a_rewrite_beyond_the_budget_reports_a_limit_not_a_zero_count() {
+fn a_whole_rewrite_keeps_exact_counts_without_hunks() {
     let data = tempdir().unwrap();
     let workspace = tempdir().unwrap();
     let target = workspace.path().join("big.txt");
@@ -238,12 +242,47 @@ fn a_rewrite_beyond_the_budget_reports_a_limit_not_a_zero_count() {
     let rewritten: String = (0..4_000).map(|index| format!("other {index}\n")).collect();
     fs::write(&target, rewritten).unwrap();
 
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     assert!(change.truncated);
-    assert_eq!(change.additions, None, "unknown counts are not zero");
-    assert_eq!(change.deletions, None);
+    // The engine's own edit script is exact, so a rewrite reports its real
+    // counts instead of withholding them behind a complexity limit.
+    assert_eq!(change.additions, Some(4_000));
+    assert_eq!(change.deletions, Some(4_000));
     assert!(change.hunks.is_empty());
-    assert_eq!(change.reason, Some(ReviewDiffLimit::DiffTooComplex));
+    assert_eq!(change.reason, Some(ReviewDiffLimit::DiffTooLarge));
+}
+
+#[test]
+fn a_long_file_with_one_edited_line_records_a_real_hunk() {
+    let data = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let target = workspace.path().join("long.txt");
+    let original: String = (0..40_000)
+        .map(|index| format!("long line {index} with some payload\n"))
+        .collect();
+    assert!(
+        original.len() > 1_000_000,
+        "a 1.34 MB file is the shape users hit"
+    );
+    fs::write(&target, &original).unwrap();
+    let pending = prepare(data.path(), workspace.path(), "s1", "m1", "long.txt");
+    let edited = original.replacen(
+        "long line 20000 with some payload",
+        "long line 20000 edited",
+        1,
+    );
+    fs::write(&target, edited).unwrap();
+
+    let change = finalize_change(&pending, None).unwrap();
+    assert_eq!(change.reason, None, "1.34 MB is inside the input ceiling");
+    assert_eq!(change.additions, Some(1));
+    assert_eq!(change.deletions, Some(1));
+    assert_eq!(change.hunks.len(), 1);
+    assert!(change
+        .hunks
+        .iter()
+        .flat_map(|hunk| hunk.lines.iter())
+        .any(|line| line.text == "long line 20000 edited"));
 }
 
 #[test]
@@ -255,7 +294,7 @@ fn a_binary_change_is_reported_as_binary() {
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "blob.bin");
     fs::write(&target, [0_u8, 9, 9, 9]).unwrap();
 
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     assert!(change.binary);
     assert!(!change.truncated);
     assert_eq!(change.additions, None);
@@ -277,7 +316,7 @@ fn an_oversized_file_reports_the_byte_limit() {
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "huge.txt");
     fs::write(&target, payload.replacen('x', "y", 1)).unwrap();
 
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     assert!(change.truncated);
     assert_eq!(change.reason, Some(ReviewDiffLimit::FileTooLarge));
     assert_eq!(change.additions, None);
@@ -301,7 +340,7 @@ fn a_record_keeps_its_identity_fields_under_the_display_cap() {
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "huge-hunks.txt");
     fs::write(&target, &edited).unwrap();
 
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     assert!(change.truncated);
     assert_eq!(change.reason, Some(ReviewDiffLimit::DiffTooLarge));
     assert_eq!(change.additions, Some(400), "counts stay exact");
@@ -324,10 +363,10 @@ fn one_file_row_covers_every_edit_of_the_file() {
     fs::write(&target, "one\ntwo\nthree\n").unwrap();
     let first = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
     fs::write(&target, "one\nTWO\nthree\n").unwrap();
-    let first = finalize_change(&first).unwrap();
+    let first = finalize_change(&first, None).unwrap();
     let second = prepare(data.path(), workspace.path(), "s1", "m2", "src.txt");
     fs::write(&target, "one\nTWO\nTHREE\n").unwrap();
-    let second = finalize_change(&second).unwrap();
+    let second = finalize_change(&second, None).unwrap();
 
     let files = file_changes(data.path(), "s1", &roots_of(workspace.path())).files;
     assert_eq!(files.len(), 1);
@@ -349,7 +388,7 @@ fn a_file_that_ends_up_as_it_started_is_not_a_changed_file() {
     fs::write(&target, "one\ntwo\n").unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
     fs::write(&target, "one\nchanged\n").unwrap();
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     assert_eq!(change.additions, Some(1));
     fs::write(&target, "one\ntwo\n").unwrap();
 
@@ -368,7 +407,7 @@ fn the_baseline_stays_the_first_recorded_bytes_not_git_head() {
     fs::write(&target, "user work\nkeep\n").unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
     fs::write(&target, "user work\nkeep\ntopic\n").unwrap();
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     assert_eq!(change.additions, Some(1));
 
     let files = file_changes(data.path(), "s1", &roots_of(workspace.path())).files;
@@ -392,10 +431,10 @@ fn every_touched_file_gets_exactly_one_row() {
     fs::write(&first_target, "a\n").unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "a.txt");
     fs::write(&first_target, "a changed\n").unwrap();
-    finalize_change(&pending).unwrap();
+    finalize_change(&pending, None).unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m2", "b.txt");
     fs::write(workspace.path().join("b.txt"), "b\n").unwrap();
-    finalize_change(&pending).unwrap();
+    finalize_change(&pending, None).unwrap();
 
     let files = file_changes(data.path(), "s1", &roots_of(workspace.path())).files;
     assert_eq!(files.len(), 2);
@@ -415,10 +454,10 @@ fn file_rollback_restores_the_first_baseline_after_several_edits() {
     fs::write(&target, "one\ntwo\n").unwrap();
     let first = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
     fs::write(&target, "one\nTWO\n").unwrap();
-    let first = finalize_change(&first).unwrap();
+    let first = finalize_change(&first, None).unwrap();
     let second = prepare(data.path(), workspace.path(), "s1", "m2", "src.txt");
     fs::write(&target, "one\nTWO\nthree\n").unwrap();
-    let second = finalize_change(&second).unwrap();
+    let second = finalize_change(&second, None).unwrap();
     assert!(first.additions.is_some() && second.additions.is_some());
     let roots = roots_of(workspace.path());
 
@@ -440,10 +479,10 @@ fn file_rollback_never_overwrites_bytes_it_did_not_record() {
     fs::write(&target, "one\n").unwrap();
     let first = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
     fs::write(&target, "one\ntwo\n").unwrap();
-    finalize_change(&first).unwrap();
+    finalize_change(&first, None).unwrap();
     let second = prepare(data.path(), workspace.path(), "s1", "m2", "src.txt");
     fs::write(&target, "one\ntwo\nthree\n").unwrap();
-    finalize_change(&second).unwrap();
+    finalize_change(&second, None).unwrap();
     fs::write(&target, "edited outside the app\n").unwrap();
     let roots = roots_of(workspace.path());
 
@@ -461,10 +500,10 @@ fn file_rollback_removes_a_file_the_topic_created() {
     let workspace = tempdir().unwrap();
     let first = prepare(data.path(), workspace.path(), "s1", "m1", "new.txt");
     fs::write(workspace.path().join("new.txt"), "new\n").unwrap();
-    finalize_change(&first).unwrap();
+    finalize_change(&first, None).unwrap();
     let second = prepare(data.path(), workspace.path(), "s1", "m2", "new.txt");
     fs::write(workspace.path().join("new.txt"), "new\nmore\n").unwrap();
-    finalize_change(&second).unwrap();
+    finalize_change(&second, None).unwrap();
     let roots = roots_of(workspace.path());
 
     let outcome = rollback_file(data.path(), "s1", &roots, None, "new.txt").unwrap();
@@ -480,10 +519,10 @@ fn a_pruned_baseline_snapshot_stays_explicitly_unavailable() {
     fs::write(&target, "one\n").unwrap();
     let first = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
     fs::write(&target, "one\ntwo\n").unwrap();
-    let first = finalize_change(&first).unwrap();
+    let first = finalize_change(&first, None).unwrap();
     let second = prepare(data.path(), workspace.path(), "s1", "m2", "src.txt");
     fs::write(&target, "one\ntwo\nthree\n").unwrap();
-    finalize_change(&second).unwrap();
+    finalize_change(&second, None).unwrap();
     fs::remove_file(
         snapshot_dir(data.path(), "s1", &first.snapshot_id)
             .unwrap()
@@ -518,7 +557,7 @@ fn another_sessions_snapshot_is_never_read() {
     fs::write(&target, "one\n").unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
     fs::write(&target, "one\ntwo\n").unwrap();
-    finalize_change(&pending).unwrap();
+    finalize_change(&pending, None).unwrap();
 
     let roots = roots_of(workspace.path());
     let files = file_changes(data.path(), "s2", &roots).files;
@@ -540,11 +579,11 @@ fn two_roots_with_the_same_relative_name_stay_distinct() {
     fs::write(root_a.path().join("shared.ts"), "a0\n").unwrap();
     let pending = prepare(data.path(), root_a.path(), "s1", "m1", "shared.ts");
     fs::write(root_a.path().join("shared.ts"), "a1\n").unwrap();
-    let first = finalize_change(&pending).unwrap();
+    let first = finalize_change(&pending, None).unwrap();
     fs::write(root_b.path().join("shared.ts"), "b0\n").unwrap();
     let pending = prepare(data.path(), root_b.path(), "s1", "m2", "shared.ts");
     fs::write(root_b.path().join("shared.ts"), "b1\n").unwrap();
-    let second = finalize_change(&pending).unwrap();
+    let second = finalize_change(&pending, None).unwrap();
     assert_eq!(first.path, second.path, "both records use a relative name");
 
     let roots = SessionRoots::new(
@@ -573,7 +612,7 @@ fn a_secondary_root_rollback_never_writes_the_primary_root() {
     fs::write(root_b.path().join("gone.ts"), "keep me\n").unwrap();
     let pending = prepare(data.path(), root_b.path(), "s1", "m1", "gone.ts");
     fs::remove_file(root_b.path().join("gone.ts")).unwrap();
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     let roots = SessionRoots::new(
         root_a.path().to_path_buf(),
         vec![root_b.path().to_path_buf()],
@@ -615,7 +654,7 @@ fn a_record_from_a_removed_root_is_not_attributed_elsewhere() {
     fs::write(root_a.path().join("note.ts"), "a0\n").unwrap();
     let pending = prepare(data.path(), root_a.path(), "s1", "m1", "note.ts");
     fs::write(root_a.path().join("note.ts"), "a1\n").unwrap();
-    finalize_change(&pending).unwrap();
+    finalize_change(&pending, None).unwrap();
 
     // The session only has the other root now.
     let roots = roots_of(root_b.path());
@@ -645,7 +684,7 @@ fn a_legacy_record_without_a_root_is_unavailable_in_a_multi_root_session() {
     fs::write(root_a.path().join("legacy.ts"), "a0\n").unwrap();
     let pending = prepare(data.path(), root_a.path(), "s1", "m1", "legacy.ts");
     fs::write(root_a.path().join("legacy.ts"), "a1\n").unwrap();
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     // Rewrite the record as the older format did, without a root.
     let dir = snapshot_dir(data.path(), "s1", &change.snapshot_id).unwrap();
     let mut meta: Value =
@@ -688,7 +727,7 @@ fn a_record_written_with_the_old_operation_spelling_is_still_read() {
     fs::write(&target, "one\n").unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
     fs::write(&target, "one\ntwo\n").unwrap();
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     assert_eq!(change.operation, ReviewChangeOperation::Edit);
     let dir = snapshot_dir(data.path(), "s1", &change.snapshot_id).unwrap();
     let meta_path = dir.join("meta.json");
@@ -729,13 +768,13 @@ fn a_tail_only_renderer_window_keeps_the_first_recorded_baseline() {
     fs::write(&target, "one\ntwo\n").unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
     fs::write(&target, "one\nTWO\n").unwrap();
-    let first = finalize_change(&pending).unwrap();
+    let first = finalize_change(&pending, None).unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m2", "src.txt");
     fs::write(&target, "one\nTWO\nthree\n").unwrap();
-    let second = finalize_change(&pending).unwrap();
+    let second = finalize_change(&pending, None).unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m3", "src.txt");
     fs::write(&target, "one\nTWO\nthree\nfour\n").unwrap();
-    let third = finalize_change(&pending).unwrap();
+    let third = finalize_change(&pending, None).unwrap();
 
     // The host never sees the renderer's window: it scans the session.
     let roots = roots_of(workspace.path());
@@ -777,10 +816,10 @@ fn a_millisecond_record_keeps_its_chronological_place() {
     fs::write(&target, "one\n").unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
     fs::write(&target, "one\nTWO\n").unwrap();
-    let first = finalize_change(&pending).unwrap();
+    let first = finalize_change(&pending, None).unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m2", "src.txt");
     fs::write(&target, "one\nTWO\nthree\n").unwrap();
-    let second = finalize_change(&pending).unwrap();
+    let second = finalize_change(&pending, None).unwrap();
 
     // The older record stores microseconds, the newer one milliseconds.
     let base = now_micros() - 10_000_000;
@@ -821,7 +860,7 @@ fn a_file_edited_before_a_long_tail_is_still_listed() {
     fs::write(&target, "before\n").unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "early.txt");
     fs::write(&target, "after\n").unwrap();
-    finalize_change(&pending).unwrap();
+    finalize_change(&pending, None).unwrap();
     // Many later tool records in the same session (a long conversation).
     for index in 0..120 {
         let name = format!("later-{index}.txt");
@@ -833,7 +872,7 @@ fn a_file_edited_before_a_long_tail_is_still_listed() {
             &name,
         );
         fs::write(workspace.path().join(&name), "x\n").unwrap();
-        finalize_change(&pending).unwrap();
+        finalize_change(&pending, None).unwrap();
     }
     let roots = roots_of(workspace.path());
     let files = file_changes(data.path(), "s1", &roots).files;
@@ -842,23 +881,19 @@ fn a_file_edited_before_a_long_tail_is_still_listed() {
     assert_eq!(files[0].additions, Some(1));
 }
 
-/// The request's work and output budgets are shared, so an over-limit
-/// session states the limit instead of silently dropping rows or miscounting.
+/// The request's input budget is shared: the ledger charges each admitted
+/// file exactly once, so a session larger than the budget states the limit
+/// instead of silently dropping rows or miscounting them.
 #[test]
 fn the_request_budget_stops_work_and_says_so() {
     let data = tempdir().unwrap();
     let workspace = tempdir().unwrap();
-    // Every line is identical, so the changed region has no unique anchor:
-    // a file that cannot be solved exactly cannot fall back cheaply either.
-    // Each of these files spends just under the exact-solve ceiling, so
-    // together they exceed the request's total work budget.
-    for index in 0..30 {
+    // Lines, not bytes, are what a comparison costs, so two ordinary-sized
+    // files already spend nearly the whole request's line budget.
+    for index in 0..2 {
         let name = format!("wide-{index}.txt");
-        let lines = "shared\n".repeat(1_300);
-        let mut edited = lines.clone();
-        edited.insert_str(0, "first\n");
-        edited.push_str("last\n");
-        fs::write(workspace.path().join(&name), &lines).unwrap();
+        let before = "a\n".repeat(MAX_DIFF_LINES - 1);
+        fs::write(workspace.path().join(&name), &before).unwrap();
         let pending = prepare(
             data.path(),
             workspace.path(),
@@ -866,14 +901,20 @@ fn the_request_budget_stops_work_and_says_so() {
             &format!("m-{index}"),
             &name,
         );
-        fs::write(workspace.path().join(&name), edited).unwrap();
-        finalize_change(&pending).unwrap();
+        fs::write(workspace.path().join(&name), format!("{before}b\n")).unwrap();
+        finalize_change(&pending, None).unwrap();
     }
+    // One more ordinary file is beyond what the ledger has left.
+    let target = workspace.path().join("later.txt");
+    fs::write(&target, "one\ntwo\nthree\n").unwrap();
+    let pending = prepare(data.path(), workspace.path(), "s1", "m-late", "later.txt");
+    fs::write(&target, "one\nTWO\nthree\n").unwrap();
+    finalize_change(&pending, None).unwrap();
+
     let outcome = file_changes(data.path(), "s1", &roots_of(workspace.path()));
     assert!(
         outcome.truncated,
-        "the answer states that its work was bounded: rows={} reasons={:?}",
-        outcome.files.len(),
+        "the answer states that its work was bounded: reasons={:?}",
         outcome
             .files
             .iter()
@@ -894,11 +935,98 @@ fn the_request_budget_stops_work_and_says_so() {
         assert_eq!(row.deletions, None);
         assert!(row.hunks.is_empty());
     }
-    // The rows that did fit still carry exact counts.
-    assert!(outcome
-        .files
-        .iter()
-        .any(|file| file.additions == Some(2) && file.deletions == Some(0)));
+}
+
+/// A request with no lines left stops before touching the next file at all.
+/// The second file is unreadable, so a request that read it would have to say
+/// the baseline is unavailable; the budget row proves it was never opened.
+#[cfg(unix)]
+#[test]
+fn an_exhausted_request_does_not_read_the_next_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let data = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let first = workspace.path().join("a.txt");
+    fs::write(&first, "one\ntwo\n").unwrap();
+    let pending = prepare(data.path(), workspace.path(), "s1", "m1", "a.txt");
+    fs::write(&first, "one\nTWO\n").unwrap();
+    finalize_change(&pending, None).unwrap();
+
+    let next = workspace.path().join("b.txt");
+    fs::write(&next, "secret\ntext\n").unwrap();
+    let pending = prepare(data.path(), workspace.path(), "s1", "m2", "b.txt");
+    fs::write(&next, "secret\nchanged\n").unwrap();
+    let change = finalize_change(&pending, None).unwrap();
+    // Pin the visit order: this record is newer than the first, so the second
+    // file is reached only after the request already spent its line budget.
+    let dir = snapshot_dir(data.path(), "s1", &change.snapshot_id).unwrap();
+    let mut meta: Value =
+        serde_json::from_slice(&fs::read(dir.join("meta.json")).unwrap()).unwrap();
+    meta["createdAt"] = json!(now_micros() + 1_000);
+    fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
+    fs::set_permissions(&next, fs::Permissions::from_mode(0o000)).unwrap();
+    let roots = roots_of(workspace.path());
+
+    // The same unreadable file under a request that still has budget is read,
+    // which is what makes the row below evidence that nothing was read.
+    let files = file_changes(data.path(), "s1", &roots).files;
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[1].path, "b.txt");
+    assert_eq!(files[1].reason, Some(ReviewDiffLimit::BaselineUnavailable));
+
+    // The first file's two sides hold four lines, so this ledger is spent
+    // exactly when the next file is reached.
+    let now = Instant::now();
+    let request = DiffRequest::with_budget(now + Duration::from_secs(1), MAX_REQUEST_DIFF_BYTES, 4);
+    let outcome = file_changes_with_request(data.path(), "s1", &roots, request);
+    fs::set_permissions(&next, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(outcome.truncated);
+    assert_eq!(outcome.files.len(), 2);
+    assert_eq!(outcome.files[0].path, "a.txt");
+    assert_eq!(outcome.files[0].additions, Some(1));
+    assert_eq!(outcome.files[0].reason, None);
+    assert_eq!(outcome.files[1].path, "b.txt");
+    assert_eq!(
+        outcome.files[1].reason,
+        Some(ReviewDiffLimit::RequestBudgetExceeded),
+        "an exhausted request reads nothing: {outcome:?}"
+    );
+    assert_eq!(outcome.files[1].additions, None);
+    assert_eq!(outcome.files[1].deletions, None);
+    assert!(outcome.files[1].hunks.is_empty());
+}
+
+/// The request's byte admission is decided from metadata, before either side
+/// is read: a file the ledger cannot afford is never opened.
+#[cfg(unix)]
+#[test]
+fn a_request_without_byte_room_reports_the_budget_before_reading() {
+    use std::os::unix::fs::PermissionsExt;
+    let data = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let target = workspace.path().join("src.txt");
+    fs::write(&target, "one\ntwo\nthree\n").unwrap();
+    let pending = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
+    fs::write(&target, "one\nTWO\nthree\n").unwrap();
+    finalize_change(&pending, None).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o000)).unwrap();
+    let roots = roots_of(workspace.path());
+
+    // One byte left cannot cover the two sides' metadata sizes, so the row is
+    // decided before a read would have raised `BaselineUnavailable` instead.
+    let now = Instant::now();
+    let request =
+        DiffRequest::with_budget(now + Duration::from_secs(1), 1, MAX_REQUEST_DIFF_TOKENS);
+    let outcome = file_changes_with_request(data.path(), "s1", &roots, request);
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(outcome.truncated);
+    assert_eq!(outcome.files.len(), 1);
+    assert_eq!(
+        outcome.files[0].reason,
+        Some(ReviewDiffLimit::RequestBudgetExceeded)
+    );
+    assert_eq!(outcome.files[0].additions, None);
+    assert!(outcome.files[0].hunks.is_empty());
 }
 
 /// More files than the answer carries are counted, not silently dropped.
@@ -916,7 +1044,7 @@ fn a_session_larger_than_the_row_cap_is_marked_truncated() {
             &name,
         );
         fs::write(workspace.path().join(&name), "x\n").unwrap();
-        finalize_change(&pending).unwrap();
+        finalize_change(&pending, None).unwrap();
     }
     let outcome = file_changes(data.path(), "s1", &roots_of(workspace.path()));
     assert_eq!(outcome.files.len(), MAX_REVIEW_FILES);
@@ -930,7 +1058,7 @@ fn an_unreadable_record_is_counted_instead_of_invented() {
     let workspace = tempdir().unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
     fs::write(workspace.path().join("src.txt"), "x\n").unwrap();
-    finalize_change(&pending).unwrap();
+    finalize_change(&pending, None).unwrap();
 
     let broken = session_review_dir(data.path(), "s1")
         .unwrap()
@@ -953,7 +1081,7 @@ fn a_forged_session_record_is_refused() {
     fs::write(&target, "x\n").unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "forged.txt");
     fs::write(&target, "y\n").unwrap();
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     let dir = snapshot_dir(data.path(), "s1", &change.snapshot_id).unwrap();
     let mut meta: Value =
         serde_json::from_slice(&fs::read(dir.join("meta.json")).unwrap()).unwrap();
@@ -974,7 +1102,7 @@ fn a_record_whose_path_escapes_its_root_is_refused() {
     fs::write(&target, "x\n").unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "inside.txt");
     fs::write(&target, "y\n").unwrap();
-    let change = finalize_change(&pending).unwrap();
+    let change = finalize_change(&pending, None).unwrap();
     let dir = snapshot_dir(data.path(), "s1", &change.snapshot_id).unwrap();
     let mut meta: Value =
         serde_json::from_slice(&fs::read(dir.join("meta.json")).unwrap()).unwrap();
@@ -1032,6 +1160,51 @@ fn write_preview_without_baseline_omits_counts() {
     assert_eq!(preview.reason, Some(ReviewDiffLimit::BaselineUnavailable));
 }
 
+/// The per-call preview applies the same side byte ceiling the durable record
+/// does, so a huge Write reports the limit instead of comparing bytes no review
+/// can carry.
+#[test]
+fn a_per_call_preview_refuses_a_side_over_the_byte_ceiling() {
+    let oversized = vec![b'x'; (MAX_DIFF_BYTES as usize) + 1];
+    let preview = preview_write_diff(
+        "huge.txt".to_string(),
+        "workspace".to_string(),
+        WritePreviewStatus::Modified,
+        Some(&oversized),
+        b"one\\n",
+    );
+    assert!(preview.truncated);
+    assert_eq!(preview.reason, Some(ReviewDiffLimit::FileTooLarge));
+    assert_eq!(preview.additions, None);
+    assert_eq!(preview.deletions, None);
+    assert!(preview.hunks.is_empty());
+}
+
+/// A reservation is reconciled with what a read actually held: a file that grew
+/// past its reservation cannot push the request beyond its input ceiling.
+#[test]
+fn a_reservation_overshoot_is_reconciled_against_the_request() {
+    let now = Instant::now();
+    let mut request = DiffRequest::with_budget(now + Duration::from_secs(1), 32, 10);
+    assert!(request.admit(now, 16).is_some());
+    assert!(
+        request.settle(16, 10),
+        "an undershoot returns the difference"
+    );
+    assert!(
+        request.settle(10, 18),
+        "an overshoot inside the ceiling is charged"
+    );
+    assert!(
+        !request.settle(0, 40),
+        "a side that grew past the ceiling is refused instead of compared"
+    );
+    assert!(
+        request.is_exhausted(now),
+        "the refused overshoot spends the rest"
+    );
+}
+
 #[test]
 fn edit_preview_covers_only_its_own_statuses() {
     let modified = preview_edit_diff(
@@ -1082,4 +1255,343 @@ fn preview_operation_has_no_delete_and_keeps_wire_spelling() {
     assert_eq!(value["version"], serde_json::json!(1));
     assert_eq!(value["operation"], serde_json::json!("write"));
     assert_eq!(value["status"], serde_json::json!("added"));
+}
+
+/// The request ledger charges input once and refuses what it cannot afford, so
+/// one file never hides a later row behind a second charge.
+#[test]
+fn the_request_ledger_charges_input_once() {
+    let now = Instant::now();
+    let mut request = DiffRequest::new(now);
+    assert!(request.admit(now, MAX_REQUEST_DIFF_BYTES).is_some());
+    assert!(
+        request.admit(now, 1).is_none(),
+        "the request cannot afford a byte beyond what it was given"
+    );
+    assert!(request.is_exhausted(now));
+
+    let mut request = DiffRequest::new(now);
+    assert!(request.spend_tokens(MAX_REQUEST_DIFF_TOKENS));
+    assert!(!request.spend_tokens(1), "the line budget is finite");
+    assert!(request.is_exhausted(now));
+
+    // A request whose clock already passed admits nothing at all.
+    let mut expired = DiffRequest::new(now - Duration::from_secs(1));
+    assert!(expired.is_exhausted(now));
+    assert!(expired.admit(now, 0).is_none());
+}
+
+/// A comparison whose own clock already passed names a complex file and
+/// withholds its counts: the engine's coarse script is not trusted evidence.
+#[test]
+fn an_expired_file_deadline_reports_a_complex_diff() {
+    let preview = make_preview(
+        DiffSide::Present(b"one\ntwo\n".to_vec()),
+        DiffSide::Present(b"one\nTWO\n".to_vec()),
+        MAX_RECORD_HUNK_CHARS,
+        &mut PreviewLimits::file(Instant::now() - Duration::from_secs(1)),
+    );
+    assert!(preview.truncated);
+    assert_eq!(preview.reason, Some(ReviewDiffLimit::DiffTooComplex));
+    assert_eq!(preview.additions, None);
+    assert_eq!(preview.deletions, None);
+    assert!(preview.hunks.is_empty());
+}
+
+/// The same expiry when the request's deadline is the binding one names the
+/// request's budget, not a complex file.
+#[test]
+fn an_expired_request_deadline_reports_the_request_budget() {
+    let now = Instant::now();
+    let mut request = DiffRequest::new(now);
+    let work = DiffWork::with_deadline(now - Duration::from_secs(1), true);
+    let mut limits = PreviewLimits::request(work, &mut request);
+    let preview = make_preview(
+        DiffSide::Present(b"one\ntwo\n".to_vec()),
+        DiffSide::Present(b"one\nTWO\n".to_vec()),
+        MAX_RECORD_HUNK_CHARS,
+        &mut limits,
+    );
+    assert!(preview.truncated);
+    assert_eq!(preview.reason, Some(ReviewDiffLimit::RequestBudgetExceeded));
+    assert_eq!(preview.additions, None);
+    assert!(preview.hunks.is_empty());
+}
+
+/// The line ceiling is enforced before tokenization, so a pathological side is
+/// refused instead of allocating one slice per line.
+#[test]
+fn a_side_with_too_many_lines_is_refused_before_tokenizing() {
+    let text = "x\n".repeat(MAX_DIFF_LINES + 1);
+    let preview = make_preview(
+        DiffSide::Present(text.into_bytes()),
+        DiffSide::Present(b"x\n".to_vec()),
+        MAX_RECORD_HUNK_CHARS,
+        &mut PreviewLimits::file(Instant::now()),
+    );
+    assert!(preview.truncated);
+    assert_eq!(preview.reason, Some(ReviewDiffLimit::FileTooLarge));
+    assert_eq!(preview.additions, None);
+    assert!(preview.hunks.is_empty());
+}
+
+fn tool_options(allow_external_paths: bool) -> crate::tools::ToolExecutionOptions<'static> {
+    crate::tools::ToolExecutionOptions {
+        timeout_ms: None,
+        bash_options: None,
+        allow_external_paths,
+        hashline: None,
+    }
+}
+
+/// The tag an `Edit` requires, as a user gets it from a fresh read.
+async fn read_tag(workspace: &Path, path: &str) -> String {
+    let read = crate::tools::execute_tool_with_evidence_path_access(
+        Some(workspace),
+        None,
+        "Read",
+        &json!({ "path": path }),
+        tool_options(false),
+    )
+    .await;
+    assert!(read.result.ok, "read failed: {:?}", read.result.content);
+    read.result.content["tag"]
+        .as_str()
+        .expect("a read returns a tag")
+        .to_string()
+}
+
+/// The durable record reuses the comparison the tool already computed when the
+/// bytes still identify the same before and after state.
+#[tokio::test]
+async fn the_record_reuses_the_tools_comparison_when_the_hashes_match() {
+    let data = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let target = workspace.path().join("src.txt");
+    fs::write(&target, "one\ntwo\nthree\n").unwrap();
+    let pending = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
+    let tag = read_tag(workspace.path(), "src.txt").await;
+    let outcome = crate::tools::execute_tool_with_evidence_path_access(
+        Some(workspace.path()),
+        None,
+        "Edit",
+        &json!({ "path": "src.txt", "tag": tag, "ops": "PUT 2.=2:\n+changed" }),
+        tool_options(false),
+    )
+    .await;
+    assert!(
+        outcome.result.ok,
+        "edit failed: {:?}",
+        outcome.result.content
+    );
+    let evidence = outcome
+        .evidence
+        .clone()
+        .expect("a workspace edit carries evidence");
+    assert_eq!(evidence.preview.additions, Some(1));
+    assert_eq!(evidence.preview.deletions, Some(1));
+    // A marker inside the tool's own preview proves the record stored that
+    // comparison rather than repeating it.
+    let mut marked = evidence;
+    marked.preview.additions = Some(97);
+    marked.preview.deletions = Some(98);
+    marked.preview.hunks = vec![ReviewDiffHunk {
+        header: "@@ tool comparison @@".to_string(),
+        lines: Vec::new(),
+    }];
+    let change = finalize_change(&pending, Some(&marked)).unwrap();
+    assert_eq!(change.additions, Some(97));
+    assert_eq!(change.deletions, Some(98));
+    assert_eq!(change.hunks[0].header, "@@ tool comparison @@");
+}
+
+/// A file edited again between the tool call and the record is described from
+/// the bytes on disk, never from the tool's now-stale comparison.
+#[tokio::test]
+async fn the_record_recomputes_when_the_file_changed_after_the_tool() {
+    let data = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let target = workspace.path().join("src.txt");
+    fs::write(&target, "one\ntwo\nthree\n").unwrap();
+    let pending = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
+    let tag = read_tag(workspace.path(), "src.txt").await;
+    let outcome = crate::tools::execute_tool_with_evidence_path_access(
+        Some(workspace.path()),
+        None,
+        "Edit",
+        &json!({ "path": "src.txt", "tag": tag, "ops": "PUT 2.=2:\n+changed" }),
+        tool_options(false),
+    )
+    .await;
+    assert!(outcome.result.ok);
+    let evidence = outcome.evidence.expect("a workspace edit carries evidence");
+    assert_eq!(evidence.preview.additions, Some(1));
+    // A concurrent writer changes the file after the tool returned.
+    fs::write(&target, "one\nCHANGED\nfour\n").unwrap();
+    let change = finalize_change(&pending, Some(&evidence)).unwrap();
+    assert_eq!(
+        change.additions,
+        Some(2),
+        "the record compares the bytes it found, not the tool's memory"
+    );
+    assert_eq!(change.deletions, Some(2));
+}
+
+/// A user's concurrent edit between the snapshot and the tool must not move the
+/// record's baseline: the evidence no longer matches the captured bytes, so the
+/// record falls back to its own read.
+#[tokio::test]
+async fn the_record_keeps_its_baseline_when_the_tool_saw_other_bytes() {
+    let data = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let target = workspace.path().join("src.txt");
+    fs::write(&target, "one\ntwo\nthree\n").unwrap();
+    let pending = prepare(data.path(), workspace.path(), "s1", "m1", "src.txt");
+    // The user's own edit lands between the snapshot and the tool call.
+    fs::write(&target, "one\ntwo\nthree\nuser\n").unwrap();
+    let tag = read_tag(workspace.path(), "src.txt").await;
+    let outcome = crate::tools::execute_tool_with_evidence_path_access(
+        Some(workspace.path()),
+        None,
+        "Edit",
+        &json!({ "path": "src.txt", "tag": tag, "ops": "PUT 2.=2:\n+changed" }),
+        tool_options(false),
+    )
+    .await;
+    assert!(outcome.result.ok);
+    let evidence = outcome.evidence.expect("a workspace edit carries evidence");
+    assert_eq!(
+        evidence.preview.additions,
+        Some(1),
+        "the tool compared against the bytes it actually saw"
+    );
+    let change = finalize_change(&pending, Some(&evidence)).unwrap();
+    assert_eq!(
+        change.additions,
+        Some(2),
+        "the row still starts from the bytes the record captured"
+    );
+    assert_eq!(change.deletions, Some(1));
+}
+
+/// Only a workspace mutation feeds the durable review record; scratch and
+/// explicitly approved external writes keep their per-call preview without
+/// gaining review evidence.
+#[tokio::test]
+async fn only_a_workspace_mutation_carries_record_evidence() {
+    let workspace = tempdir().unwrap();
+    let scratch = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+
+    let created = crate::tools::execute_tool_with_evidence_path_access(
+        Some(workspace.path()),
+        Some(scratch.path()),
+        "Write",
+        &json!({ "path": "new.txt", "content": "one\ntwo\n" }),
+        tool_options(false),
+    )
+    .await;
+    assert!(created.result.ok, "{:?}", created.result.content);
+    let evidence = created
+        .evidence
+        .expect("a workspace write carries evidence");
+    assert_eq!(evidence.preview.status, EditDiffStatus::Added);
+    assert_eq!(evidence.preview.additions, Some(2));
+
+    let modified = crate::tools::execute_tool_with_evidence_path_access(
+        Some(workspace.path()),
+        Some(scratch.path()),
+        "Write",
+        &json!({ "path": "new.txt", "content": "one\nTWO\nthree\n" }),
+        tool_options(false),
+    )
+    .await;
+    assert!(modified.result.ok, "{:?}", modified.result.content);
+    let evidence = modified
+        .evidence
+        .expect("a workspace write carries evidence");
+    assert_eq!(evidence.preview.status, EditDiffStatus::Modified);
+    assert_eq!(evidence.preview.additions, Some(2));
+    assert_eq!(evidence.preview.deletions, Some(1));
+
+    let target = workspace.path().join("gone.txt");
+    fs::write(&target, "gone\n").unwrap();
+    let tag = read_tag(workspace.path(), "gone.txt").await;
+    let deleted = crate::tools::execute_tool_with_evidence_path_access(
+        Some(workspace.path()),
+        Some(scratch.path()),
+        "Edit",
+        &json!({ "path": "gone.txt", "tag": tag, "ops": "REM" }),
+        tool_options(false),
+    )
+    .await;
+    assert!(deleted.result.ok, "{:?}", deleted.result.content);
+    let evidence = deleted
+        .evidence
+        .expect("a workspace delete carries evidence");
+    assert_eq!(evidence.preview.status, EditDiffStatus::Deleted);
+    assert_eq!(evidence.preview.deletions, Some(1));
+    assert!(!target.exists());
+
+    let source = workspace.path().join("from.txt");
+    fs::write(&source, "keep\n").unwrap();
+    let tag = read_tag(workspace.path(), "from.txt").await;
+    let moved = crate::tools::execute_tool_with_evidence_path_access(
+        Some(workspace.path()),
+        Some(scratch.path()),
+        "Edit",
+        &json!({ "path": "from.txt", "tag": tag, "ops": "MV moved.txt" }),
+        tool_options(false),
+    )
+    .await;
+    assert!(moved.result.ok, "{:?}", moved.result.content);
+    let evidence = moved.evidence.expect("a workspace move carries evidence");
+    assert_eq!(evidence.preview.status, EditDiffStatus::Moved);
+    assert!(workspace.path().join("moved.txt").is_file());
+
+    // Scratch and approved external writes get the same line evidence in their
+    // own result, but no record evidence.
+    let scratch_file = scratch.path().join("note.txt");
+    let scratch_write = crate::tools::execute_tool_with_evidence_path_access(
+        Some(workspace.path()),
+        Some(scratch.path()),
+        "Write",
+        &json!({ "path": scratch_file.to_str().unwrap(), "content": "note\n" }),
+        tool_options(false),
+    )
+    .await;
+    assert!(
+        scratch_write.result.ok,
+        "{:?}",
+        scratch_write.result.content
+    );
+    assert!(scratch_write.evidence.is_none());
+    assert_eq!(
+        scratch_write.result.content["root"].as_str(),
+        Some("scratch"),
+        "a scratch write keeps its own root label"
+    );
+    assert!(scratch_write.result.content.get("editDiff").is_some());
+
+    let outside_file = outside.path().join("out.txt");
+    let external_write = crate::tools::execute_tool_with_evidence_path_access(
+        Some(workspace.path()),
+        Some(scratch.path()),
+        "Write",
+        &json!({ "path": outside_file.to_str().unwrap(), "content": "out\n" }),
+        tool_options(true),
+    )
+    .await;
+    assert!(
+        external_write.result.ok,
+        "{:?}",
+        external_write.result.content
+    );
+    assert!(external_write.evidence.is_none());
+    assert_eq!(
+        external_write.result.content["root"].as_str(),
+        Some("external")
+    );
+    assert!(external_write.result.content.get("editDiff").is_some());
+    assert!(outside_file.is_file());
 }
