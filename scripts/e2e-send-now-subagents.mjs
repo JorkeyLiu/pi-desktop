@@ -199,14 +199,20 @@ try {
     server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
   const { createQueueSlice } = await vite.ssrLoadModule("/src/stores/slices/queue-slice.ts");
   globalThis.window = { piDesktop: { invoke: async (channel, ...args) => ({ ok: true, data: await invoke(channel, args) }) } };
+  // `agentStatuses` is the store slice the agent bridge normally fills from the
+  // agent's own status events; the fixture drives the store directly, so it
+  // starts empty and is seeded with the live turn before the first send.
   state = { activeSessionId: sessionId, sessions: [{ id: sessionId, source: "desktop" }],
-    queuedPrompts: {}, runningSessions: { [sessionId]: true }, pendingPlans: {}, showToast: assert.fail };
+    queuedPrompts: {}, runningSessions: { [sessionId]: true }, pendingPlans: {},
+    // The scenario is "ordinary input queues while the turn runs".
+    settings: { sendWhileRunningMode: "queue" }, agentStatuses: {}, showToast: assert.fail };
   slice = createQueueSlice({ get: () => state,
     set: (patch) => { state = { ...state, ...(typeof patch === "function" ? patch(state) : patch) }; }, promptAttachmentsFromDraft: () => [] });
   Object.assign(state, slice);
   await invoke(IPC.invoke.agentPrompt, [{ sessionId, content: "Start two delegates and wait." }]);
   await until(() => held.size === 2 && events.some((entry) => entry.event.type === "status" && entry.event.status.activity?.phase === "waiting-subagents"), "Parent did not reach TaskWait with two live delegates");
   const originalTurnId = activeTurns.get(sessionId);
+  state.agentStatuses[sessionId] = { currentTurnId: originalTurnId };
   assert.equal(await slice.sendPrompt("Ordinary follow-up."), true);
   assert.equal(await slice.sendPrompt("Correct the plan now."), true);
   const correction = state.queuedPrompts[sessionId].find((entry) => entry.content === "Correct the plan now.");

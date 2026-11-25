@@ -1894,6 +1894,132 @@ describe("DesktopAgentRuntime configuration matching", () => {
     }
   });
 
+  it("cancels an ordinary tool call on its own identity, not only Bash and image tools", async () => {
+    let finishExecution!: (value: unknown) => void;
+    const execution = new Promise((resolve) => {
+      finishExecution = resolve;
+    });
+    const host = {
+      call: vi.fn((method: string) => {
+        if (method === "tools.execute") return execution;
+        if (method === "project.instructions.resolve") return Promise.resolve(undefined);
+        return Promise.resolve({ ok: true, content: "abort requested" });
+      }),
+      onNotification: vi.fn(() => () => {}),
+    };
+    const runtime = createRuntime({ host });
+    const read = (runtime as any).agent.state.tools.find(
+      (tool: any) => tool.name === "Read",
+    );
+    const controller = new AbortController();
+    const pending = read.execute("read-abortable", { path: "src/app.ts" }, controller.signal);
+    await vi.waitFor(() =>
+      expect(
+        host.call.mock.calls.some(([method]) => method === "tools.execute"),
+      ).toBe(true),
+    );
+
+    controller.abort();
+    // The stop names the call, not a turn or a tool family, so the host can
+    // cancel the plugin/permission/execution wait that holds this id.
+    expect(host.call).toHaveBeenCalledWith("tools.abort", {
+      sessionId: "session-1",
+      toolCallId: "read-abortable",
+    });
+    // A repeated stop of the same call is never a second cancellation.
+    controller.abort();
+    expect(
+      host.call.mock.calls.filter(([method]) => method === "tools.abort"),
+    ).toHaveLength(1);
+
+    finishExecution({
+      ok: false,
+      isError: true,
+      errorCode: "TOOL_ABORTED",
+      content: { code: "TOOL_ABORTED" },
+    });
+    await expect(pending).resolves.toMatchObject({
+      isError: true,
+      details: { code: "TOOL_ABORTED" },
+    });
+
+    await runtime.dispose();
+  });
+
+  it("does not spend the mutation budget on a cancelled Edit", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-edit-cancel-"));
+    await writeFile(join(root, "example.ts"), "original\n");
+    let finishExecution!: (value: unknown) => void;
+    const execution = new Promise((resolve) => {
+      finishExecution = resolve;
+    });
+    let executions = 0;
+    const host = {
+      call: vi.fn((method: string) => {
+        if (method === "tools.execute") {
+          executions += 1;
+          return executions <= 2
+            ? Promise.resolve({
+                ok: false,
+                isError: true,
+                errorCode: "EDIT_PARSE_FAILED",
+                content: {},
+              })
+            : execution;
+        }
+        if (method === "project.instructions.resolve") return Promise.resolve(undefined);
+        return Promise.resolve({ ok: true, content: "abort requested" });
+      }),
+      onNotification: vi.fn(() => () => {}),
+    };
+    const runtime = createRuntime({ host, projectPath: root });
+    const edit = runtimeTool(runtime, "Edit");
+    const internal = runtime as unknown as {
+      mutationFailureCounts: Map<string, number>;
+      pendingMutationTermination?: unknown;
+    };
+    try {
+      const args = { path: "example.ts", tag: "ABCD", ops: "PUT 1.=1:\n+fresh" };
+      // Two ordinary failures spend the path's budget down to its last strike.
+      for (const index of [0, 1]) {
+        const failed = await edit.execute(`failed-${index}`, args);
+        expect(failed.terminate).toBeUndefined();
+      }
+      expect([...internal.mutationFailureCounts.values()]).toEqual([2]);
+      expect(internal.pendingMutationTermination).toBeUndefined();
+
+      // The user stops the third attempt while the host is executing it.
+      const controller = new AbortController();
+      const pending = edit.execute("cancelled", args, controller.signal);
+      await vi.waitFor(() =>
+        expect(
+          host.call.mock.calls.filter(([method]) => method === "tools.execute"),
+        ).toHaveLength(3),
+      );
+      controller.abort();
+      expect(host.call).toHaveBeenCalledWith("tools.abort", {
+        sessionId: "session-1",
+        toolCallId: "cancelled",
+      });
+      finishExecution({
+        ok: false,
+        isError: true,
+        errorCode: "TOOL_ABORTED",
+        content: { code: "TOOL_ABORTED" },
+      });
+      const cancelled = await pending;
+      // The abort stays visible in the result but is not a mutation failure:
+      // no third strike, no termination, and no closing row for the turn.
+      expect(cancelled).toMatchObject({ isError: true, details: { code: "TOOL_ABORTED" } });
+      expect(cancelled.terminate).toBeUndefined();
+      expect([...internal.mutationFailureCounts.values()]).toEqual([2]);
+      expect(internal.pendingMutationTermination).toBeUndefined();
+    } finally {
+      await runtime.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("removes streamed-output resources when the host dies or runtime is disposed", async () => {
     vi.useFakeTimers();
     try {

@@ -3581,7 +3581,10 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             })
           : undefined;
         const abort = () => {
-          if ((!isBash && toolName !== "GenerateImages") || abortRequested || settled) return;
+          // Every host-bound call is cancellable on its own identity: the host
+          // keys on (sessionId, toolCallId), so no turn or tool name decides
+          // whether a stop can reach this call.
+          if (abortRequested || settled) return;
           abortRequested = true;
           abortPromise = this.host
             .call("tools.abort", {
@@ -3688,7 +3691,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         if (executionFailed) throw executionError;
         if (!result) throw new Error("tool execution returned no result");
         const recordParams = isRecord(params) ? params : undefined;
-        const failedToolExecution = !result.ok && result.denied !== true;
+        // A cancelled call is not a failed mutation: the user's stop must not
+        // spend the recovery budget, and it must not end the turn as an
+        // exhausted retry budget. The result is left exactly as the host
+        // reported it, so an abort stays distinguishable from a failure.
+        const cancelledToolExecution = abortRequested || result.errorCode === "TOOL_ABORTED";
+        const failedToolExecution =
+          !result.ok && result.denied !== true && !cancelledToolExecution;
         const failedEditPath =
           toolName === "Edit" &&
           failedToolExecution &&
@@ -5007,16 +5016,22 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         ];
         let subagentRun: SubagentRun;
         try {
-          const scopedTools = scopeDelegateTools(tools, definition, delegationId, worktreeKey, {
-            mutationOwners: this.mutationOwners,
-            permissionScopes: this.delegatePermissionScopes,
-            worktrees: this.delegateWorktrees,
-            callContexts: this.delegateCallContexts,
-            // The run is constructed below, and this callback is read only
-            // while one of its calls is executing, so it always observes the
-            // child that owns the call — never a sibling or the parent.
-            contextMessages: () => subagentRun?.contextMessages() ?? [],
-          });
+          const scopedTools = scopeDelegateTools(
+            tools,
+            definition,
+            delegationId,
+            worktreeKey,
+            {
+              mutationOwners: this.mutationOwners,
+              permissionScopes: this.delegatePermissionScopes,
+              worktrees: this.delegateWorktrees,
+              callContexts: this.delegateCallContexts,
+              // The run is constructed below, and this callback is read only
+              // while one of its calls is executing, so it always observes the
+              // child that owns the call — never a sibling or the parent.
+              contextMessages: () => subagentRun?.contextMessages() ?? [],
+            },
+          );
           subagentRun = new SubagentRun({
             definition,
             sessionId: this.sessionId,
@@ -5996,6 +6011,9 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     if (prepared.outcome === "already-applied") {
       const prior = this.delegations.get(prepared.newDelegationId);
       const turnId = prior?.taskTurnId ?? this.turnId;
+      // A retry of an already-applied continuation reports the identity the
+      // original acceptance produced; nothing about it revives or
+      // re-authorizes the run.
       return {
         accepted: true as const,
         delegationId: prepared.newDelegationId,

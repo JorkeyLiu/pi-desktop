@@ -250,10 +250,15 @@ permission gate and result envelope stay in host-core:
    to host `tools.execute` like any built-in tool.
 2. host-core resolves the durable operating mode first. In Agent it runs the
    normal permission flow (risk, session grants, no automatic deadline), then emits
-   notification `plugins.execute`
-   `{ executionId, sessionId, toolCallId, toolName, args, turnId }`. `turnId` is
-   the runtime turn identity, forwarded unchanged so the plugin tool context can
-   be matched against the `session:turnEnded` event.
+   notification
+   `plugins.execute`
+   `{ executionId, sessionId, toolCallId, toolName, args, turnId, mode, planSafeActions? }`.
+   `turnId` is the runtime turn identity, forwarded unchanged for plugin tool
+   context matching against the `session:turnEnded` event; it is attribution,
+   never dispatch authority. Electron main dispatches on the call's own
+   `(sessionId, toolCallId)` identity, with no live-turn prerequisite: an ended,
+   missing, or absent turn correlation does not refuse a legitimate call, and
+   no tool name is exempt from the same path.
 3. Plan calls fail at the host policy step with `PLUGIN_DISABLED_IN_PLAN`; they
    never reach Electron or the plugin runtime. Agent calls continue with
    Electron main executing the registered plugin tool JS and answering via RPC
@@ -266,6 +271,16 @@ permission gate and result envelope stay in host-core:
    maps to `TOOL_NOT_FOUND`. The `tools.execute` transport has no deadline while
    waiting for the explicit permission decision; after approval, host-core's
    execution budget remains authoritative.
+
+   Cancellation is per call and covers every leg: `tools.abort({ sessionId,
+   toolCallId })` stops an approval wait before anything is dispatched, stops the
+   wait on the runner's reply while plugin JS or an MCP call is in flight
+   (host-core emits `tools.aborted` naming the same pair, and the runner aborts
+   its own signal), and refuses a call whose cancellation arrived before its
+   dispatch. A cancellation that wins the wait settles the call exactly once
+   with `TOOL_ABORTED`; a reply that arrives afterwards has no pending execution
+   and resolves as `NOT_FOUND`, never as a newer call's result. Returns are not a rollback: a side effect the
+   plugin already performed stays performed.
 
 The model-facing registry gains plugin tools per prompt: main passes registered
 defs (`fullName`, description, JSON-schema parameters) to `agent.prompt`, and

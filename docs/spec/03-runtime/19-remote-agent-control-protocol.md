@@ -611,9 +611,11 @@ Legacy remote-Agent operations above remain unchanged.
 - `workspace/toolShell` accepts `{}` and returns `{ shell: CommandShellOption }`.
   Desktop supplies this effective Host shell to its local Agent. Bash execution
   verifies the same shell id and dialect, including a second check before spawn.
-- `workspace/toolExecute` accepts `{ path, sessionId, turnId, toolCallId,
+- `workspace/toolExecute` accepts `{ path, sessionId, turnId?, toolCallId,
   toolName, args, timeoutMs?, expectedCommandShellId?,
-  expectedCommandShellDialect? }`. Only Read, Glob, Grep, Write, Edit and Bash are
+  expectedCommandShellDialect? }`. `turnId` is correlation and attribution
+  only: it may be absent, including for a call whose turn already ended, and it
+  never decides admission. Only Read, Glob, Grep, Write, Edit and Bash are
   accepted; extra top-level fields and provider/credential inputs are rejected.
   `path` is the owner-selected absolute workspace root, independently
   canonicalized by the Host. Local permissions and tool admission precede this

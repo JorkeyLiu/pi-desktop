@@ -272,7 +272,8 @@ counters start at zero; `details.resumedFrom` keeps the link auditable.
 
 ### 14. ~~Direct user continuation carries explicit delivery ownership~~ — superseded: a child is never owned by whoever last typed
 
-**Superseded 2026-10 by the independent child lifecycle.** The original
+**Superseded 2026-10: a continued child is an ordinary child of its session,
+with no execution identity or delivery ownership of its own.** The original
 decision made a direct continuation record
 `delivery: "parent" | "user"` and, on the `user` side, isolate the run behind
 its own child-only execution-accounting turn with no parent accounting or

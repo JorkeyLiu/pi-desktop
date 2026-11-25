@@ -4064,6 +4064,11 @@ validation still needed.
 - **Acceptance**: G (plugin agent tool)
 - **Milestone**: M4
 - **Status**: Automated (protocol smoke: dispatch roundtrip host->runner->host; in-app JS execution via PluginRuntime)
+- **Cancellation**: the same smoke also stops a dispatched plugin call by
+  `(sessionId, toolCallId)`: `tools.aborted` names that call, `tools.execute`
+  settles once with `TOOL_ABORTED`, and the runner's late
+  `plugins.resolveExecution` is `NOT_FOUND`. No side effect is rolled back; a
+  stop never authorizes or refuses a turn.
 
 #### E2E-024G: Marketplace detail sheet shows README, permissions, versions
 
@@ -13490,7 +13495,24 @@ This test plan spec is accepted when:
   replaced tool result, and an assembled result that is not yet history — is
   automated over the real pi loop in
   `packages/agent-runtime/src/delivery-acceptance.test.ts`, with the model
-  gateway and the delegate loop as the only faked boundaries. The renderer
+  gateway and the delegate loop as the only faked boundaries. Per-call tool
+  cancellation is module-covered at the public call boundary:
+  `apps/desktop/test/tool-cancellations.test.mjs` (abort-before-dispatch
+  tombstone, one live controller per call, `(session, call)` scoping, expiry,
+  bounded memory, host-exit cleanup), `apps/desktop/test/plugin-execute-notification.test.mjs`
+  (dispatch with no active turn, no optional turn correlation, and no tool-name
+  whitelist; abort during the session read, during plugin execution, and before
+  dispatch; a stopped call answers once and a late completion is ignored; a
+  sibling call or session is untouched), runtime emission in
+  `packages/agent-runtime/src/runtime.test.ts` (a non-Bash call aborts on its own
+  identity), and host-core's approval-wait and dispatch-wait stops in
+  `crates/host-core/src/rpc/mod.rs` (`plugin_dispatch_aborted_*`: no dispatch
+  after an approval wait is stopped, one settlement after a dispatch is
+  stopped, `tools.aborted` names one call, a duplicate stop is not a second
+  cancellation, a newer call is unaffected, and a late
+  `plugins.resolveExecution` is `NOT_FOUND`). A manually continued child needs no
+  execution identity: `packages/agent-runtime/src/subagent-continue-execution.test.ts`
+  drives its plugin tool through `tools.execute` with no turn dispatch gate. The renderer
   journey (steps 2/3/7) stays pending over a capable environment.
 
 #### E2E-162 / E2E-173: Delegate workflow scrolling
@@ -16736,6 +16758,11 @@ browser milestones are scheduled.
   and real Rust Read/Bash execution, asserting zero remote providers, projects
   and sessions. Both local and remote Rust Hosts are real; the model service
   and the fixture's user approval action are controlled test boundaries.
+  The same local fixture also covers per-call relay cancellation: a call with
+  no turn attribution, a call whose turn already ended, a stop recorded before
+  Electron main starts the call, and an in-flight abort over loopback RACP
+  while the relay awaits the remote workspace tool. Each stop names one
+  `(sessionId, toolCallId)` and no other call.
 - **Status**: Candidate implementation; real SSH release validation remains the
   separately provisioned E2E-231 scenario.
 

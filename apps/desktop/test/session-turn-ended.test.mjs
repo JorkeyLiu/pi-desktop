@@ -164,11 +164,11 @@ test("isStaleTerminalEvent only classifies terminal events", () => {
   }
 });
 
-test("a dispatched plugin tool is refused once the turn is cancelled or finalizing", () => {
+test("the relay gate refuses a quoted turn that is cancelled or finalizing", () => {
   const f = fixture();
   assert.equal(f.coordination.isTurnDispatchable(SESSION, LIVE_TURN), true);
 
-  // Cancelled: a plugin side effect must not start while the cancel is in flight.
+  // Cancelled: a relay must not start while the cancel is in flight.
   f.coordination.lockAbortReason(SESSION, LIVE_TURN);
   assert.equal(f.coordination.isTurnDispatchable(SESSION, LIVE_TURN), false);
   f.coordination.clearAbortReason(SESSION, LIVE_TURN);

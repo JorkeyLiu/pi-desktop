@@ -575,7 +575,6 @@ pub struct ToolsExecuteParams {
     /// host-core resolves it against its registry; an unknown id is ignored.
     #[serde(default)]
     pub delegation_id: Option<String>,
-    #[serde(default)]
     pub expected_command_shell_id: Option<String>,
     #[serde(default)]
     pub expected_command_shell_dialect: Option<String>,

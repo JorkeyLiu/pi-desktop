@@ -177,10 +177,11 @@ export function createSessionCoordination({
   }
 
   /**
-   * Last synchronous gate before a plugin side effect. A turn that is not the
-   * session's live turn, has an abort decision recorded, or is already finalizing
-   * must not start one. Callers must not await between this check and the
-   * dispatch.
+   * Live-turn check for a remote-workspace tool request: the remote runner is
+   * acting for a turn, so a turn that is not the session's live turn, has an
+   * abort decision recorded, or is already finalizing must not issue one.
+   * Plugin and MCP dispatch do not consult this: those calls are authorized by
+   * their own per-call identity and stopped by their own cancellation.
    */
   function isTurnDispatchable(
     sessionId: string,

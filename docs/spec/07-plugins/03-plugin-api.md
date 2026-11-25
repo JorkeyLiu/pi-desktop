@@ -368,7 +368,10 @@ type ToolExecContext = {
 ```
 
 `turnId` is populated for host-driven turns and matches the `turnId` of the
-corresponding `session:turnEnded` event (§5).
+corresponding `session:turnEnded` event (§5). A directly continued
+(`agent.continueSubagent`) child run keeps its retained parent `turnId`
+unchanged for that correlation only; dispatch, and the cancellation that stops
+it, belong to the tool call's own identity.
 
 ### models (requires `models.list`)
 ```ts
