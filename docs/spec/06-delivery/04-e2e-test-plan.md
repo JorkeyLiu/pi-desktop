@@ -20152,3 +20152,38 @@ host-created files. The full app's file-preview viewer is covered separately.
   SSE provider fixture, freshly built `target/debug/pi-desktop-host-core` and
   `packages/agent-runtime/dist-bundle` from this tree. No `verify:ui:*`, user
   desktop instance, or paid provider was used.
+
+### E2E-MESSAGE-DURABILITY-CONTRACT: fractional throughput and typed outbox refusals
+
+Turns a settled assistant row's fractional `durationMs` through the real
+runtime → Host boundary and back, then proves a payload the Host cannot index is
+refused with `INVALID_PARAMS` rather than stored and stripped.
+
+```bash
+PI_DESKTOP_HOST_BIN=target/debug/pi-desktop-host-core \
+  node scripts/e2e-message-durability-contract.mjs
+```
+
+The script spawns the built host-core binary against a temporary data directory
+(no Desktop window, provider, or network) and asserts, in order:
+`session.appendMessage` with `durationMs: 1234.567` reads back as exactly
+`1234.567` with a rate that a truncated span would not produce;
+`session.replaceMessages` keeps that fraction; negative, fractional-count, and
+non-numeric throughput payloads are refused with `INVALID_PARAMS` and write no
+row; and a valid append after those refusals lands last in transcript order.
+
+#### E2E-MESSAGE-DURABILITY-CONTRACT — run record
+
+- **Tested source**: `jorkey/fix/message-durability-contract` worktree
+  (`crates/host-core/src/sessions.rs`, `apps/desktop/electron/main/persistence-outbox.ts`
+  and its test) on base `4ac7246a750cdd614579578542a8367ecdb00707`.
+- **Base**: `4ac7246a750cdd614579578542a8367ecdb00707`.
+- **E2E suites**: `node scripts/e2e-message-durability-contract.mjs` (PASS,
+  real `target/debug/pi-desktop-host-core` built from that tree);
+  `node --test apps/desktop/test/persistence-outbox.test.mjs` (25/25 PASS);
+  `cargo test -p host-core --locked throughput` (3/3 PASS).
+- **Result**: PASS. Red baseline before the change: the fractional payload
+  failed message parsing with `invalid type: floating point 1234.567, expected
+  i64`, and the four new outbox cases failed against the old outbox.
+- **Environment**: macOS host, isolated temporary data directory, no
+  `verify:ui:*`, no user desktop instance, no paid provider, no network.

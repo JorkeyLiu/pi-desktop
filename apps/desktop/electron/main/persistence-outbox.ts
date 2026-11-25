@@ -27,7 +27,14 @@ type OutboxOptions = {
   now?: () => number;
   /** Quarantined appends retained on disk, oldest discarded first. */
   maxDeadLetters?: number;
+  /** Timer seam: the retry is scheduled by the outbox itself, not by a caller. */
+  setTimer?: (callback: () => void, delayMs: number) => OutboxTimer;
+  /** Timer seam matching `setTimer`. */
+  clearTimer?: (handle: OutboxTimer) => void;
 };
+
+/** An opaque scheduled retry, owned and cleared by this outbox alone. */
+type OutboxTimer = ReturnType<typeof setTimeout>;
 
 /**
  * How one session-scoped read fence ended: the appends that session had queued
@@ -92,6 +99,12 @@ export class PersistenceOutbox {
     nextAttemptAt: number;
     host: HostProcess;
   } | null = null;
+  private readonly setTimer: (callback: () => void, delayMs: number) => OutboxTimer;
+  private readonly clearTimer: (handle: OutboxTimer) => void;
+  /** The one owned retry timer; `null` when no transient retry is pending. */
+  private retryTimer: OutboxTimer | null = null;
+  /** Shutdown closed this outbox; it never schedules work or reports success. */
+  private disposed = false;
   private readonly loaded: Promise<void>;
 
   constructor(dataDir: string, logger: OutboxLogger, options: OutboxOptions = {}) {
@@ -102,6 +115,8 @@ export class PersistenceOutbox {
     this.logger = logger;
     this.now = options.now ?? Date.now;
     this.maxDeadLetters = options.maxDeadLetters ?? MAX_DEAD_LETTERS;
+    this.setTimer = options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+    this.clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle));
     this.loaded = this.load();
   }
 
@@ -110,6 +125,9 @@ export class PersistenceOutbox {
     getHost: () => HostProcess | null,
   ): Promise<void> {
     await this.loaded;
+    // Shutdown already closed this outbox: accepting the append would queue a
+    // row nothing will drain and report a write that never happened.
+    if (this.disposed) throw new Error("session persistence outbox is disposed");
     const existing = this.entries.findIndex((item) => item.key === entry.key);
     if (existing >= 0) this.entries[existing] = entry;
     else {
@@ -131,12 +149,25 @@ export class PersistenceOutbox {
 
   async flush(getHost: () => HostProcess | null): Promise<void> {
     await this.loaded;
+    // A disposed outbox is not a drained queue: report nothing as written and
+    // leave the durable file for the next launch to drain.
+    if (this.disposed) return;
     // A session fence may end a drain pass before the queue is empty; a caller
     // that asked for the whole queue keeps draining what the pass left behind.
     let end: FlushEnd;
     do {
       end = await this.drain(getHost);
     } while (end === "fenced");
+  }
+
+  /**
+   * Stop scheduling retries for this outbox. Shutdown calls this after its
+   * final flush so no timer outlives the window or the host it was waiting on;
+   * a later enqueue is refused instead of queuing a row nothing will write.
+   */
+  dispose(): void {
+    this.disposed = true;
+    this.clearRetryTimer();
   }
 
   /**
@@ -160,6 +191,7 @@ export class PersistenceOutbox {
       this.entries.filter((entry) => entry.sessionId === sessionId).map((entry) => entry.key),
     );
     if (!keys.size) return { remaining: 0, paused: false, failed: 0 };
+    if (this.disposed) return { remaining: keys.size, paused: true, failed: 0 };
     // One fence at a time: a second read waits for the first snapshot rather
     // than competing with it for the same single write pass.
     const run = this.fenceQueue.then(() => this.fenceSession(keys, getHost));
@@ -290,17 +322,35 @@ export class PersistenceOutbox {
             key: current.key,
             data: String(error),
           });
+        } else if (isInvalidPayloadError(error)) {
+          // The host refused the payload itself (`INVALID_PARAMS`): this row
+          // cannot become writable on any retry. Quarantine it on the first
+          // refusal, with its reason and payload intact, instead of spending
+          // the transient budget while every session waits behind the head.
+          this.logger("error", "session persistence flush quarantined invalid payload", {
+            key: current.key,
+            sessionId: current.sessionId,
+            code: errorCodeOf(error),
+            file: this.deadLetterPath,
+            data: String(error),
+          });
+          await this.quarantine(current, 1, error);
+          continue;
         } else {
           const attempts = this.noteTransientFailure(current, currentHost);
           if (attempts < MAX_TRANSIENT_ATTEMPTS) {
             // Transient failure (host busy/overloaded/pipe dead). Keep the head
-            // and retry it after this attempt's backoff.
+            // and retry it after this attempt's backoff. The outbox owns that
+            // schedule so an idle session's queued rows still drain without a
+            // new enqueue or renderer interaction.
+            const retryInMs = this.headRetry ? this.headRetry.nextAttemptAt - this.now() : 0;
+            this.armRetryTimer(getHost, retryInMs);
             this.logger("warn", "session persistence flush paused", {
               key: current.key,
               sessionId: current.sessionId,
               attempts,
               maxAttempts: MAX_TRANSIENT_ATTEMPTS,
-              retryInMs: this.headRetry ? this.headRetry.nextAttemptAt - this.now() : 0,
+              retryInMs,
               data: String(error),
             });
             return "paused";
@@ -316,8 +366,10 @@ export class PersistenceOutbox {
       // Only remove the exact entry acknowledged by that write.
       if (this.entries[0] === current) this.entries.shift();
       this.headRetry = null;
+      this.clearRetryTimer();
       await this.persist();
     }
+    this.clearRetryTimer();
     return "empty";
   }
 
@@ -368,8 +420,33 @@ export class PersistenceOutbox {
     });
     if (this.entries[0] === entry) this.entries.shift();
     this.headRetry = null;
+    this.clearRetryTimer();
     await this.persist();
     await this.persistDeadLetters();
+  }
+
+  /**
+   * Own the next retry of a paused head. One timer, replaced rather than
+   * stacked, so a burst of failures cannot schedule parallel drains and a
+   * shutdown can always cancel exactly one handle.
+   */
+  private armRetryTimer(getHost: () => HostProcess | null, delayMs: number): void {
+    this.clearRetryTimer();
+    if (this.disposed) return;
+    this.retryTimer = this.setTimer(
+      () => {
+        this.retryTimer = null;
+        if (this.disposed) return;
+        void this.flush(getHost);
+      },
+      Math.max(1, Math.round(delayMs)),
+    );
+  }
+
+  private clearRetryTimer(): void {
+    if (this.retryTimer === null) return;
+    this.clearTimer(this.retryTimer);
+    this.retryTimer = null;
   }
 
   private async load(): Promise<void> {
@@ -462,11 +539,33 @@ function isDuplicateMessageIdError(error: unknown): boolean {
 }
 
 /**
+ * The typed RPC rejection code, read from the error the transport threw
+ * (`host-runtime` copies `error.data.errorCode` onto it). Only an exact code
+ * counts: a missing or unclassified failure stays transient, and host/pipe
+ * trouble is never relabelled as a bad payload.
+ */
+function errorCodeOf(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const direct = (error as { errorCode?: unknown }).errorCode;
+  if (typeof direct === "string") return direct;
+  const data = (error as { data?: { errorCode?: unknown } }).data;
+  return data && typeof data.errorCode === "string" ? data.errorCode : undefined;
+}
+
+/**
+ * The host parsed the request and refused the payload (`INVALID_PARAMS`, the
+ * dispatch mapping for `serde_json::from_value` failures and missing params).
+ * Retrying cannot change that outcome, so such a head is quarantined at once.
+ */
+function isInvalidPayloadError(error: unknown): boolean {
+  return errorCodeOf(error) === "INVALID_PARAMS";
+}
+
+/**
  * The host will reject this message on every retry. Match the host-core
  * provenance prefix in the JSON-RPC message body (append maps those failures
- * as INTERNAL). Do not treat PLUGIN_PERMISSION_DENIED or schema
- * INVALID_PARAMS as poison — those are a different surface, and serde
- * failures do not even put INVALID_PARAMS in the message text.
+ * as INTERNAL). Do not treat PLUGIN_PERMISSION_DENIED as poison — that is a
+ * different surface.
  */
 function isPoisonMessageError(error: unknown): boolean {
   return /(?<![A-Z_])PERMISSION_DENIED:/i.test(String(error));

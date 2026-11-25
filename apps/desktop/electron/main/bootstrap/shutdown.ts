@@ -197,6 +197,9 @@ export function registerShutdownHandlers({
         if (persistenceTimer) clearTimeout(persistenceTimer);
       }
       await persistenceOutbox.flush(getHost);
+      // The final flush is done: cancel the outbox's own retry timer so no
+      // schedule outlives this window, and refuse later appends honestly.
+      persistenceOutbox.dispose();
       const hostShutdown = getHost()?.dispose();
       const mcpShutdown = getMcpControl()?.stop();
       updater.dispose();

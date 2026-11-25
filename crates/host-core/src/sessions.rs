@@ -189,12 +189,51 @@ pub struct MessageAttachment {
 /// to settled-end monotonic span, with the committed sample count (always 1
 /// on a parent row). Absent on legacy rows, failed/aborted turns, and turns
 /// with no usable figure — never an invented zero.
+///
+/// The span is real milliseconds from a monotonic clock, so it is fractional:
+/// every producer (runtime sampler, renderer fold, TPS math) keeps the exact
+/// figure and this boundary must not truncate it. Integers written before this
+/// contract still deserialize (`1000` becomes `1000.0`). Validation lives on
+/// the type, so every write path that parses a message inherits the same
+/// finite, non-negative rule and a bad payload never silently loses its stats.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThroughputTotals {
+    #[serde(deserialize_with = "deserialize_throughput_count")]
     pub tokens: i64,
-    pub duration_ms: i64,
+    #[serde(deserialize_with = "deserialize_throughput_duration")]
+    pub duration_ms: f64,
+    #[serde(deserialize_with = "deserialize_throughput_count")]
     pub samples: i64,
+}
+
+/// Tokens and samples are counts: a whole, non-negative number.
+fn deserialize_throughput_count<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = i64::deserialize(deserializer)?;
+    if value < 0 {
+        return Err(serde::de::Error::custom(
+            "throughput counts must be non-negative integers",
+        ));
+    }
+    Ok(value)
+}
+
+/// The span is a finite, non-negative fraction of milliseconds; `NaN` and
+/// infinities cannot index a rate and never reach storage.
+fn deserialize_throughput_duration<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = f64::deserialize(deserializer)?;
+    if !value.is_finite() || value < 0.0 {
+        return Err(serde::de::Error::custom(
+            "throughput durationMs must be a finite non-negative number",
+        ));
+    }
+    Ok(value)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -6493,7 +6532,7 @@ mod tests {
         timed.response_output_tokens = Some(20);
         timed.throughput = Some(ThroughputTotals {
             tokens: 423,
-            duration_ms: 10_000,
+            duration_ms: 10_000.0,
             samples: 1,
         });
         append_message(&db, &session.id, &timed, None).unwrap();
@@ -6512,7 +6551,7 @@ mod tests {
         assert_eq!(timed_meta["responseOutputTokens"], json!(20));
         assert_eq!(
             timed_meta["throughput"],
-            json!({ "tokens": 423, "durationMs": 10_000, "samples": 1 })
+            json!({ "tokens": 423, "durationMs": 10_000.0, "samples": 1 })
         );
         let legacy_meta = records[1].meta.as_ref().expect("legacy metadata");
         assert!(legacy_meta.get("modelStreamDurationMs").is_none());
@@ -6525,12 +6564,98 @@ mod tests {
             detail.messages[0].throughput,
             Some(ThroughputTotals {
                 tokens: 423,
-                duration_ms: 10_000,
-                samples: 1
+                duration_ms: 10_000.0,
+                samples: 1,
             })
         );
         assert_eq!(detail.messages[1].model_stream_duration_ms, None);
         assert_eq!(detail.messages[1].throughput, None);
+    }
+
+    /// The runtime sampler measures a `performance.now()` span, so the wire
+    /// carries a real fraction. Append and rewrite must store that exact
+    /// figure — not a rounded one — and the read must return it unchanged.
+    #[test]
+    fn fractional_throughput_survives_append_and_read() {
+        let db = test_db();
+        let session = create_session(&db, None, None, None, None, None).unwrap();
+        // The exact payload the runtime emits for a settled turn.
+        let message: UiMessage = serde_json::from_value(json!({
+            "id": "fractional",
+            "role": "assistant",
+            "content": "answer",
+            "createdAt": "2025-05-01T00:00:01Z",
+            "status": "complete",
+            "throughput": { "tokens": 42, "durationMs": 1234.567, "samples": 1 }
+        }))
+        .unwrap();
+        append_message(&db, &session.id, &message, None).unwrap();
+
+        let detail = get_session(&db, &session.id).unwrap().unwrap();
+        let totals = detail.messages[0].throughput.as_ref().expect("throughput");
+        assert_eq!(totals.tokens, 42);
+        assert_eq!(totals.duration_ms, 1234.567);
+        assert!(
+            totals.duration_ms.fract() > 0.0,
+            "the fraction is preserved"
+        );
+        assert_eq!(totals.samples, 1);
+        // The stored metadata keeps the same figure the renderer re-sums.
+        let records = transcripts::read_transcript(db.data_dir(), &session.id).unwrap();
+        let meta = records[0].meta.as_ref().expect("metadata");
+        assert_eq!(meta["throughput"]["durationMs"], json!(1234.567));
+
+        // A transcript rewrite (regenerate/revision paths) carries it across.
+        replace_messages(&db, &session.id, &[message]).unwrap();
+        let rewritten = get_session(&db, &session.id).unwrap().unwrap();
+        assert_eq!(
+            rewritten.messages[0]
+                .throughput
+                .as_ref()
+                .expect("throughput after rewrite")
+                .duration_ms,
+            1234.567
+        );
+    }
+
+    /// Rows written before the fractional contract stored whole milliseconds.
+    #[test]
+    fn legacy_integer_throughput_payload_still_loads() {
+        let totals: ThroughputTotals =
+            serde_json::from_value(json!({ "tokens": 423, "durationMs": 10_000, "samples": 1 }))
+                .unwrap();
+        assert_eq!(totals.duration_ms, 10_000.0);
+        assert_eq!(totals.tokens, 423);
+        assert_eq!(totals.samples, 1);
+    }
+
+    /// A payload that cannot index a rate is refused at the message boundary
+    /// with the same serde failure the RPC maps to `INVALID_PARAMS`, so no
+    /// write path can persist it and no stats are silently normalized away.
+    #[test]
+    fn invalid_throughput_payload_is_refused_before_any_write() {
+        let base = json!({
+            "id": "bad",
+            "role": "assistant",
+            "content": "answer",
+            "createdAt": "2025-05-01T00:00:01Z",
+            "status": "complete"
+        });
+        for throughput in [
+            json!({ "tokens": 1, "durationMs": -5.5, "samples": 1 }),
+            json!({ "tokens": -1, "durationMs": 10.0, "samples": 1 }),
+            json!({ "tokens": 1, "durationMs": 10.0, "samples": -1 }),
+            json!({ "tokens": 1, "durationMs": 10.5, "samples": 0.5 }),
+            json!({ "tokens": 1, "durationMs": "slow", "samples": 1 }),
+            json!({ "tokens": 1, "durationMs": null, "samples": 1 }),
+        ] {
+            let mut wire = base.clone();
+            wire["throughput"] = throughput.clone();
+            assert!(
+                serde_json::from_value::<UiMessage>(wire).is_err(),
+                "invalid throughput must fail message parsing: {throughput}"
+            );
+        }
     }
 
     #[test]

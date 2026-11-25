@@ -44,7 +44,7 @@ function createHarness({ sessionIds = [], confirm = true, installingUpdate = fal
     getSidecar: () => ({ call: async () => { activeTurns.clear(); }, dispose: asyncNoop }),
     getMcpControl: () => null, activeTurns,
     hasRunningSessions: () => activeTurns.size > 0,
-    persistenceOutbox: { size: () => 0, flush: asyncNoop },
+    persistenceOutbox: { size: () => 0, flush: asyncNoop, dispose: noop },
     inflightCheckpointer: {
       observe() {}, flush: asyncNoop, flushAll: asyncNoop, settleIf() {}, dispose() {},
     },
