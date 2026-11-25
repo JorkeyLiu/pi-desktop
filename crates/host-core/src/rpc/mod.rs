@@ -1228,6 +1228,26 @@ fn shell_failure_result(
     }
 }
 
+/// A refused tool call that has nothing to do with a command shell. Bash
+/// failures carry shell identity, so they use `shell_failure_result`.
+fn tool_failure_result(
+    p: &ToolsExecuteParams,
+    error_code: &str,
+    message: impl Into<String>,
+    started: std::time::Instant,
+) -> tools::ToolsExecuteResult {
+    tools::ToolsExecuteResult {
+        tool_call_id: p.tool_call_id.clone(),
+        ok: false,
+        is_error: Some(true),
+        content: json!({ "error": message.into(), "code": error_code }),
+        duration_ms: started.elapsed().as_millis() as u64,
+        denied: None,
+        error_code: Some(error_code.to_string()),
+        command_shell_id: None,
+    }
+}
+
 fn shell_changed_result(
     p: &ToolsExecuteParams,
     expected_shell_id: &str,
@@ -1514,7 +1534,7 @@ impl crate::plugins::InstallObserver for RpcInstallObserver {
     }
 }
 
-async fn wait_for_bash_cancellation(
+async fn wait_for_tool_cancellation(
     receiver: &mut Option<tokio::sync::watch::Receiver<bool>>,
 ) -> bool {
     let Some(receiver) = receiver.as_mut() else {
@@ -1533,13 +1553,13 @@ async fn wait_for_bash_cancellation(
     }
 }
 
-fn bash_cancellation_requested(receiver: &Option<tokio::sync::watch::Receiver<bool>>) -> bool {
+fn tool_cancellation_requested(receiver: &Option<tokio::sync::watch::Receiver<bool>>) -> bool {
     receiver.as_ref().is_some_and(|receiver| *receiver.borrow())
 }
 
-async fn clear_bash_cancellation(state: &Arc<Mutex<AppState>>, p: &ToolsExecuteParams) {
+async fn clear_tool_cancellation(state: &Arc<Mutex<AppState>>, p: &ToolsExecuteParams) {
     let mut st = state.lock().await;
-    st.clear_bash_cancellation(&p.session_id, &p.tool_call_id);
+    st.clear_tool_cancellation(&p.session_id, &p.tool_call_id);
 }
 
 async fn cancel_pending_permission(state: &Arc<Mutex<AppState>>, p: &ToolsExecuteParams) -> bool {
@@ -1549,14 +1569,35 @@ async fn cancel_pending_permission(state: &Arc<Mutex<AppState>>, p: &ToolsExecut
 
 /// Dispatch a `plugin_*` tool to the desktop runner (Electron main), which
 /// executes the plugin JS and answers via `plugins.resolveExecution`.
+///
+/// The call's own cancellation is raced against the runner. A cancelled call
+/// settles here once with `TOOL_ABORTED` and its pending execution is dropped,
+/// so Electron main can stop the side effect it started and a late
+/// `plugins.resolveExecution` reply has nowhere to land.
 async fn execute_plugin_tool(
     state: &Arc<Mutex<AppState>>,
     tx: &mpsc::UnboundedSender<String>,
     p: &ToolsExecuteParams,
     timeout_ms: u64,
     session_mode: &str,
+    cancellation: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> tools::ToolsExecuteResult {
     let started = std::time::Instant::now();
+    let mut cancellation = cancellation;
+    let aborted = |duration_ms: u64| tools::ToolsExecuteResult {
+        tool_call_id: p.tool_call_id.clone(),
+        ok: false,
+        is_error: Some(true),
+        content: json!({ "error": "tool aborted", "code": "TOOL_ABORTED" }),
+        duration_ms,
+        denied: None,
+        error_code: Some("TOOL_ABORTED".into()),
+        command_shell_id: None,
+    };
+    // A cancel that already arrived must not start the plugin at all.
+    if tool_cancellation_requested(&cancellation) {
+        return aborted(started.elapsed().as_millis() as u64);
+    }
     let execution_id = uuid::Uuid::new_v4().to_string();
     let (otx, orx) = tokio::sync::oneshot::channel::<Value>();
     {
@@ -1582,10 +1623,27 @@ async fn execute_plugin_tool(
     )
     .await;
 
-    let outcome = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), orx).await;
+    enum PluginOutcome {
+        Answered(Result<Value, tokio::sync::oneshot::error::RecvError>),
+        Cancelled,
+        TimedOut,
+    }
+    let outcome = {
+        let deadline = tokio::time::sleep(std::time::Duration::from_millis(timeout_ms));
+        tokio::pin!(deadline);
+        tokio::select! {
+            biased;
+            cancelled = wait_for_tool_cancellation(&mut cancellation) => {
+                debug_assert!(cancelled);
+                PluginOutcome::Cancelled
+            }
+            received = orx => PluginOutcome::Answered(received),
+            _ = &mut deadline => PluginOutcome::TimedOut,
+        }
+    };
     let duration_ms = started.elapsed().as_millis() as u64;
     match outcome {
-        Ok(Ok(resp)) => {
+        PluginOutcome::Answered(Ok(resp)) => {
             let ok = resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
             let content = resp.get("content").cloned().unwrap_or(Value::Null);
             let error_code = resp
@@ -1606,6 +1664,11 @@ async fn execute_plugin_tool(
                 },
                 command_shell_id: None,
             }
+        }
+        PluginOutcome::Cancelled => {
+            let mut st = state.lock().await;
+            st.plugin_execs.remove(&execution_id);
+            aborted(duration_ms)
         }
         _ => {
             let mut st = state.lock().await;
@@ -4080,28 +4143,34 @@ async fn handle_request(
                     .ok_or_else(|| rpc_err(1007, "session not found", "SESSION_NOT_FOUND"))?
             };
 
-            // Register before permission evaluation so tools.abort can cancel
-            // an approval wait as well as an already-spawned process.
-            let cancellation_receiver = if remote_workspace.is_some()
-                || matches!(p.tool_name.as_str(), "Bash" | "GenerateImages")
-            {
+            // Every call is cancellable on its own identity: tools.abort keys
+            // on (sessionId, toolCallId) and must reach an approval wait, a
+            // dispatch awaiting Electron main, or a running tool alike.
+            let cancellation_receiver = {
                 let mut st = state.lock().await;
-                match st.register_bash_cancellation(&p.session_id, &p.tool_call_id) {
+                match st.register_tool_cancellation(&p.session_id, &p.tool_call_id) {
                     Ok(receiver) => Some(receiver),
                     Err(error_code) => {
-                        let result = shell_failure_result(
-                            &p,
-                            &error_code,
-                            "another Bash call is already active for this tool call ID",
-                            command_shell_id.clone(),
-                            call_started,
-                        );
+                        let result = if p.tool_name == "Bash" {
+                            shell_failure_result(
+                                &p,
+                                &error_code,
+                                "another Bash call is already active for this tool call ID",
+                                command_shell_id.clone(),
+                                call_started,
+                            )
+                        } else {
+                            tool_failure_result(
+                                &p,
+                                &error_code,
+                                "another tool call is already active for this tool call ID",
+                                call_started,
+                            )
+                        };
                         return serde_json::to_value(result)
                             .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"));
                     }
                 }
-            } else {
-                None
             };
 
             let outcome: Result<Value, JsonRpcError> = async {
@@ -4270,7 +4339,7 @@ async fn handle_request(
 
                 let prompted = request_opt.is_some();
                 let mut permission_cancellation = cancellation_receiver.clone();
-                let mut cancelled = bash_cancellation_requested(&permission_cancellation);
+                let mut cancelled = tool_cancellation_requested(&permission_cancellation);
                 if cancelled {
                     let _ = cancel_pending_permission(&state, &p).await;
                 }
@@ -4301,7 +4370,7 @@ async fn handle_request(
                 let final_decision = if cancelled {
                     PermissionDecision::Deny
                 } else if let Some(d) = auto_decision {
-                    cancelled = bash_cancellation_requested(&permission_cancellation);
+                    cancelled = tool_cancellation_requested(&permission_cancellation);
                     if cancelled {
                         let _ = cancel_pending_permission(&state, &p).await;
                         PermissionDecision::Deny
@@ -4314,7 +4383,7 @@ async fn handle_request(
                             Ok(d) => d,
                             _ => PermissionDecision::Deny,
                         },
-                        _ = wait_for_bash_cancellation(&mut permission_cancellation) => {
+                        _ = wait_for_tool_cancellation(&mut permission_cancellation) => {
                             let _ = cancel_pending_permission(&state, &p).await;
                             cancelled = true;
                             PermissionDecision::Deny
@@ -4323,7 +4392,7 @@ async fn handle_request(
                 } else {
                     PermissionDecision::Deny
                 };
-                cancelled = cancelled || bash_cancellation_requested(&permission_cancellation);
+                cancelled = cancelled || tool_cancellation_requested(&permission_cancellation);
                 if cancelled {
                     let _ = cancel_pending_permission(&state, &p).await;
                 }
@@ -4573,6 +4642,7 @@ async fn handle_request(
                         &p,
                         tools::desktop_dispatch_timeout_ms(p.timeout_ms),
                         &durable_mode,
+                        cancellation_receiver.clone(),
                     )
                     .await
                 } else if scheduled_tools::recognizes(&p.tool_name) {
@@ -4718,7 +4788,7 @@ async fn handle_request(
                 serde_json::to_value(result).map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))
             }
             .await;
-            clear_bash_cancellation(&state, &p).await;
+            clear_tool_cancellation(&state, &p).await;
             outcome
         }
 
@@ -4731,15 +4801,29 @@ async fn handle_request(
                 .get("toolCallId")
                 .and_then(|value| value.as_str())
                 .ok_or_else(|| rpc_err(1002, "toolCallId required", "INVALID_PARAMS"))?;
-            let mut st = state.lock().await;
-            let permission_found = st.cancel_pending_permission(session_id, tool_call_id);
-            let (process_found, queued) = st.abort_or_queue_bash(session_id, tool_call_id);
-            let remote = match sessions::session_summary(&st.db, session_id)
-                .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?
-            {
-                Some(_) => remote_tools::session_remote_workspace(&st, session_id)?.is_some(),
-                None => false,
+            let (permission_found, process_found, queued, remote) = {
+                let mut st = state.lock().await;
+                let permission_found = st.cancel_pending_permission(session_id, tool_call_id);
+                let (process_found, queued) = st.abort_or_queue_tool(session_id, tool_call_id);
+                let remote = match sessions::session_summary(&st.db, session_id)
+                    .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?
+                {
+                    Some(_) => remote_tools::session_remote_workspace(&st, session_id)?.is_some(),
+                    None => false,
+                };
+                (permission_found, process_found, queued, remote)
             };
+            // A call whose execution lives outside this process (plugin JS or
+            // an MCP call in Electron main) can only be stopped by the owner
+            // of that side effect. The report names one call and nothing else:
+            // it authorizes no turn and carries no liveness claim.
+            if process_found {
+                send_notification(
+                    &tx,
+                    "tools.aborted",
+                    json!({ "sessionId": session_id, "toolCallId": tool_call_id }),
+                );
+            }
             if remote {
                 send_notification(
                     &tx,
@@ -4755,7 +4839,6 @@ async fn handle_request(
                 "aborted": found || queued
             }))
         }
-
         "permissions.evaluate" => {
             let session_id = params
                 .get("sessionId")
@@ -7861,7 +7944,7 @@ mod tests {
             if state
                 .lock()
                 .await
-                .active_bash_cancellations
+                .active_tool_cancellations
                 .contains_key(&(session_id.to_string(), tool_call_id.to_string()))
             {
                 return;
@@ -7871,8 +7954,8 @@ mod tests {
         panic!("Bash cancellation was not registered");
     }
 
-    async fn assert_bash_registry_empty(state: &Arc<Mutex<AppState>>) {
-        assert!(state.lock().await.active_bash_cancellations.is_empty());
+    async fn assert_tool_registry_empty(state: &Arc<Mutex<AppState>>) {
+        assert!(state.lock().await.active_tool_cancellations.is_empty());
     }
 
     #[test]
@@ -9178,7 +9261,7 @@ mod tests {
             .unwrap();
         assert_eq!(result["errorCode"], "TOOL_ABORTED");
         assert_eq!(result["content"]["code"], "TOOL_ABORTED");
-        assert_bash_registry_empty(&state).await;
+        assert_tool_registry_empty(&state).await;
 
         let second = handle_request(
             state,
@@ -9303,7 +9386,7 @@ mod tests {
         .await
         .unwrap();
         assert!(after["requests"].as_array().unwrap().is_empty());
-        assert_bash_registry_empty(&state).await;
+        assert_tool_registry_empty(&state).await;
     }
 
     #[tokio::test]
@@ -9395,7 +9478,276 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(late_resolution.data.unwrap()["errorCode"], "NOT_FOUND");
-        assert_bash_registry_empty(&state).await;
+        assert_tool_registry_empty(&state).await;
+    }
+
+    /// A plugin tool the user has not approved is stopped while it waits for
+    /// that approval: the abort reaches the call on its own identity, the
+    /// dispatch to Electron main never happens, and the call settles once.
+    #[tokio::test]
+    async fn plugin_dispatch_aborted_during_permission_never_reaches_the_runner() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let project = data_dir.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let session = sessions::create_session(
+            &app_state.db,
+            Some("Abort plugin during approval".into()),
+            Some("agent".into()),
+            None,
+            None,
+            Some(project.to_string_lossy().into_owned()),
+        )
+        .unwrap();
+        sessions::configure_session_with_thinking(
+            &app_state.db,
+            &session.id,
+            "agent",
+            None,
+            None,
+            None,
+            Some("ask"),
+        )
+        .unwrap();
+        let state = Arc::new(Mutex::new(app_state));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let session_id = session.id.clone();
+        let pending_state = state.clone();
+        let pending_task = tokio::spawn(async move {
+            handle_request(
+                pending_state,
+                "tools.execute",
+                json!({
+                    "sessionId": session_id,
+                    "toolCallId": "abort-plugin-approval",
+                    "toolName": "plugin_demo_echo",
+                    "args": { "text": "hello" },
+                    "mode": "agent"
+                }),
+                tx,
+            )
+            .await
+        });
+        let permission = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let permission: Value = serde_json::from_str(&permission).unwrap();
+        assert_eq!(permission["method"], "permissions.request");
+        assert_eq!(permission["params"]["toolName"], "plugin_demo_echo");
+
+        let aborted = handle_request(
+            state.clone(),
+            "tools.abort",
+            json!({
+                "sessionId": session.id,
+                "toolCallId": "abort-plugin-approval"
+            }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(aborted["aborted"], true);
+        let result = tokio::time::timeout(Duration::from_secs(2), pending_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["errorCode"], "TOOL_ABORTED");
+
+        // Nothing was dispatched to the plugin runner, so the stopped call
+        // never started a side effect it would have to undo.
+        while let Ok(message) = rx.try_recv() {
+            let message: Value = serde_json::from_str(&message).unwrap();
+            assert_ne!(message["method"], "plugins.execute");
+        }
+        assert!(state.lock().await.plugin_execs.is_empty());
+        assert_tool_registry_empty(&state).await;
+    }
+
+    /// A plugin tool whose JS execution lives in Electron main is stopped
+    /// after dispatch: the wait on the runner's reply is cancelled, the call
+    /// settles exactly once, and a late reply has nowhere to land.
+    #[tokio::test]
+    async fn plugin_dispatch_aborted_while_awaiting_the_runner_settles_once() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let project = data_dir.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let session = sessions::create_session(
+            &app_state.db,
+            Some("Abort plugin during execution".into()),
+            Some("agent".into()),
+            None,
+            None,
+            Some(project.to_string_lossy().into_owned()),
+        )
+        .unwrap();
+        sessions::configure_session_with_thinking(
+            &app_state.db,
+            &session.id,
+            "agent",
+            None,
+            None,
+            None,
+            Some("auto"),
+        )
+        .unwrap();
+        let state = Arc::new(Mutex::new(app_state));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        // The abort answers on the sender the caller passes, so it must be the
+        // same notification channel this call reports on.
+        let notify_tx = tx.clone();
+        let session_id = session.id.clone();
+        let pending_state = state.clone();
+        let pending_task = tokio::spawn(async move {
+            handle_request(
+                pending_state,
+                "tools.execute",
+                json!({
+                    "sessionId": session_id,
+                    "toolCallId": "abort-plugin-execution",
+                    "toolName": "plugin_demo_echo",
+                    "args": { "text": "hello" },
+                    "mode": "agent"
+                }),
+                tx,
+            )
+            .await
+        });
+        let dispatch = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let dispatch: Value = serde_json::from_str(&dispatch).unwrap();
+        assert_eq!(dispatch["method"], "plugins.execute");
+        let execution_id = dispatch["params"]["executionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let aborted = handle_request(
+            state.clone(),
+            "tools.abort",
+            json!({
+                "sessionId": session.id,
+                "toolCallId": "abort-plugin-execution"
+            }),
+            notify_tx.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(aborted["aborted"], true);
+        // The cancellation reaches the dispatch wait instead of sitting there
+        // for the dispatch budget to expire.
+        let result = tokio::time::timeout(Duration::from_secs(2), pending_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["errorCode"], "TOOL_ABORTED");
+
+        // The owner of the side effect is told which call stopped, so it can
+        // stop its own await, and a duplicate stop of an already-settled call
+        // is not a second cancellation.
+        let mut aborted_notifications = 0;
+        while let Ok(message) = rx.try_recv() {
+            let message: Value = serde_json::from_str(&message).unwrap();
+            if message["method"] == "tools.aborted" {
+                assert_eq!(message["params"]["sessionId"], *session.id);
+                assert_eq!(message["params"]["toolCallId"], "abort-plugin-execution");
+                aborted_notifications += 1;
+            }
+        }
+        assert_eq!(aborted_notifications, 1);
+        assert!(state.lock().await.plugin_execs.is_empty());
+        let repeat = handle_request(
+            state.clone(),
+            "tools.abort",
+            json!({
+                "sessionId": session.id,
+                "toolCallId": "abort-plugin-execution"
+            }),
+            notify_tx.clone(),
+        )
+        .await
+        .unwrap();
+        // The settled call cannot be found again, but the stop is remembered
+        // for that exact identity rather than invented as a live cancellation.
+        assert_eq!(repeat["found"], false);
+        assert_eq!(repeat["queued"], true);
+        while let Ok(message) = rx.try_recv() {
+            let message: Value = serde_json::from_str(&message).unwrap();
+            assert_ne!(message["method"], "tools.aborted");
+        }
+
+        // A newer call in the same session keeps running: cancellation is
+        // scoped to the call identity, never to the session or the turn.
+        let next_state = state.clone();
+        let next_session = session.id.clone();
+        let next_notify = notify_tx.clone();
+        let next_task = tokio::spawn(async move {
+            handle_request(
+                next_state,
+                "tools.execute",
+                json!({
+                    "sessionId": next_session,
+                    "toolCallId": "abort-plugin-execution-next",
+                    "toolName": "plugin_demo_echo",
+                    "args": { "text": "next" },
+                    "mode": "agent"
+                }),
+                next_notify,
+            )
+            .await
+        });
+        let next_dispatch = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let next_dispatch: Value = serde_json::from_str(&next_dispatch).unwrap();
+        assert_eq!(next_dispatch["method"], "plugins.execute");
+        assert_eq!(
+            next_dispatch["params"]["toolCallId"],
+            "abort-plugin-execution-next"
+        );
+        let next_execution_id = next_dispatch["params"]["executionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        handle_request(
+            state.clone(),
+            "plugins.resolveExecution",
+            json!({
+                "executionId": next_execution_id,
+                "ok": true,
+                "content": { "echo": "next" }
+            }),
+            notify_tx.clone(),
+        )
+        .await
+        .unwrap();
+        let next_result = tokio::time::timeout(Duration::from_secs(2), next_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(next_result["ok"], true);
+
+        // A reply that arrives after the call settled has nowhere to land, so
+        // it cannot be applied as a newer call's result.
+        let late_resolution = handle_request(
+            state.clone(),
+            "plugins.resolveExecution",
+            json!({ "executionId": execution_id, "ok": true, "content": { "echo": "hello" } }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(late_resolution.data.unwrap()["errorCode"], "NOT_FOUND");
+        assert_tool_registry_empty(&state).await;
     }
 
     #[tokio::test]
@@ -9486,7 +9838,7 @@ mod tests {
             !late_marker.exists(),
             "aborted descendants must not write later"
         );
-        assert_bash_registry_empty(&state).await;
+        assert_tool_registry_empty(&state).await;
     }
 
     #[tokio::test]
@@ -9546,7 +9898,7 @@ mod tests {
             !timeout_late.exists(),
             "timed-out descendants must not write later"
         );
-        assert_bash_registry_empty(&state).await;
+        assert_tool_registry_empty(&state).await;
 
         let early = handle_request(
             state.clone(),
@@ -9565,7 +9917,7 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(early.data.unwrap()["errorCode"], "SESSION_NOT_FOUND");
-        assert_bash_registry_empty(&state).await;
+        assert_tool_registry_empty(&state).await;
     }
 
     #[tokio::test]
@@ -9636,7 +9988,7 @@ mod tests {
         }
         assert!(streams.iter().any(|stream| stream == "stdout"));
         assert!(streams.iter().any(|stream| stream == "stderr"));
-        assert_bash_registry_empty(&state).await;
+        assert_tool_registry_empty(&state).await;
     }
 
     #[tokio::test]
@@ -9671,7 +10023,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result["errorCode"], "COMMAND_SHELL_CHANGED");
-        assert_bash_registry_empty(&state).await;
+        assert_tool_registry_empty(&state).await;
     }
 
     #[tokio::test]

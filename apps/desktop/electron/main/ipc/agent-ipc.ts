@@ -329,7 +329,7 @@ export function registerAgentIpc({
         // A live parent turn: the sidecar decides from the child's own spawn
         // whether the run reports back to it. `expectedTurnId` is
         // informational — a stale one never rejects the user's intervention.
-        return sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
+        return await sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
           sessionId: req.sessionId,
           delegationId,
           ...(expectedTurnId ? { expectedTurnId } : {}),
@@ -359,7 +359,7 @@ export function registerAgentIpc({
         settings,
       );
       sidecar.setProjectInstructionRoot(req.sessionId, launch.workspaceRoot ?? launch.projectPath);
-      return sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
+      return await sidecar.call<AgentContinueSubagentResponse>("agent.continueSubagent", {
         ...launch.sidecarParams,
         sessionId: req.sessionId,
         delegationId,

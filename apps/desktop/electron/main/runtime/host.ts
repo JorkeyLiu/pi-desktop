@@ -9,6 +9,7 @@ import type { RuntimeState } from "./context";
 import type { FinishTurn } from "./plans";
 import { getActiveRemoteHostsBoot } from "../bootstrap/remote-hosts";
 import { createRemoteWorkspaceToolRelay, type RemoteWorkspaceToolRequest } from "../remote/remote-workspace-tools";
+import type { ToolCancellationRegistry } from "./tool-cancellations";
 
 export type HostRuntimeDependencies = {
   runtimeState: RuntimeState;
@@ -31,11 +32,12 @@ export type HostRuntimeDependencies = {
     errorCode?: string,
   ) => Promise<void>;
   /**
-   * Last synchronous gate before a plugin side effect. A turn that was cancelled
-   * or started finalizing while this handler awaited the session read must not
-   * dispatch.
+   * Per-call cancellation of host-bound tool calls. `tools.aborted` names one
+   * concrete call, so main can stop the plugin JS or MCP call it already
+   * started for that call. It carries no turn authority and no liveness claim:
+   * a call is judged only by its own `(sessionId, toolCallId)`.
    */
-  isTurnDispatchable: (sessionId: string, turnId: string | null | undefined) => boolean;
+  toolCancellations: ToolCancellationRegistry;
   /** Identity of the turn a host crash interrupted, captured before teardown. */
   activeTurns: Map<string, string>;
   approvedExecutionIdsBySession: Map<string, string>;
@@ -61,7 +63,7 @@ export function createHostRuntime({
   emitAgentEvent,
   togglePluginLauncher,
   finishTurn,
-  isTurnDispatchable,
+  toolCancellations,
   finishApprovedExecution,
   activeTurns,
   approvedExecutionIdsBySession,
@@ -114,11 +116,28 @@ export function createHostRuntime({
     }
   };
 
+  /**
+   * A cancelled or refused call keeps its protocol code on every dispatch
+   * path: plugin runtime errors carry `code`, and an MCP rejection carries
+   * either `code` (the client's own errors) or `errorCode` (its host services).
+   * Anything else is an ordinary failure, which each caller maps on its own.
+   */
+  const toolRefusalCode = (error: unknown): "TOOL_ABORTED" | "PERMISSION_DENIED" | undefined => {
+    if (!error || typeof error !== "object") return undefined;
+    const declared =
+      "code" in error && typeof (error as { code?: unknown }).code === "string"
+        ? (error as { code: string }).code
+        : "errorCode" in error && typeof (error as { errorCode?: unknown }).errorCode === "string"
+          ? (error as { errorCode: string }).errorCode
+          : undefined;
+    return declared === "TOOL_ABORTED" || declared === "PERMISSION_DENIED" ? declared : undefined;
+  };
+
   const wireHost = (h: HostProcess) => {
   const remoteTools = createRemoteWorkspaceToolRelay(h, {
     getBoot: getActiveRemoteHostsBoot,
     isCurrent: () => runtimeState.host === h,
-    isTurnDispatchable: (sessionId, turnId) => isTurnDispatchable(sessionId, turnId),
+    cancellations: toolCancellations,
     log: (message, error) => logger.app("diagnostics", "warn", message, { data: String(error) }),
   });
 
@@ -132,6 +151,14 @@ export function createHostRuntime({
     }
     if (method === "tools.remoteAbort") {
       remoteTools.cancel(params as { sessionId: string; toolCallId: string });
+      return;
+    }
+    // The host cancelled one concrete tool call. Main may own the side effect
+    // (plugin JS or an MCP call), so the report is relayed to the per-call
+    // registry; it addresses that call only.
+    if (method === "tools.aborted") {
+      const cancelled = params as { sessionId?: string; toolCallId?: string };
+      toolCancellations.noteAbort(cancelled.sessionId, cancelled.toolCallId);
       return;
     }
     // An install reports itself, so the dialog that shows it can follow the
@@ -206,7 +233,8 @@ export function createHostRuntime({
           /**
            * Runtime turn identity of the tool call, forwarded unchanged from the
            * host so a plugin receives the same identity `session:turnEnded`
-           * carries. Absent for callers that predate turn tracking.
+           * carries. Dispatch never depends on it: the call is judged by its own
+           * `(sessionId, toolCallId)`, so an absent turn id changes nothing.
            */
           turnId?: string;
           toolCallId?: string;
@@ -218,125 +246,134 @@ export function createHostRuntime({
           ? (sessionProjects.get(q.sessionId) ?? null)
           : null;
         const tool = plugins.getTools().find((t) => t.fullName === q.toolName);
-        let payload: Record<string, unknown>;
-        if (q.toolName.startsWith("mcp_")) {
-          try {
-            const result = await userMcp.callTool(q.toolName, q.args, projectPath, q.sessionId);
-            payload = { executionId: q.executionId, ok: true, content: result ?? null };
-          } catch (e) {
-            payload = {
-              executionId: q.executionId,
-              ok: false,
-              errorCode:
-                (e as { code?: string; errorCode?: string })?.code === "TOOL_ABORTED"
-                  ? "TOOL_ABORTED"
-                  : (e as { errorCode?: string })?.errorCode ?? "TOOL_FAILED",
-              content: { error: e instanceof Error ? e.message : String(e) },
-            };
-          }
-        } else if (!tool) {
-          payload = {
-            executionId: q.executionId,
-            ok: false,
-            errorCode: "TOOL_NOT_FOUND",
-            content: { error: `plugin tool not loaded: ${q.toolName}` },
-          };
-        } else if (!pluginActiveInProject(tool.pluginId, projectPath)) {
-          // The catalog already hid it, but a session assembled before the
-          // scope changed can still ask.
-          payload = {
-            executionId: q.executionId,
-            ok: false,
-            errorCode: "TOOL_NOT_FOUND",
-            content: {
-              error: `plugin tool ${q.toolName} is not enabled for this project`,
-            },
-          };
-        } else {
-          try {
-            let modelKey: string | undefined;
-            let thinkingLevel: string | undefined;
-            // Host-core sends the session mode; fall back to a session.get
-            // call when it is missing (legacy callers). The plugin-runtime
-            // uses the mode to enforce plan-safe action restrictions
-            // (ADR 0211).
-            let sessionMode: "agent" | "plan" | "goal" | undefined;
-            const normalizedMode = typeof q.mode === "string" ? q.mode : undefined;
-            if (normalizedMode === "agent" || normalizedMode === "plan" || normalizedMode === "goal") {
-              sessionMode = normalizedMode;
-            } else if (q.sessionId && runtimeState.host) {
-              try {
-                const detail = await runtimeState.host.call<{
-                  session?: {
-                    mode?: string;
-                    providerId?: string;
-                    modelId?: string;
-                    thinkingLevel?: string;
-                  };
-                }>("session.get", { id: q.sessionId });
-                const session = detail?.session;
-                if (session?.mode === "agent" || session?.mode === "plan" || session?.mode === "goal") {
-                  sessionMode = session.mode;
-                }
-                if (session?.providerId && session?.modelId) {
-                  modelKey = `${session.providerId}/${session.modelId}`;
-                }
-                thinkingLevel = session?.thinkingLevel;
-              } catch {
-                // Executor identity is best-effort; the tool can still run.
-              }
-            }
-            // Last synchronous gate before dispatch: a turn that was cancelled or
-            // began finalizing while the session read above was awaited must not
-            // start a plugin side effect. No await may sit between this check and
-            // the dispatch, and the rejection is answered on the original
-            // execution id rather than dropped.
-            //
-            // The gate is closed rather than best-effort: a payload that names no
-            // turn cannot be attributed to one this process knows about, so it is
-            // indistinguishable from a call belonging to a turn that already ended
-            // (its cancel lock may be gone, its `session:turnEnded` already sent)
-            // and any resource it started could never be related to that event.
-            // The runtime always stamps both halves of the identity on
-            // `tools.execute`, so a call without one is not a supported shape; a
-            // standalone caller that ever needs the channel must be distinguished
-            // by an explicit origin instead of by an absent identity.
-            if (!isTurnDispatchable(q.sessionId ?? "", q.turnId)) {
+        // One cancellation record for this concrete call. The host registered
+        // the call before asking, so a `tools.abort` that already happened left
+        // a tombstone this consumes — the call is refused instead of starting
+        // late — while a later abort reaches this exact call and nothing else.
+        const call = toolCancellations.begin(q.sessionId, q.toolCallId);
+        let payload: Record<string, unknown> | undefined;
+        try {
+          // Cancelled before this handler ran: the host already settled the
+          // call, so nothing may start and nothing may be answered.
+          if (call?.aborted) return;
+          if (q.toolName.startsWith("mcp_")) {
+            try {
+              const result = await userMcp.callTool(
+                q.toolName,
+                q.args,
+                projectPath,
+                q.sessionId,
+                call?.signal,
+              );
+              payload = { executionId: q.executionId, ok: true, content: result ?? null };
+            } catch (e) {
+              // A cancelled call is settled by the host; main must not answer.
+              if (call?.aborted) return;
               payload = {
                 executionId: q.executionId,
                 ok: false,
-                errorCode: "TOOL_TURN_CANCELLED",
-                content: {
-                  error: `turn ${q.turnId ?? "(none)"} is no longer dispatchable`,
-                },
+                errorCode:
+                  toolRefusalCode(e) ?? (e as { errorCode?: string })?.errorCode ?? "TOOL_FAILED",
+                content: { error: e instanceof Error ? e.message : String(e) },
               };
-            } else {
+            }
+          } else if (!tool) {
+            payload = {
+              executionId: q.executionId,
+              ok: false,
+              errorCode: "TOOL_NOT_FOUND",
+              content: { error: `plugin tool not loaded: ${q.toolName}` },
+            };
+          } else if (!pluginActiveInProject(tool.pluginId, projectPath)) {
+            // The catalog already hid it, but a session assembled before the
+            // scope changed can still ask.
+            payload = {
+              executionId: q.executionId,
+              ok: false,
+              errorCode: "TOOL_NOT_FOUND",
+              content: {
+                error: `plugin tool ${q.toolName} is not enabled for this project`,
+              },
+            };
+          } else {
+            try {
+              let modelKey: string | undefined;
+              let thinkingLevel: string | undefined;
+              // Host-core sends the session mode; fall back to a session.get
+              // call when it is missing (legacy callers). The plugin-runtime
+              // uses the mode to enforce plan-safe action restrictions
+              // (ADR 0211).
+              let sessionMode: "agent" | "plan" | "goal" | undefined;
+              const normalizedMode = typeof q.mode === "string" ? q.mode : undefined;
+              if (
+                normalizedMode === "agent" ||
+                normalizedMode === "plan" ||
+                normalizedMode === "goal"
+              ) {
+                sessionMode = normalizedMode;
+              } else if (q.sessionId && runtimeState.host) {
+                try {
+                  const detail = await runtimeState.host.call<{
+                    session?: {
+                      mode?: string;
+                      providerId?: string;
+                      modelId?: string;
+                      thinkingLevel?: string;
+                    };
+                  }>("session.get", { id: q.sessionId });
+                  const session = detail?.session;
+                  if (
+                    session?.mode === "agent" ||
+                    session?.mode === "plan" ||
+                    session?.mode === "goal"
+                  ) {
+                    sessionMode = session.mode;
+                  }
+                  if (session?.providerId && session?.modelId) {
+                    modelKey = `${session.providerId}/${session.modelId}`;
+                  }
+                  thinkingLevel = session?.thinkingLevel;
+                } catch {
+                  // Executor identity is best-effort; the tool can still run.
+                }
+              }
+              // The dispatch below is the first side effect, and every await
+              // (the session read above included) is behind us: a call the user
+              // cancelled while this handler was awaiting must not begin now.
+              if (call?.aborted) return;
               const result = await tool.execute(q.args, {
                 sessionId: q.sessionId,
                 turnId: q.turnId,
                 mode: sessionMode,
                 modelKey,
                 thinkingLevel,
+                signal: call?.signal,
               });
+              // A cancel that landed while the tool ran already settled the
+              // call in the host; this finished result must not answer twice.
+              if (call?.aborted) return;
               payload = {
                 executionId: q.executionId,
                 ok: true,
                 content: result ?? null,
               };
+            } catch (e) {
+              if (call?.aborted) return;
+              payload = {
+                executionId: q.executionId,
+                ok: false,
+                errorCode: toolRefusalCode(e) ?? "TOOL_FAILED",
+                content: { error: e instanceof Error ? e.message : String(e) },
+              };
             }
-          } catch (e) {
-            const code =
-              e && typeof e === "object" && "code" in e && typeof e.code === "string"
-                ? e.code
-                : "TOOL_FAILED";
-            payload = {
-              executionId: q.executionId,
-              ok: false,
-              errorCode: code === "PERMISSION_DENIED" || code === "TOOL_ABORTED" ? code : "TOOL_FAILED",
-              content: { error: e instanceof Error ? e.message : String(e) },
-            };
           }
+        } finally {
+          call?.dispose();
         }
+        for (const toast of plugins.drainToasts()) {
+          sendToRenderer(IPC.event.toast, { message: toast });
+        }
+        if (!payload) return;
         logger.app("plugin", "info", "plugin tool executed", {
           toolCallId: q.toolCallId,
           pluginId: tool?.pluginId,
@@ -348,9 +385,6 @@ export function createHostRuntime({
           logger.app("plugin", "warn", "plugin execution resolve failed", {
             data: String(e),
           });
-        }
-        for (const toast of plugins.drainToasts()) {
-          sendToRenderer(IPC.event.toast, { message: toast });
         }
       })();
     } else if (
@@ -378,6 +412,10 @@ export function createHostRuntime({
   });
   h.onExit(({ code, signal, intentional }) => {
     remoteTools.dispose();
+    // The host that registered those calls is gone; every per-call record it
+    // owns is stale, including tombstones for a generation that can no longer
+    // send a `plugins.execute`.
+    toolCancellations.clear();
     if (runtimeState.host !== h) return;
     logger.flushChild("host");
     runtimeState.host = null;

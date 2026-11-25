@@ -19,6 +19,7 @@ const { createHostOperations } = await import("../apps/pi-host/dist/host-operati
 const OWNER_TOKEN = newDeviceToken();
 const { createRemoteHostsBoot } = await import("../apps/desktop/electron/main/bootstrap/remote-hosts.ts");
 const { createRemoteWorkspaceToolRelay } = await import("../apps/desktop/electron/main/remote/remote-workspace-tools.ts");
+const { createToolCancellationRegistry } = await import("../apps/desktop/electron/main/runtime/tool-cancellations.ts");
 const { loadRemoteWorkspaceInstructions } = await import("../apps/desktop/electron/main/remote/remote-workspace-instructions.ts");
 const { createBackendRouter } = await import("../apps/desktop/electron/main/remote/backend-router.ts");
 
@@ -41,6 +42,10 @@ let boot;
 let runtime;
 let h;
 const wireCalls = [];
+const abortCalls = [];
+const completions = [];
+let remoteHostToolStarted;
+const remoteHostToolStartedPromise = new Promise((resolveStarted) => { remoteHostToolStarted = resolveStarted; });
 const model = createServer(async (req, res) => {
   try {
     assert.equal(req.headers.authorization, `Bearer ${KEY}`);
@@ -73,6 +78,11 @@ const deadline = setTimeout(() => { console.error("local-Agent remote-tool accep
 try {
   host = new HostProcess({ binaryPath: resolve(process.env.PI_HOST_CORE_BINARY), dataDir: join(root, "host"), onStderr: () => {} });
   await host.handshake();
+  const hostCall = host.call.bind(host);
+  host.call = async (method, params) => {
+    if (method === "tools.workspaceExecute" && params?.toolCallId === "fixture-inflight") remoteHostToolStarted();
+    return hostCall(method, params);
+  };
   const tools = createWorkspaceTools(() => host);
   let remotePrompts = 0;
   const agentHost = new AgentHost({ sessions: createHostSessionPort(() => host),
@@ -83,7 +93,10 @@ try {
   await credentials.saveDevice({ deviceId: "fixture-owner", label: "Fixture", roles: ["owner"], tokenHash: hashToken(OWNER_TOKEN), createdAt: new Date().toISOString() });
   const authenticator = new DeviceTokenAuthenticator(credentials);
   const operations = createHostOperations({ getHost: () => host, runtime: { isBusy: () => false, async compact() { throw new Error("no remote model"); } } });
-  operations.workspaceTools = { ...tools, async execute(input, owner) { wireCalls.push(structuredClone(input)); return tools.execute(input, owner); } };
+  operations.workspaceTools = { ...tools,
+    async execute(input, owner) { wireCalls.push(structuredClone(input)); return tools.execute(input, owner); },
+    async abort(input, owner) { abortCalls.push(structuredClone(input)); return tools.abort(input, owner); },
+  };
   operations.workspaceFiles = createWorkspaceFiles();
   h = { server: new RacpServer({ agentHost, operations, authenticator, hostId: "tool-host", serverVersion: "fixture", log: () => {} }), remotePrompts: () => remotePrompts };
   binding = await bindRacpWebSocket({ server: h.server, authenticator, host: "127.0.0.1", port: 0, log: () => {} });
@@ -96,10 +109,17 @@ try {
   await localHost.handshake();
   const created = await localHost.call("project.group.createRemote", { name: "Locally named remote project", remote: { hostKey: "fixture", path: remoteRoot } });
   const localSession = await localHost.call("session.create", { projectPath: created.group.primaryPath, mode: "agent" });
-  relay = createRemoteWorkspaceToolRelay(localHost, { getBoot: () => boot, isCurrent: () => true, isTurnDispatchable: (sessionId, turnId) => sessionId === localSession.session.id && turnId === "local-turn", log: () => {} });
+  const toolCancellations = createToolCancellationRegistry();
+  const localCall = localHost.call.bind(localHost);
+  localHost.call = async (method, params) => {
+    if (method === "tools.remoteComplete") completions.push(structuredClone(params));
+    return localCall(method, params);
+  };
+  relay = createRemoteWorkspaceToolRelay(localHost, { getBoot: () => boot, isCurrent: () => true, cancellations: toolCancellations, log: () => {} });
   localHost.onNotification((method, params) => {
     if (method === "tools.remoteExecute") void relay.execute(params);
     if (method === "tools.remoteAbort") relay.cancel(params);
+    if (method === "tools.aborted") toolCancellations.noteAbort(params.sessionId, params.toolCallId);
     if (method === "permissions.request") {
       localPermissions++;
       void localHost.call("permissions.resolve", { requestId: params.requestId, decision: "allow-once" });
@@ -131,6 +151,39 @@ try {
   assert.equal(projects.projects.length, 0, "tool service creates no persistent remote project");
   assert.equal(h.remotePrompts(), 0, "no remote Agent/model invocation");
   await assert.rejects(boot.executeWorkspaceTool({ ...wireCalls[0], hostKey: "fixture" }), "duplicate tool id cannot replay");
+  // Per-call relay cancellation on the real loopback RACP/Rust path: no turn
+  // prerequisite, an abort that arrives before the host reaches the relay, and
+  // an abort while the relay awaits the remote workspace call.
+  const remoteBinding = { sessionId: localSession.session.id, remoteWorkspace: { hostKey: "fixture", path: remoteRoot } };
+  const toolRequest = (toolCallId, extra) => ({ requestId: `${toolCallId}-request`, ...remoteBinding,
+    toolCallId, toolName: "Read", args: { path: "README.md" }, ...extra });
+  const completed = (requestId) => completions.find((entry) => entry.requestId === requestId)?.result;
+  await relay.execute(toolRequest("fixture-no-turn"));
+  const noTurnCall = wireCalls.find((call) => call.toolCallId === "fixture-no-turn");
+  assert.ok(noTurnCall, "a call with no turn attribution reaches the remote workspace");
+  assert.ok(!("turnId" in noTurnCall), "the relay invents no turn attribution");
+  assert.equal(completed("fixture-no-turn-request").ok, true, "and completes without a live turn");
+  await relay.execute(toolRequest("fixture-ended-turn", { turnId: "ended-parent-turn" }));
+  assert.equal(wireCalls.find((call) => call.toolCallId === "fixture-ended-turn").turnId, "ended-parent-turn",
+    "turn attribution crosses the relay without a liveness check");
+  const beforeInFlightAborts = abortCalls.length;
+  assert.equal(completed("fixture-ended-turn-request").ok, true);
+  const beforePrecancel = wireCalls.length;
+  relay.cancel({ sessionId: localSession.session.id, toolCallId: "fixture-precancel" });
+  await relay.execute(toolRequest("fixture-precancel"));
+  assert.equal(wireCalls.length, beforePrecancel, "a call cancelled before the relay starts never reaches the workspace");
+  assert.equal(completed("fixture-precancel-request").errorCode, "TOOL_ABORTED");
+  const inFlight = relay.execute(toolRequest("fixture-inflight", { toolName: "Bash", args: { command: "sleep 5" },
+    expectedCommandShellId: shell.id, expectedCommandShellDialect: shell.dialect }));
+  await remoteHostToolStartedPromise;
+  relay.cancel({ sessionId: localSession.session.id, toolCallId: "fixture-inflight" });
+  await inFlight;
+  const inFlightAborts = abortCalls.slice(beforeInFlightAborts);
+  assert.ok(inFlightAborts.length >= 1, "the in-flight call is cancelled on the remote Host");
+  assert.deepEqual([...new Set(inFlightAborts.map((call) => call.toolCallId))], ["fixture-inflight"],
+    "every remote abort names the exact in-flight call, and no other call");
+  assert.equal(completed("fixture-inflight-request").errorCode, "TOOL_ABORTED",
+    "the relay refuses the cancelled remote result");
   await boot.removeHost("fixture");
   await assert.rejects(boot.executeWorkspaceTool({ ...wireCalls[0], toolCallId: "after-disconnect", hostKey: "fixture" }), { errorCode: "AGENT_UNAVAILABLE" });
   console.log("PASS local model/key/instructions + local Rust project/permission relay + real RACP/Rust Read/Bash, no remote providers/projects/sessions, no replay/fallback");

@@ -22,6 +22,7 @@ import {
   resolvePluginExecution,
   waitForPluginExecution,
 } from "./e2e/plugin.mjs";
+import { waitForNotification } from "./e2e/wait.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
@@ -427,6 +428,60 @@ async function main() {
           dispatched.ok === true &&
           dispatched.content?.echo === "roundtrip",
         execNote ? `echo=${dispatched.content?.echo}` : "no plugins.execute notification",
+      );
+    }
+
+    // E2E-024b: a dispatched plugin tool is stopped by its own call identity.
+    // host-core names that call in `tools.aborted`, tools.execute settles once
+    // with TOOL_ABORTED, and a reply arriving afterwards is NOT_FOUND rather
+    // than a newer call's result.
+    {
+      const toolName = "plugin_demo_hello_echo_text";
+      const toolCallId = randomUUID();
+      const dispatchP = host.call("tools.execute", {
+        sessionId: session.session.id,
+        toolCallId,
+        toolName,
+        declaredRisk: "low",
+        args: { text: "cancelled" },
+        mode: "agent",
+      });
+      const execNote = await waitForNotification(
+        host.notifications,
+        (notification) =>
+          notification.method === "plugins.execute" &&
+          notification.params?.toolCallId === toolCallId,
+        5_000,
+      );
+      const abortAnswer = await host.call("tools.abort", {
+        sessionId: session.session.id,
+        toolCallId,
+      });
+      const abortedNote = host.notifications.find(
+        (notification) =>
+          notification.method === "tools.aborted" &&
+          notification.params?.toolCallId === toolCallId,
+      );
+      const cancelled = await dispatchP;
+      let lateReply = null;
+      try {
+        await host.call("plugins.resolveExecution", {
+          executionId: execNote?.params?.executionId,
+          ok: true,
+          content: { echo: "late" },
+        });
+      } catch (error) {
+        lateReply = error;
+      }
+      record(
+        "E2E-024b-plugin-tool-cancel",
+        Boolean(execNote) &&
+          abortAnswer?.aborted === true &&
+          Boolean(abortedNote) &&
+          abortedNote.params?.sessionId === session.session.id &&
+          cancelled.errorCode === "TOOL_ABORTED" &&
+          lateReply?.data?.errorCode === "NOT_FOUND",
+        `errorCode=${cancelled.errorCode} late=${lateReply?.data?.errorCode ?? "answered"}`,
       );
     }
 

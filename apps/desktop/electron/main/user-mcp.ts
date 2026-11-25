@@ -227,8 +227,14 @@ export class UserMcpRuntime {
     args: unknown,
     projectPath: string | null | undefined,
     sessionId?: string,
+    /** Per-call cancellation of this exact tool call, from the host's abort. */
+    signal?: AbortSignal,
   ): Promise<unknown> {
-    return this.calls.run(sessionId, (signal) => this.callToolActive(fullName, args, projectPath, signal));
+    return this.calls.run(
+      sessionId,
+      (callSignal) => this.callToolActive(fullName, args, projectPath, callSignal),
+      signal,
+    );
   }
 
   private async callToolActive(

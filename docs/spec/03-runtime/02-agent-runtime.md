@@ -1045,7 +1045,12 @@ core set rather than the on-demand catalog of §7.1:
   restarts, or re-prompts no parent, and the next main execution reads its
   latest status, report and usage through the ordinary subagent interfaces
   (status, `TaskList`, `TaskWait` by id, delegation history) without a provider
-  request being fired for it.
+  request being fired for it. The continued run's host-bound tool calls need no
+  execution identity of their own: `tools.execute` carries the retained
+  `turnId` for transcript attribution only, and the call is admitted, dispatched
+  and cancelled on its own `(sessionId, toolCallId)` identity, so a plugin or
+  MCP tool runs while the retained parent turn is ended without opening, reusing,
+  or impersonating a turn. Cancelling a call stops that call, not the run.
   The child run opens no parent turn and reserves no durable turn row: it
   neither blocks nor is blocked by a main prompt, so a user message to main is
   accepted concurrently with a running child and neither turn cancels or
@@ -2223,7 +2228,11 @@ does not dispose, abort, or re-root a runtime belonging to another session.
 ## 9. Abort semantics
 
 - stop model stream
-- attempt cancel interruptible tools
+- attempt cancel interruptible tools: every host-bound `tools.execute` of a
+  running turn is cancellable on its own `(sessionId, toolCallId)` identity —
+  not only Bash or image generation, and with no tool-name or turn prerequisite.
+  An abort signal that fired before the call was dispatched is not swallowed:
+  the call is refused there instead of started later in the turn's wake.
 - do not auto-rollback completed writes
 - mark turn aborted in UI/storage
 - preserve elapsed response duration; when provider final usage is unavailable,
