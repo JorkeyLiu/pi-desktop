@@ -67,8 +67,12 @@ and each layer owns one unit of work:
   mutations only: scratch and approved external writes keep their per-call
   preview and carry no review evidence.
 - Line semantics are unchanged: `str::lines()` (trailing-newline and CRLF
-  behavior), binary detection on NUL or invalid UTF-8, deterministic hunk
-  headers and ordering, unchanged output caps for the rendered patch.
+  behavior), binary detection on invalid UTF-8, deterministic hunk headers and
+  ordering, unchanged output caps for the rendered patch. Valid UTF-8 is text
+  even when it contains NUL; NUL participates in comparison and remains raw in
+  hunk evidence. BOM-marked UTF-16/UTF-32 and other unsupported encodings stay
+  binary because they are not valid UTF-8. The deadline is checked before and
+  after the two bounded UTF-8 decodes; decoding itself cannot be preempted.
 
 ## Alternatives
 
@@ -147,3 +151,9 @@ what a user sees.
   metadata before reading, so an exhausted request stops instead of starting
   one more full read; a read whose file grew past its reservation is reconciled
   against the same ledger.
+- Text classification is separate from renderer display: invisible controls are
+  escaped only in the DOM, into marked theme-token chips, after which each
+  rendered card or remote hunk group keeps the existing 64 KiB display ceiling
+  and stops creating further rows. Old per-tool records classified as binary
+  remain binary; `review.files` recomputes from retained/current bytes, so its
+  row can change to text.

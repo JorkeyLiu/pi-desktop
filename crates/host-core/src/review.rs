@@ -156,6 +156,8 @@ pub(crate) fn content_hash(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
+mod nul_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]

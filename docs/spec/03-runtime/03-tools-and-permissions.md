@@ -389,6 +389,15 @@ work, so a pathological file states its limit instead of stalling the host:
   reads the clock around tokenization and around the engine call and discards
   counts and hunks if the deadline passed; a coarse script returned after
   expiry is never trusted as evidence.
+- Text classification uses strict UTF-8 on both bounded sides. Valid UTF-8 is
+  text even when it contains NUL, and raw NUL participates in `str::lines()`,
+  comparison, hunk evidence, wire JSON, and persistence. Invalid UTF-8 and
+  unsupported encodings (including BOM-marked UTF-16/UTF-32) remain binary; no
+  UTF-16 decoding or transcoding is added. The deadline is checked before and
+  after both decodes, and an expired comparison reports no counts. Per-tool
+  records written under the old NUL-is-binary policy remain binary; a
+  `review.files` response recomputes from retained/current bytes and may
+  therefore change such a row to text.
 - A per-file comparison over its own deadline reports `diffTooComplex`; one
   whose deadline or input the request clipped reports `requestBudgetExceeded`;
   a side over a machine ceiling reports `fileTooLarge`; a change larger than a

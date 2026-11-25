@@ -5,6 +5,7 @@ export const ptBREntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
+      "O Review agora mostra como texto os arquivos UTF-8 que contêm bytes NUL e representa os caracteres de controle invisíveis como escapes visíveis; conteúdo que não é UTF-8 válido continua sendo mostrado como binário.",
       "Chamadas independentes de ferramentas na mesma resposta do modelo agora são executadas juntas, incluindo buscas, comandos de Shell, leituras de arquivos e tarefas de subagentes; os resultados continuam retornando na ordem das chamadas.",
       "As linhas da ferramenta do navegador agora nomeiam a ação executada — abrir página, instantâneo, captura e mais — e mostram a página ou o resultado obtido; falhas indicam apenas o motivo, sem detalhes brutos.",
       "Uma mensagem de orientação a um subagente se lê como a linha de espera da mesma tarefa — agente, tarefa de destino e estado enviado — e se abre sobre o próprio texto de orientação.",

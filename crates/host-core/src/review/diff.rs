@@ -328,18 +328,20 @@ pub(super) fn make_preview(
         }
         (DiffSide::Present(before), DiffSide::Present(after)) => (before, after),
     };
-    if before.contains(&0) || after.contains(&0) {
-        return ReviewPreview::binary();
-    }
-    let Ok(before) = String::from_utf8(before) else {
-        return ReviewPreview::binary();
-    };
-    let Ok(after) = String::from_utf8(after) else {
-        return ReviewPreview::binary();
-    };
+    // Decoding is synchronous and cannot be preempted, but each side is
+    // already bounded to 16 MiB. Check on both sides of classification so an
+    // expired comparison never reports counts (or binary evidence) from work
+    // that started after its budget was gone.
     if limits.work.exceeded(Instant::now()) {
         return ReviewPreview::limited(limits.work.limit());
     }
+    let decoded = (String::from_utf8(before), String::from_utf8(after));
+    if limits.work.exceeded(Instant::now()) {
+        return ReviewPreview::limited(limits.work.limit());
+    }
+    let (Ok(before), Ok(after)) = decoded else {
+        return ReviewPreview::binary();
+    };
     // The line ceiling is checked before tokenization, so a pathological side
     // never allocates one slice per line.
     let before_lines = match count_lines(&before) {

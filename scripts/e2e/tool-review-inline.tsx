@@ -10,6 +10,7 @@ import { AssistantTurn } from "../../apps/desktop/src/features/chat/transcript/A
 import { buildTranscriptEntries } from "../../apps/desktop/src/lib/assistant-turns";
 import { TranscriptDisclosureProvider } from "../../apps/desktop/src/features/chat/transcript/disclosure";
 import { probeLargeRoutes } from "./tool-review-large";
+import { probeNulRoutes } from "./tool-review-nul";
 import { buildSubagentTranscript } from "../../apps/desktop/src/lib/subagent-transcript";
 declare global {
   var toolReviewProbe: (payloads: ToolReviewPayloads) => Promise<unknown>;
@@ -50,6 +51,9 @@ type ToolReviewPayloads = {
     files: unknown[];
     truncated?: boolean;
   };
+  /** A real Write/Edit path whose valid UTF-8 contains NUL. */
+  nulEdit: HostContent;
+  nulSession: { sessionId: string; files: Array<Record<string, unknown>> };
 };
 
 const createdAt = "2026-10-18T00:00:00.000Z";
@@ -634,6 +638,21 @@ globalThis.toolReviewProbe = async (payloads: ToolReviewPayloads) => {
       toolMessage: (id, toolName, content, args) =>
         toolMessageFromContent(id, toolName, content, {}, args ?? {}),
     });
+
+    // ── 3c. Real host NUL text, session Review, remote hunks, and display cap ──
+    await probeNulRoutes(
+      { edit: payloads.nulEdit, session: payloads.nulSession },
+      {
+        mount,
+        settle,
+        check,
+        countsText,
+        expand,
+        toolMessage: (id, toolName, content, args) =>
+          toolMessageFromContent(id, toolName, content, {}, args ?? {}),
+      },
+      column,
+    );
 
     // ── 4. Anything the record does not prove states nothing ──
     const unknownHost = mount(

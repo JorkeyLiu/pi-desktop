@@ -949,6 +949,18 @@ body:has(> .context-menu) .work-panel-header {
   overflow-wrap: anywhere;
 }
 
+/*
+ * Display-only escapes for invisible diff controls. The chip keeps a rendered
+ * `\uXXXX` visually distinct from the same characters typed literally in the
+ * file; the wire text itself never changes.
+ */
+.diff-control-escape {
+  padding: 0 2px;
+  border-radius: var(--radius-3xs);
+  background: var(--ds-bg-chip);
+  color: var(--ds-text-muted);
+}
+
 .diff-line.add {
   background: color-mix(in oklab, var(--ds-success) 12%, transparent);
 }

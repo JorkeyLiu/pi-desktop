@@ -5344,6 +5344,12 @@ window; opening a normal panel afterward must still work.
   while the panel is open and verify A's rows disappear immediately, without a
   clickable rollback, until B's own rows arrive; then return to A. 9) Repeat
   with failed, denied, and scratch writes.
+  10) Through the real host, overwrite a file whose baseline contains NUL with
+  `Write` content serialized as JSON `\\u0000`, then `Edit` the NUL-containing
+  line. Inspect the inline preview and session Review row, roll the file back,
+  and compare the restored bytes exactly. Render the same hunk through the
+  remote wire-shaped component and an 11 KiB NUL-only synthetic line to check
+  the post-escape DOM ceiling and limit marker.
 - **Expected**: Each successful workspace Write/Edit creates one message-owned
   review record and one adjacent keyboard-accessible card; the card is never a
   bottom/global entry. The completion opens nothing: the panel keeps whatever
@@ -5373,6 +5379,12 @@ window; opening a normal panel afterward must still work.
   cards; session B cannot inherit A's records. Binary or oversized snapshots
   show bounded metadata and disable rollback when the previous bytes were not
   retained.
+  Valid UTF-8 containing NUL is line evidence, not binary: the inline Edit and
+  session Review row keep exact counts and show visible `\\u0000` text with no
+  raw control in the DOM, while rollback restores the original bytes exactly.
+  Invalid UTF-8 and BOM UTF-16/UTF-32 remain binary. The shared remote/tool-detail
+  display path behaves identically, and escape amplification cannot exceed the
+  existing 64 KiB rendered-content ceiling.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md` §13a,
   `03-runtime/03-tools-and-permissions.md` §4c,
   `04-ux/08-component-spec.md` §5, ADR 0043
@@ -5421,6 +5433,21 @@ window; opening a normal panel afterward must still work.
   those same counts (the row states the body cap instead of missing line
   details), and that `review.rollbackFile` removes the created file and restores
   the user's own 1.34 MB baseline byte for byte.
+  The same real-host scenario now covers NUL: `Write` receives JSON `\u0000`,
+  `Edit` changes that line, inline and session Review render escaped text with
+  exact +1/−1, `review.rollbackFile` restores the baseline byte for byte, and a
+  runtime Electron probe verifies the remote hunk renderer plus the 11 KiB
+  NUL-only line's post-escape cap (10,920 escapes / 65,520 escaped characters),
+  existing limit marker, and bounded row tail; it also reads the rendered
+  escape chip's computed background, radius, and color to prove the generated
+  escape is visually distinct while a literal `\u0000` source line stays
+  unmarked. `diff-display.test.mjs` covers C0/C1/DEL, TAB/LF,
+  Unicode, literal-backslash ambiguity, raw wire preservation, all three
+  consumers, exact budget boundaries, the theme-token escape chip, and SSR
+  without raw controls;
+  `review/nul_tests.rs` covers position/multiple/NUL-only/runtime patterns,
+  invalid UTF-8, both UTF-16 BOM endiannesses, expired decode deadlines,
+  CRLF/EOF semantics, and exact-byte rollback.
   Renderer-covered by `edit-diff-preview.test.mjs`: every legal
   tool/operation/status combination parses on every root, while illegal pairs
   (`write`/`deleted`, `write`/`moved`, `edit`/`added`) and tool/operation

@@ -286,13 +286,13 @@ fn a_long_file_with_one_edited_line_records_a_real_hunk() {
 }
 
 #[test]
-fn a_binary_change_is_reported_as_binary() {
+fn an_invalid_utf8_change_is_reported_as_binary() {
     let data = tempdir().unwrap();
     let workspace = tempdir().unwrap();
     let target = workspace.path().join("blob.bin");
-    fs::write(&target, [0_u8, 1, 2, 3]).unwrap();
+    fs::write(&target, [0_u8, 0xff, 2, 3]).unwrap();
     let pending = prepare(data.path(), workspace.path(), "s1", "m1", "blob.bin");
-    fs::write(&target, [0_u8, 9, 9, 9]).unwrap();
+    fs::write(&target, [0_u8, 0xfe, 9, 9]).unwrap();
 
     let change = finalize_change(&pending, None).unwrap();
     assert!(change.binary);

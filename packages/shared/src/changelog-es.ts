@@ -5,6 +5,7 @@ export const esEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
+      "Review ahora muestra como texto los archivos UTF-8 que contienen bytes NUL y representa los caracteres de control invisibles como escapes visibles; el contenido que no es UTF-8 válido se sigue mostrando como binario.",
       "Las llamadas independientes a herramientas de una misma respuesta del modelo ahora se ejecutan juntas, incluidas búsquedas, comandos de Shell, lecturas de archivos y tareas de subagentes; los resultados siguen devolviéndose en el orden de llamada.",
       "Las filas de la herramienta del navegador ahora nombran la acción ejecutada —abrir página, instantánea, captura y más— y muestran la página o el resultado obtenido; los errores solo indican el motivo, sin detalles sin procesar.",
       "Un mensaje de dirección a un subagente se lee como la fila de espera de la misma tarea — agente, tarea destino y estado enviado — y se abre sobre el propio texto de guía.",

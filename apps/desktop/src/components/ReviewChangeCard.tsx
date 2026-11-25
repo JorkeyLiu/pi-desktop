@@ -10,7 +10,9 @@ import type {
   UiMessage,
 } from "@pi-desktop/shared";
 import { reviewChangeFromMessage } from "../lib/workspace-review";
+import { createDiffDisplayBudget } from "../lib/diff-display";
 import { useAppStore } from "../stores/app-store";
+import { DiffDisplayLimit, renderDiffLine } from "./DiffText";
 import { cx } from "./ui";
 import { IconCheck, IconChevronRight, IconSnapshot } from "./icons";
 
@@ -109,23 +111,36 @@ export function ReviewDiffView({
       <div className="review-change-note">{t("panel.review.noLineDetails")}</div>
     );
   }
+  const budget = createDiffDisplayBudget();
   return (
     <div className="review-change-diff">
-      {hunks.map((hunk, hunkIndex) => (
-        <div className="diff-hunk" key={`${hunk.header}-${hunkIndex}`}>
-          <div className="diff-line hunk">
-            <span className="diff-line-text">{hunk.header}</span>
-          </div>
-          {hunk.lines.map((line, lineIndex) => (
-            <div className={cx("diff-line", line.type)} key={lineIndex}>
-              <span className="diff-line-sign" aria-hidden>
-                {line.type === "add" ? "+" : line.type === "del" ? "−" : " "}
-              </span>
-              <span className="diff-line-text">{line.text}</span>
+      {hunks.map((hunk, hunkIndex) => {
+        if (budget.truncated) return null;
+        const header = renderDiffLine("", hunk.header, budget);
+        if (!header) return null;
+        return (
+          <div className="diff-hunk" key={`${hunk.header}-${hunkIndex}`}>
+            <div className="diff-line hunk">
+              <span className="diff-line-text">{header.text}</span>
             </div>
-          ))}
-        </div>
-      ))}
+            {hunk.lines.map((line, lineIndex) => {
+              const sign =
+                line.type === "add" ? "+" : line.type === "del" ? "−" : " ";
+              const body = renderDiffLine(sign, line.text, budget);
+              if (!body) return null;
+              return (
+                <div className={cx("diff-line", line.type)} key={lineIndex}>
+                  <span className="diff-line-sign" aria-hidden>
+                    {body.prefix}
+                  </span>
+                  <span className="diff-line-text">{body.text}</span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+      <DiffDisplayLimit budget={budget} />
     </div>
   );
 }

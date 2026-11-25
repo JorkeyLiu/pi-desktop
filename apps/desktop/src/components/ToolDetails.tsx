@@ -12,6 +12,8 @@ import { AskToolRichText } from "./AskToolRichText";
 import { BlockHead, MoreNote } from "./tool/BlockHead";
 import { SCROLL_OWNER_CHAINED } from "../lib/transcript-scroll";
 import type { ToolBlock, ToolChip } from "../lib/tool-presentation";
+import { createDiffDisplayBudget } from "../lib/diff-display";
+import { DiffDisplayLimit, renderDiffLine } from "./DiffText";
 import { ToolChecklist } from "./tool/ToolChecklist";
 import { ToolDocumentCard } from "./tool/ToolDocumentCard";
 import { ToolRawPayload, ToolValueList } from "./tool/ToolValueList";
@@ -231,6 +233,32 @@ function EmptyResult({
   );
 }
 
+function DiffBlock({ block }: { block: Extract<ToolBlock, { kind: "diff" }> }) {
+  const budget = createDiffDisplayBudget();
+  return (
+    <div className="tool-diff">
+      <div className="diff-hunk">
+        {block.lines.map((line, index) => {
+          const sign =
+            line.type === "add" ? "+" : line.type === "del" ? "−" : " ";
+          const body = renderDiffLine(sign, line.text, budget);
+          if (!body) return null;
+          return (
+            <div className={cx("diff-line", line.type)} key={index}>
+              <span className="diff-line-sign" aria-hidden>
+                {body.prefix}
+              </span>
+              <span className="diff-line-text">{body.text}</span>
+            </div>
+          );
+        })}
+      </div>
+      <DiffDisplayLimit budget={budget} />
+      <MoreNote hidden={block.hidden} />
+    </div>
+  );
+}
+
 function BlockBody({
   block,
   streaming,
@@ -256,21 +284,7 @@ function BlockBody({
         />
       );
     case "diff":
-      return (
-        <div className="tool-diff">
-          <div className="diff-hunk">
-            {block.lines.map((line, index) => (
-              <div className={cx("diff-line", line.type)} key={index}>
-                <span className="diff-line-sign" aria-hidden>
-                  {line.type === "add" ? "+" : line.type === "del" ? "−" : " "}
-                </span>
-                <span className="diff-line-text">{line.text}</span>
-              </div>
-            ))}
-          </div>
-          <MoreNote hidden={block.hidden} />
-        </div>
-      );
+      return <DiffBlock block={block} />;
     case "files":
       return (
         <>

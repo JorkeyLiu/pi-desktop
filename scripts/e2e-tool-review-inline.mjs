@@ -29,7 +29,7 @@ import { resolveElectronBinary } from "./e2e/boot.mjs";
 import { withScenario } from "./e2e/fixture.mjs";
 import { resolveHostBinary } from "./e2e/host.mjs";
 import { configureSession, createSession } from "./e2e/session.mjs";
-
+import { exerciseNulReview } from "./e2e/tool-review-nul-host.mjs";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(join(root, "packages/agent-runtime/package.json"));
 const { build } = require("esbuild");
@@ -55,6 +55,7 @@ async function runHost() {
     async ({ host, workspace, dataDir }) => {
       const session = await createSession(host, workspace, "Inline review");
       await configureSession(host, session, "agent", "auto");
+      const nul = await exerciseNulReview(host, workspace, session.id);
       await writeFile(join(workspace, "source.txt"), "one\ntwo\n", "utf8");
 
       const read = await host.call(
@@ -669,6 +670,8 @@ async function runHost() {
           files: largeFiles.files,
           truncated: largeFiles.truncated,
         },
+        nulEdit: nul.edit,
+        nulSession: nul.session,
       };
     },
     resolveHostBinary(),

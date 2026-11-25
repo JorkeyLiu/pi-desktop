@@ -5,6 +5,7 @@ export const frEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
+      "Review affiche désormais comme texte les fichiers UTF-8 qui contiennent des octets NUL et représente les caractères de contrôle invisibles par des échappements visibles ; le contenu qui n'est pas de l'UTF-8 valide reste affiché comme binaire.",
       "Les appels d'outils indépendants d'une même réponse du modèle s'exécutent désormais ensemble, y compris les recherches, commandes Shell, lectures de fichiers et tâches de sous-agents ; les résultats restent renvoyés dans l'ordre des appels.",
       "Les lignes de l'outil navigateur nomment désormais l'action exécutée — ouvrir la page, instantané, capture et plus — et montrent la page ou le résultat obtenu ; les échecs n'indiquent que le motif, sans détails bruts.",
       "Un message d'orientation vers un sous-agent se lit comme la ligne d'attente de la même tâche — agent, tâche cible et état envoyé — et s'ouvre sur le texte de guidage lui-même.",

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import {
   knownDiffLineCounts,
+  type DiffHunk,
   type DiffFile,
   type FsEntry,
   type FsReadResult,
@@ -10,6 +11,8 @@ import {
   type WorkspaceDiff,
 } from "@pi-desktop/shared";
 import { api } from "../../lib/api";
+import { createDiffDisplayBudget } from "../../lib/diff-display";
+import { DiffDisplayLimit, renderDiffLine } from "../DiffText";
 import { sessionAllows } from "../../lib/remote-session-safety";
 import { useAppStore } from "../../stores/app-store";
 import { Button, SegmentedControl } from "../ui";
@@ -36,6 +39,42 @@ function diffFileLimitKey(file: DiffFile): string | null {
   return file.tooLarge ? "panel.review.tooLarge" : null;
 }
 
+export function RemoteDiffHunks({ hunks }: { hunks: DiffHunk[] }) {
+  const budget = createDiffDisplayBudget();
+  return (
+    <>
+      <pre>
+        {hunks.map((hunk, hunkIndex) => {
+          const header = renderDiffLine(
+            hunkIndex > 0 ? "\n" : "",
+            hunk.header,
+            budget,
+          );
+          if (!header) return null;
+          return (
+            <Fragment key={`${hunk.header}-${hunkIndex}`}>
+              {header.prefix}
+              {header.text}
+              {hunk.lines.map((line, lineIndex) => {
+                const sign =
+                  line.type === "add" ? "+" : line.type === "del" ? "-" : " ";
+                const body = renderDiffLine(`\n${sign}`, line.text, budget);
+                if (!body) return null;
+                return (
+                  <Fragment key={lineIndex}>
+                    {body.prefix}
+                    {body.text}
+                  </Fragment>
+                );
+              })}
+            </Fragment>
+          );
+        })}
+      </pre>
+      <DiffDisplayLimit budget={budget} />
+    </>
+  );
+}
 export function RemoteWorkspace({ session, width, exiting, onExitAnimationEnd }: {
   session: SessionSummary; width: number; exiting?: boolean; onExitAnimationEnd?: () => void;
 }) {
@@ -129,7 +168,7 @@ export function RemoteWorkspace({ session, width, exiting, onExitAnimationEnd }:
                 {` (+${counts.additions} / -${counts.deletions})`}</span>}</h3>
               {item.binary && <p>{t("binary")}</p>}
               {limitKey && <p>{tApp(limitKey)}</p>}
-              {item.hunks.length > 0 && <pre>{item.hunks.map((hunk) => `${hunk.header}\n${hunk.lines.map((line) => `${line.type === "add" ? "+" : line.type === "del" ? "-" : " "}${line.text}`).join("\n")}`).join("\n")}</pre>}
+              {item.hunks.length > 0 && <RemoteDiffHunks hunks={item.hunks} />}
               {!counts && !item.binary && !limitKey && <p>{tApp("panel.review.noLineDetails")}</p>}
             </section>;
           })}
