@@ -180,10 +180,15 @@ test("scroll input is attributed to the scroller that can consume it", () => {
 });
 
 test("a nested owner holds its own position and passes the hold outward", () => {
+  // One position order: the disclosure hold first, the explicit earlier-page
+  // hold second, and pinned follow last. Growing the dock while either hold is
+  // armed must not re-bottom the scroller.
   assert.match(
     followScroll,
-    /const followScrollNow = useCallback\(\(\) => \{\s*if \(restoreDisclosureAnchor\(\)\) return;\s*if \(!pinnedRef\.current\) return;\s*cancelFollowScroll\(\);\s*scrollToBottom\(\);/,
+    /const followScrollNow = useCallback\(\(\) => \{\s*if \(restoreDisclosureAnchor\(\)\) return;\s*if \(applyPrependAnchor\(\)\) return;\s*if \(!pinnedRef\.current\) return;\s*cancelFollowScroll\(\);\s*scrollToBottom\(\);/,
   );
+  assert.match(followScroll, /holdReadingPosition,/);
+  assert.match(followScroll, /settleReadingPosition,/);
   assert.match(followScroll, /disclosureAnchorNotifier,/);
   assert.match(
     transcript,

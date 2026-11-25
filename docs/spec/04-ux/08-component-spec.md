@@ -3264,12 +3264,26 @@ coexist as independent tabs. The tab renders the delegation as a conversation:
   A failed refresh keeps the loaded rows laid out in the tab, with the failure
   stated inline and a retry that repeats the same read; only a tab with nothing
   to show yet becomes a failed panel.
-- The owned rows are bounded, not promised forever: one chain keeps 400 rows
-  (oldest non-focus rows trimmed first, the older cursor kept so paging
-  re-reads what a trim dropped) and one session keeps its 12 most recently read
-  chains. The tab states an omission when a trim leaves its search focus as an
-  island — the gap marker sits where adjacency breaks — and only the main
-  reading window's own changes are guaranteed not to remove loaded rows.
+- The owned rows are bounded twice, and neither bound cuts the other: the
+  reading window keeps whole pages up to 400 rows, and the live tail keeps 100
+  rows of its own. A chain's page is never cut to fit the row budget, so a
+  window is the pages it holds and nothing else — at the chain head that is the
+  head's own short page plus the full pages that fit, 309 rows for a 9-row
+  head. The main transcript window runs the same page arithmetic with no
+  budget, so its union of pages is unchanged. Paging is directional: an older read drops the newest page, a forward
+  read drops the oldest one, and the one page just read always survives. The
+  published cursors (`messageStart`/`messageEnd`) come from the retained pages,
+  so a cursor can never name a range the window does not hold; a dropped page's
+  rows leave with it and the state the view shows is the window's own. One
+  session keeps its 12 most recently read chains.
+- An explicit `Show earlier messages` click is the only older-page trigger and
+  holds the fragment in view: the hook captures it before the read, applies the
+  correction once the page's rows are mounted (layout phase, after the
+  disclosure hold and before follow), so rows growing above the reading line
+  do not move the reader's place. The tab states an omission when a budget
+  leaves its search focus as an island — the gap marker sits where adjacency
+  breaks, the island is the one row outside the window budget — and only the
+  main reading window's own changes are guaranteed not to remove loaded rows.
 - Reaching the newest rows after the tab already holds older ones is a joined,
   bounded walk, not a jump: the newest page is read first, then the panel bridges
   backwards over the physical `messageBefore` cursor until the walked range

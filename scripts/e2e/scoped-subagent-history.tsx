@@ -8,6 +8,7 @@ import { SubagentTranscriptTab } from "../../apps/desktop/src/components/workpan
 import { useAppStore } from "../../apps/desktop/src/stores/app-store";
 import {
   SUBAGENT_HISTORY_CONTENT_LIMIT,
+  SUBAGENT_HISTORY_MESSAGE_LIMIT,
   SUBAGENT_HISTORY_PAGE_SIZE,
 } from "../../apps/desktop/src/lib/subagent-history";
 
@@ -45,6 +46,12 @@ const createdAt = "2026-10-18T00:00:00.000Z";
 const OLDER_PAGE = ["child-20", "child-21"];
 const FIRST_PAGE = ["child-30", "child-31", "child-32", "child-33"];
 const LIVE_ROW = "live-41";
+// A long chain whose physical selection is contiguous, so a full reading
+// window can be filled with ordinary 100-row pages.
+const DEEP_DELEGATION = "d-deep";
+const DEEP_CALL = "call-deep";
+const DEEP_TOTAL = 1000;
+const deepRowId = (index: number) => `child-deep-${index}`;
 // A chain the parent opened from a `Task` card while its durable row is still
 // in the persistence outbox: the scoped read cannot resolve it yet.
 const FRESH_DELEGATION = "d-fresh";
@@ -139,6 +146,49 @@ function freshChildRow(id: string): UiMessage {
   });
 }
 
+/** The long chain's root `Task` card, which identifies its scope. */
+function deepTaskRecord(): UiMessage {
+  return message("deep-task-row", "tool", "", {
+    toolName: "Task",
+    toolCallId: DEEP_CALL,
+    toolStatus: "success",
+    toolArgs: { agent: "explorer", description: "Long chain", task: "Read the long chain." },
+    toolResult: { details: { delegationId: DEEP_DELEGATION, agent: "explorer", status: "completed" } },
+  });
+}
+
+function deepChildRow(index: number): UiMessage {
+  return message(deepRowId(index), "assistant", `deep chain row ${index}`, {
+    parentToolCallId: DEEP_CALL,
+    agentName: "explorer",
+  });
+}
+
+/**
+ * One page of the long chain: `messageBefore` is the physical exclusive cursor
+ * of a contiguous selection, exactly how the host pages a scoped range.
+ */
+function deepDetail(sessionId: string, messageBefore: number | undefined): SessionDetail {
+  const end = messageBefore === undefined ? DEEP_TOTAL : Math.max(0, Math.min(messageBefore, DEEP_TOTAL));
+  const start = Math.max(0, end - SUBAGENT_HISTORY_PAGE_SIZE);
+  return {
+    id: sessionId,
+    title: "Scoped history fixture",
+    source: "local",
+    mode: "agent",
+    createdAt,
+    updatedAt: createdAt,
+    historyScope: { kind: "delegation", id: DEEP_DELEGATION },
+    messages: Array.from({ length: end - start }, (_, offset) => deepChildRow(start + offset)),
+    historyContext: [deepTaskRecord()],
+    messageStart: start,
+    messageEnd: end,
+    messageCount: DEEP_TOTAL,
+    hasMoreBefore: start > 0,
+    hasMoreAfter: end < DEEP_TOTAL,
+  } as unknown as SessionDetail;
+}
+
 /** One delegation-scoped page, shaped like the host's answer. */
 function delegationDetail(
   sessionId: string,
@@ -167,6 +217,9 @@ function delegationDetail(
       messageCount: 3,
       hasMoreBefore: false,
     } as unknown as SessionDetail;
+  }
+  if (sessionId === SESSION && scopeId === DEEP_DELEGATION) {
+    return deepDetail(sessionId, messageBefore);
   }
   if (sessionId === OTHER_SESSION) {
     return {
@@ -672,6 +725,229 @@ globalThis.scopedHistoryProbe = async () => {
     reads: freshScopedReads().length,
     rows: assistantIds(),
   };
+  // 9. A long chain fills the whole reading window. The measure is the real
+  //    one: the page the reader clicked for must survive the budget trim, the
+  //    fragment in view must stay on its viewport offset while the page grows
+  //    above it, and the dropped side must remain reachable through the
+  //    matching control.
+  flushSync(() => {
+    root?.unmount();
+    root = null;
+  });
+  flushSync(() => {
+    useAppStore.setState({
+      activeSessionId: SESSION,
+      messages: [deepTaskRecord()],
+    } as never);
+  });
+  mountTab(DEEP_DELEGATION);
+  const deepEntry = () => entry(SESSION, DEEP_DELEGATION);
+  const deepReads = () =>
+    scopedReads().filter((read) => read.scope?.id === DEEP_DELEGATION);
+  const olderReady = () =>
+    deepEntry()?.refreshing !== true &&
+    deepEntry()?.status !== "loading" &&
+    showingEarlier() !== null;
+  const latestReady = () =>
+    deepEntry()?.refreshing !== true &&
+    document.querySelector<HTMLElement>('[data-testid="subagent-show-latest"] .link-btn') !== null;
+  await until(
+    () => deepReads().length === 1 && deepEntry()?.status === "ready",
+    "the long chain's first page",
+  );
+  await frames(2);
+  // Three explicit older reads fill the window: 600…999 at 400 rows.
+  for (let click = 0; click < 3; click += 1) {
+    await until(olderReady, "the earlier control before a deep-chain click");
+    const before = deepReads().length;
+    showingEarlier()?.click();
+    await until(
+      () => deepReads().length === before + 1 && deepEntry()?.status === "ready",
+      `deep-chain older page ${click + 1}`,
+    );
+    await frames(2);
+  }
+  failures.push(
+    ...failuresOf([
+      [
+        deepEntry()?.messages.length === SUBAGENT_HISTORY_MESSAGE_LIMIT,
+        `the long chain fills its ${SUBAGENT_HISTORY_MESSAGE_LIMIT}-row window`,
+      ],
+      [deepEntry()?.messageStart === 600, `the window's older cursor is 600 (${deepEntry()?.messageStart})`],
+      [
+        JSON.stringify(deepReads().slice(1).map((read) => read.messageBefore)) ===
+          JSON.stringify([900, 800, 700]),
+        `each older read pages from the window's own cursor (${deepReads()
+          .slice(1)
+          .map((read) => read.messageBefore)
+          .join(",")})`,
+      ],
+    ]),
+  );
+  facts.deepFullWindow = {
+    rows: assistantIds().length,
+    messageStart: deepEntry()?.messageStart,
+    reads: deepReads().length,
+  };
+
+  // A real upward gesture releases follow, so the click below grows the rows
+  // above the reader's own reading position instead of the pinned bottom.
+  const deepScroller = scroller();
+  const geometryOf = (element: HTMLElement) => {
+    const top = element.getBoundingClientRect().top;
+    return {
+      scrollTop: element.scrollTop,
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight,
+      distanceFromBottom: element.scrollHeight - element.scrollTop - element.clientHeight,
+      top,
+    };
+  };
+  const readingLine = (element: HTMLElement) => {
+    const top = element.getBoundingClientRect().top;
+    const line = Math.min(120, element.clientHeight / 4);
+    for (const node of Array.from(element.querySelectorAll<HTMLElement>("[data-message-id]"))) {
+      const rect = node.getBoundingClientRect();
+      if (rect.height === 0 || rect.bottom - top <= line) continue;
+      return { id: node.dataset.messageId ?? "", offset: rect.top - top };
+    }
+    return null;
+  };
+  const fragmentOffset = (element: HTMLElement, id: string) => {
+    const node = element.querySelector<HTMLElement>(`[data-message-id="${id}"]`);
+    if (!node) return null;
+    return node.getBoundingClientRect().top - element.getBoundingClientRect().top;
+  };
+  deepScroller?.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+  deepScroller!.scrollTop = Math.max(0, deepScroller!.scrollHeight / 2);
+  await frames(3);
+  const released = deepScroller ? geometryOf(deepScroller).distanceFromBottom > 100 : false;
+  failures.push(
+    ...failuresOf([
+      [released, "an upward gesture releases follow at the reading position"],
+      [
+        document.querySelector<HTMLElement>(".subagent-transcript-jump") !== null,
+        "a released scroller offers the jump control",
+      ],
+    ]),
+  );
+  const anchored = deepScroller ? readingLine(deepScroller) : null;
+  if (!anchored) failures.push("the released scroller shows a fragment at the reading line");
+  const anchoredId = anchored?.id ?? "";
+  const beforeAnchor = deepScroller ? geometryOf(deepScroller) : null;
+
+  const deepBeforeRead = deepReads().length;
+  showingEarlier()?.click();
+  await until(
+    () => deepReads().length === deepBeforeRead + 1 && deepEntry()?.status === "ready",
+    "the older page at the full window",
+  );
+  await frames(3);
+  const clickedRead = deepReads().at(-1);
+  const afterAnchor = deepScroller ? geometryOf(deepScroller) : null;
+  const afterOffset =
+    deepScroller && anchoredId ? fragmentOffset(deepScroller, anchoredId) : null;
+  const windowRows = assistantIds().filter((id) => id.startsWith("child-deep-"));
+  const expectedWindow = Array.from(
+    { length: SUBAGENT_HISTORY_MESSAGE_LIMIT },
+    (_, offset) => deepRowId(500 + offset),
+  );
+  facts.deepOlderPage = {
+    messageBefore: clickedRead?.messageBefore,
+    anchoredId,
+    before: beforeAnchor,
+    after: afterAnchor,
+    anchoredOffset: afterOffset,
+    rows: windowRows.length,
+  };
+  failures.push(
+    ...failuresOf([
+      [clickedRead?.messageBefore === 600, `the click pages from the window's cursor (${clickedRead?.messageBefore})`],
+      [
+        afterOffset !== null && Math.abs(afterOffset - anchored.offset) < 2,
+        `the held fragment stays on its viewport offset (${anchoredId}: ${String(anchored?.offset)} → ${String(afterOffset)})`,
+      ],
+      [
+        beforeAnchor !== null && afterAnchor !== null && afterAnchor.scrollTop > beforeAnchor.scrollTop + 100,
+        "the page added height above the reading position",
+      ],
+      [
+        deepEntry()?.messages.length === SUBAGENT_HISTORY_MESSAGE_LIMIT,
+        "the clicked page is retained inside the window budget",
+      ],
+      [
+        deepEntry()?.messageStart === 500,
+        `the cursor names the oldest retained row (${deepEntry()?.messageStart})`,
+      ],
+      [deepEntry()?.hasMoreAfter === true, "the dropped newest page is stated as continuing"],
+      [
+        windowRows.length === SUBAGENT_HISTORY_MESSAGE_LIMIT &&
+          windowRows.every((id, index) => id === expectedWindow[index]),
+        `the rendered window is exactly 500…899 (${windowRows.length} rows, first ${windowRows[0]}, last ${windowRows.at(-1)})`,
+      ],
+      [
+        !windowRows.includes(deepRowId(999)),
+        "the newest dropped row is not mounted",
+      ],
+    ]),
+  );
+
+  // The forward control re-reads the tail: the newest page rejoins the window,
+  // the oldest page leaves it, and jumping to the latest re-bottoms the pane.
+  await until(latestReady, "the show-latest control after the older page");
+  document.querySelector<HTMLElement>('[data-testid="subagent-show-latest"] .link-btn')?.click();
+  await until(
+    () => deepReads().length === deepBeforeRead + 2 && deepEntry()?.status === "ready",
+    "the tail read of the long chain",
+  );
+  await frames(3);
+  const recoveredRows = assistantIds().filter((id) => id.startsWith("child-deep-"));
+  const expectedRecovered = Array.from(
+    { length: SUBAGENT_HISTORY_MESSAGE_LIMIT },
+    (_, offset) => deepRowId(600 + offset),
+  );
+  failures.push(
+    ...failuresOf([
+      [deepEntry()?.hasMoreAfter === false, "the forward read reaches the chain's tail"],
+      [deepEntry()?.hasMoreBefore === true, "the older page it dropped stays reachable backwards"],
+      [deepEntry()?.messageEnd === DEEP_TOTAL, `the newest cursor is the tail end (${deepEntry()?.messageEnd})`],
+      [
+        recoveredRows.length === SUBAGENT_HISTORY_MESSAGE_LIMIT &&
+          recoveredRows.every((id, index) => id === expectedRecovered[index]),
+        `the recovered window is exactly 600…999 (${recoveredRows.length} rows, last ${recoveredRows.at(-1)})`,
+      ],
+      [
+        new Set(recoveredRows).size === recoveredRows.length,
+        "a rejoining page does not duplicate a row",
+      ],
+    ]),
+  );
+  document.querySelector<HTMLElement>(".subagent-transcript-jump")?.click();
+  await until(
+    () => (deepScroller ? geometryOf(deepScroller).distanceFromBottom < 2 : false),
+    "the jump back to the latest row",
+  );
+  const jumped = deepScroller ? geometryOf(deepScroller) : null;
+  facts.deepRecovery = {
+    messageStart: deepEntry()?.messageStart,
+    rows: recoveredRows.length,
+    last: recoveredRows.at(-1),
+    jumped,
+    reads: deepReads().length,
+  };
+  failures.push(
+    ...failuresOf([
+      [
+        jumped !== null && jumped.distanceFromBottom < 2,
+        `the jump control re-bottoms the pane (${String(jumped?.distanceFromBottom)})`,
+      ],
+      [
+        assistantText(deepRowId(DEEP_TOTAL - 1)).includes(`deep chain row ${DEEP_TOTAL - 1}`),
+        "the newest row renders after the recovery",
+      ],
+    ]),
+  );
+
   facts.channels = channels.length;
   facts.scopedReads = scopedReads();
   facts.finalRows = assistantIds();

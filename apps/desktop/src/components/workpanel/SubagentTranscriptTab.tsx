@@ -519,8 +519,27 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     jumpToLatest,
     scheduleFollowScroll,
     releaseFollow,
+    holdReadingPosition,
+    settleReadingPosition,
     disclosureAnchorNotifier,
   } = useFollowScroll();
+  /*
+    An explicit "show earlier" click grows the dock's rows above the reading
+    position. The hook holds the fragment in view across those rows; it is
+    applied once the read settles, in the layout phase of the commit that
+    mounted them, and the button stays the only trigger (no automatic read).
+  */
+  const olderHoldPending = useRef(false);
+  const loadOlderKeepingPosition = () => {
+    olderHoldPending.current = true;
+    holdReadingPosition();
+    history.loadOlder();
+  };
+  useLayoutEffect(() => {
+    if (!olderHoldPending.current || history.refreshing) return;
+    olderHoldPending.current = false;
+    settleReadingPosition();
+  }, [history.refreshing, settleReadingPosition]);
 
   // Several delegation tabs can be open at once, so an explicit search hit
   // is claimed only by the tab whose own conversation contains the message;
@@ -705,7 +724,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                     type="button"
                     className="link-btn"
                     disabled={history.refreshing || history.status === "loading"}
-                    onClick={history.loadOlder}
+                    onClick={loadOlderKeepingPosition}
                   >
                     {t("chat.showEarlierMessages")}
                   </button>
