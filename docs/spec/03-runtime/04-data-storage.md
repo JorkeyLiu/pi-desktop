@@ -1823,9 +1823,12 @@ and rejected the payload itself, so no retry can make that row writable. Such a
 head is quarantined on its first refusal with the reason and payload intact,
 and the next queued row (any session) drains in the same pass; it never spends
 the transient budget while other sessions wait behind it. The retry schedule is
-owned by the outbox: one timer, armed only while a paused head still has budget,
-cleared when the queue empties, when the head is quarantined, and on shutdown
-(`dispose`), so an idle session's queued rows still drain without a new enqueue.
+owned by the outbox: one timer, armed while a paused head still has budget and
+also while a drain finds no live host (a bounded 5s recheck that spends no
+attempt, quarantines nothing, and makes no RPC until `getHost` returns a live
+host), cleared when the queue empties, when the head is quarantined, and on
+shutdown (`dispose`), so an idle session's queued rows still drain without a
+new enqueue. The owned timer never pins the process open (`unref`).
 After `dispose`, an enqueue is refused and a session fence reports the wait as
 paused rather than as a clean write.
 Quarantined appends are never replayed automatically, and `session.delete`

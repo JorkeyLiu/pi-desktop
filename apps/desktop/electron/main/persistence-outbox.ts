@@ -280,7 +280,16 @@ export class PersistenceOutbox {
       if (this.fenceStop()) return "fenced";
       const current = this.entries[0];
       const currentHost = getHost();
-      if (!currentHost || !currentHost.isAvailable()) return "paused";
+      if (!currentHost || !currentHost.isAvailable()) {
+        // A recheck that fires while the host is restarting, or a drain that
+        // finds no host at all, must not end the outbox's autonomy: rearm the
+        // same owned recheck so the queue drains once `getHost` hands back a
+        // live host. It makes no RPC against a dead pipe, spends no transient
+        // attempt, and quarantines nothing for host trouble; the bounded step
+        // keeps it a recheck rather than a spin.
+        this.armRetryTimer(getHost, RETRY_BACKOFF_MS);
+        return "paused";
+      }
       // Bounded backoff: a head that just failed is not retried on every
       // enqueue, so a struggling host is not hammered by a burst. A restarted
       // host is a new generation and retries at once (#1560).
@@ -433,7 +442,7 @@ export class PersistenceOutbox {
   private armRetryTimer(getHost: () => HostProcess | null, delayMs: number): void {
     this.clearRetryTimer();
     if (this.disposed) return;
-    this.retryTimer = this.setTimer(
+    const handle = this.setTimer(
       () => {
         this.retryTimer = null;
         if (this.disposed) return;
@@ -441,6 +450,10 @@ export class PersistenceOutbox {
       },
       Math.max(1, Math.round(delayMs)),
     );
+    // A queued drain is application work, not a reason to keep the process
+    // alive: an idle window's recheck must never pin the event loop open.
+    (handle as { unref?: () => void }).unref?.();
+    this.retryTimer = handle;
   }
 
   private clearRetryTimer(): void {

@@ -775,3 +775,92 @@ test("dispose cancels the owned retry timer and a later enqueue is refused, not 
   );
   assert.equal(outbox.size(), 1, "the durable row stays on disk for the next launch");
 });
+
+test("a retry that fires into a host restart keeps its own recheck instead of losing autonomy", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-outbox-"));
+  const now = { value: 0 };
+  const timers = fakeTimers();
+  const calls = [];
+  let live = null;
+  const liveHost = mockHost(async (_method, params) => {
+    calls.push(params.message.id);
+  });
+  // `getHost()` returns null while the sidecar is restarting: the queue must
+  // not make an RPC against a dead pipe, but it also must not stop asking.
+  const getHost = () => live;
+  const outbox = new PersistenceOutbox(dir, silent, {
+    now: () => now.value,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+  await outbox.enqueue(
+    { key: "message:s1:a", sessionId: "s1", message: { id: "a" } },
+    getHost,
+  );
+  await settle();
+  await settle();
+
+  assert.equal(outbox.size(), 1, "the row waits for a live host");
+  assert.deepEqual(calls, [], "no append is attempted against a dead host");
+  assert.equal(timers.pending().length, 1, "the paused drain owns exactly one recheck");
+  assert.equal(timers.pending()[0].delayMs, 5_000, "the recheck is the bounded backoff step");
+
+  // A scoped read while the host is down answers honestly and at once.
+  const fence = await outbox.waitForSession("s1", getHost);
+  assert.deepEqual(fence, { remaining: 1, paused: true, failed: 0 });
+  assert.equal(timers.pending().length, 1, "still one recheck, replaced rather than stacked");
+
+  // The timer fires while the host is still restarting: same recheck, no
+  // attempt spent, no quarantine, still no RPC.
+  now.value += timers.pending()[0].delayMs;
+  const duringRestart = timers.pending()[0];
+  duringRestart.handle.cleared = true;
+  duringRestart.callback();
+  await settle();
+  await settle();
+
+  assert.equal(outbox.size(), 1, "host trouble never quarantines the row");
+  assert.deepEqual(calls, [], "the recheck makes no RPC while the host is down");
+  assert.equal(timers.pending().length, 1, "the fired recheck arms the next one");
+  await assert.rejects(
+    readFile(join(dir, DEAD_LETTER_FILE), "utf8"),
+    /ENOENT/,
+    "an unavailable host is not a payload refusal, so nothing is quarantined",
+  );
+
+  // Shutdown while the host is down leaves no live timer behind.
+  const haltedTimers = fakeTimers();
+  const halted = new PersistenceOutbox(dir, silent, {
+    now: () => now.value,
+    setTimer: haltedTimers.setTimer,
+    clearTimer: haltedTimers.clearTimer,
+  });
+  await halted.enqueue(
+    { key: "message:s2:b", sessionId: "s2", message: { id: "b" } },
+    () => null,
+  );
+  await settle();
+  await settle();
+  assert.equal(haltedTimers.pending().length, 1);
+  halted.dispose();
+  assert.equal(
+    haltedTimers.pending().length,
+    0,
+    "dispose cancels the recheck while the host is down",
+  );
+
+  // No new enqueue and no caller flush: the recheck alone drains once the host
+  // is back, and the row persists.
+  live = liveHost;
+  now.value += timers.pending()[0].delayMs;
+  const afterRestart = timers.pending()[0];
+  afterRestart.handle.cleared = true;
+  afterRestart.callback();
+  await settle();
+  await settle();
+
+  assert.equal(outbox.size(), 0, "the recheck's own drain wrote the row");
+  assert.deepEqual(calls, ["a"], "exactly one append for the recovered row");
+  assert.equal(timers.pending().length, 0, "a successful write clears the schedule");
+  assert.ok(await readFile(join(dir, "session-message-outbox.json"), "utf8"));
+});
