@@ -476,7 +476,7 @@ export class SubagentRun {
         thinkingLevel: binding.agentThinkingLevel,
         messages: opts.initialMessages ? [...opts.initialMessages] : [],
       },
-      toolExecution: "sequential",
+      // Same pinned pi-agent-core parallel default as the parent session.
     });
     this.agent.subscribe((event) => this.handleEvent(event));
   }

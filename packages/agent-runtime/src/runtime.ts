@@ -317,7 +317,7 @@ import {
   type PluginSkillDef,
 } from "./plugin-skills-prompt.js";
 import { pluginSkillsDigest } from "./plugin-skills.js";
-import { repeatedSkillNotice } from "./skill-context.js";
+import { repeatedSkillNotice, SameBatchSkillLoads } from "./skill-context.js";
 import {
   openCodeEndpointFromProvider,
   withOpenCodeSessionHeaders,
@@ -2056,6 +2056,9 @@ export class DesktopAgentRuntime {
     string,
     () => readonly AgentMessage[]
   >();
+  /** Same-message Skill calls share source-order duplicate suppression. */
+  private readonly skillBatches = new WeakMap<AgentMessage, SameBatchSkillLoads>();
+
   /** Why the recovery guard ended the turn, pending its visible error row. */
   private pendingMutationTermination?: {
     kind: "edit" | "patch-command";
@@ -2390,16 +2393,10 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         thinkingLevel: agentThinkingLevel(this.thinkingLevel),
         messages: initialSystemTranscript(this.composeSystemPrompt(), tools, this.liveSessionContext().messages, this.composedSections),
       },
-      // Plan transitions must be the only tool call in an assistant batch.
-      // Sequential execution also makes the host-confirmed mode change visible
-      // before the next model request in the same run.
       beforeToolCall: (context) => this.beforeToolCall(context),
-      // Every tool except `Task` carries `executionMode: "sequential"`, and pi
-      // runs a batch sequentially as soon as it contains one such tool. So the
-      // only batch that actually runs concurrently is a batch of nothing but
-      // `Task` calls — subagent fan-out (ADR 0062) — and every existing tool
-      // ordering guarantee is untouched.
-      toolExecution: "parallel",
+      // pi-agent-core's pinned default is parallel. Admission stays in
+      // `beforeToolCall`; concrete resource ordering stays with PathMutex and
+      // the host rather than a blanket per-tool sequential override.
       steeringMode: "all",
       // pi-agent-core 0.87 replaces shouldStopAfterTurn with finishTurn. A
       // queued renderer prompt ends a completed turn at the next boundary,
@@ -3520,12 +3517,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       PluginPack: { directory: Type.String() },
     };
     const exec = (toolName: string): AgentTool => {
-      const run: AgentTool["execute"] = async (
-        toolCallId,
-        params,
-        signal,
-        onUpdate,
-      ) => {
+      const run = async (
+        toolCallId: string,
+        params: unknown,
+        signal?: AbortSignal,
+        onUpdate?: Parameters<AgentTool["execute"]>[3],
+        skillBatch?: SameBatchSkillLoads,
+      ): Promise<AgentToolResult<unknown>> => {
         const mutationPath = PATH_MUTATING_TOOLS.has(toolName) && isRecord(params) && typeof params.path === "string"
           ? this.remoteWorkspace
             ? remoteMutationIdentity(this.remoteWorkspace, params.path)
@@ -3886,18 +3884,19 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         // (skill-context.ts): this runtime's own for a session call, the
         // delegate's for a delegated one. An evicted, revised, or
         // never-delivered document still loads.
-        if (
-          toolName === SKILL_TOOL_NAME &&
-          result.ok &&
-          result.isError !== true
-        ) {
+        if (toolName === SKILL_TOOL_NAME && result.ok && result.isError !== true) {
+          skillBatch?.settle(toolCallId, text);
           const contextMessages =
             this.delegateCallContexts.get(toolCallId)?.() ??
             this.liveSessionContext().messages;
+          const earlierBatchDocuments = skillBatch
+            ? await skillBatch.documentsBefore(toolCallId)
+            : [];
           const reused = repeatedSkillNotice(
             contextMessages,
             text,
             typeof recordParams?.id === "string" ? recordParams.id : "",
+            earlierBatchDocuments,
           );
           if (reused !== undefined) {
             // The result details are what main persists and what a restored
@@ -3928,12 +3927,21 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         execute: async (toolCallId, rawParams, signal, onUpdate) => {
           const params = normalizeToolParams(toolName, rawParams);
           requireAliasedParams(toolName, params);
-          return PATH_MUTATING_TOOLS.has(toolName)
-            ? this.writeLocks.run(
-                isRecord(params) ? String(params.path ?? "") : "",
-                () => run(toolCallId, params, signal, onUpdate),
-              )
-            : run(toolCallId, params, signal, onUpdate);
+          const skillBatch = toolName === SKILL_TOOL_NAME
+            ? this.skillBatchFor(toolCallId)
+            : undefined;
+          try {
+            return await (PATH_MUTATING_TOOLS.has(toolName)
+              ? this.writeLocks.run(
+                  isRecord(params) ? String(params.path ?? "") : "",
+                  () => run(toolCallId, params, signal, onUpdate, skillBatch),
+                )
+              : run(toolCallId, params, signal, onUpdate, skillBatch));
+          } finally {
+            // Release later duplicate checks even when admission, host transport,
+            // or cancellation ends this call before a document is available.
+            skillBatch?.settle(toolCallId);
+          }
         },
       };
     };
@@ -3964,7 +3972,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           }),
         ),
       }),
-      executionMode: "sequential",
       execute: async (toolCallId, params, signal) => {
         const questions = this.normalizeAskQuestions(params);
         if (!questions) {
@@ -4049,7 +4056,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         description,
         parameters: (def.parameters ??
           Type.Object({})) as AgentTool["parameters"],
-        executionMode: "sequential" as const,
         execute: exec(def.name).execute,
       };
     });
@@ -4117,21 +4123,14 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     const catalog = new Map<string, AgentTool>();
     for (const tool of this.buildToolDefinitions()) {
       if (!this.isToolAllowedInMode(tool.name) && !retainModeToolDeclaration(tool.name)) continue;
-      // The execution mode is decided here, in one place, so no tool can grow
-      // an accidental parallel batch: everything is sequential except `Task`.
-      // pi runs a whole batch sequentially when it holds one sequential tool,
-      // so only an all-`Task` batch fans out.
-      // The provider-facing schema is settled here too, at the single origin of
+      // The provider-facing schema is settled here, at the single origin of
       // every tool, so the session agent and a delegated `Task` run send the
-      // same declaration (#864).
+      // same declaration (#864). Execution uses pi's parallel default; tools
+      // that own a real resource constraint enforce it at that resource.
       catalog.set(
         tool.name,
         withModeExecutionGuard(
-          withExplicitRequired({
-            ...tool,
-            executionMode:
-              tool.name === SUBAGENT_TOOL_NAME ? "parallel" : "sequential",
-          }),
+          withExplicitRequired(tool),
           () => this.isToolAllowedInMode(tool.name) ? undefined : modeToolDenial(tool.name, this.mode),
         ),
       );
@@ -4150,10 +4149,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     if (this.deferredToolNames.size > 0) {
       this.toolCatalog.set(
         TOOL_SEARCH_NAME,
-        withExplicitRequired({
-          ...this.buildToolSearchTool(),
-          executionMode: "sequential",
-        }),
+        withExplicitRequired(this.buildToolSearchTool()),
       );
     }
     if (this.model) this.refreshToolDeclarationPolicy();
@@ -4341,7 +4337,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           ? "Switch this same agent into Plan mode after the host confirms the durable session transition. Use when the user wants to agree on the implementation steps before any change is made."
           : "Switch this same agent into Goal mode after the host confirms the durable session transition. Use when the user states an outcome and wants you to agree on the goal and its acceptance criteria, then reach it autonomously.",
       parameters: Type.Object({}),
-      executionMode: "sequential",
       execute: async (toolCallId) => {
         await this.host.call("plans.enter", {
           sessionId: this.sessionId,
@@ -4660,7 +4655,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
               `No delegation model overrides are configured. ${DELEGATION_DEFAULT_MODEL_GUIDANCE} ${DELEGATION_MODEL_OPT_IN_GUIDANCE}`,
             ]),
         "`task` is the delegate's only instruction. It cannot see this conversation, so state the goal, the paths and facts it cannot infer, and exactly what to report back. To adjust it while it is still running, call TaskSteer with its delegationId; Task(resume) refuses a running delegation and is only for settled ones.",
-        "To run delegates concurrently, emit several Task calls in one assistant message. A message that mixes Task with any other tool runs one call at a time. You may keep working or talk to the user while they run; the runtime delivers their reports when they finish. Call TaskStop only to cancel.",
+        "To run delegates concurrently, emit several Task calls in one assistant message. Task and ordinary tools in the same message start together; use later model turns when one call depends on another's result. You may keep working or talk to the user while delegates run; the runtime delivers their reports when they finish. Call TaskStop only to cancel.",
         "To continue a previous subagent, pass its `resume` id (the `delegationId` returned by Task). Saying \"reuse\" in prose is not enough. Do not pass `model` when resuming; start a new delegation to change models.",
         `Available subagents:\n${catalog}`,
       ].join("\n\n"),
@@ -4691,9 +4686,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           }),
         ),
       }),
-      // Set in `rebuildToolCatalog`, which owns every execution mode; repeated
-      // here so the intent survives a tool built outside that path.
-      executionMode: "parallel",
       execute: async (toolCallId, params) => {
         const requested = isRecord(params) ? String(params.agent ?? "") : "";
         const definition = this.subagents.find(
@@ -5718,7 +5710,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           }),
         ),
       }),
-      executionMode: "sequential",
       execute: async (toolCallId, params, signal) => {
         const record = isRecord(params) ? params : {};
         const ids = Array.isArray(record.delegationIds)
@@ -5871,7 +5862,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       description:
         "List the subagents started by Task in this session with their status and live progress. Returns the current snapshot immediately, even while subagents run, and never waits; call TaskWait to converge on their reports. Use it to check progress, or before TaskStop to choose what to stop.",
       parameters: Type.Object({}),
-      executionMode: "sequential",
       execute: async () =>
         listDelegationRecords(
           mergeDelegationViews(
@@ -6115,7 +6105,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
           ),
         ),
       }),
-      executionMode: "sequential",
       execute: async (_toolCallId, params) => {
         const ids =
           isRecord(params) && Array.isArray(params.delegationIds)
@@ -6151,7 +6140,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
            description: "Follow-up direction to queue into the child's conversation at its next turn boundary.",
          }),
        }),
-       executionMode: "sequential",
        execute: async (toolCallId, params) => this.executeModelSteer(toolCallId, params),
      };
    }
@@ -6384,7 +6372,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
               : "The question or decision the user should answer when approving this goal contract.",
         }),
       }),
-      executionMode: "sequential",
       execute: async (toolCallId, params) => {
         const title =
           isRecord(params) && typeof params.title === "string"
@@ -7611,6 +7598,28 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       model: this.model.id,
       requiresCompletionsReasoningReplay,
     };
+  }
+
+  private skillBatchFor(toolCallId: string): SameBatchSkillLoads | undefined {
+    const messages = this.delegateCallContexts.get(toolCallId)?.() ?? this.liveSessionContext().messages;
+    let assistant: AgentMessage | undefined;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message?.role !== "assistant") continue;
+      if (!message.content.some((block) => block.type === "toolCall" && block.id === toolCallId)) {
+        return undefined;
+      }
+      assistant = message;
+      break;
+    }
+    if (!assistant) return undefined;
+    let batch = this.skillBatches.get(assistant);
+    if (!batch) {
+      batch = new SameBatchSkillLoads();
+      this.skillBatches.set(assistant, batch);
+    }
+    batch.register(toolCallId);
+    return batch;
   }
 
   private liveSessionContext(

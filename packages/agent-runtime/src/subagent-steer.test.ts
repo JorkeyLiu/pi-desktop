@@ -185,7 +185,7 @@ describe("TaskSteer registration", () => {
     try {
       expect((runtime as any).deferredToolNames.has("TaskSteer")).toBe(false);
       const declared = tool(runtime, "TaskSteer");
-      expect(declared.executionMode).toBe("sequential");
+      expect(declared.executionMode).toBeUndefined();
       expect(String(declared.description)).toContain("next turn");
     } finally {
       await runtime.dispose();

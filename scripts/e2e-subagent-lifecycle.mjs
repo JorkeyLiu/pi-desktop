@@ -500,7 +500,7 @@ try {
     getHost: () => host, getSidecar: () => sidecar, getAgentHostBridge: () => bridge,
     logger: { app() {} }, dataDir, activeTurns, activeTurnUsages: new Map(),
     vendorOAuth: { async resolveAuth() { throw new Error("Fixture does not use OAuth"); } },
-    agentExtensions: { cancelPrompts() {} }, cancelSessionTools() {}, persistenceOutbox: { async flush() {} },
+    agentExtensions: { cancelPrompts() {} }, cancelSessionTools() {}, persistenceOutbox: { async flush() {}, async waitForSession() { return { remaining: 0, paused: false, failed: 0 }; } },
     approvedExecutionIdsBySession: new Map(), claimedExecutionSessions: new Map(),
     acquireSessionOperation: coordination.acquireSessionOperation, isTurnDispatchable: coordination.isTurnDispatchable,
     lockAbortReason: coordination.lockAbortReason, finishTurn,

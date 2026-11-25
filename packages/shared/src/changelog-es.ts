@@ -5,6 +5,7 @@ export const esEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
+      "Las llamadas independientes a herramientas de una misma respuesta del modelo ahora se ejecutan juntas, incluidas búsquedas, comandos de Shell, lecturas de archivos y tareas de subagentes; los resultados siguen devolviéndose en el orden de llamada.",
       "Las filas de la herramienta del navegador ahora nombran la acción ejecutada —abrir página, instantánea, captura y más— y muestran la página o el resultado obtenido; los errores solo indican el motivo, sin detalles sin procesar.",
       "Un mensaje de dirección a un subagente se lee como la fila de espera de la misma tarea — agente, tarea destino y estado enviado — y se abre sobre el propio texto de guía.",
       "Al reiniciar, el panel de trabajo vuelve tal como lo dejaste: abierto o contraído, con el mismo ancho, las pestañas de cada conversación en su orden, la pestaña seleccionada y la vista previa del archivo o la página del navegador que mostraba.",

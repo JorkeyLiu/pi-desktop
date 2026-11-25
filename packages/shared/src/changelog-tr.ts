@@ -5,6 +5,7 @@ export const trEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
+      "Aynı model yanıtındaki bağımsız araç çağrıları artık aramalar, Shell komutları, dosya okumaları ve alt aracı görevleri dahil birlikte çalışıyor; sonuçlar yine çağrı sırasıyla dönüyor.",
       "Tarayıcı araç satırları artık çalıştırılan eylemi adlandırır — sayfa açma, anlık görüntü, ekran görüntüsü ve daha fazlası — ve üretilen sayfayı ya da sonucu gösterir; hatalarda ham ayrıntılar yerine yalnızca neden yazılır.",
       "Bir alt aracıya yönlendirme iletisi, aynı görevin bekleme satırıyla aynı görünür — aracı, hedef görev ve gönderildi durumu — ve açıldığında yönlendirme metninin kendisini gösterir.",
       "Yeniden başlatma, çalışma panelini bıraktığınız gibi geri getirir: açık veya daraltılmış, aynı genişlikte, her sohbetin sekmeleri sırasıyla, seçili sekme ve en son gösterilen dosya önizlemesi ya da tarayıcı sayfasıyla.",

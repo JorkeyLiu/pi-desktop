@@ -415,11 +415,17 @@ work, so a pathological file states its limit instead of stalling the host:
 
 ## 4d. Mutation ordering and edit recovery
 
-`Write` and `Edit` are serialized within each session. Read/search tools may
-continue in parallel, and different sessions may mutate different roots
-concurrently, but a session never has two in-flight mutations. The host holds
-the per-session mutation permit before consuming a global mutation slot, so a
+Same-turn tool calls run in parallel by default (ADR 0340). The runtime-owned
+`PathMutex` serializes `Write` and `Edit` calls that resolve to the same
+normalized path before host admission; calls on different paths can overlap,
+as can reads and searches. The mutex is shared by parent and delegate tool
+objects, so it orders same-path calls across those scopes as well.
+
+Actual mutation admission remains host-core's per-session mutation permit:
+the host holds that permit before consuming a global mutation slot, so a
 queued mutation cannot reserve capacity while it waits for an earlier edit.
+The sidecar path lock orders calls; it does not replace host permission,
+containment, snapshot, or mutation checks.
 
 `Edit` names positions and supplies new content only; it never matches existing
 text. Every call carries the whole-file `tag` minted by whichever tool last

@@ -1894,6 +1894,11 @@ identical complete skill document is currently visible as a successful `Skill`
 result in that agent's own model context, the runtime returns a short reuse
 notice naming the requested id instead of the body; otherwise the full document
 loads. Availability is derived from that context, never from a loaded flag: a
+For calls in one parallel assistant batch, an earlier successful same-message
+load counts once its host read settles, in source call order. Host reads still
+overlap; only duplicate-result selection waits, so one body is returned without
+serializing unrelated tools.
+
 body dropped by compaction, retained only in part, never delivered
 successfully, or revised on disk loads in full, and the caller's id plus the
 call/result protocol are unchanged. A delegated call is decided by the context
@@ -2208,19 +2213,27 @@ merging to the user, and how to resolve a merge conflict).
 |---|---|
 | same session | single turn serial |
 | different sessions | limited parallel |
-| tools | sequential by default |
-| `Task` calls in one assistant message | parallel; 10 running delegates per session (ADR 0089) |
+| tools in one assistant message | parallel by default (ADR 0340) |
+| `Task` calls in one assistant message | share the same parallel policy; 10 running delegates per session (ADR 0089) |
 
-Tool concurrency is expressed through pi execution modes: every catalog tool is
-`sequential` and `Task` alone is `parallel`, and pi runs a batch sequentially as
-soon as it contains one sequential tool. So an all-`Task` batch is the only batch
-that fans out, and every other ordering guarantee is unchanged. Delegates issue
-host calls independently, and host-core's one-mutation-per-session admission
-keeps writes from tearing but leaves two same-path mutations unordered, so the
-sidecar serializes `Write`/`Edit` calls that target the same normalized path
-before they reach the host; calls on different paths never wait on each other.
-This is what keeps the per-path edit-recovery rules of
+Independent calls in one assistant message start together in both the parent
+session and a delegated `SubagentRun`. pi-agent-core's pinned parallel default
+owns this policy; the runtime does not force unrelated tools to be sequential.
+A dependency is expressed in a later model turn, after the earlier results
+return. Calls may complete in a different order, but the next model request
+receives their `toolResult` envelopes in source call order with the original
+tool-call identities and content.
+
+Delegates issue host calls independently, and their existing concurrency cap
+still applies. Host-core's one-mutation-per-session admission keeps actual
+mutations from tearing but leaves two same-path calls unordered, so the
+sidecar's shared `PathMutex` serializes `Write`/`Edit` calls on the same
+normalized path before they reach the host; calls on different paths do not
+wait on that mutex. Permission/mode admission, deferred activation,
+cancellation, and delegate tool scope remain per call and unchanged. This is
+what keeps the per-path edit-recovery rules of
 `03-tools-and-permissions.md` §4d meaningful under fan-out.
+
 
 Selecting another project tab affects only the visible shell workspace. It
 does not dispose, abort, or re-root a runtime belonging to another session.

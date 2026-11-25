@@ -483,7 +483,7 @@ export class TrustedExtensionRunner {
           label: def.label ?? def.name,
           description: def.description,
           parameters: def.parameters as AgentTool["parameters"],
-          executionMode: def.executionMode ?? "sequential",
+          ...(def.executionMode ? { executionMode: def.executionMode } : {}),
           ...(def.prepareArguments ? { prepareArguments: def.prepareArguments } : {}),
           execute: (toolCallId, params, signal, onUpdate) => {
             if (this.closing) throw new DOMException("Extension disposed", "AbortError");

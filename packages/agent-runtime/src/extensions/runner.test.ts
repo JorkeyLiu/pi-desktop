@@ -566,6 +566,10 @@ export default function (pi: any) {
       return { content: [{ type: "text", text: String(p.a + p.b) + ":" + ctx.cwd.length }], details: {} };
     },
   }));
+  pi.registerTool(defineTool({
+    name: "fx_explicit", description: "explicit sequential", parameters: Type.Object({}), executionMode: "sequential",
+    async execute() { return { content: [{ type: "text", text: "explicit" }], details: {} }; },
+  }));
   pi.on("before_agent_start", (e: any) => ({ systemPrompt: e.systemPrompt + " +marker" }));
   pi.on("tool_call", (e: any) => e.toolName === "bash" ? { block: true, reason: "no bash" } : undefined);
   pi.on("session_start", (e: any, ctx: any) => { (globalThis as any).__started = e.reason + ctx.hasUI; });
@@ -576,13 +580,14 @@ export default function (pi: any) {
     const runner = new TrustedExtensionRunner({ specs: [ext], bridge, reservedToolNames: () => ["read"] });
     const reports = await runner.load();
     expect(reports).toEqual([
-      { extensionId: ext.id, state: "loaded", toolNames: ["fx_add"], commandNames: [], agentNames: [], eventNames: ["before_agent_start", "tool_call", "session_start"] },
+      { extensionId: ext.id, state: "loaded", toolNames: ["fx_add", "fx_explicit"], commandNames: [], agentNames: [], eventNames: ["before_agent_start", "tool_call", "session_start"] },
     ]);
     expect((globalThis as { __started?: string }).__started).toBe("startuptrue");
 
-    const [tool] = runner.getAgentTools();
+    const [tool, explicitTool] = runner.getAgentTools();
     expect(tool.name).toBe("fx_add");
-    expect(tool.executionMode).toBe("sequential");
+    expect(tool.executionMode).toBeUndefined();
+    expect(explicitTool?.executionMode).toBe("sequential");
     const result = await tool.execute("c1", { a: 2, b: 3 });
     expect(result.content[0]).toEqual({ type: "text", text: `5:${root.length}` });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { loadedSkillDocumentDigests, repeatedSkillNotice } from "./skill-context.js";
+import { loadedSkillDocumentDigests, repeatedSkillNotice, SameBatchSkillLoads } from "./skill-context.js";
 
 const body = [
   "# Skill: Notes (fixture/notes)",
@@ -98,5 +98,34 @@ describe("repeatedSkillNotice", () => {
       timestamp: 1,
     } as AgentMessage;
     expect(repeatedSkillNotice([split], body, "fixture/notes")).toBeDefined();
+  });
+});
+
+describe("SameBatchSkillLoads", () => {
+  it("lets a later-finishing earlier call keep the full body", async () => {
+    const batch = new SameBatchSkillLoads();
+    batch.register("call-a");
+    batch.register("call-b");
+    batch.settle("call-b", body);
+
+    let compared = false;
+    const comparison = batch.documentsBefore("call-b").then((documents) => {
+      compared = true;
+      return repeatedSkillNotice([], body, "fixture/notes", documents);
+    });
+    await Promise.resolve();
+    expect(compared).toBe(false);
+
+    batch.settle("call-a", body);
+    expect(await comparison).toContain("already loaded");
+  });
+
+  it("does not count an earlier failed call", async () => {
+    const batch = new SameBatchSkillLoads();
+    batch.register("failed");
+    batch.register("next");
+    batch.settle("failed");
+    batch.settle("next", body);
+    expect(await batch.documentsBefore("next")).toEqual([]);
   });
 });
