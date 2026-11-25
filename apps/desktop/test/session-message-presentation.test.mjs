@@ -57,6 +57,9 @@ function loadComponent(name, extras = {}) {
       useChatTextActions: () => ({ copyText: () => {}, selectText: () => {} }),
     },
     "./ActionBarSlots": { ActionSlotSide: () => null },
+    // These are render-only rows: the edit control is dormant until an edit
+    // request, so a null placeholder keeps the mounted row honest here.
+    "./UserMessageEditor": { UserMessageEditor: () => null },
     "../../../plugins/renderer-slots/slot-message": { slotMessage: () => undefined },
     // The row renders the user's own order through the shared placement helper.
     "@pi-desktop/shared": { splitInlineContent },

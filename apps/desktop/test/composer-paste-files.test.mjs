@@ -22,8 +22,11 @@ const [composer, api, main, attachments, saver, protocol, history, picker] = awa
 test("composer converts oversized text paste and materializes clipboard files", () => {
   assert.match(composer, /onPaste=\{pasteClipboardFiles\}/);
   assert.match(composer, /const text = event\.clipboardData\.getData\("text\/plain"\)/);
-  assert.match(composer, /const textLength = Array\.from\(text\)\.length/);
-  assert.match(composer, /!files\.length && textLength > largePasteThreshold/);
+  // Clipboard routing is one pure classification shared by both surfaces;
+  // an oversized text-only paste is the `large-text` intake kind.
+  assert.match(composer, /export function classifyClipboardIntake\(/);
+  assert.match(composer, /const hasFiles = files\.length > 0 && !preferIntakeText\(text, files, resolveNativePath\);/);
+  assert.match(composer, /return Array\.from\(text\)\.length > largePasteThreshold \? "large-text" : "plain-text";/);
   assert.match(composer, /pasted-text-\$\{crypto\.randomUUID\(\)\.slice\(0, 8\)\}\.txt/);
   assert.match(composer, /mimeType: "text\/plain"/);
   assert.match(composer, /recordHistory: true/);
