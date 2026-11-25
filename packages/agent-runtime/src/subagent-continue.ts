@@ -673,21 +673,7 @@ export function scopeDelegateTools(
     callContexts?: Map<string, () => readonly AgentMessage[]>;
     /** The owning agent's live context; installed only while a call runs. */
     contextMessages?: () => readonly AgentMessage[];
-    /**
-     * Independent execution identity of the owning run, keyed by call id.
-     * Stamped only while the run is still live, so a call that starts after
-     * its run settled carries no identity and the host gate refuses it.
-     */
-    independentRuns?: Map<string, string>;
   },
-  /**
-   * The owning run's own identity, present only for a directly continued
-   * child (`continueSubagent`): the run's `tools.execute` calls carry its
-   * delegation id as `childRunId`, which main validates against the live
-   * child it registered. Parent-issued runs never carry one and keep the
-   * parent-turn gate.
-   */
-  independent?: { delegationId: string; isLive: () => boolean },
 ): AgentTool[] {
   const scope = definition.permission ?? DEFAULT_SUBAGENT_PERMISSION;
   return tools.map((tool) => ({
@@ -698,9 +684,6 @@ export function scopeDelegateTools(
         owners?.permissionScopes.set(toolCallId, scope);
       }
       if (worktreeKey) owners?.worktrees.set(toolCallId, worktreeKey);
-      if (independent?.isLive()) {
-        owners?.independentRuns?.set(toolCallId, independent.delegationId);
-      }
       const readContext = owners?.contextMessages;
       if (readContext) owners?.callContexts?.set(toolCallId, readContext);
       try {
@@ -710,7 +693,6 @@ export function scopeDelegateTools(
         owners?.worktrees.delete(toolCallId);
         owners?.mutationOwners.delete(toolCallId);
         owners?.callContexts?.delete(toolCallId);
-        owners?.independentRuns?.delete(toolCallId);
       }
     },
   }));

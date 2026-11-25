@@ -1900,15 +1900,6 @@ export class DesktopAgentRuntime {
   private delegatePermissionScopes = new Map<string, SubagentPermission>();
   /** Worktree key of the delegate executing one tool call (ADR 0329). */
   private delegateWorktrees = new Map<string, string>();
-  /**
-   * Independent execution identity of the delegate executing one tool call,
-   * keyed by tool call id. Only a directly continued child stamps it (via
-   * `scopeDelegateTools`); the host reads it on `tools.execute` and main
-   * validates it against the live child it registered, instead of the
-   * parent turn. Deleted with the rest of the per-call entries once the call
-   * is handed off, so a later call never inherits another run's identity.
-   */
-  private delegateIndependentRuns = new Map<string, string>();
   /** Serializes same-path mutations across the parent and its delegates. */
   private writeLocks = new PathMutex();
   /** Complete tool registry; only the active subset is sent to the provider. */
@@ -3590,7 +3581,10 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             })
           : undefined;
         const abort = () => {
-          if ((!isBash && toolName !== "GenerateImages") || abortRequested || settled) return;
+          // Every host-bound call is cancellable on its own identity: the host
+          // keys on (sessionId, toolCallId), so no turn or tool name decides
+          // whether a stop can reach this call.
+          if (abortRequested || settled) return;
           abortRequested = true;
           abortPromise = this.host
             .call("tools.abort", {
@@ -3684,20 +3678,12 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
               ...(this.delegateWorktrees.has(toolCallId)
                 ? { delegationId: this.delegateWorktrees.get(toolCallId) }
                 : {}),
-              // An independently continued child's own identity, shared by
-              // every host-bound tool call of that run. Main validates it
-              // against the live child it registered; the stamped turn stays
-              // the retained parent turn for attribution only.
-              ...(this.delegateIndependentRuns.has(toolCallId)
-                ? { childRunId: this.delegateIndependentRuns.get(toolCallId) }
-                : {}),
             });
         } catch (error) {
           executionFailed = true;
           executionError = error;
         } finally {
           this.delegatePermissionScopes.delete(toolCallId);
-          this.delegateIndependentRuns.delete(toolCallId);
           cleanup(true);
         }
         if (abortPromise) await abortPromise;
@@ -3705,7 +3691,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         if (executionFailed) throw executionError;
         if (!result) throw new Error("tool execution returned no result");
         const recordParams = isRecord(params) ? params : undefined;
-        const failedToolExecution = !result.ok && result.denied !== true;
+        // A cancelled call is not a failed mutation: the user's stop must not
+        // spend the recovery budget, and it must not end the turn as an
+        // exhausted retry budget. The result is left exactly as the host
+        // reported it, so an abort stays distinguishable from a failure.
+        const cancelledToolExecution = abortRequested || result.errorCode === "TOOL_ABORTED";
+        const failedToolExecution =
+          !result.ok && result.denied !== true && !cancelledToolExecution;
         const failedEditPath =
           toolName === "Edit" &&
           failedToolExecution &&
@@ -5034,23 +5026,11 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
               permissionScopes: this.delegatePermissionScopes,
               worktrees: this.delegateWorktrees,
               callContexts: this.delegateCallContexts,
-              independentRuns: this.delegateIndependentRuns,
               // The run is constructed below, and this callback is read only
               // while one of its calls is executing, so it always observes the
               // child that owns the call — never a sibling or the parent.
               contextMessages: () => subagentRun?.contextMessages() ?? [],
             },
-            // A direct user continuation owns its execution identity: every
-            // host-bound tool call of this run carries the run's own id,
-            // stamped only while the run is still live. A parent-issued
-            // `Task` never claims one and keeps the parent-turn gate.
-            claimed
-              ? {
-                  delegationId,
-                  isLive: () =>
-                    this.delegations.get(delegationId)?.status === "running",
-                }
-              : undefined,
           );
           subagentRun = new SubagentRun({
             definition,
@@ -5980,11 +5960,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     delegationId: string;
     /** Transcript turn the new run's rows carry; informational attribution. */
     turnId?: string;
-    /**
-     * Whether the named run is still live. An idempotent retry of a settled
-     * run reports `false`, so main never (re-)registers a dead run.
-     */
-    live: boolean;
   }> {
     const prepared = prepareSubagentContinue(
       {
@@ -6009,14 +5984,13 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     if (prepared.outcome === "already-applied") {
       const prior = this.delegations.get(prepared.newDelegationId);
       const turnId = prior?.taskTurnId ?? this.turnId;
-      // A retry of a settled run must not resurrect it: main registers only a
-      // run that is still live. Missing records read as settled.
-      const live = prior?.status === "running";
+      // A retry of an already-applied continuation reports the identity the
+      // original acceptance produced; nothing about it revives or
+      // re-authorizes the run.
       return {
         accepted: true as const,
         delegationId: prepared.newDelegationId,
         ...(turnId ? { turnId } : {}),
-        live,
       };
     }
     const { validated, parentTurnId } = prepared;
@@ -6096,10 +6070,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
       accepted: true as const,
       delegationId: newDelegationId,
       turnId: rowTurnId,
-      // A run that settled before the response is built is already revoked by
-      // its terminal settlement; reporting it dead keeps main from
-      // re-registering it after the revocation.
-      live: record?.status === "running",
     };
   }
 
@@ -9824,7 +9794,6 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
     this.mutationRecoveryGraces.clear();
     this.mutationOwners.clear();
     this.delegateCallContexts.clear();
-    this.delegateIndependentRuns.clear();
     this.delegateMutationTerminations.clear();
     this.pendingMutationTermination = undefined;
     this.terminatingToolCalls.clear();

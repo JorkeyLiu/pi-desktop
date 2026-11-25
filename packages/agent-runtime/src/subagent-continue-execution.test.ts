@@ -1,19 +1,15 @@
 /**
- * Manual continuation must give the continued child run an independent
- * execution identity on every host-bound tool call.
+ * Manual continuation must not need an execution identity of its own.
  *
- * Regression: a manually continued child (`continueSubagent` between parent
- * turns) spawns via `Task(resume)` with no durable parent turn, but its
- * tools stamp the retained, ended parent `turnId`. The host gate only
- * dispatches live parent turns, so the child's plugin tools are refused
- * with `turn ... is no longer dispatchable` even while the child is live.
+ * A manually continued child (`continueSubagent` between parent turns) spawns
+ * via `Task(resume)` with no durable parent turn, and its tool calls carry the
+ * retained, ended parent `turnId`. Nothing in the tool path treats that turn as
+ * dispatch authority: every host-bound call is issued under its own
+ * `(sessionId, toolCallId)` identity and is stopped by its own cancellation.
  *
- * The fix stamps an explicit per-run identity (`childRunId`, the continued
- * run's own delegation id) on the run's `tools.execute` calls. Main
- * validates it against its live-child registry instead of the parent turn.
- * These tests drive the real `continueSubagent` spawn path with real
- * internal wiring; only the delegate loop (covered in `subagent.test.ts`)
- * and the host edge are faked.
+ * These tests drive the real `continueSubagent` spawn path with real internal
+ * wiring; only the delegate loop (covered in `subagent.test.ts`) and the host
+ * edge are faked.
  */
 import { describe, expect, it, vi } from "vitest";
 import { Type } from "typebox";
@@ -170,13 +166,11 @@ function toolsExecuteCalls(host: { call: ReturnType<typeof vi.fn> }) {
     .map(([, params]) => params as Record<string, unknown>);
 }
 
-describe("manually continued child execution identity", () => {
-  it("stamps the continued run's own identity on its plugin tool calls while the parent turn stays ended", async () => {
+describe("manually continued child tool calls", () => {
+  it("issues the continued run's plugin call under its own call identity, with no run identity", async () => {
     subagentRuns.calls.length = 0;
     subagentRuns.instances.length = 0;
-    // Deferred so the run is still live when its tool call is driven below;
-    // an instantly-settling mock would revoke the identity first, which is
-    // the next test's subject.
+    // Deferred so the run is still live when its tool call is driven below.
     subagentRuns.deferred = true;
     const { runtime, host } = createRuntime({ turnId: "parent-turn-1" });
     try {
@@ -185,20 +179,22 @@ describe("manually continued child execution identity", () => {
         text: "Keep going from the settled run.",
       });
       expect(accepted.accepted).toBe(true);
-      const childRunId = accepted.delegationId as string;
-      expect(childRunId).toBeTruthy();
-      expect(childRunId).not.toBe("del-1");
+      expect(accepted.delegationId).toBeTruthy();
+      // The acceptance carries no liveness claim: a dispatch decision is not
+      // part of the continuation contract.
+      expect(accepted).not.toHaveProperty("live");
 
       await scopedPluginTool().execute("child-call-1", { url: "https://example.com" });
 
       const calls = toolsExecuteCalls(host);
       expect(calls).toHaveLength(1);
-      // The run's own identity travels on the call: main validates the live
-      // child, not the parent turn.
-      expect(calls[0]?.childRunId).toBe(childRunId);
-      // The stamped turn is the retained parent turn (ended): it is
-      // preserved for attribution, never impersonated as a durable turn.
+      // Ordinary call identity: the pair cancellation is keyed on.
+      expect(calls[0]?.sessionId).toBe("session-1");
+      expect(calls[0]?.toolCallId).toBe("child-call-1");
+      // The retained parent turn travels for transcript attribution only, and
+      // no separate execution identity exists to authorize the call.
       expect(calls[0]?.turnId).toBe("parent-turn-1");
+      expect(Object.hasOwn(calls[0] as object, "childRunId")).toBe(false);
       // No durable parent turn was opened for the continuation.
       expect(runtime.turnId).toBe("parent-turn-1");
       expect(
@@ -213,36 +209,7 @@ describe("manually continued child execution identity", () => {
     }
   });
 
-  it("stops stamping once the continued run settles, so late calls cannot reuse its identity", async () => {
-    subagentRuns.calls.length = 0;
-    subagentRuns.instances.length = 0;
-    subagentRuns.deferred = true;
-    const { runtime, host } = createRuntime({ turnId: "parent-turn-1" });
-    try {
-      const accepted = await runtime.continueSubagent({
-        delegationId: "del-1",
-        text: "Keep going from the settled run.",
-      });
-      const tool = scopedPluginTool();
-
-      await tool.execute("child-call-1", { url: "https://example.com" });
-      expect(toolsExecuteCalls(host)[0]?.childRunId).toBe(accepted.delegationId);
-
-      subagentRuns.resolveRun?.({ status: "completed", report: "done" });
-      await (runtime.delegations.get(accepted.delegationId)?.completion ??
-        Promise.resolve());
-
-      await tool.execute("child-call-2", { url: "https://example.com" });
-      const calls = toolsExecuteCalls(host);
-      expect(calls).toHaveLength(2);
-      expect(calls[1]?.childRunId).toBeUndefined();
-    } finally {
-      subagentRuns.deferred = false;
-      await runtime.dispose();
-    }
-  });
-
-  it("leaves parent-issued runs unstamped: ordinary Task tools keep turn gating", async () => {
+  it("issues a parent-issued delegate's plugin call the same way", async () => {
     subagentRuns.calls.length = 0;
     const { runtime, host } = createRuntime({ turnId: "parent-turn-1" });
     try {
@@ -263,16 +230,17 @@ describe("manually continued child execution identity", () => {
 
       const calls = toolsExecuteCalls(host);
       expect(calls).toHaveLength(1);
-      expect(calls[0]?.childRunId).toBeUndefined();
+      expect(Object.hasOwn(calls[0] as object, "childRunId")).toBe(false);
       expect(calls[0]?.turnId).toBe("parent-turn-1");
+      expect(calls[0]?.toolCallId).toBe("delegate-call-1");
     } finally {
       await runtime.dispose();
     }
   });
 });
 
-describe("continued run liveness in the acceptance (F2)", () => {
-  it("reports a fresh acceptance as live and a settled retry as already-applied and not live", async () => {
+describe("continued run acceptance idempotency", () => {
+  it("replays a settled run's id without spawning again", async () => {
     subagentRuns.calls.length = 0;
     subagentRuns.instances.length = 0;
     subagentRuns.deferred = true;
@@ -284,22 +252,17 @@ describe("continued run liveness in the acceptance (F2)", () => {
         messageId: "user-continue-1",
       });
       expect(first.accepted).toBe(true);
-      expect(first.live).toBe(true);
-      const runId = first.delegationId as string;
-      expect(runId).toBeTruthy();
+      expect(first.delegationId).toBeTruthy();
 
       subagentRuns.resolveRun?.({ status: "completed", report: "done" });
       await (runtime.delegations.get(first.delegationId)?.completion ??
         Promise.resolve());
 
-      // A settled run retried with the same idempotency key replays the first
-      // run's id, but reports it as dead so main never (re-)registers it.
       const retry = await runtime.continueSubagent({
         delegationId: "del-1",
         text: "Keep going from the settled run.",
         messageId: "user-continue-1",
       });
-      expect(retry.live).toBe(false);
       expect(retry.accepted).toBe(true);
       expect(retry.delegationId).toBe(first.delegationId);
       // The settled retry replays the first run's id without spawning again.
@@ -310,7 +273,7 @@ describe("continued run liveness in the acceptance (F2)", () => {
     }
   });
 
-  it("reports a retry of a still-live run as already-applied and live", async () => {
+  it("replays a still-live run's id", async () => {
     subagentRuns.calls.length = 0;
     subagentRuns.instances.length = 0;
     subagentRuns.deferred = true;
@@ -321,7 +284,6 @@ describe("continued run liveness in the acceptance (F2)", () => {
         text: "Keep going from the settled run.",
         messageId: "user-continue-2",
       });
-      expect(first.live).toBe(true);
 
       const retry = await runtime.continueSubagent({
         delegationId: "del-1",
@@ -330,7 +292,6 @@ describe("continued run liveness in the acceptance (F2)", () => {
       });
       expect(retry.accepted).toBe(true);
       expect(retry.delegationId).toBe(first.delegationId);
-      expect(retry.live).toBe(true);
 
       subagentRuns.resolveRun?.({ status: "completed", report: "done" });
       await (runtime.delegations.get(first.delegationId)?.completion ??

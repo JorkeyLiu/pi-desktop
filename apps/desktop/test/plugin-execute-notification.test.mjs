@@ -1,3 +1,18 @@
+/**
+ * `plugins.execute` crosses a language boundary: host-core writes the payload
+ * in Rust, the main process reads it back by field name, and nothing
+ * type-checks the two against each other. A field dropped from the Rust side
+ * is invisible to every other check — the receiver throws on the first missing
+ * name, the tool never runs, and host-core waits out its RPC timeout. So the
+ * field list below is read from the Rust source and driven through the real
+ * receiver.
+ *
+ * The same receiver decides when a plugin tool may start. That decision is
+ * per-call cancellation, not turn liveness: host-bound tool calls run on their
+ * own identity, and a call the runtime cancelled — before dispatch, during the
+ * session read, or while the plugin was running — must never start or answer
+ * twice.
+ */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { register } from "node:module";
@@ -13,13 +28,10 @@ const { createHostRuntime } = await import("../electron/main/runtime/host.ts");
 const { createSessionCoordination } = await import(
   "../electron/main/runtime/session-coordination.ts"
 );
+const { createToolCancellationRegistry } = await import(
+  "../electron/main/runtime/tool-cancellations.ts"
+);
 
-// `plugins.execute` crosses a language boundary: host-core writes the payload in
-// Rust, the main process reads it back by field name, and nothing type-checks the
-// two against each other. A field dropped from the Rust side is invisible to
-// every other check — the receiver throws on the first missing name, the tool
-// never runs, and host-core waits out its RPC timeout. So read the field list
-// from the Rust source and drive the real receiver with it.
 const rustSource = readFileSync(
   join(here, "..", "..", "..", "crates", "host-core", "src", "rpc", "mod.rs"),
   "utf8",
@@ -59,28 +71,25 @@ const FIELDS = pluginExecutePayloadFields(rustSource);
 
 const SESSION_ID = "session-1";
 const TURN_ID = "turn-1";
+const TOOL_NAME = "plugin_demo_echo";
 
 const VALUE_BY_FIELD = {
   executionId: "exec-1",
   sessionId: SESSION_ID,
   turnId: TURN_ID,
   toolCallId: "call-1",
-  toolName: "demo_echo",
+  toolName: TOOL_NAME,
   args: { message: "hello" },
   mode: "agent",
   planSafeActions: [],
 };
 
-const TOOL_NAME = VALUE_BY_FIELD.toolName;
-
 /**
- * The dispatch gate is the real coordination instance in the main process, and
- * whether a call may run depends on the identity it carries, so the fixture
- * builds the real instance instead of stubbing `isTurnDispatchable`: a stub would
- * decide that question itself. `activeTurn` seeds the session's live turn;
- * leaving it out models a session whose turn has already ended.
+ * The real host runtime over a fake host process and fake plugin/MCP runtimes,
+ * with the real per-call cancellation registry. Only external boundaries are
+ * faked: host-core's channel, the plugin runtime and the user's MCP servers.
  */
-function fixture({ activeTurn } = {}) {
+function fixture({ activeTurn, sessionGate, tools, mcp } = {}) {
   const calls = [];
   const invocations = [];
   let notification = null;
@@ -92,6 +101,7 @@ function fixture({ activeTurn } = {}) {
     getMainWindow: () => null,
     getViewingSessionId: () => null,
   });
+  const toolCancellations = createToolCancellationRegistry();
 
   const host = {
     onNotification: (handler) => {
@@ -100,13 +110,14 @@ function fixture({ activeTurn } = {}) {
     onExit() {},
     async call(method, params) {
       calls.push({ method, params });
+      if (method === "session.get") {
+        return sessionGate ? sessionGate(params) : { session: { mode: "agent" } };
+      }
       return {};
     },
   };
 
   const runtime = createHostRuntime({
-    // The notification handler ignores anything from a host generation that is
-    // no longer current, so the fake must be the live one.
     runtimeState: { host, sidecar: null, agentHostBridge: null },
     dataDir: "/tmp/pi-desktop-test",
     logger: { app() {}, child: () => ({ app() {} }), flushChild() {} },
@@ -115,32 +126,32 @@ function fixture({ activeTurn } = {}) {
     activeToolCallKey: (sessionId, toolCallId) => `${sessionId}:${toolCallId}`,
     sessionProjects: new Map(),
     plugins: {
-      getTools: () => [
-        {
-          fullName: TOOL_NAME,
-          pluginId: "demo",
-          execute: async (args, ctx) => {
-            invocations.push({ args, ctx });
-            return { echoed: true };
+      getTools: () =>
+        tools ?? [
+          {
+            fullName: TOOL_NAME,
+            pluginId: "demo",
+            execute: async (args, ctx) => {
+              invocations.push({ args, ctx });
+              return { echoed: true };
+            },
           },
-        },
-      ],
+        ],
       drainToasts: () => [],
     },
-    userMcp: { callTool: async () => null },
+    userMcp: {
+      callTool: async (...args) => {
+        invocations.push({ mcp: true, args });
+        return mcp ? mcp(...args) : null;
+      },
+    },
     pluginActiveInProject: () => true,
     sendToRenderer() {},
     emitAgentEvent() {},
     togglePluginLauncher: async () => undefined,
     finishTurn: async () => undefined,
     isTurnDispatchable: coordination.isTurnDispatchable,
-    // The combined dispatch predicate main passes in production: a live
-    // parent turn dispatches, and so does a live independent child run the
-    // continuation path registered. Inert until host.ts consults it.
-    isPluginDispatchable: coordination.isPluginDispatchable,
-    // The in-flight acceptance a continuation published: the gate awaits it
-    // before failing a first tool call that beat the sidecar response.
-    pendingChildAcceptance: coordination.pendingChildAcceptance,
+    toolCancellations,
     finishApprovedExecution: async () => undefined,
     activeTurns,
     approvedExecutionIdsBySession: new Map(),
@@ -155,8 +166,9 @@ function fixture({ activeTurn } = {}) {
   return {
     calls,
     invocations,
-    coordination,
+    toolCancellations,
     notify: (method, params) => notification(method, params),
+    aborted: (toolCallId) => notification("tools.aborted", { sessionId: SESSION_ID, toolCallId }),
   };
 }
 
@@ -170,18 +182,56 @@ function payloadWithout(missing) {
   );
 }
 
-async function dispatch(f, payload) {
-  f.notify("plugins.execute", payload);
-  await setImmediate();
-  await setImmediate();
+function resolved(f) {
   return f.calls.filter((call) => call.method === "plugins.resolveExecution");
 }
 
-function assertRefused(resolved, expectedExecutionId) {
-  assert.equal(resolved.length, 1, "host-core must be answered exactly once");
-  assert.equal(resolved[0].params.ok, false, "the call must be refused");
-  assert.equal(resolved[0].params.errorCode, "TOOL_TURN_CANCELLED");
-  assert.equal(resolved[0].params.executionId, expectedExecutionId);
+/** Advance the receiver's awaits without a wall-clock sleep. */
+async function settle(turns = 4) {
+  for (let index = 0; index < turns; index += 1) await setImmediate();
+}
+
+async function waitFor(predicate) {
+  for (let index = 0; index < 50; index += 1) {
+    if (predicate()) return;
+    await setImmediate();
+  }
+  throw new Error("the observed boundary never happened");
+}
+
+/** A plugin tool whose completion the test controls, honouring its signal. */
+function pendingTool(name = TOOL_NAME) {
+  const record = { name, ctx: undefined, started: false, settled: false };
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  record.tool = {
+    fullName: name,
+    pluginId: "demo",
+    execute: async (_args, ctx) => {
+      record.ctx = ctx;
+      record.started = true;
+      ctx?.signal?.addEventListener(
+        "abort",
+        () => {
+          if (record.settled) return;
+          record.settled = true;
+          reject(Object.assign(new Error("tool call aborted"), { code: "TOOL_ABORTED" }));
+        },
+        { once: true },
+      );
+      return promise;
+    },
+  };
+  record.complete = (value) => {
+    if (record.settled) return;
+    record.settled = true;
+    resolve(value);
+  };
+  return record;
 }
 
 test("the host-core notification carries every field the receiver reads", () => {
@@ -193,260 +243,254 @@ test("the host-core notification carries every field the receiver reads", () => 
     1,
     "the turn identity must be sent exactly once",
   );
+  assert.ok(
+    !FIELDS.includes("childRunId"),
+    "dispatch identity is per call, so the payload carries no run-authority field",
+  );
 });
 
-test("the live turn's payload runs the plugin tool and is answered", async () => {
-  const f = fixture({ activeTurn: TURN_ID });
+// A host-bound tool call is admitted on its own identity. Whether a turn of the
+// same session is live is irrelevant: the runtime may have finished the parent
+// turn while a manually continued child, or a plain non-turn caller, still runs
+// a legitimate tool.
+test("a plugin tool dispatches with no live turn", async () => {
+  const f = fixture({ activeTurn: undefined });
   const payload = fullPayload();
 
-  const resolved = await dispatch(f, payload);
+  f.notify("plugins.execute", payload);
+  await settle();
 
-  assert.equal(resolved.length, 1, "host-core must be answered exactly once");
-  assert.equal(
-    resolved[0].params.ok,
-    true,
-    `the tool must run: ${JSON.stringify(resolved[0].params)}`,
-  );
-  assert.equal(resolved[0].params.executionId, payload.executionId);
-
+  const answers = resolved(f);
+  assert.equal(answers.length, 1, "host-core must be answered exactly once");
+  assert.equal(answers[0].params.ok, true, JSON.stringify(answers[0].params));
   assert.equal(f.invocations.length, 1, "the plugin tool must be executed once");
   assert.deepEqual(f.invocations[0].args, payload.args);
-  // The turn identity travels with the call, so a plugin can scope the work it
-  // started to the turn `session:turnEnded` will name.
-  assert.equal(f.invocations[0].ctx.turnId, payload.turnId);
-  assert.equal(f.invocations[0].ctx.sessionId, payload.sessionId);
+  assert.equal(f.invocations[0].ctx.turnId, TURN_ID, "the turn stays attribution");
 });
 
-// A turn that no longer owns the session was already settled: its cancel lock is
-// gone and its `session:turnEnded` has been announced, so nothing may start work
-// on its behalf. The refusal is answered on the original execution id, otherwise
-// host-core waits out its RPC timeout.
-test("a payload naming a turn that no longer owns the session is refused", async () => {
-  const f = fixture({ activeTurn: "turn-elsewhere" });
-  const payload = fullPayload();
-
-  assertRefused(await dispatch(f, payload), payload.executionId);
-  assert.equal(f.invocations.length, 0, "a settled turn must not start a plugin side effect");
-});
-
-test("a payload for a turn that already ended is refused", async () => {
-  // No live turn at all: the session's record was released when its
-  // `session:turnEnded` went out.
-  const f = fixture();
-  const payload = fullPayload();
-
-  assertRefused(await dispatch(f, payload), payload.executionId);
-  assert.equal(f.invocations.length, 0);
-});
-
-// host-core types the turn identity as optional (`ToolsExecuteParams.turn_id`),
-// but a call that names no turn cannot be attributed to one: main cannot tell it
-// apart from a call belonging to a turn that already ended, and any resource it
-// started could never be related to that turn's `session:turnEnded`. So the gate
-// stays closed and the caller gets a failure instead of a silent new turn.
-test("a payload without a turn identity is refused rather than executed", async () => {
-  // The session's turn is live on purpose: the refusal must come from the missing
-  // identity, not from an idle session.
-  const f = fixture({ activeTurn: TURN_ID });
+test("a call with no optional turn correlation dispatches", async () => {
+  const f = fixture({ activeTurn: undefined });
   const payload = payloadWithout("turnId");
 
-  assertRefused(await dispatch(f, payload), payload.executionId);
-  assert.equal(
-    f.invocations.length,
-    0,
-    "a call that names no turn must not start a plugin side effect",
+  f.notify("plugins.execute", payload);
+  await settle();
+
+  assert.equal(resolved(f)[0].params.ok, true);
+  assert.equal(f.invocations.length, 1);
+  assert.equal(f.invocations[0].ctx.turnId, undefined);
+});
+
+// Tools are dispatched by plugin catalog presence, never by a hard-coded
+// allow/deny list of tool names: a name the runtime never special-cased must
+// reach its plugin exactly like any other.
+test("the dispatch path has no tool-name whitelist", async () => {
+  const seen = [];
+  const f = fixture({
+    tools: [
+      {
+        fullName: "plugin_demo_navigate",
+        pluginId: "demo",
+        execute: async (args, ctx) => {
+          seen.push({ args, ctx });
+          return { navigated: true };
+        },
+      },
+    ],
+  });
+  const payload = { ...fullPayload(), toolName: "plugin_demo_navigate" };
+
+  f.notify("plugins.execute", payload);
+  await settle();
+
+  assert.equal(resolved(f)[0].params.ok, true, JSON.stringify(resolved(f)[0].params));
+  assert.equal(seen.length, 1, "an unlisted tool name still dispatches");
+  assert.deepEqual(seen[0].args, payload.args);
+});
+
+// A cancel already recorded for this exact call means host-core has settled it
+// with TOOL_ABORTED. Main must not start the side effect and must not answer
+// again.
+test("an abort recorded before the notification refuses the call once", async () => {
+  const f = fixture();
+  const payload = fullPayload();
+  f.aborted(payload.toolCallId);
+
+  f.notify("plugins.execute", payload);
+  await settle();
+
+  assert.equal(f.invocations.length, 0, "a cancelled call must not start");
+  assert.equal(resolved(f).length, 0, "host-core already settled it on cancellation");
+
+  // The tombstone is consumed by the refused call: a later call with a new
+  // identity is untouched.
+  f.notify("plugins.execute", { ...payload, executionId: "exec-2", toolCallId: "call-2" });
+  await settle();
+  assert.equal(resolved(f).length, 1);
+  assert.equal(resolved(f)[0].params.executionId, "exec-2");
+  assert.equal(f.invocations.length, 1);
+});
+
+test("an abort during the session read prevents the dispatch", async () => {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const f = fixture({ sessionGate: () => gate });
+  const payload = payloadWithout("mode");
+
+  f.notify("plugins.execute", payload);
+  await waitFor(() =>
+    f.calls.some((call) => call.method === "session.get"),
   );
+  f.aborted(payload.toolCallId);
+  assert.equal(f.invocations.length, 0, "nothing may start while the read is in flight");
+  release({ session: { mode: "agent" } });
+  await settle();
+
+  assert.equal(f.invocations.length, 0, "an aborted call must not start after the read");
+  assert.equal(resolved(f).length, 0);
 });
 
-test("a payload without a session identity is refused on the same grounds", async () => {
-  const f = fixture({ activeTurn: TURN_ID });
-  const payload = payloadWithout("sessionId");
+// The plugin runtime already runs in main: the cancellation has to reach the
+// invocation, not only the reply. The call settles once — no second answer for
+// the late completion.
+test("an abort while the plugin runs stops it and settles once", async () => {
+  const pending = pendingTool();
+  const f = fixture({ tools: [pending.tool] });
+  const payload = fullPayload();
 
-  assertRefused(await dispatch(f, payload), payload.executionId);
-  assert.equal(f.invocations.length, 0);
+  f.notify("plugins.execute", payload);
+  await waitFor(() => pending.started);
+  assert.equal(pending.ctx.signal.aborted, false, "the signal starts clear");
+
+  f.aborted(payload.toolCallId);
+  await settle();
+
+  assert.equal(pending.ctx.signal.aborted, true, "the invocation receives the cancel");
+  assert.equal(resolved(f).length, 0, "host-core settles the cancelled call");
+  // A late completion of the cancelled tool is ignored, not answered.
+  pending.complete({ echoed: true });
+  await settle();
+  assert.equal(resolved(f).length, 0);
 });
 
-test("an mcprefixed tool keeps its own path", async () => {
-  const f = fixture({ activeTurn: TURN_ID });
+test("a run that finishes normally is answered once", async () => {
+  const pending = pendingTool();
+  const f = fixture({ tools: [pending.tool] });
+
+  f.notify("plugins.execute", fullPayload());
+  await waitFor(() => pending.started);
+  pending.complete({ echoed: true });
+  await settle();
+
+  assert.equal(resolved(f).length, 1);
+  assert.equal(resolved(f)[0].params.ok, true, JSON.stringify(resolved(f)[0].params));
+});
+
+test("an abort of one call leaves a sibling call and session untouched", async () => {
+  const first = pendingTool("call-1");
+  const second = pendingTool("call-2");
+  const f = fixture({
+    tools: [first.tool, second.tool].map((tool, index) => ({
+      ...tool,
+      pluginId: "demo",
+      fullName: index === 0 ? "plugin_demo_echo" : "plugin_demo_other",
+    })),
+  });
+
+  f.notify("plugins.execute", fullPayload());
+  f.notify("plugins.execute", {
+    ...fullPayload(),
+    executionId: "exec-2",
+    toolCallId: "call-2",
+    toolName: "plugin_demo_other",
+  });
+  await waitFor(() => first.started && second.started);
+
+  f.aborted("call-1");
+  await settle();
+  assert.equal(first.ctx.signal.aborted, true, "the cancelled call is aborted");
+  assert.equal(second.ctx.signal.aborted, false, "the sibling call keeps running");
+
+  second.complete({ echoed: true });
+  await settle();
+  assert.deepEqual(
+    resolved(f).map((call) => call.params.executionId),
+    ["exec-2"],
+    "only the sibling is answered",
+  );
+  first.complete({ echoed: true });
+  await settle();
+  assert.equal(resolved(f).length, 1, "the cancelled call stays unanswered");
+});
+
+test("an mcp call receives the call signal and is answered once", async () => {
+  const f = fixture({
+    mcp: (_name, _args, _projectPath, _sessionId, signal) =>
+      new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }),
+  });
   const payload = { ...fullPayload(), toolName: "mcp_demo" };
 
-  const resolved = await dispatch(f, payload);
+  f.notify("plugins.execute", payload);
+  await waitFor(() => f.invocations.length === 1);
+  assert.ok(f.invocations[0].args[4] instanceof AbortSignal, "the user MCP call gets the signal");
 
-  assert.equal(resolved.length, 1);
-  assert.equal(resolved[0].params.ok, true);
-  assert.equal(f.invocations.length, 0, "an mcp tool never reaches the plugin runtime");
+  f.aborted(payload.toolCallId);
+  await settle();
+  assert.equal(resolved(f).length, 0, "the cancelled mcp call is settled by host-core");
 });
 
-// A manually continued child runs with no live parent turn: the runtime
-// stamps the retained (ended) parent turn for attribution and the run's own
-// `childRunId` as the dispatch identity. Main dispatches exactly the child
-// runs the continuation path registered — never a stale or missing parent,
-// never an unknown or revoked child.
+// A real stop reaches the user's MCP call before `tools.aborted` is relayed
+// here, so the rejection itself carries the cancellation: it must stay a
+// cancellation, not be restated as a generic tool failure.
+test("an mcp call rejected as aborted before the abort report keeps TOOL_ABORTED", async () => {
+  const f = fixture({
+    mcp: () => {
+      throw Object.assign(new Error("mcp tool call aborted"), { code: "TOOL_ABORTED" });
+    },
+  });
+  const payload = { ...fullPayload(), toolName: "mcp_demo" };
 
-function childPayload(childRunId) {
-  return { ...fullPayload(), childRunId };
-}
+  f.notify("plugins.execute", payload);
+  await settle();
 
-test("the forwarded payload carries the independent child identity", () => {
-  assert.ok(
-    FIELDS.includes("childRunId"),
-    "plugins.execute must forward the continued run's childRunId",
-  );
-});
-
-test("a live independent child dispatches while its parent turn stays ended", async () => {
-  const f = fixture();
-  f.coordination.registerIndependentChildRun(SESSION_ID, "child-run-1");
-  const payload = childPayload("child-run-1");
-
-  const resolved = await dispatch(f, payload);
-
-  assert.equal(resolved.length, 1, "host-core must be answered exactly once");
-  assert.equal(resolved[0].params.ok, true, `the live child must run: ${JSON.stringify(resolved[0].params)}`);
-  assert.equal(f.invocations.length, 1, "the plugin tool must be executed once");
-  // The stamped turn is preserved for attribution; it authorizes nothing.
-  assert.equal(f.invocations[0].ctx.turnId, TURN_ID);
-});
-
-test("a revoked child is refused even though its parent turn already ended", async () => {
-  const f = fixture();
-  f.coordination.registerIndependentChildRun(SESSION_ID, "child-run-1");
-  f.coordination.revokeIndependentChildRun(SESSION_ID, "child-run-1");
-
-  assertRefused(await dispatch(f, childPayload("child-run-1")), "exec-1");
-  assert.equal(f.invocations.length, 0, "a settled child must not start a plugin side effect");
-});
-
-test("an unknown child identity is refused", async () => {
-  const f = fixture();
-  f.coordination.registerIndependentChildRun(SESSION_ID, "child-run-1");
-
-  assertRefused(await dispatch(f, childPayload("child-run-other")), "exec-1");
-  assert.equal(f.invocations.length, 0);
-});
-
-test("two child identities do not interfere", async () => {
-  const f = fixture();
-  f.coordination.registerIndependentChildRun(SESSION_ID, "child-run-1");
-  f.coordination.registerIndependentChildRun(SESSION_ID, "child-run-2");
-  f.coordination.revokeIndependentChildRun(SESSION_ID, "child-run-1");
-
-  assertRefused(await dispatch(f, childPayload("child-run-1")), "exec-1");
-  const resolved = await dispatch(f, childPayload("child-run-2"));
-  assert.equal(resolved[resolved.length - 1].params.ok, true);
+  const answers = resolved(f);
+  assert.equal(answers.length, 1, "the rejected call is answered exactly once");
+  assert.equal(answers[0].params.ok, false);
+  assert.equal(answers[0].params.errorCode, "TOOL_ABORTED");
   assert.equal(f.invocations.length, 1);
+  assert.equal(f.invocations[0].mcp, true);
 });
 
-test("parent turn finalization does not revoke the independent child", async () => {
-  const f = fixture({ activeTurn: "parent-turn-live" });
-  f.coordination.registerIndependentChildRun(SESSION_ID, "child-run-1");
-  // A parent turn begins and ends while the child keeps running.
-  f.coordination.releaseTurnClaims(SESSION_ID, "parent-turn-live");
-
-  const resolved = await dispatch(f, childPayload("child-run-1"));
-  assert.equal(resolved[0].params.ok, true, "the live child survives parent finalization");
-  assert.equal(f.invocations.length, 1);
-});
-
-test("another live parent turn lends no identity to the child", async () => {
-  const f = fixture({ activeTurn: "parent-turn-other" });
-  f.coordination.registerIndependentChildRun(SESSION_ID, "child-run-1");
-  f.coordination.revokeIndependentChildRun(SESSION_ID, "child-run-1");
-
-  assertRefused(await dispatch(f, childPayload("child-run-1")), "exec-1");
-  assert.equal(f.invocations.length, 0);
-});
-
-// F1: the acceptance and the first tool call travel different channels — the
-// sidecar response and the host notification — so the tool call can arrive
-// before the registration. The gate awaits the in-flight acceptance instead
-// of failing closed; the wait is bounded by that call, never a grace window.
-
-async function pollResolved(f, tries = 100) {
-  for (let index = 0; index < tries; index += 1) {
-    const resolved = f.calls.filter((call) => call.method === "plugins.resolveExecution");
-    if (resolved.length > 0) return resolved;
-    await setImmediate();
-  }
-  return f.calls.filter((call) => call.method === "plugins.resolveExecution");
-}
-
-test("a first tool call that beats the acceptance dispatches once registered", async () => {
-  const f = fixture();
-  let resolveAcceptance;
-  const acceptance = new Promise((resolve) => {
-    resolveAcceptance = resolve;
+test("an mcp call rejected by its host services keeps the declared code", async () => {
+  const f = fixture({
+    mcp: () => {
+      throw Object.assign(new Error("unknown mcp tool: mcp_demo"), {
+        errorCode: "TOOL_NOT_FOUND",
+      });
+    },
   });
-  // The continuation path publishes its acceptance before the sidecar
-  // response lands; the registration below runs in the acceptance's own
-  // continuation, exactly as the agent-ipc handler does.
-  f.coordination.trackPendingChildAcceptance(SESSION_ID, acceptance);
-  const registered = acceptance.then((response) => {
-    f.coordination.registerIndependentChildRun(SESSION_ID, response.delegationId);
-  });
-  f.notify("plugins.execute", childPayload("child-run-9"));
-  resolveAcceptance({ accepted: true, delegationId: "child-run-9" });
-  await registered;
+  const payload = { ...fullPayload(), toolName: "mcp_demo" };
 
-  const resolved = await pollResolved(f);
-  assert.equal(resolved.length, 1, "host-core must be answered exactly once");
-  assert.equal(
-    resolved[0].params.ok,
-    true,
-    `the live child must run: ${JSON.stringify(resolved[0].params)}`,
-  );
-  assert.equal(resolved[0].params.executionId, "exec-1");
-  assert.equal(f.invocations.length, 1, "the plugin tool must be executed once");
+  f.notify("plugins.execute", payload);
+  await settle();
+
+  const answers = resolved(f);
+  assert.equal(answers.length, 1);
+  assert.equal(answers[0].params.errorCode, "TOOL_NOT_FOUND", "the mcp code is not collapsed");
 });
 
-test("an acceptance that registers nothing still fails closed", async () => {
-  const f = fixture();
-  let resolveAcceptance;
-  const acceptance = new Promise((resolve) => {
-    resolveAcceptance = resolve;
-  });
-  f.coordination.trackPendingChildAcceptance(SESSION_ID, acceptance);
-  f.notify("plugins.execute", childPayload("child-run-9"));
-  await setImmediate();
-  // A settled idempotent retry resolves the acceptance without registering:
-  // main refused the dead run, so the gate must too.
-  resolveAcceptance({ accepted: true, delegationId: "child-run-9", live: false });
+test("an unknown plugin tool is still refused on its own execution id", async () => {
+  const f = fixture({ tools: [] });
+  const payload = fullPayload();
 
-  const resolved = await pollResolved(f);
-  assertRefused(resolved, "exec-1");
-  assert.equal(f.invocations.length, 0, "an unregistered child must not start a plugin side effect");
-});
+  f.notify("plugins.execute", payload);
+  await settle();
 
-test("a pending acceptance for another session does not authorize the call", async () => {
-  const f = fixture();
-  let resolveOther;
-  const other = new Promise((resolve) => {
-    resolveOther = resolve;
-  });
-  f.coordination.trackPendingChildAcceptance("session-other", other);
-  try {
-    assertRefused(await dispatch(f, childPayload("child-run-9")), "exec-1");
-    assert.equal(f.invocations.length, 0);
-  } finally {
-    resolveOther({});
-  }
-});
-
-// A rejected continuation acceptance still settles the tracked entry: the
-// tracker converts the rejection to a settled void and cleans up, so the
-// gate wakes, rechecks an unregistered run, and fails closed.
-test("a rejected acceptance cleans up and still refuses the child call", async () => {
-  const f = fixture();
-  const acceptance = Promise.reject(new Error("sidecar gone"));
-  f.coordination.trackPendingChildAcceptance(SESSION_ID, acceptance);
-  f.notify("plugins.execute", childPayload("child-run-9"));
-  const resolved = await pollResolved(f);
-  assertRefused(resolved, "exec-1");
-  assert.equal(f.invocations.length, 0, "a rejected acceptance registers nothing to dispatch");
-  await setImmediate();
-  assert.equal(
-    f.coordination.pendingChildAcceptance(SESSION_ID),
-    undefined,
-    "the rejected acceptance must not linger",
-  );
+  const answers = resolved(f);
+  assert.equal(answers.length, 1);
+  assert.equal(answers[0].params.ok, false);
+  assert.equal(answers[0].params.errorCode, "TOOL_NOT_FOUND");
 });

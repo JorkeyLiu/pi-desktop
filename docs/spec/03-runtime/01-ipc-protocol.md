@@ -426,15 +426,14 @@ these same ordinary-child semantics; nothing is rewritten or reset. Only an
 explicit parent `Task(resume)` starts the chain's next run from the parent's
 side.
 
-A continuation accepted after the parent turn ended carries its own
-execution identity: the runtime stamps every host-bound `tools.execute` of the
-continued run with the run's own `delegationId` (`childRunId`), registered as
-live when the continuation is accepted and revoked when the run settles, is
-cancelled, or the runtime is disposed. Plugin tool dispatch succeeds while the
-child is live without opening a parent turn; the plugin context `turnId` keeps
-the retained parent turn identity unchanged for `session:turnEnded`
-correlation. Late tool calls from an ended run, calls naming another live run,
-and ordinary stale or missing parent turns are still refused.
+A continuation accepted after the parent turn ended needs no execution
+identity of its own. Its host-bound `tools.execute` calls carry the retained
+parent `turnId` for transcript attribution, and each call is admitted, dispatched
+and cancelled on `(sessionId, toolCallId)`: plugin and MCP dispatch therefore
+work while the parent turn is ended without opening, reusing, or impersonating
+a durable turn. An ended, stale, or missing turn correlation refuses nothing on
+its own; only an explicit stop of that call identity does, including a stop that
+arrived before the call was dispatched.
 This is an additive desktop channel; it does not change RACP, the host
 RPC version, or the storage schema.
 

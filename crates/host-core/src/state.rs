@@ -17,8 +17,8 @@ use crate::workspace::WorkspaceState;
 
 pub const PROTOCOL_VERSION: u32 = 11;
 pub const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
-const BASH_ABORT_TOMBSTONE_TTL: Duration = Duration::from_secs(60);
-const MAX_BASH_ABORT_TOMBSTONES: usize = 1024;
+const TOOL_ABORT_TOMBSTONE_TTL: Duration = Duration::from_secs(60);
+const MAX_TOOL_ABORT_TOMBSTONES: usize = 1024;
 const PLUGIN_IMPORT_RATE_WINDOW: Duration = Duration::from_secs(60);
 const PLUGIN_IMPORT_RATE_LIMIT: usize = 10;
 const PLUGIN_BATCH_IMPORT_RATE_LIMIT: usize = 5;
@@ -60,9 +60,11 @@ pub struct AppState {
     pub plugin_batch_import_rates: HashMap<String, Vec<Instant>>,
     pub plugin_delete_rates: HashMap<String, Vec<Instant>>,
     pub tool_budget: ToolBudget,
-    /// (session_id, tool_call_id) -> cancellation signal for an active Bash
-    /// process. The signal is removed by the execution owner in all outcomes.
-    pub active_bash_cancellations: HashMap<(String, String), tokio::sync::watch::Sender<bool>>,
+    /// (session_id, tool_call_id) -> cancellation signal for a tool call that
+    /// is in flight: an approval wait, a plugin dispatch awaiting Electron
+    /// main, or a running tool. The signal is removed by the execution owner
+    /// in all outcomes.
+    pub active_tool_cancellations: HashMap<(String, String), tokio::sync::watch::Sender<bool>>,
     /// request_id -> (session_id, tool_call_id) for permission requests that
     /// are currently awaited by an RPC task. PermissionManager intentionally
     /// keeps its pending map private, so AppState tracks the ownership needed
@@ -71,7 +73,7 @@ pub struct AppState {
     /// Abort can race ahead of tools.execute because host RPC requests run in
     /// separate tasks. A short-lived tombstone makes the later request start
     /// already cancelled instead of executing after Stop was acknowledged.
-    pending_bash_aborts: HashMap<(String, String), Instant>,
+    pending_tool_aborts: HashMap<(String, String), Instant>,
     /// Session-scoped Read/Edit snapshot store (ADR 0087). Interior mutex so
     /// tool execution does not hold the AppState lock.
     pub hashline: crate::tools::HashlineStore,
@@ -148,9 +150,9 @@ impl AppState {
             plugin_batch_import_rates: HashMap::new(),
             plugin_delete_rates: HashMap::new(),
             tool_budget: ToolBudget::new(),
-            active_bash_cancellations: HashMap::new(),
+            active_tool_cancellations: HashMap::new(),
             pending_permissions: HashMap::new(),
-            pending_bash_aborts: HashMap::new(),
+            pending_tool_aborts: HashMap::new(),
             hashline: crate::tools::HashlineStore::new(),
         })
     }
@@ -235,23 +237,23 @@ impl AppState {
         result
     }
 
-    fn prune_bash_abort_tombstones(&mut self) {
-        self.pending_bash_aborts
-            .retain(|_, requested_at| requested_at.elapsed() < BASH_ABORT_TOMBSTONE_TTL);
-        while self.pending_bash_aborts.len() > MAX_BASH_ABORT_TOMBSTONES {
+    fn prune_tool_abort_tombstones(&mut self) {
+        self.pending_tool_aborts
+            .retain(|_, requested_at| requested_at.elapsed() < TOOL_ABORT_TOMBSTONE_TTL);
+        while self.pending_tool_aborts.len() > MAX_TOOL_ABORT_TOMBSTONES {
             let Some(oldest) = self
-                .pending_bash_aborts
+                .pending_tool_aborts
                 .iter()
                 .min_by_key(|(_, requested_at)| **requested_at)
                 .map(|(key, _)| key.clone())
             else {
                 break;
             };
-            self.pending_bash_aborts.remove(&oldest);
+            self.pending_tool_aborts.remove(&oldest);
         }
     }
 
-    pub fn register_bash_cancellation(
+    pub fn register_tool_cancellation(
         &mut self,
         session_id: &str,
         tool_call_id: &str,
@@ -259,44 +261,44 @@ impl AppState {
         if self.shutting_down {
             return Err("HOST_SHUTTING_DOWN".into());
         }
-        self.prune_bash_abort_tombstones();
+        self.prune_tool_abort_tombstones();
         let key = (session_id.to_string(), tool_call_id.to_string());
-        if self.active_bash_cancellations.contains_key(&key) {
+        if self.active_tool_cancellations.contains_key(&key) {
             return Err("TOOL_BUSY".into());
         }
-        let initially_aborted = self.pending_bash_aborts.remove(&key).is_some();
+        let initially_aborted = self.pending_tool_aborts.remove(&key).is_some();
         let (sender, receiver) = tokio::sync::watch::channel(initially_aborted);
-        self.active_bash_cancellations.insert(key, sender);
+        self.active_tool_cancellations.insert(key, sender);
         Ok(receiver)
     }
 
-    pub fn abort_or_queue_bash(&mut self, session_id: &str, tool_call_id: &str) -> (bool, bool) {
-        self.prune_bash_abort_tombstones();
+    pub fn abort_or_queue_tool(&mut self, session_id: &str, tool_call_id: &str) -> (bool, bool) {
+        self.prune_tool_abort_tombstones();
         let key = (session_id.to_string(), tool_call_id.to_string());
         let active = self
-            .active_bash_cancellations
+            .active_tool_cancellations
             .get(&key)
             .is_some_and(|sender| sender.send(true).is_ok());
         if active {
             (true, false)
         } else {
-            self.pending_bash_aborts.insert(key, Instant::now());
+            self.pending_tool_aborts.insert(key, Instant::now());
             (false, true)
         }
     }
 
-    pub fn clear_bash_cancellation(&mut self, session_id: &str, tool_call_id: &str) {
+    pub fn clear_tool_cancellation(&mut self, session_id: &str, tool_call_id: &str) {
         let key = (session_id.to_string(), tool_call_id.to_string());
-        self.active_bash_cancellations.remove(&key);
-        self.pending_bash_aborts.remove(&key);
+        self.active_tool_cancellations.remove(&key);
+        self.pending_tool_aborts.remove(&key);
     }
 
     pub fn shutdown(&mut self) {
         self.shutting_down = true;
-        for sender in self.active_bash_cancellations.values() {
+        for sender in self.active_tool_cancellations.values() {
             let _ = sender.send(true);
         }
-        self.active_bash_cancellations.clear();
+        self.active_tool_cancellations.clear();
 
         let pending_request_ids: Vec<String> = self.pending_permissions.keys().cloned().collect();
         for request_id in pending_request_ids {
@@ -304,7 +306,7 @@ impl AppState {
         }
         self.pending_permissions.clear();
 
-        self.pending_bash_aborts.clear();
+        self.pending_tool_aborts.clear();
         self.plugin_execs.clear();
         self.remote_execs.clear();
     }
@@ -319,7 +321,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shutdown_cancels_pending_permissions_and_active_bash() {
+    fn shutdown_cancels_pending_permissions_and_active_tool() {
         let data_dir = tempfile::tempdir().unwrap();
         let mut state = AppState::open(data_dir.path()).unwrap();
         let (request, _receiver) = state.permissions.create_request(
@@ -335,17 +337,17 @@ mod tests {
             &request.tool_call_id,
         );
         let mut cancellation = state
-            .register_bash_cancellation("session-1", "tool-call-2")
+            .register_tool_cancellation("session-1", "tool-call-2")
             .unwrap();
 
         state.shutdown();
 
         assert!(state.pending_permissions.is_empty());
-        assert!(state.active_bash_cancellations.is_empty());
-        assert!(state.pending_bash_aborts.is_empty());
+        assert!(state.active_tool_cancellations.is_empty());
+        assert!(state.pending_tool_aborts.is_empty());
         assert!(state.shutting_down);
         assert!(matches!(
-            state.register_bash_cancellation("session-1", "tool-call-3"),
+            state.register_tool_cancellation("session-1", "tool-call-3"),
             Err(error) if error == "HOST_SHUTTING_DOWN"
         ));
         assert!(*cancellation.borrow_and_update());

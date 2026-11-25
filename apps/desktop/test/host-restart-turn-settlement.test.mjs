@@ -36,6 +36,9 @@ const { createRuntimeLifecycle } = await import("../electron/main/runtime/lifecy
 const { createSessionCoordination } = await import(
   "../electron/main/runtime/session-coordination.ts"
 );
+const { createToolCancellationRegistry } = await import(
+  "../electron/main/runtime/tool-cancellations.ts"
+);
 
 const exe = process.platform === "win32" ? ".exe" : "";
 const repoRoot = join(here, "..", "..", "..");
@@ -99,6 +102,7 @@ function createHarness(options = {}) {
     child: () => () => {},
   };
   const sendToRenderer = (channel, payload) => events.push({ channel, payload });
+  const toolCancellations = createToolCancellationRegistry();
   const coordination = createSessionCoordination({
     activeTurns,
     getMainWindow: () => null,
@@ -152,6 +156,7 @@ function createHarness(options = {}) {
     finishTurn: plans.finishTurn,
     finishApprovedExecution: plans.finishApprovedExecution,
     isTurnDispatchable: coordination.isTurnDispatchable,
+    toolCancellations,
     activeTurns,
     approvedExecutionIdsBySession,
     claimedExecutionSessions,
@@ -194,6 +199,7 @@ function createHarness(options = {}) {
     runtimeState,
     state,
     coordination,
+    toolCancellations,
     hostRuntime,
     lifecycle,
     /** Open a session and its live turn, as a prompt would. */
@@ -247,6 +253,39 @@ function createHarness(options = {}) {
     },
   };
 }
+
+// A plugin or MCP call runs in this process, so its host dying does not stop
+// it by itself. The exit path must abort the call it still owes, and must leave
+// nothing behind that the replacement host could mistake for its own.
+test("a host exit aborts the plugin call main is still running", { skip: missingHost }, async (t) => {
+  const harness = createHarness();
+  t.after(() => harness.dispose());
+  await harness.hostRuntime.startHost();
+  const host = harness.runtimeState.host;
+  const sessionId = "session-plugin-call";
+  const inFlight = harness.toolCancellations.begin(sessionId, "plugin-call-1");
+  assert.equal(inFlight.signal.aborted, false, "the call starts clear");
+  const reasons = [];
+  inFlight.signal.addEventListener(
+    "abort",
+    () => reasons.push(inFlight.signal.reason?.code),
+    { once: true },
+  );
+
+  harness.killHost(host);
+  await until(() => inFlight.signal.aborted, "the host exit aborts the in-flight call", 10_000);
+
+  assert.deepEqual(reasons, ["TOOL_ABORTED"], "the plugin runtime receives the cancel");
+  assert.equal(inFlight.aborted, true);
+  // The dead generation's own cleanup runs after the replacement host re-registers
+  // the same pair; it is bound to its own record and cannot cancel or delete it.
+  inFlight.dispose();
+  await harness.nextHost(host);
+  const current = harness.toolCancellations.begin(sessionId, "plugin-call-1");
+  assert.equal(current.aborted, false, "the replacement host's call starts clean");
+  assert.equal(current.signal.aborted, false);
+  current.dispose();
+});
 
 test("a host restart stops the run that owned the interrupted turn and settles it", { skip: missingHost }, async (t) => {
   const harness = createHarness();

@@ -71,6 +71,7 @@ import {
 } from "./runtime/provider-catalog";
 import { createSessionLaunchRuntime } from "./runtime/session-launch";
 import { createSessionCoordination } from "./runtime/session-coordination";
+import { createToolCancellationRegistry } from "./runtime/tool-cancellations";
 import { createScheduledRuntime } from "./runtime/scheduled";
 import { createDesktopServices } from "./services/desktop-services";
 import { createPluginServices } from "./services/plugin-services";
@@ -643,16 +644,17 @@ const {
   planSubmissionTurnKey,
   lockAbortReason,
   isTurnDispatchable,
-  isPluginDispatchable,
-  registerIndependentChildRun,
-  trackPendingChildAcceptance,
-  pendingChildAcceptance,
-  isIndependentChildRunLive,
-  clearIndependentChildRuns,
-  noteChildRunEvent,
   isSessionBusy,
   isStaleTerminalEvent,
 } = sessionCoordination;
+
+/**
+ * Per-call cancellation for host-bound tool calls. host-core reports
+ * `tools.aborted` for one concrete call; main keeps a controller for each
+ * call it is currently running, so a stop reaches the plugin JS or MCP call
+ * it started and nothing else.
+ */
+const toolCancellations = createToolCancellationRegistry();
 
 /**
  * Applies a close-behavior choice. The tray icon is owned by D216 and stays
@@ -756,8 +758,6 @@ const sidecarRuntime = createSidecarRuntime({
   inflightCheckpointer,
   finishTurn,
   isStaleTerminalEvent,
-  noteChildRunEvent,
-  clearIndependentChildRuns,
   finishApprovedExecution,
   superviseRestart,
   isQuitting: () => mainState.quitting,
@@ -795,8 +795,7 @@ const { startHost } = createHostRuntime({
   togglePluginLauncher,
   finishTurn,
   isTurnDispatchable,
-  isPluginDispatchable,
-  pendingChildAcceptance,
+  toolCancellations,
   finishApprovedExecution,
   activeTurns,
   approvedExecutionIdsBySession,
@@ -893,8 +892,6 @@ function registerIpc() {
     dataDir,
     activeTurns,
     isTurnDispatchable,
-    trackPendingChildAcceptance,
-    registerIndependentChildRun,
     sessionProjects,
     persistenceOutbox,
     logger,

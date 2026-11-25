@@ -227,7 +227,7 @@ async fn workspace_bash_requires_matching_shell_and_honors_abort_before_dispatch
         .unwrap();
     assert_eq!(result["errorCode"], "COMMAND_SHELL_CHANGED");
     assert!(!dir.path().join("should-not-exist").exists());
-    assert!(state.lock().await.active_bash_cancellations.is_empty());
+    assert!(state.lock().await.active_tool_cancellations.is_empty());
     handle_request(
         state.clone(),
         "tools.workspaceAbort",
@@ -239,7 +239,7 @@ async fn workspace_bash_requires_matching_shell_and_honors_abort_before_dispatch
     let result=handle_request(state.clone(),"tools.workspaceExecute",json!({"path":dir.path(),"sessionId":"local-owner","toolCallId":"write-late","toolName":"Write","args":{"path":"should-not-exist","content":"forbidden"}}),tx.clone()).await.unwrap();
     assert_eq!(result["errorCode"], "TOOL_ABORTED");
     assert!(!dir.path().join("should-not-exist").exists());
-    assert!(state.lock().await.active_bash_cancellations.is_empty());
+    assert!(state.lock().await.active_tool_cancellations.is_empty());
 }
 
 #[tokio::test]

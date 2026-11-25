@@ -48,17 +48,6 @@ export type SidecarRuntimeDependencies = {
    * in Agent Host or the renderer.
    */
   isStaleTerminalEvent: (envelope: AgentEventEnvelope) => boolean;
-  /**
-   * Revoke the child run a terminal delegation settlement names. Observed on
-   * the same event channel that delivers the settlement to the renderer, so
-   * revocation follows the run's own completion, failure, or cancel.
-   */
-  noteChildRunEvent: (envelope: AgentEventEnvelope) => void;
-  /**
-   * Drop every child registration. The runs live in the sidecar runtime, so a
-   * sidecar exit leaves no live child behind to authorize.
-   */
-  clearIndependentChildRuns: () => void;
   isQuitting: () => boolean;
   dataDir: string;
   agentExtensions: AgentExtensionBridge;
@@ -91,8 +80,6 @@ export function createSidecarRuntime({
   inflightCheckpointer,
   finishTurn,
   isStaleTerminalEvent,
-  noteChildRunEvent,
-  clearIndependentChildRuns,
   finishApprovedExecution,
   superviseRestart,
   isQuitting,
@@ -254,7 +241,6 @@ export function createSidecarRuntime({
           },
         );
       }
-      noteChildRunEvent(envelope);
       emitAgentEvent(envelope);
       const persistedMessage = persistAgentEvent(envelope);
       if (persistedMessage) {
@@ -306,7 +292,6 @@ export function createSidecarRuntime({
     logger.flushChild("agent");
     const interruptedToolCalls = [...activeToolCalls.values()];
     activeToolCalls.clear();
-    clearIndependentChildRuns();
     runtimeState.sidecar = null;
     steeringReplies.clear();
     if (intentional || isQuitting()) return;

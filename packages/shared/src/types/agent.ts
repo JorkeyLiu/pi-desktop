@@ -471,11 +471,4 @@ export type AgentContinueSubagentResponse = {
    * runtime has one; it is history attribution, never an ownership grant.
    */
   turnId?: string;
-  /**
-   * Whether the named run is still live as the response is returned. An
-   * idempotent retry (`already-applied`) reports `false` once its run has
-   * settled, so main never (re-)registers a dead run. Absent from older
-   * sidecars, which main reads as live.
-   */
-  live?: boolean;
 };

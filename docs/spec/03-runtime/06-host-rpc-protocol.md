@@ -713,7 +713,30 @@ Additive `worktree.*` methods; no protocol version bump. Failures use code
 ### Tools
 - `tools.list`
 - `tools.execute`
-- `tools.abort`
+- `tools.abort({ sessionId, toolCallId })` → `{ ok, found, queued, aborted }`
+  cancels one call by its own identity, never by turn or tool name. Every
+  `tools.execute` registers a cancellation for `(sessionId, toolCallId)` while
+  it runs, so cancellation is uniform up to the first side effect: a call
+  waiting for approval, a dispatch still queued, and a call already handed to
+  Electron main (plugin JS or MCP execution) are all cancellable on that pair.
+  Waiting and pre-dispatch work settles exactly once with
+  `errorCode: TOOL_ABORTED` and `content: { error, code }`. An in-flight call is
+  cooperative: cancellation reaches the plugin or MCP runtime through that
+  runtime's own abort signal, while a tool that cannot observe the signal once
+  it has started (an in-process filesystem operation already under way, for
+  example) may still complete and report its normal result. Cancellation is not
+  a rollback: work that already started stays done, and no caller may assume a
+  cancelled write did not land. A second `tools.execute` for a call id that is
+  still registered fails with `TOOL_BUSY` instead of running twice under one
+  cancellation.
+  An abort that arrives before the call begins is remembered for that exact
+  pair (bounded TTL, bounded count, consumed once) and the call starts already
+  cancelled instead of dispatching. A stop of an unknown or already-settled
+  call reports `found: false, queued: true` and touches no other call: a newer
+  call in the same session or turn is unaffected. A call whose execution lives
+  outside host-core (plugin JS or an MCP call in Electron main) additionally
+  reports `tools.aborted({ sessionId, toolCallId })` so its owner can abort its
+  own await; that report names one call and authorizes no turn.
 - `tools.output` notifications for ordered `stdout`/`stderr` chunks
 
 ### Shells
@@ -942,14 +965,14 @@ type ToolsExecuteParams = {
   /** Isolated `Write`/`Edit` delegate chain id; re-roots the call to that
    * delegate's worktree (ADR 0329). Omitted for every other call. */
   delegationId?: string
-  /** Independent execution identity of a directly continued (`agent.continueSubagent`)
-   * child run: the continued run's own `delegationId`, stamped by the runtime on
-   * every host-bound `tools.execute` of that run. Forwarded into the
-   * `plugins.execute` notification for dispatch liveness; never used for
-   * mode/workspace authorization. Omitted for every other call. */
-  childRunId?: string
 }
 ```
+
+`turnId` is transcript attribution, not dispatch authority. A host-bound call
+is issued on its own `(sessionId, toolCallId)` identity, so a `tools.execute`
+whose `turnId` names an ended turn, or carries no turn at all, still runs. No
+tool name is privileged: every call goes through the same admission,
+permission, dispatch, and cancellation path.
 
 Authoritative mode and workspace resolution are session-scoped:
 

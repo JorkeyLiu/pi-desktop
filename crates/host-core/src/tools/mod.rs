@@ -575,15 +575,6 @@ pub struct ToolsExecuteParams {
     /// host-core resolves it against its registry; an unknown id is ignored.
     #[serde(default)]
     pub delegation_id: Option<String>,
-    /// Independent execution identity of a manually continued child run: its
-    /// own delegation id, stamped by the agent runtime on every host-bound
-    /// tool call of that run. host-core never gates on it; it only forwards
-    /// it so the desktop runner can validate the run against the live child
-    /// it registered. Absent for parent-turn and parent-issued delegate
-    /// calls, which keep turn gating.
-    #[serde(default)]
-    pub child_run_id: Option<String>,
-    #[serde(default)]
     pub expected_command_shell_id: Option<String>,
     #[serde(default)]
     pub expected_command_shell_dialect: Option<String>,

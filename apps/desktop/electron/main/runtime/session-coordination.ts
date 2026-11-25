@@ -57,120 +57,6 @@ export function createSessionCoordination({
    * the frozen record already owns the turn.
    */
   const pendingAbortReasons = new Map<string, TurnEndReason>();
-  /**
-   * Live independent child runs, keyed by session then by the run's own
-   * delegation id. A manually continued child (`agent.continueSubagent`)
-   * runs with no durable parent turn, so the plugin dispatch gate cannot use
-   * turn identity for its tools: the continuation path registers the run when
-   * the sidecar accepts it, and a terminal delegation settlement observed on
-   * the event channel revokes it. Per-run ids mean a delayed event from one
-   * run can never authorize a newer run, and parent turn finalization never
-   * touches this table.
-   */
-  const liveChildRuns = new Map<string, Set<string>>();
-  /**
-   * In-flight `agent.continueSubagent` acceptances, keyed by session. The
-   * accepted run registers only when the sidecar response reaches main, but
-   * the child's first tool call travels the host channel and can arrive
-   * first. The plugins gate awaits this entry instead of failing closed, so
-   * the authoritative registration is visible before the first tool
-   * dispatches. Bounded by the acceptance call itself — never a grace
-   * window — and settled runs still never register (F2 reports liveness).
-   * Serialized per session by `acquireSessionOperation`, so one entry per
-   * session is enough.
-   */
-  const pendingChildAcceptances = new Map<string, Promise<void>>();
-
-  function trackPendingChildAcceptance(sessionId: string, pending: Promise<unknown>): void {
-    const session = normalizeChildIdentity(sessionId);
-    if (!session) return;
-    const settled: Promise<void> = pending.then(
-      () => undefined,
-      () => undefined,
-    );
-    pendingChildAcceptances.set(session, settled);
-    void settled.then(() => {
-      if (pendingChildAcceptances.get(session) === settled) {
-        pendingChildAcceptances.delete(session);
-      }
-    });
-  }
-
-  function pendingChildAcceptance(sessionId: string): Promise<void> | undefined {
-    const session = normalizeChildIdentity(sessionId);
-    if (!session) return undefined;
-    return pendingChildAcceptances.get(session);
-  }
-
-  function normalizeChildIdentity(value: string | null | undefined): string | undefined {
-    if (typeof value !== "string") return undefined;
-    const id = value.trim();
-    return id ? id : undefined;
-  }
-
-  function registerIndependentChildRun(sessionId: string, childRunId: string): void {
-    const session = normalizeChildIdentity(sessionId);
-    const run = normalizeChildIdentity(childRunId);
-    if (!session || !run) return;
-    let runs = liveChildRuns.get(session);
-    if (!runs) {
-      runs = new Set();
-      liveChildRuns.set(session, runs);
-    }
-    runs.add(run);
-  }
-
-  function revokeIndependentChildRun(sessionId: string, childRunId: string): void {
-    const session = normalizeChildIdentity(sessionId);
-    const run = normalizeChildIdentity(childRunId);
-    if (!session || !run) return;
-    const runs = liveChildRuns.get(session);
-    if (!runs) return;
-    runs.delete(run);
-    if (runs.size === 0) liveChildRuns.delete(session);
-  }
-
-  function isIndependentChildRunLive(
-    sessionId: string,
-    childRunId: string | null | undefined,
-  ): boolean {
-    const session = normalizeChildIdentity(sessionId);
-    const run = normalizeChildIdentity(childRunId);
-    if (!session || !run) return false;
-    return liveChildRuns.get(session)?.has(run) ?? false;
-  }
-
-  /** Drop every child registration: the runtime state behind them is gone. */
-  function clearIndependentChildRuns(): void {
-    liveChildRuns.clear();
-  }
-
-  /**
-   * Revoke the child run a terminal delegation settlement names. Only a
-   * `Task`-row `message_end` whose details carry a non-`running` status
-   * revokes anything: progress snapshots, rows for other tools, and
-   * malformed payloads leave the table untouched. Revocation is idempotent,
-   * and a run id is per-run, so a late event can neither reopen its own run
-   * nor authorize a newer one.
-   */
-  function noteChildRunEvent(envelope: AgentEventEnvelope): void {
-    if (!envelope || typeof envelope !== "object") return;
-    const event = (envelope as { event?: unknown }).event;
-    if (!event || typeof event !== "object") return;
-    if ((event as { type?: unknown }).type !== "message_end") return;
-    const message = (event as { message?: unknown }).message;
-    if (!message || typeof message !== "object") return;
-    const row = message as { role?: unknown; toolName?: unknown; toolResult?: unknown };
-    if (row.role !== "tool" || row.toolName !== "Task") return;
-    const result = row.toolResult;
-    if (!result || typeof result !== "object") return;
-    const details = (result as { details?: unknown }).details;
-    if (!details || typeof details !== "object") return;
-    const record = details as { delegationId?: unknown; status?: unknown };
-    if (typeof record.delegationId !== "string" || !record.delegationId.trim()) return;
-    if (typeof record.status !== "string" || record.status === "running") return;
-    revokeIndependentChildRun(envelope.sessionId, record.delegationId);
-  }
 
   async function acquireSessionOperation(sessionId: string): Promise<() => void> {
     const id = sessionId.trim();
@@ -291,10 +177,11 @@ export function createSessionCoordination({
   }
 
   /**
-   * Last synchronous gate before a plugin side effect. A turn that is not the
-   * session's live turn, has an abort decision recorded, or is already finalizing
-   * must not start one. Callers must not await between this check and the
-   * dispatch.
+   * Live-turn check for a remote-workspace tool request: the remote runner is
+   * acting for a turn, so a turn that is not the session's live turn, has an
+   * abort decision recorded, or is already finalizing must not issue one.
+   * Plugin and MCP dispatch do not consult this: those calls are authorized by
+   * their own per-call identity and stopped by their own cancellation.
    */
   function isTurnDispatchable(
     sessionId: string,
@@ -303,26 +190,6 @@ export function createSessionCoordination({
     if (!isActiveTurn(sessionId, turnId)) return false;
     const key = planSubmissionTurnKey(sessionId.trim(), String(turnId).trim());
     return !pendingAbortReasons.has(key) && !turnFinalizations.has(key);
-  }
-
-  /**
-   * Combined synchronous gate before a plugin side effect. A payload that
-   * carries an explicit child identity is judged only by that identity: it
-   * dispatches exactly when the continuation path registered the run as
-   * live, even with no live parent turn, and never borrows a live parent
-   * turn's authority. A payload without one dispatches exactly when its
-   * turn still owns the session. Callers must not await between this check
-   * and the dispatch.
-   */
-  function isPluginDispatchable(
-    sessionId: string,
-    turnId: string | null | undefined,
-    childRunId?: string | null,
-  ): boolean {
-    if (normalizeChildIdentity(childRunId) !== undefined) {
-       return isIndependentChildRunLive(sessionId, childRunId);
-    }
-    return isTurnDispatchable(sessionId, turnId);
   }
 
   /**
@@ -398,14 +265,6 @@ export function createSessionCoordination({
     clearAbortReason,
     releaseTurnClaims,
     isTurnDispatchable,
-    isPluginDispatchable,
-    registerIndependentChildRun,
-    revokeIndependentChildRun,
-    trackPendingChildAcceptance,
-    pendingChildAcceptance,
-    isIndependentChildRunLive,
-    clearIndependentChildRuns,
-    noteChildRunEvent,
     isSessionBusy,
     isStaleTerminalEvent,
   };
