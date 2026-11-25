@@ -51,7 +51,10 @@ test("the left identity is localized and independent of lifecycle; unknown names
   // The display name is resolved once; the identity is the localized catalog
   // key when one exists, else that formatted name, else the generic label.
   assert.match(transcript, /const formattedName = getToolDisplayName\(message\.toolName\);/);
-  assert.match(transcript, /const rawName = identityKey \? t\(identityKey\) : formattedName \|\| t\("chat\.tool"\);/);
+  // The shipped Browser tool prefixes its action to the catalog word; every
+  // other tool keeps the localized identity, formatted name, or generic label.
+  assert.match(transcript, /const browserName = isBrowserTool/);
+  assert.match(transcript, /const rawName = browserName \?\? \(identityKey \? t\(identityKey\) : formattedName \|\| t\("chat\.tool"\)\);/);
   assert.match(transcript, /<span className="tool-row-name" title=\{waitTitle\}> \{rawName\} <\/span>/);
   assert.doesNotMatch(transcript, /TOOL_ACTION_KEYS|TOOL_RUNNING_KEYS/);
   assert.doesNotMatch(transcript, /className=\{`tool-row-name/);
@@ -108,7 +111,9 @@ test("the disclosure chevron is decorative content inside the header", () => {
 });
 
 test("run summaries use prose typography except structured commands and paths", () => {
-  assert.match(transcript, /summaryIsPath \? " is-path" : ""/);
+  // Paths keep the layout span and render their file name; structured commands
+  // keep the mono `is-code` class inside the prose summary template.
+  assert.match(transcript, /<span className="tool-row-summary is-path">/);
   assert.match(transcript, /summaryIsCode \? " is-code" : ""/);
   assert.match(styles, /\.tool-row-summary \{[^}]*font-family: var\(--font-sans\);[^}]*font-size: var\(--text-sm-plus\);[^}]*line-height: var\(--leading-row\);/);
   assert.match(styles, /\.tool-row-summary\.is-code \{[^}]*font-family: var\(--font-mono\)/);
