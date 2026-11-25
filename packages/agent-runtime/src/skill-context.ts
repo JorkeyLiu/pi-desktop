@@ -9,7 +9,10 @@
  * Suppression is therefore derived from the agent's own context, never from a
  * loaded flag: a fresh successful result is replaced with a short reuse notice
  * only when the identical full document is currently visible there as a
- * successful Skill result. That single rule keeps every other case honest by
+ * successful Skill result. Parallel batches settle their result messages only
+ * after every call finishes, so `SameBatchSkillLoads` also lets a later call
+ * compare against earlier successful calls in source order without delaying
+ * their host reads. That single rule keeps every other case honest by
  * construction. A new or delegated context has not seen the body, so it loads.
  * A content revision no longer matches, so it loads. A body dropped by
  * compaction, retained only in part, or never successfully delivered is not
@@ -84,9 +87,15 @@ export function repeatedSkillNotice(
   messages: readonly AgentMessage[],
   fullText: string,
   requestedId: string,
+  earlierBatchDocuments: readonly string[] = [],
 ): string | undefined {
   if (!fullText) return undefined;
-  if (!loadedSkillDocumentDigests(messages).has(skillDocumentDigest(fullText))) {
+  const digest = skillDocumentDigest(fullText);
+  const loaded = loadedSkillDocumentDigests(messages);
+  if (
+    !loaded.has(digest) &&
+    !earlierBatchDocuments.some((document) => skillDocumentDigest(document) === digest)
+  ) {
     return undefined;
   }
   const id = requestedId.trim();
@@ -95,4 +104,45 @@ export function repeatedSkillNotice(
     `Skill ${label} is already loaded: its complete document appears in an earlier successful ` +
     "Skill result in this context, with identical content. Reuse that text instead of loading it again."
   );
+}
+
+type BatchSkillCall = {
+  document?: string;
+  settled: Promise<void>;
+  settle: () => void;
+  done: boolean;
+};
+
+/**
+ * One assistant message's Skill calls, registered in source order before any
+ * host read settles. Host execution stays parallel; only duplicate-result
+ * selection waits for earlier calls, preserving which call carries the body.
+ */
+export class SameBatchSkillLoads {
+  private readonly calls = new Map<string, BatchSkillCall>();
+
+  register(toolCallId: string): void {
+    if (this.calls.has(toolCallId)) return;
+    let settle!: () => void;
+    const settled = new Promise<void>((resolve) => { settle = resolve; });
+    this.calls.set(toolCallId, { settled, settle, done: false });
+  }
+
+  settle(toolCallId: string, document?: string): void {
+    const call = this.calls.get(toolCallId);
+    if (!call || call.done) return;
+    call.document = document;
+    call.done = true;
+    call.settle();
+  }
+
+  async documentsBefore(toolCallId: string): Promise<string[]> {
+    const earlier: BatchSkillCall[] = [];
+    for (const [id, call] of this.calls) {
+      if (id === toolCallId) break;
+      earlier.push(call);
+    }
+    await Promise.all(earlier.map((call) => call.settled));
+    return earlier.flatMap((call) => call.document ? [call.document] : []);
+  }
 }

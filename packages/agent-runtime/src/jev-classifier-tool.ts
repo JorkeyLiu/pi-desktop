@@ -181,7 +181,6 @@ export function createJevClassifierTool(apiKey: string): AgentTool {
       },
       { additionalProperties: false },
     ),
-    executionMode: "sequential",
     execute: async (_toolCallId, rawParams, signal) => {
       const context = parseContext(rawParams);
       if (!context) {

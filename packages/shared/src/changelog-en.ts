@@ -5,6 +5,7 @@ export const enEntries: ChangelogEntry[] = [
     version: "0.20.1",
     date: "2026-10-13",
     highlights: [
+      "Independent tool calls from the same model response now run together, including searches, shell commands, file reads, and subagent tasks; results still return in call order.",
       "Browser tool rows now name the action they ran — open page, snapshot, screenshot, and more — and show the page or result they produced; a failure states its reason alone instead of raw details.",
       "A steering message to a subagent reads like the wait row for the same task — agent, target task, and sent state — and opens on the guidance text itself.",
       "Relaunching reopens the work panel the way you left it: open or collapsed, at the same width, with each conversation's tabs in order, the selected tab, and the file preview or browser page it was showing.",

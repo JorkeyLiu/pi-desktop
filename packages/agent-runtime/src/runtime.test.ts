@@ -8570,14 +8570,12 @@ describe("DesktopAgentRuntime subagents", () => {
     } finally { await runtime.dispose(); }
   });
 
-  it("is the only tool allowed to run in parallel", async () => {
+  it("uses the upstream parallel default for every catalog tool", async () => {
     const runtime = createRuntime({ subagents: [explorer] });
     const catalog = (runtime as any).toolCatalog as Map<string, any>;
 
-    expect(catalog.get("Task").executionMode).toBe("parallel");
-    for (const [name, tool] of catalog) {
-      if (name === "Task") continue;
-      expect(tool.executionMode).toBe("sequential");
+    for (const tool of catalog.values()) {
+      expect(tool.executionMode).toBeUndefined();
     }
 
     await runtime.dispose();

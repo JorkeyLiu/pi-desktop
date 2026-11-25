@@ -7680,6 +7680,36 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   and offline, not an incident replay or a claim about production-session root
   cause.
 
+#### E2E-TOOL-BATCH-PARALLEL: Independent same-turn calls overlap without losing order
+
+- **Preconditions**: Local OpenAI-compatible SSE fixture and a real
+  `DesktopAgentRuntime` / `SubagentRun` with production tools and the real
+  pi-agent-core loop. Host transport is the external boundary; no paid API,
+  production session, or running user app is used.
+- **Steps**: 1) Emit a parent batch containing a gated Bash call and a Read
+  call, observe both enter before either is released, then finish Read first.
+  2) Run a real scoped child batch containing Read and Glob with the same
+  gates. 3) Mix Read, Task, and Bash in one parent batch. 4) Gate two sibling
+  calls and abort the turn. 5) Emit same-path Write/`./same.txt` plus a write
+  to another path. 6) Mix a plan transition with an ordinary call.
+- **Expected**: Every independent parent and child call enters before a gated
+  sibling is released; mixed Task/ordinary calls are not serialized and the
+  delegate cap remains enforced. Completion order may reverse, while tool-call
+  ids and `toolResult` content remain matched and source-ordered in the next
+  model request. Abort reaches both in-flight siblings once and emits no late
+  or duplicate result. Same-path writes serialize while a different path can
+  finish; permission, mode, deferred-tool, and scoped-tool admission do not
+  widen. The illegal mixed transition batch executes neither call.
+- **Automation**: `packages/agent-runtime/src/tool-batch-parallel.test.ts`
+  drives these real loops with gated host transport and records source-order
+  provider requests; `src/path-lock.test.ts` covers path-lock admission and
+  normalization. Run
+  `pnpm --filter @pi-desktop/agent-runtime exec vitest run src/tool-batch-parallel.test.ts src/path-lock.test.ts`.
+  `pnpm test:e2e:tool-preparation` preserves the corresponding streamed
+  prepare/ready/start lifecycle and transcript position contract.
+- **Specs linked**: `03-runtime/02-agent-runtime.md` §8/§9,
+  `03-runtime/03-tools-and-permissions.md` §4d, ADR 0340.
+
 #### E2E-TOOL-PREPARING: A named call waits for its arguments without claiming execution
 
 - **Preconditions**: Isolated Electron window with the production transcript

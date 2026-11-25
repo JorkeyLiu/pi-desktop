@@ -5,6 +5,7 @@ export const deEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
+      "Unabhängige Werkzeugaufrufe aus derselben Modellantwort laufen jetzt gleichzeitig — einschließlich Suchen, Shell-Befehlen, Dateileseaktionen und Subagentenaufgaben; die Ergebnisse bleiben in Aufrufreihenfolge.",
       "Browser-Werkzeugzeilen nennen jetzt die ausgeführte Aktion – Seite öffnen, Schnappschuss, Bildschirmfoto und mehr – und zeigen die erzeugte Seite oder das Ergebnis; ein Fehler nennt nur den Grund statt roher Details.",
       "Eine Lenkungsnachricht an einen Subagenten liest sich wie die Wartezeile derselben Aufgabe — Agent, Zielaufgabe und Gesendet-Status — und öffnet den Hinweistext selbst.",
       "Ein Neustart öffnet das Arbeitsfenster so, wie Sie es verlassen haben: geöffnet oder eingeklappt, in derselben Breite, mit den Tabs jeder Unterhaltung in ihrer Reihenfolge, dem ausgewählten Tab und der zuletzt gezeigten Dateivorschau oder Browserseite.",

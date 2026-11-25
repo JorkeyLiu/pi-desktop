@@ -4,7 +4,8 @@
 - Status: Accepted for implementation (definition roots amended by ADR 0112;
   timeout policy amended by ADR 0119; delegation presentation amended by D265;
   opt-in parent-tool inherit amended by ADR 0246; resumable delegations amended
-  by ADR 0279; report spillover amended by RFC #1196)
+  by ADR 0279; report spillover amended by RFC #1196; §4 execution-mode
+  policy superseded by ADR 0340)
 - Date: 2026-08-06
 - Deciders: PI-Desktop core
 - Related: D201, ADR 0041 (persistence outbox), ADR 0048 (lazy per-turn tool
@@ -94,6 +95,11 @@ negotiations (D198), and a delegate with Bash or Edit would drive straight
 through one. [Contract-mode declaration compatibility](plan-tool-declarations-and-execution-denials.md)
 retains configured Task-family schemas but rejects their execution before any
 delegate is created or controlled; a visible schema is not a permission grant.
+
+> **Historical policy:** ADR 0340 supersedes this section's execution-mode
+> rules. Same-turn tool batches now use pi's parallel default in both parent
+> and child agents; dependencies use subsequent model turns. The delegation
+> bounds and resource-ordering decisions below remain in force.
 
 Concurrency is expressed through pi's execution modes: the session Agent runs
 with `toolExecution: "parallel"`, every catalog tool carries

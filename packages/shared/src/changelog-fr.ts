@@ -5,6 +5,7 @@ export const frEntries: ChangelogEntry[] = [
     "version": "0.20.1",
     "date": "2026-10-13",
     "highlights": [
+      "Les appels d'outils indépendants d'une même réponse du modèle s'exécutent désormais ensemble, y compris les recherches, commandes Shell, lectures de fichiers et tâches de sous-agents ; les résultats restent renvoyés dans l'ordre des appels.",
       "Les lignes de l'outil navigateur nomment désormais l'action exécutée — ouvrir la page, instantané, capture et plus — et montrent la page ou le résultat obtenu ; les échecs n'indiquent que le motif, sans détails bruts.",
       "Un message d'orientation vers un sous-agent se lit comme la ligne d'attente de la même tâche — agent, tâche cible et état envoyé — et s'ouvre sur le texte de guidage lui-même.",
       "Un redémarrage rouvre le panneau de travail tel que vous l'avez laissé : ouvert ou replié, à la même largeur, avec les onglets de chaque conversation dans leur ordre, l'onglet sélectionné et l'aperçu de fichier ou la page du navigateur qu'il affichait.",
