@@ -2348,6 +2348,13 @@ validation still needed.
   its delegate rows. Reported supporting evidence for this change:
   agent-runtime 1722 passed, desktop 4496 passed / 4 skipped, shared 1382,
   i18n 32, `pnpm lint` and the desktop typecheck pass.
+  Current-source re-run — the same journey also exits 0 on the change built
+  from base `1e1a3c004` (that base is the checkout's branch point; the run's
+  result JSON records the exact tested commit as `testedSource.head`, plus
+  `atStart`/`atFinish` source and binary hashes): the sidebar open sent
+  `{ kind: "main" }`, returned 100 top-level rows and no child rows, and older
+  paging reached the transcript head. The `2d5f6f893` numbers above stay as the
+  record of the earlier event, not as the current tested source.
 
 #### E2E-207c: A main-window change never disturbs an open delegation panel
 
@@ -2367,9 +2374,12 @@ validation still needed.
   available, and keeps the rows and reading position it had already loaded; no
   main-window change makes the tab switch chains, go unavailable, or drop
   displayed rows, and the tab keeps its brief even while the root `Task` is
-  outside the main page. The panel's own read is what refreshes it: a reopen
-  after a live row reads only the tail and merges it over the held rows without
-  resetting them, a wider gap is answered with a bounded newest window plus the
+  outside the main page. The panel's own read is what refreshes it, and only an
+  entry a live publication touched after its last durable answer is stale: that
+  reopen reads exactly one newest page and merges it over the held rows without
+  resetting them, while a reopen whose entry was finalized by its own durable
+  read (`finalized: true`, nothing published since) costs no read at all. A
+  wider gap is answered with a bounded newest window plus the
   retained focus island, an explicit omission marker, and `hasMoreBefore` true
   whose `Show earlier` re-reads every omitted row, and a failed read keeps the
   rows on screen with the failure stated inline and a retry. A main-window
@@ -2399,8 +2409,13 @@ validation still needed.
   real-host run `node scripts/e2e-scoped-history-real-host.mjs` exits 0 with an
   empty defect list: opening the panel and paging the chain's 1009 child rows
   left the tab on its own canonical identity with 0 extra child reads across
-  main-window replacement, reselect, alias open, and close/reopen, and returning
-  to the session performed exactly one tail refresh.
+  main-window replacement, reselect, and alias open; a close/reopen of the
+  finalized entry spent 0 panel reads; the session restore published live
+  `Task` rows and cost exactly one bounded tail refresh; and a reopen after that
+  live publication spent exactly one panel read — one newest page of 100 child
+  rows, no `messageBefore`, no `messageAround`, merged over the retained 400
+  rows (`child-1-609` → `child-3-c`), with the chain's three `Task` rows as the
+  only context. No parent or other-session row joined either case.
 #### E2E-207d: One chain resolves by run id, legacy call id, and resume
 
 - **Preconditions**: A settled chain of at least three runs (`Task` dispatch,
@@ -2430,8 +2445,9 @@ validation still needed.
   `apps/desktop/test/subagent-search-focus-tab.test.mjs`. Real rendered
   evidence — `node scripts/e2e-scoped-history-real-host.mjs` exits 0 with an
   empty defect list: opening the chain by its run id, by the legacy `Task`
-  call id, and after close/reopen all landed on the same active
-  `subagent:delegation-1` tab with the canonical echo and no extra child read.
+  call id, and after a finalized close/reopen all landed on the same active
+  `subagent:delegation-1` tab with the canonical echo, and those three opens
+  spent no panel read.
   The nested child search (rows 1–500) found the child, put one highlighted
   range inside the viewport of that tab, and left the caller's main range
   untouched; `Show latest` merged the retained target into the newest window
@@ -2510,7 +2526,7 @@ validation still needed.
   `03-runtime/04-data-storage.md` (§11), `04-ux/08-component-spec.md` (§5.7)
 - **Acceptance**: C (session open), F (persistence), Quality
 - **Milestone**: M5
-- **Status**: Regression-covered, not rendered. Renderer regressions —
+- **Status**: Passed. Renderer regressions —
   `node --test apps/desktop/test/scoped-subagent-history.test.mjs` fails on the
   pre-fix code (`'error' !== 'ready'` while a live `Task` row exists and the host
   answers `session:null`; `1 !== 2` reads when a dispatch settles during the
@@ -2533,11 +2549,19 @@ validation still needed.
   row on a ready panel (`pendingDurable`, no error, one scoped read) and
   converges on its durable page once the card settles (two scoped reads, no
   poll); the same fixture on the pre-fix source times out waiting for that
-  ready answer. Real-host evidence is NOT PASS on this source and on
-  unmodified base `32b1d0cfa` alike: `node
-  scripts/e2e-scoped-history-real-host.mjs` fails at
-  `scripts/e2e-scoped-history-real-host.mjs:1145` (`reopening spends no panel
-  read`, `1 !== 0`) on both, so this scenario has no passing real-host run.
+  ready answer. Real-host evidence is PASS on the change built from base
+  `1e1a3c004`: `node scripts/e2e-scoped-history-real-host.mjs` exits 0 with an
+  empty defect list over the real renderer, Main, and Host in an isolated
+  profile with no provider, and its result JSON records the exact tested commit
+  as `testedSource.head`. Its journey reaches this entry's steps — the settled
+  card after restart, its full report, and the chain's delegation page — and
+  its panel transitions assert the §5.7 lifecycle directly: a finalized cached
+  entry reopens with **0** delegation reads, while an entry a live publication
+  touched after its last durable answer reopens with **exactly one** newest
+  page (no `messageBefore`, no `messageAround`) merged over the retained rows.
+  The earlier `NOT PASS` observation at `:1145` on base `32b1d0cfa` came from a
+  scenario that required zero reads after a live publication; the split above
+  replaces that expectation rather than loosening it.
 
 
 #### E2E-011a: New session while another session is still streaming

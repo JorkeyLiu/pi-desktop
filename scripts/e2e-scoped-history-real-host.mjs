@@ -22,8 +22,10 @@
  *   2. scrolling to the head loads one older main page and ends at the head;
  *   3. the root Task card opens its own `{kind:"delegation", id}` page; the
  *      panel pages to its head while the main window is replaced and restored;
- *   4. session switch, tab close/reopen, and a second alias of the chain keep
- *      the panel's identity and loaded rows without a new panel read;
+ *   4. a finalized cached entry reopens with no panel read, while an entry a
+ *      live publication touched after its last durable answer reads one tail
+ *      page and merges it over the rows it already holds; a second alias of
+ *      the chain keeps the same tab and spends no read;
  *   5. searching a nested child opens the owning tab and highlights the row,
  *      while the main transcript never renders that child standalone;
  *   6. a settlement + handoff checkpoint is appended through the host's
@@ -38,9 +40,11 @@
  *
  * Optional:
  *   PI_SCOPED_ARTIFACT_DIR  directory for screenshots, host log, and result JSON.
+ *   PI_SCOPED_BASE_REF      comparison ref for the recorded base (defaults to
+ *                           the integration branch, then origin/main).
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -55,8 +59,7 @@ import { Host } from "./e2e/host.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const REAL_HOST =
-  process.env.PI_DESKTOP_HOST_BIN ||
-  "/Users/jorkeyliu/workspace/repos/pi-desktop/target/debug/pi-desktop-host-core";
+  process.env.PI_DESKTOP_HOST_BIN || join(root, "target/debug/pi-desktop-host-core");
 const artifactDir =
   process.env.PI_SCOPED_ARTIFACT_DIR ||
   join(process.env.PI_SCRATCH_DIR || tmpdir(), "artifacts", "scoped-history-real-host");
@@ -489,6 +492,100 @@ async function until(check, label, timeoutMs = 20_000) {
   throw new Error(`timeout waiting for ${label}${last ? ` (${last.message})` : ""}`);
 }
 
+
+/**
+ * The exact source and binary identity this run executes against.
+ *
+ * Recorded before the UI starts and again at the end, so a failure artifact
+ * still names the tested HEAD and base instead of an empty or guessed field.
+ * The base is the branch point this checkout was cut from, resolved from Git
+ * rather than hardcoded; when no comparison ref exists, HEAD is the honest
+ * bound and `baseRef` says so.
+ */
+function captureProvenance() {
+  const git = (args) =>
+    execFileSync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    }).trim();
+  const head = git(["rev-parse", "HEAD"]);
+  const candidates = [
+    process.env.PI_SCOPED_BASE_REF,
+    "jorkey/integration",
+    "origin/jorkey/integration",
+    "origin/main",
+  ].filter(Boolean);
+  let base;
+  let baseRef;
+  for (const ref of candidates) {
+    try {
+      execFileSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
+        cwd: root,
+        stdio: "ignore",
+      });
+      const merged = git(["merge-base", "HEAD", ref]);
+      if (merged) {
+        base = merged;
+        baseRef = ref;
+        break;
+      }
+    } catch {
+      // Try the next comparison ref; a missing local branch is not fatal.
+    }
+  }
+  if (!base) {
+    base = head;
+    baseRef = "HEAD (no comparison ref resolved)";
+  }
+  const status = execFileSync("git", ["status", "--short"], { cwd: root, encoding: "utf8" });
+  const diff = execFileSync("git", ["diff", "--binary"], {
+    cwd: root,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const untrackedFiles = execFileSync("git", ["ls-files", "-o", "--exclude-standard"], {
+    cwd: root,
+    encoding: "utf8",
+  })
+    .split("\n")
+    .filter(Boolean)
+    // The driver itself is not part of the product source being verified.
+    .filter((file) => file !== "scripts/e2e-scoped-history-real-host.mjs")
+    .sort();
+  const untrackedHashes = untrackedFiles
+    .map((file) => `${file} ${sha256(readFileSync(join(root, file)))}`)
+    .join("\n");
+  const rendererHtml = readFileSync(join(appDir, "out/renderer/index.html"), "utf8");
+  const rendererEntry = rendererHtml.match(/src="\.\/assets\/([^"]+\.js)"/)?.[1] ?? "";
+  return {
+    head,
+    base,
+    baseRef,
+    hostBinary: REAL_HOST,
+    hostSha256: sha256(readFileSync(REAL_HOST)),
+    rendererIndexSha256: sha256(readFileSync(join(appDir, "out/renderer/index.html"))),
+    rendererEntry,
+    rendererEntrySha256: rendererEntry
+      ? sha256(readFileSync(join(appDir, "out/renderer/assets", rendererEntry)))
+      : "",
+    mainSha256: sha256(readFileSync(join(appDir, "out/main/index.js"))),
+    root,
+    appDir,
+    worktreeStatusEntries: status.split("\n").filter(Boolean).length,
+    untrackedFiles: untrackedFiles.length,
+    // Tracked edits plus status: the dirty-diff identity of this checkout.
+    worktreeStateSha256: createHash("sha256").update(diff).update(status).digest("hex"),
+    // Full product-source fingerprint: HEAD, tracked edits, status, and the
+    // contents of every untracked file.
+    sourceSha256: createHash("sha256")
+      .update(head)
+      .update(diff)
+      .update(status)
+      .update(untrackedHashes)
+      .digest("hex"),
+  };
+}
+
 const tempRoot = await mkdtemp(join(tmpdir(), "pi-scoped-real-host-"));
 const dataDir = join(tempRoot, "data");
 const profileDir = join(tempRoot, "profile");
@@ -497,15 +594,14 @@ const workspace = join(tempRoot, "workspace");
 for (const path of [dataDir, profileDir, homeDir, workspace]) mkdirSync(path, { recursive: true });
 writeFileSync(join(workspace, "README.md"), "synthetic workspace for scoped history E2E\n");
 const proxy = writeHostProxy(tempRoot);
+
+const provenanceAtStart = captureProvenance();
 const result = {
   testedSource: {
-    head: "",
-    base: "2d5f6f893",
-    hostBinary: REAL_HOST,
-    hostSha256: sha256(readFileSync(REAL_HOST)),
-    rendererIndexSha256: sha256(readFileSync(join(appDir, "out/renderer/index.html"))),
-    rendererEntry: "",
-    mainSha256: sha256(readFileSync(join(appDir, "out/main/index.js"))),
+    ...provenanceAtStart,
+    atStart: provenanceAtStart,
+    atFinish: null,
+    changedDuringRun: false,
   },
   environment: {
     platform: `${process.platform}-${process.arch}`,
@@ -1012,14 +1108,52 @@ try {
   };
   await desktop.screenshot("02-panel-full-chain.png");
 
-  // ------------------------- 5. main window change/restore keeps the panel
-  const stableFrom = mark();
   const signature = {
     activeTabId: loadedTab.activeTabId,
     status: loadedTab.status,
     context: loadedTab.context,
     rowIds: loadedTab.rowIds,
   };
+
+  // ----------------- 5. a finalized entry reopens without a panel read
+  // The paging above ended on a durable answer, and no live publication has
+  // touched the entry since: an answer only leaves the entry stale when a live
+  // row arrived while that read was in flight. Closing the view keeps the
+  // entry, so the reopen must draw the 400 rows it already holds and spend no
+  // read. This is the positive control the stale case below compares against.
+  const finalizedFrom = mark();
+  await desktop.evaluate(
+    `document.querySelector('.work-panel-tab.active .work-panel-tab-close').click()`,
+  );
+  await until(
+    () => desktop.evaluate(`!document.querySelector('.subagent-transcript-tab')`),
+    "the closed delegation surface",
+  );
+  await desktop.evaluate(
+    `document.querySelector('[data-message-id="${TASK_1}"] button.subagent-task-card').click()`,
+  );
+  await until(
+    () => desktop.evaluate(`Boolean(document.querySelector('.subagent-transcript-tab'))`),
+    "the finalized delegation surface",
+  );
+  const finalizedTab = await until(
+    async () => {
+      const tab = await tabState();
+      return tab.rowIds.length === PANEL_ROW_BUDGET ? tab : null;
+    },
+    "the finalized cached rows",
+  );
+  assert.deepEqual(finalizedTab.rowIds, signature.rowIds, "a finalized reopen draws the cached page");
+  assert.equal(finalizedTab.activeTabId, signature.activeTabId);
+  const finalizedReads = readsFor(
+    finalizedFrom,
+    (event) => event.summary?.historyScope?.kind === "delegation",
+  );
+  assert.equal(finalizedReads.length, 0, "a finalized reopen spends no panel read");
+  result.phases.reopenFinalized = { tab: finalizedTab, reads: 0 };
+
+  // ------------------------- 6. main window change/restore keeps the panel
+  const stableFrom = mark();
   await driveMainScroll({ position: "end", untilTasks: [TASK_3] });
   await driveMainScroll({ position: "start", untilTasks: [TASK_1] });
   await delay(400);
@@ -1121,7 +1255,13 @@ try {
   assert.equal(readsFor(aliasFrom, (event) => event.summary?.historyScope?.kind === "delegation").length, 0, "an alias spends no panel read");
   result.phases.alias = { tab: aliasTab, reads: 0 };
 
-  // --------------------------------------------- 8. close/reopen reuses cache
+  // --------------- 8. a live-touched entry refreshes one tail page on reopen
+  // Closing the view keeps the facts the panel already read. Re-publishing the
+  // active session's live rows while the view is closed is the production
+  // transition that marks the entry stale: a live `Task` row of the chain
+  // arrives after its last durable answer. The reopen must therefore read
+  // exactly one newest page, merge it over the 400 rows already held, and never
+  // ask for an older page or re-centre. The first case above is the control.
   const closeFrom = mark();
   await desktop.evaluate(
     `document.querySelector('.work-panel-tab.active .work-panel-tab-close').click()`,
@@ -1130,7 +1270,55 @@ try {
     () => desktop.evaluate(`!document.querySelector('.subagent-transcript-tab')`),
     "the closed delegation surface",
   );
+  assert.equal(
+    readsFor(closeFrom, (event) => event.summary?.historyScope?.kind === "delegation").length,
+    0,
+    "closing the tab spends no panel read",
+  );
+
+  // With the tab closed, the session's live rows reach the cached entry without
+  // any ensure. Switching away and back re-publishes this session's live `Task`
+  // rows; the closed tab stays closed across that publication.
+  const republishFrom = mark();
+  await desktop.evaluate(`document.querySelector(${JSON.stringify(bRow)}).click()`);
+  const republishOrdinaryRead = await until(
+    () => readsFor(republishFrom, (event) => event.summary?.id === SESSION_B)[0],
+    "the ordinary session's re-publication read",
+  );
+  await until(
+    () => desktop.evaluate(`!document.querySelector('.subagent-transcript-tab')`),
+    "the other session still has no delegate surface",
+  );
+  await desktop.evaluate(`document.querySelector(${JSON.stringify(aRow)}).click()`);
+  const republishMainRead = await until(
+    () =>
+      readsFor(
+        republishFrom,
+        (event) =>
+          event.summary?.id === SESSION_A && event.summary?.historyScope?.kind === "main",
+      )[0],
+    "the restored main read",
+  );
+  await until(
+    () =>
+      desktop.evaluate(
+        `Boolean(document.querySelector('[data-scroll-owner="transcript"] [data-message-id="${TASK_3}"]'))`,
+      ),
+    "the restored main window for the stale reopen",
+  );
+  assert.equal(
+    await desktop.evaluate(`Boolean(document.querySelector('.subagent-transcript-tab'))`),
+    false,
+    "a closed delegate tab stays closed across the session restore",
+  );
   await driveMainScroll({ position: "start", untilTasks: [TASK_1] });
+  assert.equal(
+    readsFor(closeFrom, (event) => event.summary?.historyScope?.kind === "delegation").length,
+    0,
+    "the live re-publication spends no panel read while the tab is closed",
+  );
+
+  const reopenFrom = mark();
   await desktop.evaluate(
     `document.querySelector('[data-message-id="${TASK_1}"] button.subagent-task-card').click()`,
   );
@@ -1138,12 +1326,66 @@ try {
     () => desktop.evaluate(`Boolean(document.querySelector('.subagent-transcript-tab'))`),
     "the reopened delegation surface",
   );
-  await delay(500);
-  const reopenedTab = await tabState();
-  assert.deepEqual(reopenedTab.rowIds, signature.rowIds, "reopening draws the cached page");
-  assert.equal(reopenedTab.activeTabId, signature.activeTabId);
-  assert.equal(readsFor(closeFrom, (event) => event.summary?.historyScope?.kind === "delegation").length, 0, "reopening spends no panel read");
-  result.phases.closeReopen = { tab: reopenedTab, reads: 0 };
+  const staleRead = await until(
+    () => readsFor(reopenFrom, (event) => event.summary?.historyScope?.kind === "delegation")[0],
+    "the stale entry's tail refresh",
+  );
+  // The answer arriving is not the merge: wait for the earlier control to leave
+  // its refreshing state before reading the settled rows.
+  await until(
+    () =>
+      desktop.evaluate(
+        `(() => {
+          const button = document.querySelector('.subagent-transcript-earlier .link-btn');
+          return !button || !button.disabled;
+        })()`,
+      ),
+    "the stale tail refresh merge",
+  );
+  const staleTab = await tabState();
+  const staleReads = readsFor(
+    closeFrom,
+    (event) => event.summary?.historyScope?.kind === "delegation",
+  );
+  assert.equal(staleReads.length, 1, "a stale reopen spends exactly one panel read");
+  assert.equal(staleRead.params.messageLimit, 100);
+  assert.equal(staleRead.params.contentLimit, 64 * 1024);
+  assert.equal(staleRead.params.messageBefore, undefined, "a stale reopen never asks for an older page");
+  assert.equal(staleRead.params.messageAround, undefined, "a stale reopen never re-centres");
+  assert.equal(staleRead.params.historyScope.id, DELEGATION, "the refresh keeps the chain scope");
+  assert.equal(staleRead.summary.historyScope.id, DELEGATION);
+  assert(staleRead.summary.returnedRows <= 100, "the refresh stays inside one page");
+  assert.equal(staleRead.summary.childRows, staleRead.summary.returnedRows);
+  assert(
+    staleRead.summary.messageIds.every((id) => id.startsWith("child-")),
+    "no parent or other session row joins the tail page",
+  );
+  assert.deepEqual(
+    staleRead.summary.historyContextIds,
+    [TASK_1, TASK_2, TASK_3],
+    "only the chain's Task context accompanies the tail",
+  );
+  const heldRows = new Set(signature.rowIds);
+  assert.equal(
+    staleRead.summary.messageIds.filter((id) => heldRows.has(id)).length,
+    staleRead.summary.messageIds.length,
+    "every tail row merges over a held row",
+  );
+  assert.deepEqual(staleTab.rowIds, signature.rowIds, "the refresh merges over the held page without a reset");
+  assert.equal(staleTab.rowIds.length, PANEL_ROW_BUDGET);
+  assert.equal(staleTab.rowIds[0], retainedHeadId, "the older retained head survives the tail merge");
+  assert.equal(staleTab.rowIds.at(-1), "child-3-c");
+  assert.equal(staleTab.activeTabId, signature.activeTabId);
+  assert.equal(staleTab.status, signature.status);
+  result.phases.reopenStale = {
+    tab: staleTab,
+    reads: staleReads.length,
+    read: compactEvent(staleRead),
+    republished: {
+      ordinaryRead: compactEvent(republishOrdinaryRead),
+      mainRead: compactEvent(republishMainRead),
+    },
+  };
 
   // --------------------------------- 9. search a nested child -> its owning tab
   const searchFrom = mark();
@@ -1565,48 +1807,13 @@ try {
   await desktop.screenshot("06-restart-settled-panel.png");
 
   // -------------------------------------------------------------- evidence
-  const { execFileSync } = await import("node:child_process");
-  const gitHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  const gitStatus = execFileSync("git", ["status", "--short"], { cwd: root, encoding: "utf8" });
-  const gitDiff = execFileSync("git", ["diff", "--binary"], {
-    cwd: root,
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  const untrackedFiles = execFileSync("git", ["ls-files", "-o", "--exclude-standard"], {
-    cwd: root,
-    encoding: "utf8",
-  })
-    .split("\n")
-    .filter(Boolean)
-    // The driver itself is not part of the product source being verified.
-    .filter((file) => file !== "scripts/e2e-scoped-history-real-host.mjs")
-    .sort();
-  const untrackedHashes = untrackedFiles
-    .map((file) => `${file} ${sha256(readFileSync(join(root, file)))}`)
-    .join("\n");
-  result.testedSource.head = gitHead;
-  result.testedSource.worktreeStatusEntries = gitStatus.split("\n").filter(Boolean).length;
-  result.testedSource.untrackedFiles = untrackedFiles.length;
-  result.testedSource.worktreeStateSha256 = createHash("sha256")
-    .update(gitDiff)
-    .update(gitStatus)
-    .digest("hex");
-  // Full product-source fingerprint: tracked edits, status, and the contents
-  // of every untracked file (new modules are untracked in this worktree).
-  result.testedSource.sourceSha256 = createHash("sha256")
-    .update(gitHead)
-    .update(gitDiff)
-    .update(gitStatus)
-    .update(untrackedHashes)
-    .digest("hex");
-  result.testedSource.root = root;
-  result.testedSource.appDir = appDir;
-  const rendererHtml = readFileSync(join(appDir, "out/renderer/index.html"), "utf8");
-  result.testedSource.rendererEntry =
-    rendererHtml.match(/src="\.\/assets\/([^"]+\.js)"/)?.[1] ?? "";
-  result.testedSource.rendererEntrySha256 = result.testedSource.rendererEntry
-    ? sha256(readFileSync(join(appDir, "out/renderer/assets", result.testedSource.rendererEntry)))
-    : "";
+  const provenanceAtFinish = captureProvenance();
+  result.testedSource = {
+    ...provenanceAtFinish,
+    atStart: provenanceAtStart,
+    atFinish: provenanceAtFinish,
+    changedDuringRun: provenanceAtStart.sourceSha256 !== provenanceAtFinish.sourceSha256,
+  };
   result.checkedAt = new Date().toISOString();
   result.allReads = hostEvents(0)
     .filter((event) => event.method === "session.get")
@@ -1649,6 +1856,8 @@ try {
         defects: defects.map((defect) => defect.id),
         evidence: {
           head: result.testedSource.head,
+          base: result.testedSource.base,
+          baseRef: result.testedSource.baseRef,
           worktreeState: result.testedSource.worktreeStateSha256.slice(0, 16),
           sourceSha256: result.testedSource.sourceSha256.slice(0, 16),
           untrackedFiles: result.testedSource.untrackedFiles,
@@ -1667,7 +1876,14 @@ try {
   if (defects.length > 0) process.exitCode = 1;
 } catch (error) {
   result.failure = error?.stack ?? String(error);
-  if (Array.isArray(error?.trace)) result.driverTrace = error.trace;
+  try {
+    const atFinish = captureProvenance();
+    result.testedSource.atFinish = atFinish;
+    result.testedSource.changedDuringRun =
+      provenanceAtStart.sourceSha256 !== atFinish.sourceSha256;
+  } catch {
+    // The start snapshot still names the tested HEAD, base, and binaries.
+  }
   try {
     if (desktop) {
       result.consoleErrors = desktop.consoleErrors;
