@@ -37,12 +37,6 @@ export type HostRuntimeDependencies = {
    * started for that call. It carries no turn authority and no liveness claim:
    * a call is judged only by its own `(sessionId, toolCallId)`.
    */
-  /**
-   * Turn gate for the remote-workspace tool relay only: a remote runner request
-   * is issued on behalf of a live turn. Plugin and MCP dispatch no longer
-   * consult it — those calls are judged by their own per-call identity.
-   */
-  isTurnDispatchable: (sessionId: string, turnId: string | null | undefined) => boolean;
   toolCancellations: ToolCancellationRegistry;
   /** Identity of the turn a host crash interrupted, captured before teardown. */
   activeTurns: Map<string, string>;
@@ -69,7 +63,6 @@ export function createHostRuntime({
   emitAgentEvent,
   togglePluginLauncher,
   finishTurn,
-  isTurnDispatchable,
   toolCancellations,
   finishApprovedExecution,
   activeTurns,
@@ -144,7 +137,7 @@ export function createHostRuntime({
   const remoteTools = createRemoteWorkspaceToolRelay(h, {
     getBoot: getActiveRemoteHostsBoot,
     isCurrent: () => runtimeState.host === h,
-    isTurnDispatchable: (sessionId, turnId) => isTurnDispatchable(sessionId, turnId),
+    cancellations: toolCancellations,
     log: (message, error) => logger.app("diagnostics", "warn", message, { data: String(error) }),
   });
 

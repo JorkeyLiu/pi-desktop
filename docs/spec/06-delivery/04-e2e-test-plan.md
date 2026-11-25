@@ -16640,6 +16640,11 @@ browser milestones are scheduled.
   and real Rust Read/Bash execution, asserting zero remote providers, projects
   and sessions. Both local and remote Rust Hosts are real; the model service
   and the fixture's user approval action are controlled test boundaries.
+  The same local fixture also covers per-call relay cancellation: a call with
+  no turn attribution, a call whose turn already ended, a stop recorded before
+  Electron main starts the call, and an in-flight abort over loopback RACP
+  while the relay awaits the remote workspace tool. Each stop names one
+  `(sessionId, toolCallId)` and no other call.
 - **Status**: Candidate implementation; real SSH release validation remains the
   separately provisioned E2E-231 scenario.
 

@@ -794,7 +794,6 @@ const { startHost } = createHostRuntime({
   emitAgentEvent,
   togglePluginLauncher,
   finishTurn,
-  isTurnDispatchable,
   toolCancellations,
   finishApprovedExecution,
   activeTurns,

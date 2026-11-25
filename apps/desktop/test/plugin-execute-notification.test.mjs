@@ -25,9 +25,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 register(pathToFileURL(join(here, "helpers/ts-import-hooks.mjs")));
 
 const { createHostRuntime } = await import("../electron/main/runtime/host.ts");
-const { createSessionCoordination } = await import(
-  "../electron/main/runtime/session-coordination.ts"
-);
 const { createToolCancellationRegistry } = await import(
   "../electron/main/runtime/tool-cancellations.ts"
 );
@@ -96,11 +93,6 @@ function fixture({ activeTurn, sessionGate, tools, mcp } = {}) {
 
   const activeTurns = new Map();
   if (activeTurn !== undefined) activeTurns.set(SESSION_ID, activeTurn);
-  const coordination = createSessionCoordination({
-    activeTurns,
-    getMainWindow: () => null,
-    getViewingSessionId: () => null,
-  });
   const toolCancellations = createToolCancellationRegistry();
 
   const host = {
@@ -150,7 +142,6 @@ function fixture({ activeTurn, sessionGate, tools, mcp } = {}) {
     emitAgentEvent() {},
     togglePluginLauncher: async () => undefined,
     finishTurn: async () => undefined,
-    isTurnDispatchable: coordination.isTurnDispatchable,
     toolCancellations,
     finishApprovedExecution: async () => undefined,
     activeTurns,

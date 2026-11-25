@@ -115,7 +115,7 @@ export type WorkspaceFilesRequest = Static<typeof WorkspaceFilesRequestSchema>;
 export const WorkspaceToolExecuteSchema = Type.Object({
   path: Type.String({ minLength: 1, maxLength: 4096 }),
   sessionId: Type.String({ minLength: 1, maxLength: 256 }),
-  turnId: Type.String({ minLength: 1, maxLength: 256 }),
+  turnId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
   toolCallId: Type.String({ minLength: 1, maxLength: 256 }),
   toolName: Type.Union([Type.Literal("Read"), Type.Literal("Glob"), Type.Literal("Grep"), Type.Literal("Write"), Type.Literal("Edit"), Type.Literal("Bash")]),
   args: Type.Record(Type.String(), Type.Unknown()),

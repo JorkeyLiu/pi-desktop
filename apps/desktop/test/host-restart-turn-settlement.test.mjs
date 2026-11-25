@@ -155,7 +155,6 @@ function createHarness(options = {}) {
     togglePluginLauncher: async () => {},
     finishTurn: plans.finishTurn,
     finishApprovedExecution: plans.finishApprovedExecution,
-    isTurnDispatchable: coordination.isTurnDispatchable,
     toolCancellations,
     activeTurns,
     approvedExecutionIdsBySession,

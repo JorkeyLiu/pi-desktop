@@ -737,6 +737,20 @@ Additive `worktree.*` methods; no protocol version bump. Failures use code
   outside host-core (plugin JS or an MCP call in Electron main) additionally
   reports `tools.aborted({ sessionId, toolCallId })` so its owner can abort its
   own await; that report names one call and authorizes no turn.
+- A session bound to a remote workspace does not execute the tool in host-core.
+  `tools.execute` emits one `tools.remoteExecute({ requestId, sessionId, turnId?,
+  toolCallId, toolName, args, remoteWorkspace, timeoutMs?,
+  expectedCommandShellId?, expectedCommandShellDialect? })` and waits for
+  `tools.remoteComplete({ requestId, result })`; a cancel emits
+  `tools.remoteAbort({ sessionId, toolCallId })` for that call whether or not
+  it is still live. `turnId` is correlation and attribution only: it may be
+  absent, and a call is never refused because its turn ended. Electron main's
+  relay is lifecycle, not admission — local permission admission already
+  happened — and it can stop only the exact `(sessionId, toolCallId)` the host
+  cancelled. An abort before the dispatch leaves a bounded tombstone that
+  refuses the late start; an abort during the remote await sends one remote
+  abort and refuses a late success; a replaced host generation cancels its
+  live remote requests and never answers for the successor's call.
 - `tools.output` notifications for ordered `stdout`/`stderr` chunks
 
 ### Shells
