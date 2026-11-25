@@ -15,6 +15,14 @@ import {
   type ScrollInputType,
 } from "../lib/transcript-scroll";
 import { readScrollInputContext } from "../lib/scroll-input";
+import {
+  captureVisibleFragment,
+  isPrependAnchorPending,
+  remeasureVisibleFragment,
+  resolvePrependAnchor,
+  PREPEND_ANCHOR_TOLERANCE_PX,
+  type VisibleFragmentAnchor,
+} from "../lib/transcript-prepend-anchor";
 import type { DisclosureAnchorNotifier } from "../lib/disclosure-anchor-context";
 import { useDisclosureAnchor } from "./use-disclosure-anchor";
 
@@ -26,6 +34,13 @@ export type FollowScroll = {
   jumpToLatest: () => void;
   scheduleFollowScroll: () => void;
   releaseFollow: () => void;
+  /**
+   * Arm a reading-position hold for an explicit older-page read: the fragment
+   * in view keeps its viewport offset while the page grows the rows above it.
+   */
+  holdReadingPosition: () => void;
+  /** Apply that hold once the read's rows are mounted, and release it. */
+  settleReadingPosition: () => void;
   /** Provided around this scroller's rows so their disclosures can hold it. */
   disclosureAnchorNotifier: DisclosureAnchorNotifier;
 };
@@ -48,6 +63,22 @@ export function useFollowScroll(): FollowScroll {
   const lastScrollGestureAtRef = useRef(-Infinity);
   const followFrameRef = useRef(0);
   const [showJump, setShowJump] = useState(false);
+  /**
+   * The reader's visible fragment, held across the commit an explicit
+   * older-page read adds height above (ADR 0331). The dock's rows grow above a
+   * released reading position, and native anchoring does not cover a scroller
+   * sitting at the top or a page boundary that cuts a turn, so the hook keeps
+   * the fragment itself: captured on the click, applied once after its rows
+   * mount.
+   */
+  const prependAnchorRef = useRef<VisibleFragmentAnchor | null>(null);
+  /** The read that armed that hold has settled (see `settleReadingPosition`). */
+  const prependAnchorSettledRef = useRef(false);
+  /** Drop the hold and the read it was armed for, together. */
+  const clearPrependAnchor = useCallback(() => {
+    prependAnchorRef.current = null;
+    prependAnchorSettledRef.current = false;
+  }, []);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const el = scrollRef.current;
@@ -69,6 +100,64 @@ export function useFollowScroll(): FollowScroll {
   const recordScrollPosition = useCallback((top: number) => {
     lastScrollTopRef.current = top;
   }, []);
+  /**
+   * The residual write of the armed hold: `true` while the hold owns the
+   * position, `false` when there is nothing to hold any more.
+   *
+   * The correction is measured against the layout the browser already
+   * produced, native anchoring included, so the two never compensate twice.
+   */
+  const applyPrependAnchor = useCallback((): boolean => {
+    const held = prependAnchorRef.current;
+    if (!held) return false;
+    const el = scrollRef.current;
+    if (!el) {
+      clearPrependAnchor();
+      return false;
+    }
+    const current = remeasureVisibleFragment(el, held.messageId);
+    if (!current) {
+      // The fragment is no longer mounted: there is nothing to hold on to.
+      clearPrependAnchor();
+      return false;
+    }
+    const resolution = resolvePrependAnchor(held, current, el);
+    if (
+      isPrependAnchorPending({
+        gainedAbove: resolution.gainedAbove,
+        readSettled: prependAnchorSettledRef.current,
+      })
+    ) {
+      // Nothing landed above this fragment yet: this is not the commit the
+      // hold was taken for, so keep it at the reader's current reading line.
+      prependAnchorRef.current = { ...held, offset: current.offset };
+      return true;
+    }
+    clearPrependAnchor();
+    if (resolution.gainedAbove < PREPEND_ANCHOR_TOLERANCE_PX) return false;
+    if (resolution.target === null) return false;
+    el.scrollTop = resolution.target;
+    recordScrollPosition(el.scrollTop);
+    return true;
+  }, [clearPrependAnchor, recordScrollPosition]);
+
+  const holdReadingPosition = useCallback(() => {
+    // A pinned scroller follows the newest row: rows added above it cannot
+    // move the bottom, and a hold would only fight the follow.
+    if (pinnedRef.current) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const held = captureVisibleFragment(el);
+    if (!held) return;
+    prependAnchorRef.current = held;
+    prependAnchorSettledRef.current = false;
+  }, []);
+
+  const settleReadingPosition = useCallback(() => {
+    if (!prependAnchorRef.current) return;
+    prependAnchorSettledRef.current = true;
+    applyPrependAnchor();
+  }, [applyPrependAnchor]);
   const {
     notifier: disclosureAnchorNotifier,
     restore: restoreDisclosureAnchor,
@@ -117,17 +206,19 @@ export function useFollowScroll(): FollowScroll {
 
   useLayoutEffect(() => {
     releaseDisclosureAnchor();
+    clearPrependAnchor();
     cancelFollowScroll();
     pinnedRef.current = true;
     setShowJump(false);
     scrollToBottom();
-  }, [cancelFollowScroll, releaseDisclosureAnchor, scrollToBottom]);
+  }, [cancelFollowScroll, clearPrependAnchor, releaseDisclosureAnchor, scrollToBottom]);
 
   const scheduleFollowScroll = useCallback(() => {
     // A queued follow frame must not move the title the reader just toggled:
     // the observer below already refuses to, and this path would undo it.
     if (!pinnedRef.current || followFrameRef.current !== 0) return;
     if (isDisclosureAnchorHeld()) return;
+    if (prependAnchorRef.current) return;
     followFrameRef.current = requestAnimationFrame(() => {
       followFrameRef.current = 0;
       if (pinnedRef.current) scrollToBottom();
@@ -138,16 +229,20 @@ export function useFollowScroll(): FollowScroll {
   // ResizeObserver paints one unpinned frame before the follow lands. A held
   // disclosure position takes precedence — it is what keeps the clicked title
   // still while the dock's rows animate. (`useDisclosureAnchor` already passes
-  // this hold outward to the scroller this one is nested in.)
+  // this hold outward to the scroller this one is nested in.) An explicit
+  // earlier-page hold takes the position next: it owns it until its read lands,
+  // so re-bottoming here would throw the reader's place away.
   const followScrollNow = useCallback(() => {
     if (restoreDisclosureAnchor()) return;
+    if (applyPrependAnchor()) return;
     if (!pinnedRef.current) return;
     cancelFollowScroll();
     scrollToBottom();
-  }, [cancelFollowScroll, restoreDisclosureAnchor, scrollToBottom]);
+  }, [applyPrependAnchor, cancelFollowScroll, restoreDisclosureAnchor, scrollToBottom]);
 
   useEffect(() => cancelFollowScroll, [cancelFollowScroll]);
   useEffect(() => releaseDisclosureAnchor, [releaseDisclosureAnchor]);
+  useEffect(() => clearPrependAnchor, [clearPrependAnchor]);
 
   const handleScroll = useCallback<UIEventHandler<HTMLDivElement>>(() => {
     const el = scrollRef.current;
@@ -194,6 +289,7 @@ export function useFollowScroll(): FollowScroll {
 
   const jumpToLatest = useCallback(() => {
     releaseDisclosureAnchor();
+    clearPrependAnchor();
     pinnedRef.current = true;
     setShowJump(false);
     scrollToBottom(
@@ -201,14 +297,15 @@ export function useFollowScroll(): FollowScroll {
         ? "auto"
         : "smooth",
     );
-  }, [releaseDisclosureAnchor, scrollToBottom]);
+  }, [clearPrependAnchor, releaseDisclosureAnchor, scrollToBottom]);
 
   const releaseFollow = useCallback(() => {
     releaseDisclosureAnchor();
+    clearPrependAnchor();
     cancelFollowScroll();
     pinnedRef.current = false;
     setShowJump(true);
-  }, [cancelFollowScroll, releaseDisclosureAnchor]);
+  }, [cancelFollowScroll, clearPrependAnchor, releaseDisclosureAnchor]);
 
   return {
     scrollRef,
@@ -218,6 +315,8 @@ export function useFollowScroll(): FollowScroll {
     jumpToLatest,
     scheduleFollowScroll,
     releaseFollow,
+    holdReadingPosition,
+    settleReadingPosition,
     disclosureAnchorNotifier,
   };
 }

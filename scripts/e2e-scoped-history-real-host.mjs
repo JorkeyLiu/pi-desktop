@@ -101,6 +101,9 @@ const TOP_LEVEL_TOTAL = 150;
 const ORDINARY_ROWS = 140;
 const PANEL_PAGE_ROWS = 100;
 const PANEL_ROW_BUDGET = 400;
+// Head (9 rows) plus three full 100-row pages: the largest whole-page window
+// under the 400-row budget, so paging to the chain head never cuts a page.
+const PANEL_HEAD_ROWS = 9 + 3 * PANEL_PAGE_ROWS;
 
 const timestamp = (second) =>
   new Date(Date.UTC(2026, 9, 18, 0, 0, second)).toISOString();
@@ -826,7 +829,8 @@ async function tabState() {
         rowIds: list
           ? Array.from(list.querySelectorAll('.message-row.assistant[data-message-id]')).map((row) => row.getAttribute('data-message-id'))
           : [],
-        earlier: Boolean(document.querySelector('.subagent-transcript-earlier .link-btn')),
+        earlier: Boolean(document.querySelector('.subagent-transcript-earlier:not([data-testid="subagent-show-latest"]) .link-btn')),
+        showLatest: Boolean(document.querySelector('[data-testid="subagent-show-latest"] .link-btn')),
         empty: Boolean(document.querySelector('[data-testid="subagent-history-empty"]')),
         failed: Boolean(document.querySelector('[data-testid="subagent-history-error"]')),
       };
@@ -1023,7 +1027,7 @@ try {
     for (let attempt = 0; attempt < 60; attempt += 1) {
       const state = await desktop.evaluate(
         `(() => {
-          const button = document.querySelector('.subagent-transcript-earlier .link-btn');
+          const button = document.querySelector('.subagent-transcript-earlier:not([data-testid="subagent-show-latest"]) .link-btn');
           return {
             button: button ? (button.disabled ? "disabled" : "ready") : "absent",
             status: document.querySelector('.subagent-transcript-status')?.textContent ?? null,
@@ -1045,7 +1049,7 @@ try {
     (result.evidence.panelPagingProbe ??= []).push({ panelPages, probe: probe.slice(-4) });
     if (!hasEarlier) break;
     await desktop.evaluate(
-      `document.querySelector('.subagent-transcript-earlier .link-btn').click()`,
+      `document.querySelector('.subagent-transcript-earlier:not([data-testid="subagent-show-latest"]) .link-btn').click()`,
     );
     const next = await until(
       () =>
@@ -1063,7 +1067,7 @@ try {
       () =>
         desktop.evaluate(
           `(() => {
-            const button = document.querySelector('.subagent-transcript-earlier .link-btn');
+            const button = document.querySelector('.subagent-transcript-earlier:not([data-testid="subagent-show-latest"]) .link-btn');
             return !button || !button.disabled;
           })()`,
         ),
@@ -1082,23 +1086,35 @@ try {
   assert.equal(panelRowsRead, CHAIN_CHILD_TOTAL, "older paging loads every chain child row once");
   assert.equal(panelPages, 11, "1009 child rows page as ten full pages plus a nine-row head");
   const loadedTab = await tabState();
-  // The panel keeps a bounded row budget (the newest rows win), so reaching the
-  // chain head moves the cursor and clears the trigger while the rendered rows
-  // stay the newest budget. Assert the contract, not an unbounded DOM.
+  // The reading window is bounded by whole pages, not by a row count that cuts
+  // one: ten pages already exceed the 400-row budget, so paging to the head keeps
+  // the pages between the head and the budget and drops the newest ones whole.
+  // The head's own nine-row page plus three full pages is therefore 309 rows,
+  // the first row is the chain's first child row, and the newest page is still
+  // reachable through the forward control instead of being trimmed row by row.
   assert.equal(
     loadedTab.rowIds.length,
-    PANEL_ROW_BUDGET,
-    `the panel keeps its ${PANEL_ROW_BUDGET}-row budget after paging to the head`,
+    PANEL_HEAD_ROWS,
+    `the panel keeps whole pages up to the ${PANEL_ROW_BUDGET}-row budget at the head`,
   );
-  const retainedHeadId = `child-1-${CHAIN_CHILD_TOTAL - PANEL_ROW_BUDGET}`;
   assert.equal(
     loadedTab.rowIds[0],
-    retainedHeadId,
-    "the retained window starts at the oldest row inside the budget",
+    "child-1-0",
+    "the retained window starts at the chain's first child row",
   );
-  assert(!loadedTab.rowIds.includes("child-1-0"), "rows past the budget are trimmed, not mounted");
-  assert(loadedTab.rowIds.includes("child-3-c"), "the newest chain segment stays rendered");
+  assert(
+    loadedTab.rowIds.includes("child-1-9"),
+    "the page right after the head's short page stays whole",
+  );
+  assert(
+    loadedTab.rowIds.at(-1) === "child-1-308",
+    "the retained window ends on its oldest page's last row",
+  );
+  assert(!loadedTab.rowIds.includes("child-1-309"), "the page after the window left whole");
+  assert(!loadedTab.rowIds.includes("child-3-c"), "the newest segment left the window with its page");
   assert.equal(loadedTab.earlier, false, "the earlier trigger disappears at the chain head");
+  assert.equal(loadedTab.showLatest, true, "the dropped newest pages stay reachable forwards");
+  const retainedHeadId = "child-1-0";
   result.phases.panelPaging = {
     pages: panelPages,
     rows: panelRowsRead,
@@ -1108,19 +1124,72 @@ try {
   };
   await desktop.screenshot("02-panel-full-chain.png");
 
+  // --------------------------- 4b. the forward control recovers the newest pages
+  // The panel now holds the head of the chain with a hole after its pages. The
+  // forward control is the only trigger that asks for the newest page again, so
+  // a click must rejoin the tail without keeping the rows in between, and the
+  // recovered window must be the newest pages with no gap and no duplicate row.
+  const headFrom = mark();
+  await desktop.evaluate(`document.querySelector('[data-testid="subagent-show-latest"] .link-btn').click()`);
+  const reloadedTab = await until(
+    async () => {
+      const tab = await tabState();
+      const settled = tab.rowIds.length > 0 && tab.rowIds.at(-1) === "child-3-c" && !tab.showLatest ? tab : null;
+      return settled;
+    },
+    "the newest pages after the forward control",
+    30_000,
+  );
+  assert.equal(
+    reloadedTab.rowIds.length,
+    PANEL_ROW_BUDGET,
+    "the forward control refills the window to its page budget",
+  );
+  assert.equal(
+    reloadedTab.rowIds[0],
+    "child-1-609",
+    "the recovered window starts on its own page boundary",
+  );
+  assert.deepEqual(
+    reloadedTab.rowIds.slice(1).filter((id, index) => {
+      const previous = reloadedTab.rowIds[index];
+      const [, segment, ordinal] = id.split("-");
+      if (segment !== "1") return false;
+      return `child-1-${Number(ordinal) - 1}` !== previous;
+    }),
+    [],
+    "the recovered segment is contiguous",
+  );
+  assert.equal(new Set(reloadedTab.rowIds).size, reloadedTab.rowIds.length, "no row repeats after the recovery");
+  assert(reloadedTab.rowIds.includes("child-3-c"), "the newest chain segment rejoins");
+  assert.equal(reloadedTab.earlier, true, "the head it left behind stays reachable backwards");
+  const forwardReads = readsFor(headFrom, (event) => event.summary?.historyScope?.kind === "delegation");
+  assert(forwardReads.length >= 1, "showing latest spends a delegation-scoped read");
+  for (const read of forwardReads) {
+    assert.equal(read.params.historyScope.id, DELEGATION);
+    assert.equal(read.params.messageLimit, 100, "the recovery stays inside one page");
+    assert.equal(read.params.contentLimit, 64 * 1024);
+  }
+  assert(readsFor(headFrom, (event) => event.params?.messageAround !== undefined).length === 0);
+  result.phases.panelLatest = { tab: reloadedTab, reads: forwardReads.length };
+  await desktop.screenshot("02b-panel-latest-recovered.png");
+
+  // The reference state for the durability phases below is the recovered newest
+  // window: the forward control ended on the scope's tail, so the cache holds
+  // the newest page the later reopen and refresh are compared against.
   const signature = {
-    activeTabId: loadedTab.activeTabId,
-    status: loadedTab.status,
-    context: loadedTab.context,
-    rowIds: loadedTab.rowIds,
+    activeTabId: reloadedTab.activeTabId,
+    status: reloadedTab.status,
+    context: reloadedTab.context,
+    rowIds: reloadedTab.rowIds,
   };
 
   // ----------------- 5. a finalized entry reopens without a panel read
   // The paging above ended on a durable answer, and no live publication has
   // touched the entry since: an answer only leaves the entry stale when a live
   // row arrived while that read was in flight. Closing the view keeps the
-  // entry, so the reopen must draw the 400 rows it already holds and spend no
-  // read. This is the positive control the stale case below compares against.
+  // entry, so the reopen must draw the rows it already holds and spend no read.
+  // This is the positive control the stale case below compares against.
   const finalizedFrom = mark();
   await desktop.evaluate(
     `document.querySelector('.work-panel-tab.active .work-panel-tab-close').click()`,
@@ -1373,7 +1442,11 @@ try {
   );
   assert.deepEqual(staleTab.rowIds, signature.rowIds, "the refresh merges over the held page without a reset");
   assert.equal(staleTab.rowIds.length, PANEL_ROW_BUDGET);
-  assert.equal(staleTab.rowIds[0], retainedHeadId, "the older retained head survives the tail merge");
+  assert.equal(
+    staleTab.rowIds[0],
+    signature.rowIds[0],
+    "the oldest retained page survives the tail merge",
+  );
   assert.equal(staleTab.rowIds.at(-1), "child-3-c");
   assert.equal(staleTab.activeTabId, signature.activeTabId);
   assert.equal(staleTab.status, signature.status);

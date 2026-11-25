@@ -198,14 +198,14 @@ export function extendTranscriptView(
     hasMoreBefore: view.hasMoreBefore,
     hasMoreAfter: view.hasMoreAfter,
   };
-  const merged0 = mergePageWindow({ window, page, direction });
+  const windowed = mergePageWindow({ window, page, direction });
   return {
     ...view,
     messages,
-    messageStart: merged0.messageStart,
-    messageEnd: merged0.messageEnd,
-    hasMoreBefore: merged0.hasMoreBefore,
-    hasMoreAfter: merged0.hasMoreAfter,
+    messageStart: windowed.messageStart,
+    messageEnd: windowed.messageEnd,
+    hasMoreBefore: windowed.hasMoreBefore,
+    hasMoreAfter: windowed.hasMoreAfter,
     restored: atTail ? undefined : view.restored,
     loading: null,
   };

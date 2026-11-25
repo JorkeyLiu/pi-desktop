@@ -455,43 +455,6 @@ export function subagentHistoryLiveTaskState(
   return orderRowsByLiveAnnouncement(next, liveOrder, (message) => liveOrder.has(message.id));
  }
 
- /**
-  * Trim the oldest rows of a chain that grew past its row budget.
-  *
-  * The focus row is kept wherever it sits, so trimming can leave it as an island
-  * with a hole after it. That hole is recorded rather than hidden: the entry then
-  * names the first row of the retained run that follows the island, and the view
-  * states the omission there. A trim that only drops rows before every kept row
-  * keeps the range contiguous, and no marker is set.
-  */
-function limitRows(entry: SubagentHistoryEntry, limit: number): SubagentHistoryEntry {
-  const focusId = entry.focus?.messageId;
-  const focusIndex = focusId ? entry.messages.findIndex((row) => row.id === focusId) : -1;
-  const kept: UiMessage[] = [];
-  let excess = entry.messages.length - limit;
-  let droppedAfterFocus = false;
-  for (const [index, row] of entry.messages.entries()) {
-    if (excess > 0 && row.id !== focusId) {
-      excess -= 1;
-      if (focusIndex >= 0 && index > focusIndex) droppedAfterFocus = true;
-      continue;
-    }
-    kept.push(row);
-  }
-  const keptIds = new Set(kept.map((row) => row.id));
-  const trimmed: SubagentHistoryEntry = {
-    ...entry,
-    messages: kept,
-    // An unconfirmed row is always one of the rows, so a trim bounds both.
-    livePending: (entry.livePending ?? []).filter((row) => keptIds.has(row.id)),
-  };
-  if (!droppedAfterFocus) return trimmed;
-  const island = kept.findIndex((row) => row.id === focusId);
-  const following = island >= 0 ? kept[island + 1] : undefined;
-  if (!following) return trimmed;
-  return { ...trimmed, omittedAfterId: focusId };
-}
-
 /**
  * Bound the live tail without touching the reading window.
  *
@@ -582,11 +545,12 @@ function samePendingRows(held: readonly UiMessage[], next: readonly UiMessage[])
  * live row is therefore never displayed from an older unsettled copy of the
  * same call, whichever read path built the rows.
  *
- * Retention is bounded by the row budget (`limitRows`): pending holds one
- * version per call and always a subset of `messages`, so a chain that keeps
- * streaming cannot accumulate rows past its own window. Pending state only
- * spans the distance between a live event and the durable row that records the
- * same call.
+ * Retention is bounded by the two budgets, not by the merge that produced the
+ * rows: a page read keeps only the pages its window holds, and a live
+ * publication keeps only its own tail. Pending holds one version per call and
+ * always a subset of `messages`, so a chain that keeps streaming cannot
+ * accumulate rows past the window plus the tail. Pending state only spans the
+ * distance between a live event and the durable row that records the same call.
  */
 function reconcileLiveRows(
   rows: readonly UiMessage[],
@@ -683,7 +647,6 @@ export function applySubagentLiveRows(
     entry.liveDuringRead !== liveDuringRead ||
     entry.finalized;
   if (!changed) return undefined;
-  if (!changed) return undefined;
   return limitLiveRows(
     {
       ...entry,
@@ -718,7 +681,8 @@ function mergeTailRows(existing: readonly UiMessage[], page: readonly UiMessage[
  * Reads never erase: an `initial` page, an older page, and a tail refresh all
  * merge onto the rows the entry already owns, so a read that lands while a
  * live row was already routed in cannot take that row away. `initial` adopts
- * the page's own cursor and adopts the echoed canonical identity; `before`
+ * the echoed canonical identity and its page joins the held window, so the
+ * published cursor always names the page the window starts on; `before`
  * moves the older cursor backward; `latest` replaces overlapping ids with the
  * durable version, appends the ids the entry did not hold yet, and adopts the
  * newer cursor, `hasMoreAfter`, and the tail's `messageEnd`.
@@ -768,68 +732,83 @@ export function applySubagentHistoryPage(
     hasMoreBefore: detail.hasMoreBefore === true,
     hasMoreAfter: detail.hasMoreAfter === true,
   };
-  // An initial read adopts the answer's own window; every other read merges
-  // the page onto the pages the entry already holds.
-  const window: PageWindow = initial
-    ? {
-        pages: [],
-        hasMoreBefore: page.hasMoreBefore === true,
-        hasMoreAfter: page.hasMoreAfter === true,
-      }
-    : {
-        pages: entry.pages ?? [],
-        hasMoreBefore: entry.hasMoreBefore,
-        hasMoreAfter: entry.hasMoreAfter,
-      };
+  // Every page joins the pages the entry already holds, including a focus page
+  // read from an entry that is already loaded: a page that lands beside or
+  // inside the held range must extend the window, not replace it, or rows the
+  // entry still shows would lose the physical range that their cursor states.
+  // An entry with no pages (its first durable answer, or one that held only
+  // live rows) has nothing to join, so the answer becomes the window.
+  const window: PageWindow = {
+    pages: entry.pages ?? [],
+    hasMoreBefore: entry.hasMoreBefore,
+    hasMoreAfter: entry.hasMoreAfter,
+  };
   const windowed = mergePageWindow({
     window,
     page,
     direction: initial ? "after" : direction === "before" ? "before" : "after",
     limit: SUBAGENT_HISTORY_MESSAGE_LIMIT,
   });
+  // A first answer has no page to be merged beside, so it states both sides
+  // itself: the window may begin or end where that page does. A page joining an
+  // existing window speaks only for the side it lands on.
+  if (initial && !window.pages.length) {
+    windowed.hasMoreBefore = page.hasMoreBefore === true;
+    windowed.hasMoreAfter = page.hasMoreAfter === true;
+  }
   const focusId = entry.focus?.messageId;
   // Rows of the pages the budget dropped leave with their page. Keeping a row
   // whose physical range is not in the window is exactly what would let the
   // cursor skip it later; the retained pages are the window the entry claims.
   const retained = withoutPageWindowRows(messages, windowed.droppedIds, focusId);
-  const omittedAfterId =
-    entry.omittedAfterId && retained.some((row) => row.id === entry.omittedAfterId)
+  /*
+    A focus row whose own page the budget dropped stays as an island: the rows
+    the window kept after it belong to a separate range, so the hole is recorded
+    instead of hidden. The island is the one row the reading window may hold
+    past its budget. Trimming a retained page row to pay for it would move the
+    cursor off the window's first page again — the skip this window exists to
+    prevent — so the island is stated, not paid for.
+  */
+  const focusIsland =
+    focusId !== undefined &&
+    retained.some((row) => row.id === focusId) &&
+    !windowed.pages.some((held) => held.ids.includes(focusId));
+  const omittedAfterId = focusIsland
+    ? focusId
+    : entry.omittedAfterId && retained.some((row) => row.id === entry.omittedAfterId)
       ? entry.omittedAfterId
       : undefined;
-  return limitRows(
-    {
-      ...entry,
-      canonicalId,
-      aliases,
-      // The status describes the delegate's own conversation: root `Task`
-      // records identify the chain, but a chain with no child row yet has no
-      // messages to show.
-      status: retained.length ? "ready" : "empty",
-      messages: retained,
-      context,
-      livePending,
-      messageStart: windowed.messageStart,
-      messageEnd: windowed.messageEnd,
-      pages: windowed.pages,
-      hasMoreBefore: windowed.hasMoreBefore,
-      hasMoreAfter: windowed.hasMoreAfter,
-      omittedAfterId,
-      // A live row that arrived while this read was in flight is not in its
-      // answer, so the entry stays stale and the next open refreshes the tail
-      // instead of trusting this read.
-      finalized: entry.liveDuringRead !== true,
-      liveDuringRead: false,
-      refreshing: false,
-      scoped: initial
-        ? detail.historyScope !== undefined
-        : entry.scoped || detail.historyScope !== undefined,
-      pendingDurable: false,
-      error: undefined,
-      retryDirection: undefined,
-      touched,
-    },
-    SUBAGENT_HISTORY_MESSAGE_LIMIT,
-  );
+  return {
+    ...entry,
+    canonicalId,
+    aliases,
+    // The status describes the delegate's own conversation: root `Task`
+    // records identify the chain, but a chain with no child row yet has no
+    // messages to show.
+    status: retained.length ? "ready" : "empty",
+    messages: retained,
+    context,
+    livePending,
+    messageStart: windowed.messageStart,
+    messageEnd: windowed.messageEnd,
+    pages: windowed.pages,
+    hasMoreBefore: windowed.hasMoreBefore,
+    hasMoreAfter: windowed.hasMoreAfter,
+    omittedAfterId,
+    // A live row that arrived while this read was in flight is not in its
+    // answer, so the entry stays stale and the next open refreshes the tail
+    // instead of trusting this read.
+    finalized: entry.liveDuringRead !== true,
+    liveDuringRead: false,
+    refreshing: false,
+    scoped: initial
+      ? detail.historyScope !== undefined
+      : entry.scoped || detail.historyScope !== undefined,
+    pendingDurable: false,
+    error: undefined,
+    retryDirection: undefined,
+    touched,
+  };
 }
 
 /**
