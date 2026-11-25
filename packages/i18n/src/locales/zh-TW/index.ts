@@ -2934,6 +2934,8 @@ sklm: {
       "子智慧體的任務超出了其模型的上下文上限。請縮小任務範圍、為它選擇上下文視窗更大的模型，或讓它一次讀取更少的內容。",
     AGENT_BUSY: "此對話正在處理中。請等待完成，或先停止當前任務。",
     TURN_ABORTED: "已停止。",
+    PERSISTENCE_BACKLOG: "上一則回覆仍在儲存中。請稍後重試。",
+    PERSISTENCE_QUARANTINED: "部分較早的訊息未能儲存，已保留以供復原；重試將繼續，但不包含這些訊息。",
     AGENT_SIDECAR_CRASHED: "AI 執行環境在處理這則訊息時當機了。此回合已停止，請重試。",
     AGENT_SIDECAR_OOM: "這段對話超出了 AI 執行環境的記憶體上限。請建立新對話或減少讓 Agent 處理的內容，然後再試。",
     workspaceActivationFailed: "無法啟用專案工作區",

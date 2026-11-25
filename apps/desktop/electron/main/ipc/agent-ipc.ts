@@ -57,6 +57,64 @@ export type AgentIpcDependencies = {
   loadComposerTemplatesCached: (root: string | null) => Promise<ComposerTemplate[]>;
 };
 
+/**
+ * Refuse a new turn while this session's already-queued transcript appends have
+ * not reached a final disposition.
+ *
+ * Assistant and tool rows reach the Host through the persistence outbox, while
+ * a prompt's own user row is appended directly under a freshly opened turn.
+ * When the outbox is paused — host restarting, a head in bounded retry — that
+ * direct append used to overtake the previous turn's queued rows and write
+ * them into the transcript after the user's next message. Wait for this
+ * session's queued appends instead, and refuse the prompt when they have not
+ * reached a final disposition: a prompt that cannot be ordered is refused
+ * rather than stored in the wrong position. The fence is session-scoped, so an
+ * unrelated conversation's queue neither blocks this prompt nor is appended
+ * twice. A quarantined append is a real durable failure and is reported as
+ * itself, not as "still saving".
+ *
+ * It runs at two checkpoints. The preflight runs before any turn exists, so a
+ * backlog that is already visible refuses without leaving an orphaned running
+ * turn. The admission checkpoint runs immediately before the direct user
+ * append, because an older turn can still queue its last row while this
+ * prompt awaits launch setup and `session.beginTurn`; a successful beginTurn
+ * means the Host settled that older turn, so a row queued by now is its tail
+ * and must be written ahead of this prompt's user row.
+ */
+async function assertSessionPersistenceReady(
+  persistenceOutbox: PersistenceOutbox,
+  logger: Pick<Logger, "app">,
+  sessionId: string,
+  getHost: () => HostProcess | null,
+  stage: "preflight" | "admission",
+): Promise<void> {
+  const durability = await persistenceOutbox.waitForSession(sessionId, getHost);
+  if (durability.failed > 0) {
+    logger.app("persistence", "error", "queued transcript appends were quarantined; new turn refused", {
+      sessionId,
+      data: {
+        failed: durability.failed,
+        recovery: "session-message-outbox.dead-letter.json",
+        stage,
+      },
+    });
+    throw Object.assign(
+      new Error("Queued transcript appends were refused by the host and quarantined"),
+      { errorCode: ErrorCodes.PERSISTENCE_QUARANTINED },
+    );
+  }
+  if (durability.remaining > 0) {
+    logger.app("persistence", "warn", "queued transcript appends are not written; new turn refused", {
+      sessionId,
+      data: { pending: durability.remaining, paused: durability.paused, stage },
+    });
+    throw Object.assign(
+      new Error("Queued transcript appends for this session have not been written yet"),
+      { errorCode: ErrorCodes.PERSISTENCE_BACKLOG },
+    );
+  }
+}
+
 function rejectNativeAgentOperation(sessionId: string): void {
   if (sessionId.startsWith("native-pi:")) {
     throw Object.assign(new Error("Operation is unsupported for native Pi sessions"), { errorCode: "NATIVE_PI_UNSUPPORTED" });
@@ -434,6 +492,11 @@ export function registerAgentIpc({
         )
       : null;
 
+    // Preflight: a backlog that is already visible must refuse before this
+    // prompt opens a turn, so the refusal cannot leave a running turn behind.
+    // The admission checkpoint below covers rows queued while launch setup and
+    // `session.beginTurn` are in flight.
+    await assertSessionPersistenceReady(persistenceOutbox, logger, req.sessionId, () => host, "preflight");
     const truncateFromMessageId =
       typeof req.truncateFromMessageId === "string"
         ? req.truncateFromMessageId.trim()
@@ -671,6 +734,12 @@ export function registerAgentIpc({
         : {}),
     };
     try {
+      // Admission checkpoint: an older turn can queue its final row while this
+      // prompt awaits launch setup and `session.beginTurn`; that row is ahead of
+      // this turn's user row and must be durable before it. Revalidate here,
+      // inside this try, so a refusal closes the just-opened turn through the
+      // existing error path and no user row or sidecar dispatch follows.
+      await assertSessionPersistenceReady(persistenceOutbox, logger, req.sessionId, () => host, "admission");
       await host.call("session.appendMessage", {
         sessionId: req.sessionId,
         message: userMessage,

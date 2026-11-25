@@ -73,7 +73,7 @@ function promptFixture(commandService, projectPath = "/repo", remoteWorkspace) {
     getAgentHostBridge: () => null,
     isTurnDispatchable: () => true,
     logger: { app() {} }, vendorOAuth: {}, agentExtensions: {}, cancelSessionTools() {},
-    persistenceOutbox: {}, dataDir: "/unused-for-no-attachments",
+    persistenceOutbox: { waitForSession: async () => ({ remaining: 0, paused: false, failed: 0 }) }, dataDir: "/unused-for-no-attachments",
     activeTurns: new Map(), activeTurnUsages: new Map(), approvedExecutionIdsBySession: new Map(), claimedExecutionSessions: new Map(),
     resolveAgentRuntimeLaunch: async () => ({
       projectPath, providerId: "provider", modelId: "model",

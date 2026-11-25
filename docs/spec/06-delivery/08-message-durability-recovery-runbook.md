@@ -33,6 +33,38 @@ Two Main processes sharing one data directory are a last-writer-wins risk
 (outbox JSON rewrite is whole-file), but no overwrite has been confirmed. Treat
 it as a precondition (§2), not as a proven cause of loss.
 
+### 1a. Transcripts that are already interleaved are not repaired
+
+An older build could append a new turn's user row before the previous turn's
+queued rows reached the host, leaving a finished older reply physically after
+the user's next message in the same session. The admission fence described in
+`03-runtime/04-data-storage.md` (`## 5. Write paths`) prevents new interleavings;
+it **does not** repair a profile that already contains one.
+
+The fence runs twice: a preflight before the turn row exists, and an admission
+check immediately before the direct user-row append, so a row the previous
+turn settles while a prompt is in its launch/`beginTurn` window is written
+ahead of the user row or refuses the prompt. It closes that normal reply race;
+it does not promise ordering against every background stream that may enqueue
+after admission.
+
+An existing interleaved turn is therefore a recovery case, not a display bug:
+
+- Never reorder, rewrite, or "sort" transcript lines or `seq` values in place,
+  and never edit `pi.sqlite` to match the expected order — the transcript file
+  is the source of truth and the index is derived, so an in-place edit
+  desynchronizes both. The renderer keeps the physical order it reads.
+- Diagnose on the offline §3 backup copy only: identify the later turn's rows
+  (their own `createdAt`/message ids) and the older turn's rows that landed
+  after them. Count both classes before deciding anything (§4).
+- Any repair is a replay-class operation and needs the §6 preconditions: verified
+  tooling that reads the backup, an ordered plan, per-item host outcomes, and
+  explicit user approval. A message is never reported saved, moved, or recovered
+  by a tool that has not produced that evidence.
+- If a repair cannot be planned without inventing ids, rewriting payloads, or
+  guessing turn ownership, stop (§8) and leave the originals untouched.
+
+
 ## 2. Prerequisites (all mandatory, user-coordinated)
 
 1. Quiesce every writer, coordinated with the user: stop the Desktop app and any

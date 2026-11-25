@@ -1453,6 +1453,25 @@ snapshot instead of following the queue's tail, so a chain the renderer already
 draws a `Task` card for is not answered as missing while its durable rows are
 still queued. The fence reports a paused or quarantined append instead of hiding
 it; `main` and unscoped reads do not wait.
+A new prompt's admission is fenced the same way, because its user row does not
+travel through the queue: `agent/prompt` waits for this session's
+already-queued appends to reach a final disposition at two checkpoints — a
+preflight before the turn row exists, and an admission check immediately
+before the direct user-row append. The preflight refuses a backlog that is
+already visible without opening a turn. The admission check covers an older
+turn that queues its last row while this prompt awaits launch setup and
+`session.beginTurn`: a successful beginTurn means the host settled that older
+turn, so a row queued by then is its tail and is written ahead of the user row.
+A paused drain or a remaining append refuses the prompt with
+`PERSISTENCE_BACKLOG` (retryable): the preflight refusal leaves no turn behind,
+and the admission refusal closes the turn it opened and writes no user row.
+A quarantined append refuses it once with `PERSISTENCE_QUARANTINED` and the
+retry proceeds without the lost row. The fence is session-scoped: an
+unrelated conversation's backlog neither blocks nor extends the prompt. This
+closes the normal reply race (a settled turn's `message_end`); it does not
+order every background stream against a prompt — rows enqueued after the
+admission checkpoint (a late `tool_end` of an already-settled turn) are still
+archived in arrival order and are not dropped.
 Renderer-side Stop never rewrites a transcript that has a
 started reply (spec 01 §5.3); its only rewrite is the undo of an unanswered
 prompt, computed from the full durable transcript merged with the live rows.

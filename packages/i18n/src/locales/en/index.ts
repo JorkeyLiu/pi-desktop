@@ -3055,6 +3055,8 @@ importConfirm: "Imported extensions run inside the agent process with the same a
       "A subagent's task grew past its model's context limit. Narrow the task, give the subagent a model with a larger context window, or have it read less at once.",
     AGENT_BUSY: "This chat is already working. Wait for it to finish, or stop it first.",
     TURN_ABORTED: "Stopped.",
+    PERSISTENCE_BACKLOG: "Your earlier messages are still being saved. Try again in a moment.",
+    PERSISTENCE_QUARANTINED: "Some earlier messages couldn't be saved. They are kept for recovery; retry to continue without them.",
     AGENT_SIDECAR_CRASHED: "The AI runtime crashed while working on this. The turn was stopped; try again.",
     AGENT_SIDECAR_OOM: "This conversation outgrew the AI runtime's memory. Start a new chat or reduce what the agent is working with, then try again.",
     workspaceActivationFailed: "Unable to activate project workspace",

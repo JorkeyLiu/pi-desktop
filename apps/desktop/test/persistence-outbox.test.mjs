@@ -862,5 +862,14 @@ test("a retry that fires into a host restart keeps its own recheck instead of lo
   assert.equal(outbox.size(), 0, "the recheck's own drain wrote the row");
   assert.deepEqual(calls, ["a"], "exactly one append for the recovered row");
   assert.equal(timers.pending().length, 0, "a successful write clears the schedule");
-  assert.ok(await readFile(join(dir, "session-message-outbox.json"), "utf8"));
+  // The emptied queue is rewritten in place (truncate, then write), so a read
+  // landing inside that window sees a zero-length file. Poll a bounded number
+  // of settle cycles for the persisted clear marker instead of racing the
+  // write; the assertion is the durable outcome, not the read timing.
+  let persisted = "";
+  for (let attempt = 0; attempt < 200 && !persisted.trim(); attempt += 1) {
+    await settle();
+    persisted = await readFile(join(dir, "session-message-outbox.json"), "utf8").catch(() => "");
+  }
+  assert.equal(persisted.trim(), "[]", "the drained queue is persisted as cleared");
 });

@@ -2910,6 +2910,8 @@ sklm: {
     "SUBAGENT_CONTEXT_OVERFLOW": "La tâche d'un sous-agent a dépassé la limite de contexte de son modèle. Réduisez la tâche, confiez au sous-agent un modèle doté d'une fenêtre de contexte plus grande, ou faites-lui lire moins de choses à la fois.",
     "AGENT_BUSY": "Ce chat fonctionne déjà. Attendez qu'il se termine ou arrêtez-le d'abord.",
     "TURN_ABORTED": "Arrêté.",
+    "PERSISTENCE_BACKLOG": "Une réponse précédente est encore en cours d'enregistrement. Réessayez dans un instant.",
+    "PERSISTENCE_QUARANTINED": "Certains messages précédents n'ont pas pu être enregistrés. Ils sont conservés pour la récupération ; réessayez pour continuer sans eux.",
     "AGENT_SIDECAR_CRASHED": "Le moteur d'IA a planté pendant le traitement. Ce tour a été arrêté ; réessayez.",
     "AGENT_SIDECAR_OOM": "Cette conversation a dépassé la mémoire du moteur d'IA. Démarrez une nouvelle conversation ou réduisez ce que l'agent traite, puis réessayez.",
     "workspaceActivationFailed": "Impossible d'activer l'espace de travail du projet",

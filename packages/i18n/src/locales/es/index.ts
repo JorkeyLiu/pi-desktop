@@ -2910,6 +2910,8 @@ sklm: {
     "SUBAGENT_CONTEXT_OVERFLOW": "La tarea de un subagente superó el límite de contexto de su modelo. Reduce el alcance de la tarea, dale al subagente un modelo con una ventana de contexto más grande o haz que lea menos a la vez.",
     "AGENT_BUSY": "Este chat ya está funcionando. Espere a que termine o deténgalo primero.",
     "TURN_ABORTED": "Detenido.",
+    "PERSISTENCE_BACKLOG": "Una respuesta anterior aún se está guardando. Inténtalo de nuevo en un momento.",
+    "PERSISTENCE_QUARANTINED": "Algunos mensajes anteriores no se pudieron guardar. Se conservan para su recuperación; reintentar continuará sin ellos.",
     "AGENT_SIDECAR_CRASHED": "El runtime de IA falló mientras trabajaba en esto. El turno se detuvo; inténtalo de nuevo.",
     "AGENT_SIDECAR_OOM": "Esta conversación superó la memoria del runtime de IA. Inicia un chat nuevo o reduce lo que el agente esté procesando e inténtalo de nuevo.",
     "workspaceActivationFailed": "No se pudo activar el espacio de trabajo del proyecto",
