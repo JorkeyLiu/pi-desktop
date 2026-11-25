@@ -11,3 +11,4 @@
 | [05-change-checklist.md](05-change-checklist.md) | Practical checklist before finishing work |
 | [06-release-runbook.md](06-release-runbook.md) | Desktop release lanes, packaging, and mandatory shipped-locale changelog gate (D164/D345) |
 | [07-remote-control-rollout.md](07-remote-control-rollout.md) | Remote Agent Control rollout and acceptance |
+| [08-message-durability-recovery-runbook.md](08-message-durability-recovery-runbook.md) | Backlog and dead-letter recovery plan for refused transcript appends: no replay tooling, quiesce/backup/ledger/stop-condition preconditions |

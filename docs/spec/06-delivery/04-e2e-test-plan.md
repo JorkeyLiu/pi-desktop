@@ -2356,6 +2356,46 @@ validation still needed.
   paging reached the transcript head. The `2d5f6f893` numbers above stay as the
   record of the earlier event, not as the current tested source.
 
+#### E2E-207g: A delegate reading window keeps whole pages at the chain head
+
+- **Preconditions**: One delegate chain long enough to page past the 400-row
+  reading-window budget at a 100-row page size (the scoped-history fixtures'
+  1009 chain child rows), a built desktop, and a host that records its
+  `session.get` answers.
+- **Steps**: 1) Open the chain's `Task` card and click `Show earlier messages`
+  until the control disappears at the chain head, recording each read. 2) Assert
+  the visible rows and the entry's cursors. 3) Click `Show latest messages` and
+  assert the recovered window. 4) Close and reopen the tab, and separately
+  re-publish live rows while it is closed, asserting one bounded tail read each.
+- **Expected**: Every older read asks for the entry's own `messageStart` as
+  `messageBefore` and costs one 100-row page. At the head the window holds the
+  head's own short page plus the full pages that fit the budget — 309 rows for
+  the fixture's 9-row head, starting at the chain's first child row — and never
+  a row count that cuts a page. `hasMoreBefore` is false, `hasMoreAfter` is
+  true, and `Show latest messages` is offered. The forward control re-reads the
+  newest page, which rejoins on its own boundary (row `child-1-609` first,
+  `child-3-c` last), fills exactly the 400-row budget, repeats no row, keeps no
+  hole, and leaves `hasMoreBefore` true so the pages it dropped stay reachable.
+  A reopen that no live row touched costs no read; a live-touched one costs
+  exactly one newest-page read and keeps the retained window.
+- **Specs linked**: `04-ux/08-component-spec.md` (§5.7 delegate history
+  window), `03-runtime/06-host-rpc-protocol.md`, ADR 0335
+- **Acceptance**: C (session open and scroll), F (persistence), Quality
+- **Milestone**: M5
+- **Status**: Passed. `apps/desktop/test/scoped-subagent-history.test.mjs`,
+  `apps/desktop/test/subagent-history-page-window.test.mjs`, and
+  `apps/desktop/test/transcript-disclosure-reading.test.mjs` cover the
+  page-window arithmetic, the directional trim, the focus island, and the held
+  reading position. Rendered evidence — `node scripts/e2e-scoped-subagent-history.mjs`
+  exits 0 against the built stylesheet, filling a 400-row window, holding the
+  fragment's viewport offset across an older page, and recovering the newest
+  page through the forward control. Real-host evidence —
+  `node scripts/e2e-scoped-history-real-host.mjs` exits 0 at source
+  `275417194` over base `4ac7246a7` with the unchanged Rust host binary: paging
+  reached the head with 309 rows from `child-1-0`, the forward control recovered
+  `child-1-609`…`child-3-c` with no hole or duplicate, and the reuse, session
+  switch, search-focus, and restart phases kept their own reads.
+
 #### E2E-207c: A main-window change never disturbs an open delegation panel
 
 - **Preconditions**: A session holding one chain of at least two runs with
@@ -20152,3 +20192,38 @@ host-created files. The full app's file-preview viewer is covered separately.
   SSE provider fixture, freshly built `target/debug/pi-desktop-host-core` and
   `packages/agent-runtime/dist-bundle` from this tree. No `verify:ui:*`, user
   desktop instance, or paid provider was used.
+
+### E2E-MESSAGE-DURABILITY-CONTRACT: fractional throughput and typed outbox refusals
+
+Turns a settled assistant row's fractional `durationMs` through the real
+runtime → Host boundary and back, then proves a payload the Host cannot index is
+refused with `INVALID_PARAMS` rather than stored and stripped.
+
+```bash
+PI_DESKTOP_HOST_BIN=target/debug/pi-desktop-host-core \
+  node scripts/e2e-message-durability-contract.mjs
+```
+
+The script spawns the built host-core binary against a temporary data directory
+(no Desktop window, provider, or network) and asserts, in order:
+`session.appendMessage` with `durationMs: 1234.567` reads back as exactly
+`1234.567` with a rate that a truncated span would not produce;
+`session.replaceMessages` keeps that fraction; negative, fractional-count, and
+non-numeric throughput payloads are refused with `INVALID_PARAMS` and write no
+row; and a valid append after those refusals lands last in transcript order.
+
+#### E2E-MESSAGE-DURABILITY-CONTRACT — run record
+
+- **Tested source**: `jorkey/fix/message-durability-contract` worktree
+  (`crates/host-core/src/sessions.rs`, `apps/desktop/electron/main/persistence-outbox.ts`
+  and its test) on base `4ac7246a750cdd614579578542a8367ecdb00707`.
+- **Base**: `4ac7246a750cdd614579578542a8367ecdb00707`.
+- **E2E suites**: `node scripts/e2e-message-durability-contract.mjs` (PASS,
+  real `target/debug/pi-desktop-host-core` built from that tree);
+  `node --test apps/desktop/test/persistence-outbox.test.mjs` (25/25 PASS);
+  `cargo test -p host-core --locked throughput` (3/3 PASS).
+- **Result**: PASS. Red baseline before the change: the fractional payload
+  failed message parsing with `invalid type: floating point 1234.567, expected
+  i64`, and the four new outbox cases failed against the old outbox.
+- **Environment**: macOS host, isolated temporary data directory, no
+  `verify:ui:*`, no user desktop instance, no paid provider, no network.

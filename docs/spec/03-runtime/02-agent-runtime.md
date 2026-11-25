@@ -2241,6 +2241,14 @@ does not dispose, abort, or re-root a runtime belonging to another session.
   Aborted, failed, and in-flight turns never contribute generation-throughput
   samples: average TPS folds exact provider output over settled complete
   responses only, so a stopped turn shows `—`, never an estimate
+- generation-throughput spans are real monotonic milliseconds, so they are
+  fractional. The exact figure crosses the runtime → Host boundary unchanged:
+  `meta.throughput` stores `tokens`, fractional `durationMs`, and `samples`,
+  legacy integer payloads still load, and the consumer derives TPS from the
+  same fraction. A payload that cannot index a rate (negative, non-finite, or
+  fractional counts) is rejected at that boundary, never normalized into empty
+  stats; the value lives in the existing message metadata, so no schema
+  migration is involved
 - preserve request-to-first-response wait and streamed thinking/answer duration
   on assistant messages when available; stopped streams retain the elapsed
   streamed duration captured before cancellation
