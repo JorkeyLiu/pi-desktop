@@ -415,8 +415,6 @@ export const ko = {
     loadingLaterMessages: "이후 메시지 불러오는 중…",
     laterFailedRetry: "이후 메시지 다시 불러오기",
     showEarlierMessages: "이전 메시지 표시",
-    showLatestMessages: "최신 메시지 표시",
-    omittedEarlierMessages: "이전 메시지는 여기에서 생략되었습니다",
     copy: "복사",
     copied: "복사됨",
     copyFailed: "클립보드에 복사하지 못했습니다",

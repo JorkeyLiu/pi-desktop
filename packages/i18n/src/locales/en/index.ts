@@ -418,8 +418,6 @@ export const en = {
     loadingLaterMessages: "Loading later messages…",
     laterFailedRetry: "Retry loading later messages",
     showEarlierMessages: "Show earlier messages",
-    showLatestMessages: "Show latest messages",
-    omittedEarlierMessages: "Earlier messages are omitted here",
     copy: "Copy",
     copied: "Copied",
     copyFailed: "Couldn't copy to the clipboard",

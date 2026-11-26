@@ -1,13 +1,17 @@
 import { useEffect, useMemo } from "react";
-import { findSubagentHistoryEntry, subagentHistoryMessages } from "../lib/subagent-history";
+import {
+  findSubagentHistoryEntry,
+  subagentHistoryIsFollowing,
+  subagentHistoryMessages,
+} from "../lib/subagent-history";
 import { EMPTY_TRANSCRIPT } from "../lib/transcript-reading";
 import { useAppStore } from "../stores/app-store";
 
 /**
  * One delegate tab's own history source.
  *
- * The tab reads the chain's scoped page, its root `Task` context, and the live
- * rows the parent stream produced for the chain — all of it owned by the
+ * The tab reads the chain's scoped window, its root `Task` context, and the
+ * live rows the parent stream produced for the chain — all of it owned by the
  * entry, none of it derived from the main transcript window. Availability,
  * identity, and content therefore survive the parent replacing, reducing,
  * paginating, or restoring its own range.
@@ -16,6 +20,11 @@ import { useAppStore } from "../stores/app-store";
  * finished returns immediately, so the effect cannot loop; an entry that live
  * rows touched since then refreshes its tail once instead of trusting a stale
  * page; a failed one stays an inline error until the reader asks to retry.
+ *
+ * The reading window is one contiguous interval, so paging has two directions
+ * (`loadOlder`, `loadNewer`) and one explicit return to the tail (`loadLatest`).
+ * `following` is that tail state, not a scroll position: only a window that
+ * reaches the tail takes live output.
  */
 export function useSubagentHistory(sessionId: string, tabKey: string) {
   const entry = useAppStore((state) =>
@@ -30,6 +39,7 @@ export function useSubagentHistory(sessionId: string, tabKey: string) {
   );
   const ensureSubagentHistory = useAppStore((state) => state.ensureSubagentHistory);
   const loadOlderSubagentHistory = useAppStore((state) => state.loadOlderSubagentHistory);
+  const loadNewerSubagentHistory = useAppStore((state) => state.loadNewerSubagentHistory);
   const loadLatestSubagentHistory = useAppStore((state) => state.loadLatestSubagentHistory);
   const retrySubagentHistory = useAppStore((state) => state.retrySubagentHistory);
 
@@ -47,13 +57,19 @@ export function useSubagentHistory(sessionId: string, tabKey: string) {
     refreshing: entry?.refreshing === true,
     hasMoreBefore: entry?.hasMoreBefore === true,
     hasMoreAfter: entry?.hasMoreAfter === true,
+    /** The window reaches the tail, so live output belongs in it. */
+    following: subagentHistoryIsFollowing(entry),
+    /** A forward page could not move the window; only a latest read advances. */
+    laterStalled: entry?.laterStalled === true,
     focus: entry?.focus ?? null,
-    /** The retained row after which rows were omitted, when any were. */
-    omittedAfterId: entry?.omittedAfterId,
     error: entry?.error,
     loadOlder: () => {
       if (!sessionId || !tabKey) return;
       void loadOlderSubagentHistory({ sessionId, tabKey });
+    },
+    loadNewer: () => {
+      if (!sessionId || !tabKey) return;
+      void loadNewerSubagentHistory({ sessionId, tabKey });
     },
     loadLatest: () => {
       if (!sessionId || !tabKey) return;

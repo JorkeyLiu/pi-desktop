@@ -406,8 +406,6 @@ export const de = {
     loadingLaterMessages: "Spätere Nachrichten laden…",
     laterFailedRetry: "Spätere Nachrichten erneut laden",
     "showEarlierMessages": "Frühere Nachrichten anzeigen",
-    "showLatestMessages": "Neueste Nachrichten anzeigen",
-    "omittedEarlierMessages": "Frühere Nachrichten sind hier ausgelassen",
     "copy": "Kopieren",
     "copied": "Kopiert",
     "copyFailed": "Kopieren in die Zwischenablage fehlgeschlagen",

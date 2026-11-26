@@ -2356,45 +2356,65 @@ validation still needed.
   paging reached the transcript head. The `2d5f6f893` numbers above stay as the
   record of the earlier event, not as the current tested source.
 
-#### E2E-207g: A delegate reading window keeps whole pages at the chain head
+#### E2E-207g: A delegate tab pages one continuous window, ceiling-free
 
-- **Preconditions**: One delegate chain long enough to page past the 400-row
-  reading-window budget at a 100-row page size (the scoped-history fixtures'
-  1009 chain child rows), a built desktop, and a host that records its
-  `session.get` answers.
-- **Steps**: 1) Open the chain's `Task` card and click `Show earlier messages`
-  until the control disappears at the chain head, recording each read. 2) Assert
-  the visible rows and the entry's cursors. 3) Click `Show latest messages` and
-  assert the recovered window. 4) Close and reopen the tab, and separately
-  re-publish live rows while it is closed, asserting one bounded tail read each.
-- **Expected**: Every older read asks for the entry's own `messageStart` as
-  `messageBefore` and costs one 100-row page. At the head the window holds the
-  head's own short page plus the full pages that fit the budget — 309 rows for
-  the fixture's 9-row head, starting at the chain's first child row — and never
-  a row count that cuts a page. `hasMoreBefore` is false, `hasMoreAfter` is
-  true, and `Show latest messages` is offered. The forward control re-reads the
-  newest page, which rejoins on its own boundary (row `child-1-609` first,
-  `child-3-c` last), fills exactly the 400-row budget, repeats no row, keeps no
-  hole, and leaves `hasMoreBefore` true so the pages it dropped stay reachable.
-  A reopen that no live row touched costs no read; a live-touched one costs
-  exactly one newest-page read and keeps the retained window.
+- **Preconditions**: One delegate chain long enough to page many times at a
+ 100-row page size (the scoped-history fixtures' 1009 chain child rows), a built
+  desktop, and a host that records its `session.get` answers.
+- **Steps**: 1) Open the chain's `Task` card and scroll to the visible bottom /
+  top of the tab until automatic boundary paging reaches the chain head,
+  recording each read and the visible message across the first prepend. 2) Assert
+  the visible rows and the entry's cursors. 3) Search a distant child row and
+  assert the window that results. 4) Click the jump control — once when it is
+  the only request in flight, and once while a boundary read is still
+  outstanding — and assert the fresh tail read and the scroll position.
+  5) Re-publish live rows while a historical window is open, then close and
+  reopen the tab.
+- **Expected**: Every read asks for the cursor the answer itself stated —
+  `messageStart` for an older page, `messageEnd` plus one page for a forward
+  page — and no read is triggered by a control: reaching the visible top or
+  bottom continues the same contiguous interval one page in that direction,
+  exactly as the main transcript pages. The window keeps every page it read,
+  with no 400-row budget: paging to the head leaves all 1009 child rows in one
+  interval starting at `child-1-0`, `hasMoreBefore` false, `hasMoreAfter` true,
+  and a forward read that cannot move the window stops that direction at that
+  boundary instead of repeating itself (nothing was fetched, so there is nothing
+  to retry; the jump control or a search focus is what selects a new window).
+  A prepend preserves the reader's place: the fragment visible before the read
+  still sits at the same viewport offset afterwards. A search on a distant child
+  row replaces the window with the contiguous page around that target and draws
+  nothing else — no island, no omission marker, no second range. The jump
+  control reads the newest page first (one tail read, no cursor) — even when a
+  boundary read is still outstanding, which it supersedes rather than waiting
+  for — and then scrolls to the bottom of that fresh window, so it can never
+  land on the bottom of a stale range. While a historical window is open, live
+  rows outside it are not drawn as adjacent; a reopen that no live row touched
+  costs no read, and a live-touched one costs exactly one newest-page read that
+  extends the window when that page is adjacent and replaces it when it is not.
 - **Specs linked**: `04-ux/08-component-spec.md` (§5.7 delegate history
   window), `03-runtime/06-host-rpc-protocol.md`, ADR 0335
 - **Acceptance**: C (session open and scroll), F (persistence), Quality
 - **Milestone**: M5
 - **Status**: Passed. `apps/desktop/test/scoped-subagent-history.test.mjs`,
-  `apps/desktop/test/subagent-history-page-window.test.mjs`, and
-  `apps/desktop/test/transcript-disclosure-reading.test.mjs` cover the
-  page-window arithmetic, the directional trim, the focus island, and the held
-  reading position. Rendered evidence — `node scripts/e2e-scoped-subagent-history.mjs`
-  exits 0 against the built stylesheet, filling a 400-row window, holding the
-  fragment's viewport offset across an older page, and recovering the newest
-  page through the forward control. Real-host evidence —
-  `node scripts/e2e-scoped-history-real-host.mjs` exits 0 at source
-  `275417194` over base `4ac7246a7` with the unchanged Rust host binary: paging
-  reached the head with 309 rows from `child-1-0`, the forward control recovered
-  `child-1-609`…`child-3-c` with no hole or duplicate, and the reuse, session
-  switch, search-focus, and restart phases kept their own reads.
+  `apps/desktop/test/subagent-tab-scoped-history.test.mjs`, and
+  `apps/desktop/test/transcript-subagent-bash-parallel.test.mjs` cover the
+  contiguous-interval arithmetic, the boundary directions, the target/latest
+  window replacement, the live/durable reconciliation and order — including a
+  repeated tail range that confirms a finished child row's durable value — and
+  the held reading position. Rendered evidence —
+  `node scripts/e2e-scoped-subagent-history.mjs`
+  exits 0 against the built stylesheet: paging to the head keeps 1009 rows in one
+  window, holds the fragment's viewport offset across an older page, replaces
+  the window with the searched page, spends one tail read for the jump, and
+  supersedes a boundary read that is still in flight so the pane lands on the
+  fresh tail instead of the stale window. Real-host
+  evidence — `node scripts/e2e-scoped-history-real-host.mjs` exits 0 with an
+  empty defect list at source/base `97a5bee31`: synthetic wheel reaches page the
+  panel to the head in 11 pages with 1009 rows retained from `child-1-0` to
+  `child-3-c`, the jump control re-bottoms at 0 reads when the window already
+  reaches the tail, a nested-child search from a partial tail window spends one
+  focus read that replaces the window with the target page, and the jump after
+  it spends exactly one tail read and re-bottoms.
 
 #### E2E-207c: A main-window change never disturbs an open delegation panel
 
@@ -2416,16 +2436,17 @@ validation still needed.
   displayed rows, and the tab keeps its brief even while the root `Task` is
   outside the main page. The panel's own read is what refreshes it, and only an
   entry a live publication touched after its last durable answer is stale: that
-  reopen reads exactly one newest page and merges it over the held rows without
-  resetting them, while a reopen whose entry was finalized by its own durable
-  read (`finalized: true`, nothing published since) costs no read at all. A
-  wider gap is answered with a bounded newest window plus the
-  retained focus island, an explicit omission marker, and `hasMoreBefore` true
-  whose `Show earlier` re-reads every omitted row, and a failed read keeps the
-  rows on screen with the failure stated inline and a retry. A main-window
-  replacement is exactly the change that must not remove them, and a trim or
-  eviction of the bounded cache (§9.9) states the gap instead of silently
-  dropping it. A child search hit opens or reuses the owning chain's tab keyed
+  reopen is a latest read — exactly one newest page, which extends the window
+  when that page is adjacent and replaces it when it is not, never a distant
+  range merged onto the held one — while a reopen whose entry was finalized by its own durable
+  read (`finalized: true`, nothing published since) costs no read at all. Live
+  rows the panel is already watching survive every replacement, and a
+  historical window draws only its own contiguous range instead of presenting
+  newer live rows as adjacent to it. A main-window replacement is exactly the
+  change that must not remove them, and eviction of a whole chain (§9.9) is
+  reported as the chain leaving the cache rather than as a gap inside its
+  window. A failed read keeps the rows on screen with the failure stated inline
+  and a retry. A child search hit opens or reuses the owning chain's tab keyed
   by the chain's root `delegationId` rather than the asking call id, and leaves
   the main reading range exactly as it was. This is a deterministic-window
   assertion; reproducing rapid flicker is out of scope.
@@ -2439,9 +2460,9 @@ validation still needed.
   `apps/desktop/test/subagent-tab-scoped-history.test.mjs`,
   `apps/desktop/test/scoped-subagent-history.test.mjs`, and
   `apps/desktop/test/subagent-search-focus-tab.test.mjs` — the owned cache
-  survives a main-window replacement, a tail sync merges newest-first without
-  resetting held rows, a bounded window states its omission and `Show earlier`
-  still reaches the omitted rows, a ready refresh is non-destructive, and a
+  survives a main-window replacement, a tail read replaces or extends the window
+  without resetting held rows, a historical window draws only its own contiguous
+  range, a ready refresh is non-destructive, and a
   failed read keeps its rows with an inline retry. Rendered evidence — the
   Chromium fixture journey `node scripts/e2e-scoped-subagent-history.mjs`
   (`scripts/e2e/scoped-subagent-history.tsx`: production `SubagentTranscriptTab`
@@ -2451,11 +2472,12 @@ validation still needed.
   left the tab on its own canonical identity with 0 extra child reads across
   main-window replacement, reselect, and alias open; a close/reopen of the
   finalized entry spent 0 panel reads; the session restore published live
-  `Task` rows and cost exactly one bounded tail refresh; and a reopen after that
-  live publication spent exactly one panel read — one newest page of 100 child
-  rows, no `messageBefore`, no `messageAround`, merged over the retained 400
-  rows (`child-1-609` → `child-3-c`), with the chain's three `Task` rows as the
+  `Task` rows and cost exactly one tail refresh; and a reopen after that
+  live publication spent exactly one panel read — one newest page, no
+  `messageBefore`, no `messageAround`, merged over the retained window
+  (`child-1-0` → `child-3-c`), with the chain's three `Task` rows as the
   only context. No parent or other-session row joined either case.
+
 #### E2E-207d: One chain resolves by run id, legacy call id, and resume
 
 - **Preconditions**: A settled chain of at least three runs (`Task` dispatch,
@@ -2488,11 +2510,10 @@ validation still needed.
   call id, and after a finalized close/reopen all landed on the same active
   `subagent:delegation-1` tab with the canonical echo, and those three opens
   spent no panel read.
-  The nested child search (rows 1–500) found the child, put one highlighted
-  range inside the viewport of that tab, and left the caller's main range
-  untouched; `Show latest` merged the retained target into the newest window
-  through 6 bridge reads over 400 unique retained rows and stated the omission
-  marker where the gap remains.
+  The nested child search found the child through one focus read that replaced
+  the window with the contiguous page around it (no island, no omission
+  marker), and the jump control then spent exactly one tail read and
+  re-bottomed on the newest page.
 
 #### E2E-207e: A settled result survives close, restart, and truncation without a prefix rewrite
 
@@ -7776,7 +7797,7 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
    durable pages arrive in finish order, so the overlay never re-sorts them
    by creation time. Rows the live tail does not name stay on the
    chronological history baseline (`createdAt` order with arrival tiebreak),
-   which keeps the existing paging, focus-island, and context semantics. The delegate tab holds the same
+   which keeps the existing paging and context semantics. The delegate tab holds the same
    A/B order when B ends first while A still runs, when A ends afterwards,
    when the tab opens late onto a page that already holds durable B, across
    `latest` refreshes, and when B ends while the parent session is parked on

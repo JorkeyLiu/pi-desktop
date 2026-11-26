@@ -154,7 +154,10 @@ test("the tab owns one scroll surface and pins to the latest output", () => {
   assert.match(tabSource, /useFollowScroll\(\)/);
   assert.match(tabSource, /ref=\{scrollRef\}/);
   assert.match(tabSource, /onScroll=\{handleScroll\}/);
-  assert.match(tabSource, /onClick=\{jumpToLatest\}/);
+  // The jump control selects the newest window before it scrolls: scrolling a
+  // stale window to its bottom would show the bottom of history, not the tail.
+  assert.match(tabSource, /onClick=\{requestLatest\}/);
+  assert.match(tabSource, /releaseFollow\(\);\n?[\s\S]*?history\.loadLatest\(\);/);
   assert.match(tabSource, /role="log"/);
   assert.match(tabSource, /aria-live="polite"/);
   assert.match(tabSource, /tabIndex=\{0\}/);

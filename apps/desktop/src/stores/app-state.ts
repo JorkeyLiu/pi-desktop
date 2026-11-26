@@ -232,7 +232,9 @@ export type AppState = {
   /** Open (or reuse) a delegate's own scoped history; never the parent page. */
   ensureSubagentHistory: SubagentHistoryActions["ensureSubagentHistory"];
   loadOlderSubagentHistory: SubagentHistoryActions["loadOlderSubagentHistory"];
-  /** Read the chain's newest page and merge it over what the entry holds. */
+  /** Read one newer page of the chain at the panel's bottom boundary. */
+  loadNewerSubagentHistory: SubagentHistoryActions["loadNewerSubagentHistory"];
+  /** Read the chain's newest page: joined when adjacent, replaced when not. */
   loadLatestSubagentHistory: SubagentHistoryActions["loadLatestSubagentHistory"];
   retrySubagentHistory: SubagentHistoryActions["retrySubagentHistory"];
   restoreTranscriptReading: (sessionId: string, position: TranscriptReadingPosition, signal: AbortSignal) => Promise<boolean>;

@@ -17,9 +17,7 @@ import {
 import { readScrollInputContext } from "../lib/scroll-input";
 import {
   captureVisibleFragment,
-  isPrependAnchorPending,
   remeasureVisibleFragment,
-  resolvePrependAnchor,
   PREPEND_ANCHOR_TOLERANCE_PX,
   type VisibleFragmentAnchor,
 } from "../lib/transcript-prepend-anchor";
@@ -41,6 +39,13 @@ export type FollowScroll = {
   holdReadingPosition: () => void;
   /** Apply that hold once the read's rows are mounted, and release it. */
   settleReadingPosition: () => void;
+  /**
+   * Whether follow is still pinned to the bottom, read after a scroll event.
+   *
+   * It is the state the main transcript's own history gate uses, exposed so a
+   * nested scroller reads the same position instead of guessing it from pixels.
+   */
+  isPinned: () => boolean;
   /** Provided around this scroller's rows so their disclosures can hold it. */
   disclosureAnchorNotifier: DisclosureAnchorNotifier;
 };
@@ -72,11 +77,20 @@ export function useFollowScroll(): FollowScroll {
    * mount.
    */
   const prependAnchorRef = useRef<VisibleFragmentAnchor | null>(null);
+  /**
+   * The scroller's content height when the hold was taken.
+   *
+   * A prepend only grows the content above the held fragment, so the height the
+   * scroller gained is exactly how far that fragment moved - the fallback for a
+   * fragment the browser no longer lays out (see `applyPrependAnchor`).
+   */
+  const prependAnchorHeightRef = useRef<number | null>(null);
   /** The read that armed that hold has settled (see `settleReadingPosition`). */
   const prependAnchorSettledRef = useRef(false);
   /** Drop the hold and the read it was armed for, together. */
   const clearPrependAnchor = useCallback(() => {
     prependAnchorRef.current = null;
+    prependAnchorHeightRef.current = null;
     prependAnchorSettledRef.current = false;
   }, []);
 
@@ -106,6 +120,12 @@ export function useFollowScroll(): FollowScroll {
    *
    * The correction is measured against the layout the browser already
    * produced, native anchoring included, so the two never compensate twice.
+   *
+   * A fragment the browser stopped laying out - the rows a prepended page
+   * pushes out of the viewport are skipped by `content-visibility` - cannot be
+   * re-measured, yet the page still moved it. The height the scroller gained is
+   * that distance, because a prepend adds all of it above the held row, so the
+   * hold falls back to the content height it recorded when it was taken.
    */
   const applyPrependAnchor = useCallback((): boolean => {
     const held = prependAnchorRef.current;
@@ -115,28 +135,29 @@ export function useFollowScroll(): FollowScroll {
       clearPrependAnchor();
       return false;
     }
+    const anchorHeight = prependAnchorHeightRef.current;
     const current = remeasureVisibleFragment(el, held.messageId);
-    if (!current) {
-      // The fragment is no longer mounted: there is nothing to hold on to.
-      clearPrependAnchor();
-      return false;
-    }
-    const resolution = resolvePrependAnchor(held, current, el);
-    if (
-      isPrependAnchorPending({
-        gainedAbove: resolution.gainedAbove,
-        readSettled: prependAnchorSettledRef.current,
-      })
-    ) {
-      // Nothing landed above this fragment yet: this is not the commit the
-      // hold was taken for, so keep it at the reader's current reading line.
-      prependAnchorRef.current = { ...held, offset: current.offset };
+    const gainedAbove = current
+      ? current.contentTop - held.contentTop
+      : anchorHeight === null
+        ? 0
+        : el.scrollHeight - anchorHeight;
+    if (!prependAnchorSettledRef.current) {
+      // The read this hold was taken for has not mounted its rows yet: no
+      // intermediate commit may spend the hold, not a partial layout pass and
+      // not a height the browser is still resolving.
+      if (current) prependAnchorRef.current = { ...held, offset: current.offset };
       return true;
     }
     clearPrependAnchor();
-    if (resolution.gainedAbove < PREPEND_ANCHOR_TOLERANCE_PX) return false;
-    if (resolution.target === null) return false;
-    el.scrollTop = resolution.target;
+    if (gainedAbove < PREPEND_ANCHOR_TOLERANCE_PX) return false;
+    const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+    const target = Math.min(
+      maxScrollTop,
+      Math.max(0, held.contentTop + gainedAbove - held.offset),
+    );
+    if (Math.abs(target - el.scrollTop) < PREPEND_ANCHOR_TOLERANCE_PX) return false;
+    el.scrollTop = target;
     recordScrollPosition(el.scrollTop);
     return true;
   }, [clearPrependAnchor, recordScrollPosition]);
@@ -150,6 +171,7 @@ export function useFollowScroll(): FollowScroll {
     const held = captureVisibleFragment(el);
     if (!held) return;
     prependAnchorRef.current = held;
+    prependAnchorHeightRef.current = el.scrollHeight;
     prependAnchorSettledRef.current = false;
   }, []);
 
@@ -317,6 +339,7 @@ export function useFollowScroll(): FollowScroll {
     releaseFollow,
     holdReadingPosition,
     settleReadingPosition,
+    isPinned: () => pinnedRef.current,
     disclosureAnchorNotifier,
   };
 }

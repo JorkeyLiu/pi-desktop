@@ -405,8 +405,6 @@ export const ptBR = {
     loadingLaterMessages: "Carregando mensagens posteriores…",
     laterFailedRetry: "Tentar carregar mensagens posteriores novamente",
     showEarlierMessages: "Mostrar mensagens anteriores",
-    showLatestMessages: "Mostrar mensagens mais recentes",
-    omittedEarlierMessages: "As mensagens anteriores são omitidas aqui",
     copy: "Copiar",
     copied: "Copiado",
     copyFailed: "Não foi possível copiar para a área de transferência",

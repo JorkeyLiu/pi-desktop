@@ -24,7 +24,20 @@ import {
 } from "../../lib/subagent-chain";
 import { sessionAllows } from "../../lib/remote-session-safety";
 import { api } from "../../lib/api";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  isHistoryRevealPosition,
+  isLaterRevealPosition,
+  transcriptHasLayout,
+} from "../../lib/transcript-scroll";
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type UIEventHandler,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/app-store";
 import { useChatSessionCapability } from "../../hooks/use-chat-session-capability";
@@ -515,31 +528,116 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     scrollRef,
     contentRef,
     showJump,
-    handleScroll,
+    handleScroll: followScroll,
     jumpToLatest,
     scheduleFollowScroll,
     releaseFollow,
     holdReadingPosition,
     settleReadingPosition,
+    isPinned,
     disclosureAnchorNotifier,
   } = useFollowScroll();
   /*
-    An explicit "show earlier" click grows the dock's rows above the reading
-    position. The hook holds the fragment in view across those rows; it is
-    applied once the read settles, in the layout phase of the commit that
-    mounted them, and the button stays the only trigger (no automatic read).
+    Boundary paging, the main transcript's direction and its own gates:
+    approaching the visible top continues the interval one page earlier and
+    holds the fragment in view while the rows above it mount, approaching the
+    visible bottom continues one page later. Neither stage is a control, and a
+    page already in flight is never requested again by a scroll event. A pane's
+    first frames are not a reading position, and a box without layout is at no
+    position at all — the same reading the main transcript pages by. A forward
+    page that cannot move the window stops asking; the explicit latest control
+    is the way back to the tail from there.
   */
-  const olderHoldPending = useRef(false);
-  const loadOlderKeepingPosition = () => {
-    olderHoldPending.current = true;
+  const olderInFlight = useRef(false);
+  const latestInFlight = useRef(false);
+  /** Rows mounted when the older read was requested; the hold settles on more. */
+  const olderRowsBefore = useRef(0);
+  /** This pane has presented a row, so its geometry is a reading position. */
+  const presented = useRef(false);
+  const atOlderBoundary = useRef(false);
+  const atNewerBoundary = useRef(false);
+  useLayoutEffect(() => {
+    if (history.messages.length) presented.current = true;
+  }, [history.messages]);
+  const requestOlder = () => {
+    if (olderInFlight.current) return;
+    if (!history.hasMoreBefore || history.refreshing || history.status === "loading") return;
+    olderInFlight.current = true;
+    olderRowsBefore.current = history.messages.length;
     holdReadingPosition();
     history.loadOlder();
   };
+  const requestNewer = () => {
+    if (history.refreshing || history.status === "loading") return;
+    if (!history.hasMoreAfter || history.laterStalled) return;
+    history.loadNewer();
+  };
+  // The read's own state finishes before the rows it asked for are drawn, so
+  // the hold settles on the commit that mounts them: the page's height above
+  // the reading position is measured from the rows, not from the answer.
   useLayoutEffect(() => {
-    if (!olderHoldPending.current || history.refreshing) return;
-    olderHoldPending.current = false;
+    if (!olderInFlight.current) return;
+    if (history.messages.length <= olderRowsBefore.current) return;
+    olderInFlight.current = false;
     settleReadingPosition();
-  }, [history.refreshing, settleReadingPosition]);
+  }, [history.messages, settleReadingPosition]);
+  // A read that moves nothing - an overlapping page, or the head - has no rows
+  // to settle on, so its own finish releases the hold and the next reach.
+  useEffect(() => {
+    if (!olderInFlight.current || history.refreshing) return;
+    const timer = window.setTimeout(() => {
+      if (!olderInFlight.current) return;
+      olderInFlight.current = false;
+      settleReadingPosition();
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [history.messages, history.refreshing, settleReadingPosition]);
+  /**
+   * The one explicit return to the tail: it reads the scope's newest page and
+   * scrolls to the rows that read selected, so a pressed control never lands on
+   * the bottom of a stale window.
+   *
+   * The read supersedes any page still in flight (a boundary reach that was
+   * already armed), and the control stays armed until that read publishes: the
+   * effect below jumps once the answer is in the entry and mounted, which is
+   * what keeps button state and jump state the same transition.
+   */
+  const requestLatest = () => {
+    if (latestInFlight.current) return;
+    if (!history.hasMoreAfter) {
+      jumpToLatest();
+      return;
+    }
+    latestInFlight.current = true;
+    releaseFollow();
+    history.loadLatest();
+  };
+  useLayoutEffect(() => {
+    if (!latestInFlight.current || history.refreshing) return;
+    latestInFlight.current = false;
+    jumpToLatest();
+  }, [history.messages, history.refreshing, jumpToLatest]);
+  const handleScroll: UIEventHandler<HTMLDivElement> = (event) => {
+    followScroll(event);
+    const el = scrollRef.current;
+    // No reading position before this pane has presented a row, and none in a
+    // pane whose box has no layout.
+    if (!el || !presented.current || !transcriptHasLayout(el)) return;
+    const atTop = isHistoryRevealPosition(el, isPinned());
+    if (atTop && !atOlderBoundary.current) {
+      atOlderBoundary.current = true;
+      requestOlder();
+    } else if (!atTop) {
+      atOlderBoundary.current = false;
+    }
+    const atBottom = isLaterRevealPosition(el);
+    if (atBottom && !atNewerBoundary.current) {
+      atNewerBoundary.current = true;
+      requestNewer();
+    } else if (!atBottom) {
+      atNewerBoundary.current = false;
+    }
+  };
 
   // Several delegation tabs can be open at once, so an explicit search hit
   // is claimed only by the tab whose own conversation contains the message;
@@ -561,7 +659,12 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     scrollRef,
     contentRef,
     contentVersion: messages,
-    onNavigate: releaseFollow,
+    // Only a fresh hit owns the viewport: the same hit re-installs on every
+    // content commit and must not release follow (or drop a page's reading
+    // position hold) each time the window grows.
+    onNavigate: (fresh: boolean) => {
+      if (fresh) releaseFollow();
+    },
   });
 
   useLayoutEffect(() => {
@@ -718,16 +821,16 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
             tabIndex={0}
           >
             <div ref={contentRef} className="subagent-transcript-list">
-              {history.hasMoreBefore ? (
-                <div className="subagent-transcript-earlier">
-                  <button
-                    type="button"
-                    className="link-btn"
-                    disabled={history.refreshing || history.status === "loading"}
-                    onClick={loadOlderKeepingPosition}
-                  >
-                    {t("chat.showEarlierMessages")}
-                  </button>
+              {/* Boundary paging has no control of its own: reaching the top
+                reads the previous page and holds the fragment in view, exactly
+                like the main transcript. The line only states the read. */}
+              {olderInFlight.current && history.hasMoreBefore ? (
+                <div
+                  className="subagent-transcript-earlier"
+                  role="status"
+                  data-testid="subagent-history-older-loading"
+                >
+                  {t("chat.loadingEarlierMessages")}
                 </div>
               ) : null}
               {history.status === "loading" && !transcriptResult ? (
@@ -826,15 +929,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                           </div>
                         </div>
                         )}
-                        {history.omittedAfterId === row.message.id ? (
-                          <div
-                            className="subagent-transcript-omitted"
-                            role="status"
-                            data-testid="subagent-history-omitted"
-                          >
-                            {t("chat.omittedEarlierMessages")}
-                          </div>
-                        ) : null}
+
                       </Fragment>
                     ))}
                   </Fragment>
@@ -848,28 +943,24 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                   {t("panel.subagentEmpty")}
                 </div>
               )}
-              {history.hasMoreAfter ? (
-                <div className="subagent-transcript-earlier" data-testid="subagent-show-latest">
-                  <button
-                    type="button"
-                    className="link-btn"
-                    disabled={history.refreshing || history.status === "loading"}
-                    onClick={history.loadLatest}
-                  >
-                    {t("chat.showLatestMessages")}
-                  </button>
-                </div>
-              ) : null}
+
               {showWorking ? <WorkingIndicator /> : null}
             </div>
           </div>
-          {showJump ? (
+          {/*
+            The transcript's own jump control. A bounded range whose newer rows
+            are not loaded keeps it for the same reason the main transcript
+            does: its bottom is not the live tail. Pressing it reads the tail
+            and scrolls to the rows that read selected, never to the bottom of
+            the range the reader has left.
+          */}
+          {showJump || history.hasMoreAfter ? (
             <TooltipButton
               type="button"
               className="jump-latest-btn subagent-transcript-jump"
               tooltip={t("chat.scrollToBottom")}
               ariaLabel={t("chat.scrollToBottom")}
-              onClick={jumpToLatest}
+              onClick={requestLatest}
             >
               <IconArrowDown size={14} />
             </TooltipButton>

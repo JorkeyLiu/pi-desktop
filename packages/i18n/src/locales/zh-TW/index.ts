@@ -408,8 +408,6 @@ export const zhTW = {
     loadingLaterMessages: "正在載入後續訊息…",
     laterFailedRetry: "重試載入後續訊息",
     showEarlierMessages: "顯示更早的訊息",
-    showLatestMessages: "顯示最新訊息",
-    omittedEarlierMessages: "較早的訊息在此處略過",
     copy: "複製",
     copied: "已複製",
     copyFailed: "複製到剪貼簿失敗",
