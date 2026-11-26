@@ -235,6 +235,7 @@ function transcriptFiles(dataDir) {
 function writeHostProxy(tempRoot) {
   const path = join(tempRoot, "host-proxy.mjs");
   const logPath = join(tempRoot, "host-rpc.jsonl");
+  const gatePath = join(tempRoot, "older-read-gate");
   writeFileSync(
     path,
     `#!/usr/bin/env node
@@ -244,6 +245,7 @@ import { createInterface } from "node:readline";
 
 const real = ${JSON.stringify(REAL_HOST)};
 const log = ${JSON.stringify(logPath)};
+const gate = ${JSON.stringify(gatePath)};
 // The log outlives one host process: a restart spawns this proxy again, so the
 // request counter must continue from what the file already holds. Evidence
 // ranges taken before a restart then still address the later reads.
@@ -261,6 +263,7 @@ if (existsSync(log)) {
   }
 }
 const pending = new Map();
+const held = [];
 
 function logEvent(event) {
   appendFileSync(log, JSON.stringify({ at: new Date().toISOString(), ...event }) + "\\n");
@@ -302,6 +305,7 @@ function summarize(method, params, result) {
     childRows: messages.filter((message) => message.parentToolCallId).length,
     messageIds: compactIds,
     historyContextIds: (session.historyContext ?? []).map((message) => message.id),
+    historyRuns: session.historyRuns ?? null,
     taskRows,
   };
 }
@@ -313,6 +317,12 @@ function onRequest(line) {
   const event = { seq: ++seq, method: wire.method, params: wire.params };
   pending.set(String(wire.id), event);
   logEvent({ kind: "request", ...event });
+  const shouldHold = wire.method === "session.get" &&
+    wire.params?.historyScope?.kind === "delegation" &&
+    typeof wire.params?.messageBefore === "number" &&
+    existsSync(gate);
+  if (shouldHold) held.push(line);
+  else child.stdin.write(line + "\\n");
 }
 
 function onResponse(line) {
@@ -332,6 +342,11 @@ function onResponse(line) {
 }
 
 const child = spawn(real, [], { stdio: ["pipe", "pipe", "pipe"], env: process.env });
+const releaseHeld = setInterval(() => {
+  if (existsSync(gate) || held.length === 0) return;
+  for (const line of held.splice(0)) child.stdin.write(line + "\\n");
+}, 10);
+releaseHeld.unref();
 process.stdin.setEncoding("utf8");
 let inbound = "";
 process.stdin.on("data", (chunk) => {
@@ -341,7 +356,6 @@ process.stdin.on("data", (chunk) => {
   for (const line of lines) {
     if (!line.trim()) continue;
     onRequest(line);
-    child.stdin.write(line + "\\n");
   }
 });
 process.stdin.on("end", () => child.stdin.end());
@@ -362,14 +376,14 @@ child.stdout.on("end", () => {
   if (outbound) process.stdout.write(outbound + "\\n");
 });
 child.stderr.pipe(process.stderr);
-child.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
+child.on("exit", (code, signal) => { clearInterval(releaseHeld); process.exit(code ?? (signal ? 1 : 0)); });
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
   process.on(signal, () => { try { child.kill(signal); } catch {} });
 }
 `,
   );
   chmodSync(path, 0o755);
-  return { path, logPath };
+  return { path, logPath, gatePath };
 }
 
 function freePort() {
@@ -617,7 +631,7 @@ let desktopOutput = "";
 let host = null;
 let logCursor = 0;
 
-function hostEvents(fromSeq) {
+function hostEvents(fromSeq, kind = "response") {
   if (!existsSync(proxy.logPath)) return [];
   const lines = readFileSync(proxy.logPath, "utf8").split("\n").filter(Boolean);
   return lines
@@ -631,10 +645,14 @@ function hostEvents(fromSeq) {
     .filter(
       (event) =>
         event &&
-        event.kind === "response" &&
+        event.kind === kind &&
         Number.isInteger(event.seq) &&
         event.seq >= fromSeq,
     );
+}
+
+function hostRequests(fromSeq) {
+  return hostEvents(fromSeq, "request");
 }
 
 function lastSeq() {
@@ -816,14 +834,59 @@ async function tabState() {
     `(() => {
       const surface = document.querySelector('.subagent-transcript-tab');
       const list = document.querySelector('.subagent-transcript-list');
+      const scroller = document.querySelector('.subagent-transcript-scroll');
+      const ids = list
+        ? Array.from(list.querySelectorAll('[data-message-id]')).map((row) => row.getAttribute('data-message-id'))
+        : [];
+      const top = scroller?.getBoundingClientRect().top ?? 0;
+      const line = Math.min(120, (scroller?.clientHeight ?? 0) / 4);
+      let anchor = null;
+      for (const row of Array.from(scroller?.querySelectorAll('[data-message-id]') ?? [])) {
+        const rect = row.getBoundingClientRect();
+        if (rect.height === 0 || rect.bottom - top <= line) continue;
+        anchor = { id: row.getAttribute('data-message-id'), offset: rect.top - top };
+        break;
+      }
+      const loading = document.querySelector('[data-testid="subagent-history-older-loading"]');
+      const loadingLabel = loading?.querySelector('.subagent-transcript-earlier-label');
+      const briefIds = ['${TASK_1}', '${TASK_2}', '${TASK_3}'];
+      const briefNodes = Object.fromEntries(briefIds.map((id) => [id, list?.querySelector('[data-message-id="' + id + '"]') ?? null]));
+      // Stability means the prompt row a settled state showed is still the same
+      // node at the next settled state. A window replacement (focus read, jump)
+      // legitimately unmounts and re-creates the row, so each observation
+      // compares with its predecessor instead of the first node ever seen.
+      const previousBriefs = globalThis.__scopedHistoryBriefs ?? {};
+      const briefDomStability = Object.fromEntries(briefIds.map((id) => [
+        id,
+        Boolean(briefNodes[id] && (!previousBriefs[id] || previousBriefs[id] === briefNodes[id])),
+      ]));
+      globalThis.__scopedHistoryBriefs = { ...briefNodes };
+      const promptRows = Array.from(list?.querySelectorAll('.message-row.user') ?? []);
       return {
         present: Boolean(surface),
         activeTabId: document.querySelector('.work-panel-tab.active')?.getAttribute('data-work-panel-tab-id') ?? null,
         status: document.querySelector('.subagent-transcript-status')?.textContent ?? '',
         context: document.querySelector('[data-testid="subagent-metrics-context"]')?.textContent ?? '',
-        rowIds: list
-          ? Array.from(list.querySelectorAll('.message-row.assistant[data-message-id]')).map((row) => row.getAttribute('data-message-id'))
-          : [],
+        rowIds: ids.filter((id) => id?.startsWith('child-')),
+        messageIds: ids,
+        taskBriefIds: ids.filter((id) => briefIds.includes(id)),
+        userPromptIds: promptRows.map((row) => row.getAttribute('data-message-id')),
+        userPromptTexts: promptRows.map((row) => row.textContent ?? ''),
+        sameBriefDom: briefDomStability['${TASK_1}'],
+        briefDomStability,
+        anchor,
+        geometry: scroller ? {
+          scrollTop: scroller.scrollTop,
+          scrollHeight: scroller.scrollHeight,
+          clientHeight: scroller.clientHeight,
+        } : null,
+        loading: loading ? {
+          present: true,
+          height: loading.getBoundingClientRect().height,
+          ariaHidden: loading.getAttribute('aria-hidden'),
+          labelVisibility: loadingLabel ? getComputedStyle(loadingLabel).visibility : null,
+          overflowAnchor: getComputedStyle(loading).overflowAnchor,
+        } : { present: false },
         jump: Boolean(document.querySelector('.subagent-transcript-jump')),
         empty: Boolean(document.querySelector('[data-testid="subagent-history-empty"]')),
         failed: Boolean(document.querySelector('[data-testid="subagent-history-error"]')),
@@ -842,6 +905,11 @@ function compactEvent(event) {
   };
 }
 
+function assertBriefDomStability(state, label) {
+  for (const id of state.taskBriefIds) {
+    assert.equal(state.briefDomStability[id], true, `${label} keeps the subagent brief DOM for ${id}`);
+  }
+}
 try {
   // ------------------------------------------------------------------ seed
   host = new Host(REAL_HOST, dataDir);
@@ -997,6 +1065,20 @@ try {
     [TASK_1, TASK_2, TASK_3],
     "the whole resume-connected Task chain answers as context",
   );
+  assert.deepEqual(
+    firstPanelRead.summary.historyRuns.map((run) => ({
+      callId: run.callId,
+      taskMessageId: run.taskMessageId,
+      taskIndex: run.taskIndex,
+      firstChildIndex: run.firstChildIndex,
+    })),
+    [
+      { callId: CALL_1, taskMessageId: TASK_1, taskIndex: 1, firstChildIndex: 2 },
+      { callId: CALL_2, taskMessageId: TASK_2, taskIndex: 1143, firstChildIndex: 1144 },
+      { callId: CALL_3, taskMessageId: TASK_3, taskIndex: 1150, firstChildIndex: 1151 },
+    ],
+    "the host states each run's physical Task row and first selected child",
+  );
   assert(firstPanelRead.summary.childRows === firstPanelRead.summary.returnedRows);
   assert.equal(firstPanelRead.summary.returnedRows, 100);
   assert.equal(firstPanelRead.summary.hasMoreBefore, true);
@@ -1006,6 +1088,28 @@ try {
   assert(firstTab.rowIds.includes("child-3-c"), "the third chain segment renders");
   assert(firstTab.empty === false && firstTab.failed === false);
   assert(firstTab.status.length > 0, "the panel renders the chain status label");
+  // The tail page is cut inside the root run, so the root Task prompt is not
+  // drawn above children the window already holds. The two resume runs do open
+  // inside this window, and only they draw a prompt.
+  assert.deepEqual(
+    firstTab.taskBriefIds,
+    [TASK_2, TASK_3],
+    "only runs whose first selected child is inside the window draw a prompt",
+  );
+  assert.deepEqual(
+    firstTab.userPromptIds,
+    [TASK_2, TASK_3],
+    "the drawn user rows are those runs' own Task rows",
+  );
+  assert(
+    !firstTab.messageIds.includes(TASK_1),
+    "the root chain prompt is not a sticky header of a partial window",
+  );
+  assertBriefDomStability(firstTab, "the initial scoped panel");
+  assert.equal(firstTab.loading.present, true, "older-loading furniture is mounted before it is needed");
+  assert.equal(firstTab.loading.ariaHidden, "true", "idle older-loading furniture is hidden");
+  assert(!firstTab.messageIds.includes("root-user"), "the ordinary root prompt stays outside the local scope");
+  assert(!firstTab.messageIds.includes("ordinary-0"), "ordinary main rows stay outside the local scope");
   result.phases.panelOpen = { read: compactEvent(firstPanelRead), tab: firstTab };
 
   // ----------------- 3b. search a nested child -> its owning tab, from a partial window
@@ -1141,6 +1245,13 @@ try {
       })()`,
     );
   const focusedPage = await _focusView();
+  const focusedTab = await tabState();
+  assert.deepEqual(
+    focusedTab.userPromptIds,
+    [],
+    "a focused window cut inside a run draws no Task prompt",
+  );
+  assert.deepEqual(focusedTab.taskBriefIds, [], "no run opening is inside the target's page");
   const mainSearchIds = await mainRowIds();
   assert(!mainSearchIds.includes(NESTED_TARGET), "the main transcript still holds no child row");
   // The focused read replaced the tail window with the one page it selected:
@@ -1201,6 +1312,16 @@ try {
   assert.equal(latestReads[0].messageBefore, null, "the jump reads the newest page, not a cursor");
   assert.equal(latestReads[0].messageAround, null, "the jump does not re-centre the window");
   assert.equal(latestState.rows, latestReads[0].returnedRows, "the jump draws the rows it selected");
+  const latestTab = await tabState();
+  assert.deepEqual(
+    latestTab.taskBriefIds,
+    [TASK_2, TASK_3],
+    "the tail page re-opens only the runs whose first child it holds",
+  );
+  assert(
+    !latestTab.messageIds.includes(TASK_1),
+    "jumping back to the tail does not resurrect the root prompt",
+  );
   result.phases.searchLatest = { after: latestState, reads: latestReads };
   await desktop.screenshot("03b-search-latest.png");
 
@@ -1216,6 +1337,13 @@ try {
         event.summary?.historyScope?.kind === "delegation" &&
         typeof event.params.messageBefore === "number",
     );
+  const olderPanelRequests = () =>
+    hostRequests(olderPanelFrom).filter(
+      (event) =>
+        event.method === "session.get" &&
+        event.params?.historyScope?.kind === "delegation" &&
+        typeof event.params.messageBefore === "number",
+    );
   const panelAtBottom = () =>
     desktop.evaluate(
       `(() => {
@@ -1228,18 +1356,96 @@ try {
   // A real upward wheel is the gesture that hands the viewport to the reader;
   // without it the pane is still following and a boundary reach would just be
   // re-bottomed.
-  const drivePanelToTop = () =>
-    desktop.evaluate(
+  const drivePanelToTop = async () => {
+    const before = await desktop.evaluate(
       `(() => {
         const scroller = document.querySelector('.subagent-transcript-scroll');
-        if (!scroller) return false;
-        scroller.dispatchEvent(
-          new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -120, deltaMode: 0 }),
-        );
-        scroller.scrollTop = 60;
-        return true;
+        if (!scroller) return null;
+        const rect = scroller.getBoundingClientRect();
+        const top = rect.top;
+        const line = Math.min(120, scroller.clientHeight / 4);
+        let anchor = null;
+        for (const row of Array.from(scroller.querySelectorAll('[data-message-id]'))) {
+          const box = row.getBoundingClientRect();
+          if (box.height === 0 || box.bottom - top <= line) continue;
+          anchor = { id: row.getAttribute('data-message-id'), offset: box.top - top };
+          break;
+        }
+        return {
+          x: rect.left + rect.width / 2,
+          y: rect.top + Math.min(rect.height / 2, 240),
+          geometry: {
+            scrollTop: scroller.scrollTop,
+            scrollHeight: scroller.scrollHeight,
+            clientHeight: scroller.clientHeight,
+          },
+          anchor,
+          promptIds: Array.from(scroller.querySelectorAll('.message-row.user')).map((row) => row.getAttribute('data-message-id')),
+        };
       })()`,
     );
+    if (!before) return { reached: false };
+    const requestsBefore = olderPanelRequests().length;
+    await desktop.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x: before.x, y: before.y, pointerType: 'mouse',
+    });
+    // Hold the real host answer after the request reaches the proxy. The
+    // boundary anchor is then measured before the older rows can prepend,
+    // rather than sampled after an unknown read/merge delay.
+    writeFileSync(proxy.gatePath, "hold older delegation read\n");
+    try {
+      let gesture = null;
+      let preCommit = null;
+      let request = null;
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        await desktop.send('Input.dispatchMouseEvent', {
+          type: 'mouseWheel', x: before.x, y: before.y,
+          deltaX: 0, deltaY: -600, pointerType: 'mouse',
+        });
+        await delay(30);
+        gesture = await desktop.evaluate(
+          `(() => {
+            const scroller = document.querySelector('.subagent-transcript-scroll');
+            if (!scroller) return null;
+            const top = scroller.getBoundingClientRect().top;
+            const line = Math.min(120, scroller.clientHeight / 4);
+            let anchor = null;
+            for (const row of Array.from(scroller.querySelectorAll('[data-message-id]'))) {
+              const box = row.getBoundingClientRect();
+              if (box.height === 0 || box.bottom - top <= line) continue;
+              anchor = { id: row.getAttribute('data-message-id'), offset: box.top - top };
+              break;
+            }
+            return {
+              scrollTop: scroller.scrollTop,
+              scrollHeight: scroller.scrollHeight,
+              clientHeight: scroller.clientHeight,
+              anchor,
+              promptIds: Array.from(scroller.querySelectorAll('.message-row.user')).map((row) => row.getAttribute('data-message-id')),
+            };
+          })()`,
+        );
+        request = olderPanelRequests().slice(requestsBefore)[0] ?? null;
+        if (request) {
+          preCommit = gesture;
+          break;
+        }
+      }
+      return {
+        reached: true,
+        before: before.geometry,
+        beforeAnchor: before.anchor,
+        beforePrompts: before.promptIds,
+        gesture,
+        preCommit,
+        requestSeq: request?.seq ?? null,
+        anchor: preCommit?.anchor ?? gesture?.anchor ?? null,
+        input: 'CDP Input.dispatchMouseEvent mouseWheel; host response held until pre-commit measurement',
+      };
+    } finally {
+      rmSync(proxy.gatePath, { force: true });
+    }
+  };
   // The first page is still settling its follow when the panel opens: wait for
   // its bottom before the first boundary reach.
   await until(panelAtBottom, "the panel's first page settles at its bottom", 30_000);
@@ -1247,10 +1453,13 @@ try {
   let panelPages = 1;
   let panelRowsRead = firstPanelRead.summary.returnedRows;
   let panelMessageStart = firstPanelRead.summary.messageStart;
+  const panelPagingTrace = [];
   while (panelPages < 30) {
     let next;
+    let reach;
     for (let attempt = 0; attempt < 3 && !next; attempt += 1) {
-      assert.equal(await drivePanelToTop(), true, "the panel transcript reaches its top boundary");
+      reach = await drivePanelToTop();
+      assert.equal(reach.reached, true, "the panel transcript reaches its top boundary");
       try {
         next = await until(
           () => olderPanelReads()[panelPages - 1],
@@ -1280,7 +1489,75 @@ try {
       `the merge of delegate page ${panelPages}`,
       30_000,
     );
+    await until(
+      async () => (await tabState()).loading.ariaHidden === "true",
+      `the loading indicator settles after delegate page ${panelPages}`,
+      30_000,
+    );
+    const after = await tabState();
+    if (panelPages <= 4) {
+      const page = panelPages - 1;
+      const expectedBriefs =
+        next.summary.messageStart <= 2 ? [TASK_1, TASK_2, TASK_3] : [TASK_2, TASK_3];
+      panelPagingTrace.push({
+        page,
+        input: reach.input,
+        before: reach.before,
+        beforeAnchor: reach.beforeAnchor,
+        gesture: reach.gesture,
+        preCommit: reach.preCommit,
+        requestSeq: reach.requestSeq,
+        after: after.geometry,
+        anchorBefore: reach.anchor,
+        anchorAfter: after.anchor,
+        promptsBefore: reach.beforePrompts,
+        promptsDuring: reach.preCommit?.promptIds,
+        userPromptIds: after.userPromptIds,
+        briefDomStability: after.briefDomStability,
+        taskBriefIds: after.taskBriefIds,
+        loading: after.loading,
+        scope: next.summary.historyScope,
+        cursor: next.params.messageBefore,
+      });
+      assert(reach.preCommit?.anchor && after.anchor, "a pre-commit rendered fragment anchors each older page");
+      assert.equal(reach.requestSeq, next.seq, "the measured boundary belongs to the held host request");
+      assert.equal(after.anchor.id, reach.preCommit.anchor.id, `page ${page} keeps the visible fragment identity`);
+      assert(
+        Math.abs(after.anchor.offset - reach.preCommit.anchor.offset) < 2,
+        `page ${page} keeps the visible fragment offset (${reach.preCommit.anchor.offset} -> ${after.anchor.offset})`,
+      );
+      assertBriefDomStability(after, `page ${page}`);
+      assert.deepEqual(
+        after.taskBriefIds,
+        expectedBriefs,
+        `page ${page} draws only the runs whose first child is inside the window`,
+      );
+      assert.deepEqual(
+        after.userPromptIds,
+        expectedBriefs,
+        `page ${page} draws each prompt as that run's own user row`,
+      );
+      assert.deepEqual(
+        reach.preCommit?.promptIds,
+        reach.beforePrompts,
+        `page ${page} draws no new prompt before the older page commits`,
+      );
+      assert.deepEqual(
+        after.userPromptIds,
+        reach.beforePrompts,
+        `page ${page} lands the older page without redrawing a Task prompt`,
+      );
+      assert.equal(after.loading.ariaHidden, "true", `page ${page} hides the settled loading label`);
+      assert.equal(after.loading.labelVisibility, "hidden", `page ${page} removes the settled loading label visually`);
+      assert.equal(after.loading.overflowAnchor, "none", `page ${page} excludes loading furniture from native anchoring`);
   }
+}
+  assert.equal(panelPagingTrace.length, 3, "three real-wheel older pages have a complete rendered trace");
+  assert.deepEqual(
+    panelPagingTrace.map((page) => page.cursor),
+    [firstPanelRead.summary.messageStart, firstPanelRead.summary.messageStart - 100, firstPanelRead.summary.messageStart - 200],
+    "real-wheel older reads progress through the stated page cursors",
+  );
   const pagingDiagnostic = {
     pages: panelPages,
     tabRows: (await tabState()).rowIds.length,
@@ -1297,6 +1574,23 @@ try {
   );
   assert.equal(panelPages, 11, "1009 child rows page as ten full pages plus a nine-row head");
   const loadedTab = await tabState();
+  const expectedMessageIds = [
+    TASK_1,
+    ...Array.from({ length: 1001 }, (_, index) => `child-1-${index}`),
+    TASK_2,
+    ...Array.from({ length: 5 }, (_, index) => `child-2-${index}`),
+    TASK_3,
+    "child-3-a",
+    "child-3-b",
+    "child-3-c",
+  ];
+  assert.deepEqual(loadedTab.messageIds, expectedMessageIds, "briefs and children keep true chain order");
+  assert.deepEqual(loadedTab.taskBriefIds, [TASK_1, TASK_2, TASK_3], "each Task brief appears exactly once");
+  assertBriefDomStability(loadedTab, "the fully paged subagent transcript");
+  assert(!loadedTab.messageIds.includes("root-user"), "the root main prompt is not scoped into the delegate");
+  assert(!loadedTab.messageIds.includes("ordinary-0"), "ordinary main rows are not scoped into the delegate");
+  assert(!loadedTab.messageIds.includes("tail-0"), "ordinary tail rows are not scoped into the delegate");
+  assert(!loadedTab.messageIds.includes(TASK_WAIT), "the parent TaskWait row is not a delegate transcript row");
   // One contiguous interval: the head it paged to and the tail it opened on
   // both stay in the window, because keeping the pages read is the policy.
   assert.equal(
@@ -1321,6 +1615,7 @@ try {
     rows: panelRowsRead,
     retainedRows: loadedTab.rowIds.length,
     retainedHeadId,
+    trace: panelPagingTrace,
     tab: loadedTab,
   };
   await desktop.screenshot("02-panel-full-chain.png");

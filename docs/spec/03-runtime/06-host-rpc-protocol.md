@@ -366,6 +366,18 @@ to later refresh and inference; the vendor picker does not collect them.
   over that selection, and `messageStart` / `messageEnd` stay physical
   positions. Additive; no protocol version bump.
 
+  A `delegation` answer may also carry `historyRuns`: one entry per chain
+  `Task` / `Task(resume)` call of the echoed `historyContext`, stating that
+  run's physical opening as `{ callId, taskMessageId, taskIndex,
+  firstChildIndex? }` (ADR 0341). `taskIndex` is the call's own `Task` row
+  position; `firstChildIndex` is the smallest selected child position of that
+  call and is omitted when the call has no selected child, so no position is
+  fabricated. The field describes chain-global physical facts, not page
+  bounds — the renderer decides from its retained contiguous window whether a
+  run's prompt is on screen — and it is omitted for `main`, unscoped, legacy,
+  and empty answers. A renderer reading an older host that omits it must not
+  guess a run head from `messageStart` / `hasMoreBefore`.
+
   The shared boundary normalizes the field before it crosses IPC: an
   untrusted or malformed scope resolves to the unscoped read, never to a
   silently filtered one. An unscoped reference client that keeps its legacy

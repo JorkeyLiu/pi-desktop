@@ -12,8 +12,16 @@ import { delegateTaskAgent } from "./subagent-task-call";
  * the turn's own user row, which has no text when the user sent images only.
  */
 export type SubagentTranscriptTurn = {
+  callId: string;
+  messageId: string;
   task: string;
   attachments?: MessageAttachment[];
+  /**
+   * Whether the turn's prompt is an opening the retained window actually
+   * reaches. A partial window inside a run keeps its children without
+   * redrawing the prompt above them; a run cut away entirely draws nothing.
+   */
+  showPrompt: boolean;
   rows: SubagentRunItem[];
 };
 
@@ -58,6 +66,7 @@ function chainCallIds(messages: readonly UiMessage[], delegationId: string): Set
 export function buildSubagentTranscript(
   messages: readonly UiMessage[],
   delegationId: string,
+  options: { promptVisible?: (call: UiMessage) => boolean } = {},
 ): SubagentTranscript | null {
   const target = delegationId.trim();
   if (!target) return null;
@@ -140,7 +149,16 @@ export function buildSubagentTranscript(
         rows.push({ kind: "answer", message });
       }
     }
-    turns.push(turnAttachments ? { task, attachments: turnAttachments, rows } : { task, rows });
+    const identity = { callId, messageId: call.id };
+    const showPrompt = options.promptVisible ? options.promptVisible(call) : true;
+    const turn = turnAttachments
+      ? { ...identity, task, attachments: turnAttachments, showPrompt, rows }
+      : { ...identity, task, showPrompt, rows };
+    // A run whose opening is outside the window contributes no row at all:
+    // its children are outside too, and an empty turn would only redraw the
+    // prompt the reader's partial window has not reached.
+    if (!showPrompt && !rows.length) continue;
+    turns.push(turn);
   }
 
   return {

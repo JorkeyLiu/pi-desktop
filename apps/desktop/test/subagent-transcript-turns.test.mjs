@@ -51,6 +51,64 @@ test("one Task call becomes one user turn followed by the delegate's rows", () =
     ["tool", "thinking", "answer"],
   );
 });
+test("each Task brief keeps the source message identity across older pages", () => {
+  const root = message("task-row-1", "", {
+    role: "tool",
+    toolName: "Task",
+    toolCallId: "call-1",
+    toolArgs: { task: "Original prompt" },
+    toolResult: { delegationId: "del-1" },
+  });
+  const resume = message("task-row-2", "", {
+    role: "tool",
+    toolName: "Task",
+    toolCallId: "call-2",
+    toolArgs: { task: "Follow-up prompt", resume: "call-1" },
+    toolResult: { delegationId: "del-1" },
+  });
+  const transcript = buildSubagentTranscript([
+    root,
+    message("answer-1", "First answer.", { role: "assistant", parentToolCallId: "call-1" }),
+    resume,
+    message("answer-2", "Second answer.", { role: "assistant", parentToolCallId: "call-2" }),
+  ], "del-1");
+
+  assert.deepEqual(
+    transcript.turns.map(({ callId, messageId }) => ({ callId, messageId })),
+    [
+      { callId: "call-1", messageId: "task-row-1" },
+      { callId: "call-2", messageId: "task-row-2" },
+    ],
+    "turn keys and brief anchors come from the Task rows, not their positions",
+  );
+});
+
+test("a hidden prompt keeps the run's rows but drops an empty run", () => {
+  const messages = [
+    taskCall("call-1", "First prompt", {
+      toolResult: { delegationId: "del-1" },
+    }),
+    message("answer-1", "First answer.", {
+      role: "assistant",
+      parentToolCallId: "call-1",
+    }),
+    taskCall("call-2", "Follow-up prompt", {
+      toolArgs: { task: "Follow-up prompt", resume: "call-1" },
+      toolResult: { delegationId: "del-1" },
+    }),
+  ];
+  const transcript = buildSubagentTranscript(messages, "del-1", {
+    promptVisible: () => false,
+  });
+  assert.equal(transcript.turns.length, 1, "a run outside the window draws nothing at all");
+  assert.equal(transcript.turns[0].messageId, "call-1");
+  assert.equal(transcript.turns[0].showPrompt, false);
+  assert.deepEqual(
+    transcript.turns[0].rows.map((row) => row.message.id),
+    ["answer-1"],
+    "a hidden prompt keeps the children the window does hold",
+  );
+});
 
 test("a resumed delegation renders follow-up prompts as further user turns", () => {
   const messages = [

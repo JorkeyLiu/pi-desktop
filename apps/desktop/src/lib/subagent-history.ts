@@ -1,10 +1,16 @@
-import type { SessionDetail, SessionHistoryScope, UiMessage } from "@pi-desktop/shared";
+import type {
+  SessionDetail,
+  SessionHistoryRun,
+  SessionHistoryScope,
+  UiMessage,
+} from "@pi-desktop/shared";
 import { delegationHistoryScope } from "@pi-desktop/shared";
 import { dedupeSessionMessages, orderRowsByLiveAnnouncement, upsertLiveSessionMessage } from "./session-transcript";
 import { subagentChainCallIds } from "./subagent-chain";
 import { delegationIdForMessage } from "./subagent-panel";
 import { isDelegationStartTool } from "./tool-display";
 import { mergePageWindow, type PageWindowPage } from "./page-window";
+import { buildSubagentTranscript, type SubagentTranscript } from "./subagent-transcript";
 
 /**
  * One delegate's conversation, read from its own scoped history page instead
@@ -63,6 +69,16 @@ export type SubagentHistoryEntry = {
   messages: UiMessage[];
   /** Root `Task` records identifying the chain, outside the reading window. */
   context: UiMessage[];
+  /**
+   * Physical run openings the backend stated for the same context chain.
+   *
+   * Chain-global facts, not page bounds: the renderer decides whether a run's
+   * prompt belongs on screen by asking whether the retained contiguous window
+   * actually covers its opening. An empty list on a scoped entry means the
+   * backend served no such metadata, and the reader falls back to the
+   * conservative whole-chain rule rather than guessing a run head.
+   */
+  runs: SessionHistoryRun[];
   messageStart: number;
   /** Exclusive physical end of the rows this entry holds, when the backend says. */
   messageEnd?: number;
@@ -166,6 +182,7 @@ export function createSubagentHistoryEntry(
     status: "loading",
     messages: [],
     context: [],
+    runs: [],
     messageStart: 0,
     pages: [],
     hasMoreBefore: false,
@@ -435,6 +452,78 @@ export function subagentHistoryMessages(
   // Live overlay second: rows the live tail names keep the first-announcement
   // order among themselves; durable-only rows never move for them.
   return orderRowsByLiveAnnouncement(next, liveOrder, (message) => liveOrder.has(message.id));
+}
+
+/**
+ * Whether the retained contiguous window covers this run's opening.
+ *
+ * The backend's `historyRuns` are physical facts (the run's Task row index and
+ * its first selected child). Visibility is decided here from the window's own
+ * physical bounds, never from `createdAt`, prompt text, or "the chain still has
+ * older rows": a window cut in the middle of a run has not reached its opening,
+ * and a later run's opening only appears when the window reaches that run.
+ *
+ * A run with no selected child yet is an empty or live opening: it is visible
+ * when the window reaches the scope's tail at or after its physical Task row,
+ * and its opening is never given a fabricated child position. Live Task rows
+ * (no durable record, hence no run metadata) follow the tail the same way.
+ *
+ * Fallbacks are explicit, not guessed:
+ * - The legacy physical read holds every row, so its prompts are visible.
+ * - A scoped answer with no `historyRuns` at all is an older backend: only a
+ *   window that provably reaches the chain head (`hasMoreBefore` false) can
+ *   assert every run opening; a partial window drops the prompt rather than
+ *   drawing one at the page head.
+ */
+export function subagentHistoryRunPromptVisible(
+  entry: SubagentHistoryEntry | undefined,
+  call: Pick<UiMessage, "id" | "toolCallId">,
+): boolean {
+  if (!entry) return true;
+  if (!entry.scoped) return true;
+  const pages = entry.pages ?? [];
+  const windowStart = pages[0]?.start;
+  const windowEnd = pages[pages.length - 1]?.end;
+  const runs = entry.runs ?? [];
+  const run =
+    runs.find((item) => item.taskMessageId === call.id) ??
+    runs.find((item) => item.callId === call.toolCallId);
+  if (run) {
+    const firstChild = run.firstChildIndex;
+    if (firstChild !== undefined) {
+      return (
+        windowStart !== undefined &&
+        windowEnd !== undefined &&
+        windowStart <= firstChild &&
+        firstChild < windowEnd
+      );
+    }
+    return (
+      entry.hasMoreAfter !== true &&
+      (windowStart === undefined || windowStart <= run.taskIndex)
+    );
+  }
+  if (windowStart === undefined) return true;
+  if (!entry.runs.length) return entry.hasMoreBefore !== true;
+  return entry.hasMoreAfter !== true;
+}
+
+/**
+ * The delegate transcript for the entry's retained window.
+ *
+ * One place wires the window to the prompt rule: the model and the rendered
+ * panel cannot disagree about whether a run opening is on screen.
+ */
+export function subagentHistoryTranscript(
+  entry: SubagentHistoryEntry | undefined,
+  live: readonly UiMessage[],
+  delegationId: string,
+): SubagentTranscript | null {
+  return buildSubagentTranscript(
+    subagentHistoryMessages(entry, live),
+    delegationId,
+    { promptVisible: (call) => subagentHistoryRunPromptVisible(entry, call) },
+  );
 }
 
 /**
@@ -851,6 +940,13 @@ export function applySubagentHistoryPage(
     ? dedupeSessionMessages([...detail.historyContext])
     : [];
   const context = dedupeSessionMessages([...entry.context, ...pageContext]);
+  // Run openings are physical chain facts, so a joining or replacing answer
+  // only confirms them: the newest statement per Task row wins, and no page
+  // can erase what another page already established. A run the entry has not
+  // seen yet is added; the window, not this list, decides visibility.
+  const runsById = new Map((entry.runs ?? []).map((run) => [run.taskMessageId, run]));
+  for (const run of detail.historyRuns ?? []) runsById.set(run.taskMessageId, run);
+  const runs = [...runsById.values()].sort((left, right) => left.taskIndex - right.taskIndex);
   const canonicalId =
     detail.historyScope?.kind === "delegation" && detail.historyScope.id
       ? detail.historyScope.id
@@ -881,6 +977,7 @@ export function applySubagentHistoryPage(
     status: messages.length ? "ready" : "empty",
     messages,
     context,
+    runs,
     livePending,
     messageStart: oldest?.start ?? entry.messageStart,
     messageEnd: newest?.end ?? entry.messageEnd,

@@ -58,6 +58,13 @@ const DEEP_DELEGATION = "d-deep";
 const DEEP_CALL = "call-deep";
 const DEEP_TOTAL = 1000;
 const deepRowId = (index: number) => `child-deep-${index}`;
+const ANCHOR_DELEGATION = "d-anchor";
+const ANCHOR_CALL = "call-anchor";
+const ANCHOR_TASK_ID = "anchor-task-row";
+const ANCHOR_HANDOFF_ID = "anchor-handoff";
+const ANCHOR_CHECKPOINT_ROW = 23;
+const ANCHOR_TOTAL = 50;
+const anchorRowId = (index: number) => `child-anchor-${index}`;
 // A chain the parent opened from a `Task` card while its durable row is still
 // in the persistence outbox: the scoped read cannot resolve it yet.
 const FRESH_DELEGATION = "d-fresh";
@@ -69,15 +76,15 @@ let freshDurable = false;
  * A gate that holds one older read open, so the probe can press the jump
  * control while a boundary read is still in flight.
  */
-let heldOlderRead: { promise: Promise<void>; resolve: () => void } | null = null;
-function holdDeepOlderReads() {
+let heldOlderRead: { promise: Promise<void>; resolve: () => void; scopeId: string } | null = null;
+function holdOlderReads(scopeId: string) {
   let resolve = () => {};
   const promise = new Promise<void>((done) => {
     resolve = done;
   });
-  heldOlderRead = { promise, resolve };
+  heldOlderRead = { promise, resolve, scopeId };
 }
-function releaseDeepOlderReads() {
+function releaseOlderReads() {
   const held = heldOlderRead;
   heldOlderRead = null;
   held?.resolve();
@@ -176,7 +183,11 @@ function deepTaskRecord(): UiMessage {
     toolName: "Task",
     toolCallId: DEEP_CALL,
     toolStatus: "success",
-    toolArgs: { agent: "explorer", description: "Long chain", task: "Read the long chain." },
+    toolArgs: {
+      agent: "explorer",
+      description: "Long chain",
+      task: Array.from({ length: 48 }, (_, line) => `Long-chain instruction ${line + 1}: preserve the reader's place while older pages arrive.`).join("\n"),
+    },
     toolResult: { details: { delegationId: DEEP_DELEGATION, agent: "explorer", status: "completed" } },
   });
 }
@@ -187,6 +198,66 @@ function deepChildRow(index: number): UiMessage {
     agentName: "explorer",
   });
 }
+
+function anchorTaskRecord(): UiMessage {
+  return message(ANCHOR_TASK_ID, "tool", "", {
+    toolName: "Task",
+    toolCallId: ANCHOR_CALL,
+    toolStatus: "success",
+    toolArgs: { agent: "explorer", task: "Keep the checkpoint anchored while older pages arrive." },
+    toolResult: { details: { delegationId: ANCHOR_DELEGATION, agent: "explorer", status: "completed" } },
+  });
+}
+
+function anchorChildRow(index: number): UiMessage {
+  return message(anchorRowId(index), "assistant", `anchor chain row ${index}`, {
+    parentToolCallId: ANCHOR_CALL,
+    agentName: "explorer",
+  });
+}
+
+function anchorHandoffRow(): UiMessage {
+  return message(ANCHOR_HANDOFF_ID, "tool", "", {
+    parentToolCallId: ANCHOR_CALL,
+    agentName: "explorer",
+    toolName: "SubagentHandoff",
+    toolCallId: "anchor-handoff-call",
+    toolStatus: "success",
+    toolArgs: { handoff: "Keep this checkpoint visible.\n\n- Preserve the reader's offset.\n- Continue from the older page." },
+    toolResult: { details: { accepted: true } },
+  });
+}
+
+function anchorDetail(sessionId: string, messageBefore: number | undefined): SessionDetail {
+  const end = messageBefore ?? ANCHOR_TOTAL;
+  const start = messageBefore === undefined ? 30 : Math.max(0, end - 10);
+  const rows = Array.from({ length: end - start }, (_, offset) => anchorChildRow(start + offset));
+  const checkpointAt = rows.findIndex((row) => row.id === anchorRowId(ANCHOR_CHECKPOINT_ROW));
+  if (checkpointAt >= 0) rows.splice(checkpointAt, 1, anchorHandoffRow());
+  return {
+    id: sessionId,
+    title: "Anchor fixture",
+    source: "local",
+    mode: "agent",
+    createdAt,
+    updatedAt: createdAt,
+    historyScope: { kind: "delegation", id: ANCHOR_DELEGATION },
+    messages: rows,
+    // The fixture numbers the chain's children from 0, so the run's opening is
+    // stated at that first child; the prompt is drawn only when the retained
+    // window reaches it.
+    historyRuns: [
+      { callId: ANCHOR_CALL, taskMessageId: ANCHOR_TASK_ID, taskIndex: 0, firstChildIndex: 0 },
+    ],
+    historyContext: [anchorTaskRecord()],
+    messageStart: start,
+    messageEnd: end,
+    messageCount: ANCHOR_TOTAL,
+    hasMoreBefore: start > 0,
+    hasMoreAfter: false,
+  } as unknown as SessionDetail;
+}
+
 
 /**
  * One page of the long chain: `messageBefore` is the physical exclusive cursor
@@ -221,6 +292,9 @@ function deepDetail(
     updatedAt: createdAt,
     historyScope: { kind: "delegation", id: DEEP_DELEGATION },
     messages: Array.from({ length: end - start }, (_, offset) => deepChildRow(start + offset)),
+    historyRuns: [
+      { callId: DEEP_CALL, taskMessageId: "deep-task-row", taskIndex: 0, firstChildIndex: 0 },
+    ],
     historyContext: [deepTaskRecord()],
     messageStart: start,
     messageEnd: end,
@@ -253,6 +327,9 @@ function delegationDetail(
     return {
       ...base,
       messages: FRESH_PAGE.map((id) => freshChildRow(id)),
+      historyRuns: [
+        { callId: FRESH_CALL, taskMessageId: "fresh-task-row", taskIndex: 49, firstChildIndex: 50 },
+      ],
       historyContext: [freshTaskRecord(true)],
       messageStart: 50,
       messageEnd: 51,
@@ -262,6 +339,9 @@ function delegationDetail(
   }
   if (sessionId === SESSION && scopeId === DEEP_DELEGATION) {
     return deepDetail(sessionId, messageBefore, messageAround);
+  }
+  if (sessionId === SESSION && scopeId === ANCHOR_DELEGATION) {
+    return anchorDetail(sessionId, messageBefore);
   }
   if (sessionId === OTHER_SESSION) {
     return {
@@ -280,6 +360,9 @@ function delegationDetail(
     return {
       ...base,
       messages: OLDER_PAGE.map((id) => childRow(id, `scoped older row ${id}`)),
+      historyRuns: [
+        { callId: CALL, taskMessageId: "task-row", taskIndex: 19, firstChildIndex: 20 },
+      ],
       historyContext: [taskRecord()],
       messageStart: OLDER_PAGE_START,
       messageEnd: FIRST_PAGE_START,
@@ -290,6 +373,9 @@ function delegationDetail(
   return {
     ...base,
     messages: FIRST_PAGE.map((id) => childRow(id, `scoped page row ${id}`)),
+    historyRuns: [
+      { callId: CALL, taskMessageId: "task-row", taskIndex: 19, firstChildIndex: 20 },
+    ],
     historyContext: [taskRecord()],
     messageStart: FIRST_PAGE_START,
     messageEnd: FIRST_PAGE_START + FIRST_PAGE.length,
@@ -325,7 +411,7 @@ window.piDesktop = {
     // pressed while a boundary page is genuinely still in flight.
     if (
       heldOlderRead &&
-      request.historyScope?.id === DEEP_DELEGATION &&
+      request.historyScope?.id === heldOlderRead.scopeId &&
       request.messageBefore !== undefined
     ) {
       await heldOlderRead.promise;
@@ -451,10 +537,22 @@ async function until(check: () => boolean, label: string, timeoutMs = 4_000) {
 const tab = () => document.querySelector<HTMLElement>(".subagent-transcript-tab");
 const scroller = () => document.querySelector<HTMLElement>(".subagent-transcript-scroll");
 const list = () => document.querySelector<HTMLElement>(".subagent-transcript-list");
-const assistantIds = () =>
-  Array.from(list()?.querySelectorAll<HTMLElement>(".message-row.assistant[data-message-id]") ?? [])
+const transcriptIds = () =>
+  Array.from(list()?.querySelectorAll<HTMLElement>("[data-message-id]") ?? [])
     .map((row) => row.dataset.messageId ?? "")
     .filter(Boolean);
+/**
+ * The Task prompts actually drawn, always scoped to the panel's own list: the
+ * main transcript can hold a Task card with the same source message identity,
+ * so an unscoped query would prove the wrong row.
+ */
+const userPromptRows = () =>
+  Array.from(list()?.querySelectorAll<HTMLElement>(".message-row.user") ?? []);
+const promptIds = () =>
+  userPromptRows()
+    .map((row) => row.dataset.messageId ?? "")
+    .filter(Boolean);
+const assistantIds = () => transcriptIds().filter((id) => id.startsWith("child-") || id.startsWith("live-"));
 const assistantText = (id: string) => {
   const row = list()?.querySelector<HTMLElement>(
     `.message-row.assistant[data-message-id="${id}"]`,
@@ -486,14 +584,30 @@ const readingLine = (element: HTMLElement) => {
  * captured here, before the scroll event that arms the panel's own hold, so
  * both sides measure the same reading position.
  */
-const reachTop = async () => {
+const reachTop = async (topPosition = 60) => {
   const scroller = document.querySelector<HTMLElement>(".subagent-transcript-scroll");
   if (!scroller) throw new Error("no transcript scroller");
-  scroller.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
-  scroller.scrollTop = 60;
+  const before = {
+    scrollTop: scroller.scrollTop,
+    scrollHeight: scroller.scrollHeight,
+    clientHeight: scroller.clientHeight,
+  };
+  const beforeIds = transcriptIds();
+  scroller.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -120 }));
+  scroller.scrollTop = topPosition;
   const anchored = readingLine(scroller);
+  const gesture = {
+    scrollTop: scroller.scrollTop,
+    scrollHeight: scroller.scrollHeight,
+    clientHeight: scroller.clientHeight,
+  };
   await frames(2);
-  return anchored;
+  return anchored ? {
+    ...anchored,
+    before,
+    gesture,
+    beforeIds,
+  } : null;
 };
 const metricsContext = () =>
   document.querySelector<HTMLElement>('[data-testid="subagent-metrics-context"]')?.textContent ?? "";
@@ -542,6 +656,10 @@ globalThis.scopedHistoryProbe = async () => {
       [/completed/i.test(statusLabel()), `the header states the chain's status (${statusLabel()})`],
       [metricsContext().length > 0, `chain metrics resolve from the page's context (${metricsContext()})`],
       [entry()?.hasMoreBefore === true, "an older page exists behind the first one"],
+      [
+        promptIds().length === 0 && userPromptRows().length === 0,
+        "a tail window cut inside the run draws no Task prompt",
+      ],
       [emptyState() === null && errorState() === null, "a loaded panel shows neither empty nor error"],
     ]),
   );
@@ -613,6 +731,14 @@ globalThis.scopedHistoryProbe = async () => {
       ],
       [entry()?.hasMoreBefore === false, "the boundary pages no further once the head is loaded"],
       [entry()?.messages.length === OLDER_PAGE.length + FIRST_PAGE.length, "the page holds every loaded row"],
+      [
+        same(promptIds(), ["task-row"]) && userPromptRows().length === 1,
+        `the page that reaches the run's first child introduces its prompt once (${promptIds().join(",")})`,
+      ],
+      [
+        transcriptIds()[0] === "task-row",
+        "the prompt takes its chronological opening position, not a sticky header",
+      ],
     ]),
   );
   facts.afterOlder = { rows: assistantIds(), reads: scopedReads().length };
@@ -830,7 +956,7 @@ globalThis.scopedHistoryProbe = async () => {
   flushSync(() => {
     useAppStore.setState({
       activeSessionId: SESSION,
-      messages: [deepTaskRecord()],
+      messages: [deepTaskRecord(), message("deep-parent-main", "user", "ordinary top-level main row")],
     } as never);
   });
   mountTab(DEEP_DELEGATION);
@@ -889,7 +1015,9 @@ globalThis.scopedHistoryProbe = async () => {
   );
 
   // Three automatic boundary reaches: each read pages from the window's own
-  // start and the fragment at the reading line keeps its offset.
+  // start and the fragment at the reading line keeps its offset. These pages
+  // stay inside the run, so none of them may draw its Task prompt.
+  const deepPagingTrace: Array<Record<string, unknown>> = [];
   for (let step = 0; step < 3; step += 1) {
     const before = deepReads().length;
     const anchored = await reachTop();
@@ -903,6 +1031,28 @@ globalThis.scopedHistoryProbe = async () => {
     );
     await frames(3);
     const after = deepScroller ? fragmentOffset(deepScroller, anchored.id) : null;
+    const ids = transcriptIds();
+    // The prompt is a chronological opening, so no prepended page may draw it
+    // above children the window already holds.
+    const promptRows = promptIds().length;
+    const loading = document.querySelector<HTMLElement>('[data-testid="subagent-history-older-loading"]');
+    const loadingLabel = loading?.querySelector<HTMLElement>(".subagent-transcript-earlier-label");
+    const read = deepReads().at(-1);
+    deepPagingTrace.push({
+      page: step + 1,
+      before: anchored.before,
+      after: deepScroller ? geometryOf(deepScroller) : null,
+      anchor: { id: anchored.id, beforeOffset: anchored.offset, afterOffset: after },
+      ids: ids.slice(0, 4),
+      promptRows,
+      loading: loading ? {
+        height: loading.getBoundingClientRect().height,
+        ariaHidden: loading.getAttribute("aria-hidden"),
+        labelVisibility: loadingLabel ? getComputedStyle(loadingLabel).visibility : null,
+      } : null,
+      scopeIds: deepReads().map((item) => item.scope?.id),
+      cursor: read?.messageBefore,
+    });
     failures.push(
       ...failuresOf([
         [
@@ -911,11 +1061,17 @@ globalThis.scopedHistoryProbe = async () => {
             anchored.offset,
           )} → ${String(after)})`,
         ],
+        [promptRows === 0, `no Task prompt is drawn above the held children at step ${step + 1}`],
+        [
+          ids[0] === (deepEntry()?.messageStart === undefined ? "" : deepRowId(deepEntry()!.messageStart!)),
+          `the page head is its oldest child, not a reused prompt at step ${step + 1}`,
+        ],
+        [loading?.getAttribute("aria-hidden") === "true", "settled loading furniture is hidden"],
+        [deepReads().every((item) => item.scope?.id === DEEP_DELEGATION), "every older read echoes the delegation scope"],
         [noEarlierControl(), "boundary paging is not a control"],
       ]),
     );
     if (step === 2) {
-      const read = deepReads().at(-1);
       failures.push(
         ...failuresOf([
           [
@@ -932,6 +1088,18 @@ globalThis.scopedHistoryProbe = async () => {
       );
     }
   }
+  facts.deepPagingTrace = deepPagingTrace;
+  failures.push(
+    ...failuresOf([
+      [deepPagingTrace.length === 3, "three older pages have a complete rendered trace"],
+      [deepPagingTrace.every((page) => page.cursor === 900 - (Number(page.page) - 1) * SUBAGENT_HISTORY_PAGE_SIZE), "older cursors progress from the window head"],
+      [
+        deepPagingTrace.every((page) => page.promptRows === 0),
+        "every older page inside the run stays prompt-free",
+      ],
+      [document.body.textContent?.includes("ordinary top-level main row") === false, "ordinary top-level main rows remain outside the scoped transcript"],
+    ]),
+  );
   // Two more reaches prove there is no row budget: the window keeps growing.
   for (let step = 0; step < 2; step += 1) {
     const before = deepReads().length;
@@ -954,6 +1122,10 @@ globalThis.scopedHistoryProbe = async () => {
         "the retained rows are one contiguous interval",
       ],
       [noEarlierControl(), "no top show-earlier control exists"],
+      [
+        promptIds().length === 0 && userPromptRows().length === 0,
+        "a window that still has not reached the run head draws no prompt",
+      ],
     ]),
   );
   facts.deepWindow = {
@@ -961,6 +1133,7 @@ globalThis.scopedHistoryProbe = async () => {
     messageStart: deepEntry()?.messageStart,
     reads: deepReads().length,
   };
+  console.log("SCOPED_DEEP_TRACE " + JSON.stringify({ trace: deepPagingTrace, window: facts.deepWindow }));
 
   // A search focus on a distant row switches the window to the target's page.
   const focusTarget = deepRowId(200);
@@ -1093,10 +1266,39 @@ globalThis.scopedHistoryProbe = async () => {
     ]),
   );
 
-  holdDeepOlderReads();
+  holdOlderReads(DEEP_DELEGATION);
   const beforeHeld = deepReads().length;
   await reachTop();
   await until(() => deepReads().length === beforeHeld + 1, "the held older read");
+  await frames(2);
+  const heldLoading = document.querySelector<HTMLElement>('[data-testid="subagent-history-older-loading"]');
+  const heldLoadingLabel = heldLoading?.querySelector<HTMLElement>(".subagent-transcript-earlier-label");
+  const heldLoadingHeight = heldLoading?.getBoundingClientRect().height ?? 0;
+  const heldAnchor = deepScroller ? readingLine(deepScroller) : null;
+  await frames(3);
+  const heldAnchorAfter = deepScroller && heldAnchor
+    ? fragmentOffset(deepScroller, heldAnchor.id)
+    : null;
+  facts.deepHeldLoading = {
+    present: heldLoading !== null,
+    height: heldLoadingHeight,
+    settledHeight: heldLoading?.getBoundingClientRect().height ?? 0,
+    ariaHidden: heldLoading?.getAttribute("aria-hidden"),
+    labelVisibility: heldLoadingLabel ? getComputedStyle(heldLoadingLabel).visibility : null,
+    overflowAnchor: heldLoading ? getComputedStyle(heldLoading).overflowAnchor : null,
+    anchor: heldAnchor,
+    anchorAfter: heldAnchorAfter,
+  };
+  failures.push(
+    ...failuresOf([
+      [heldLoading !== null && heldLoadingHeight > 0, "held older reads keep fixed loading furniture mounted"],
+      [heldLoading?.getAttribute("aria-hidden") === "false", "held older reads expose the loading status"],
+      [heldLoadingLabel ? getComputedStyle(heldLoadingLabel).visibility === "visible" : false, "held older reads show the loading label"],
+      [heldLoading ? getComputedStyle(heldLoading).overflowAnchor === "none" : false, "loading furniture is excluded from native anchoring"],
+      [heldLoading !== null && heldLoading.isConnected && Math.abs(heldLoading.getBoundingClientRect().height - heldLoadingHeight) < 0.5, "loading furniture keeps its box while the read is held"],
+      [heldAnchorAfter !== null && Math.abs(heldAnchorAfter - (heldAnchor?.offset ?? 0)) < 2, "showing loading furniture does not move the held fragment"],
+    ]),
+  );
   failures.push(
     ...failuresOf([
       [
@@ -1143,7 +1345,7 @@ globalThis.scopedHistoryProbe = async () => {
   );
 
   // The superseded answer lands now: it cannot move the window or the pane.
-  releaseDeepOlderReads();
+  releaseOlderReads();
   await frames(4);
   const released = deepScroller ? geometryOf(deepScroller) : null;
   failures.push(
@@ -1166,6 +1368,485 @@ globalThis.scopedHistoryProbe = async () => {
     superseded,
     released,
   };
+
+  // Finish at the physical head so the tall Task brief itself, not a child
+  // answer, is the only visible anchor. This is the brief-only paging case:
+  // every page before the head stays prompt-free, the head page introduces the
+  // prompt exactly once at its chronological opening, and the reading anchor it
+  // was measured against keeps its viewport offset.
+  const headTrace: Array<Record<string, unknown>> = [];
+  for (let step = 0; step < 9; step += 1) {
+    const before = deepReads().length;
+    const anchored = await reachTop();
+    await until(
+      () => deepReads().length === before + 1 && deepEntry()?.status === "ready",
+      `head-boundary older page ${step + 1}`,
+    );
+    await frames(2);
+    const after = deepScroller && anchored ? fragmentOffset(deepScroller, anchored.id) : null;
+    headTrace.push({
+      page: step + 1,
+      cursor: deepReads().at(-1)?.messageBefore,
+      messageStart: deepEntry()?.messageStart,
+      promptRows: promptIds().length,
+      ids: transcriptIds().slice(0, 3),
+      anchor: { id: anchored?.id ?? null, beforeOffset: anchored?.offset ?? null, afterOffset: after },
+    });
+    failures.push(
+      ...failuresOf([
+        [
+          anchored !== null && after !== null && Math.abs(after - anchored.offset) < 2,
+          `the head-boundary anchor keeps its offset at page ${step + 1} (${anchored?.id}: ${String(
+            anchored?.offset,
+          )} → ${String(after)})`,
+        ],
+        [
+          promptIds().length === (deepEntry()?.messageStart === 0 ? 1 : 0),
+          `the prompt appears only on the page that reaches the run head (page ${step + 1})`,
+        ],
+      ]),
+    );
+  }
+  const headBriefNode = userPromptRows()[0] ?? null;
+  // A further reach at the head reads nothing and must not rerender the prompt
+  // away or duplicate it.
+  const headNodeBefore = headBriefNode;
+  const readsAtHead = deepReads().length;
+  await reachTop();
+  await frames(3);
+  const headNodeAfter = userPromptRows()[0] ?? null;
+  deepScroller!.scrollTop = 0;
+  await frames(3);
+  const headAnchor = readingLine(deepScroller!);
+  const headBrief = headBriefNode?.getBoundingClientRect();
+  facts.deepHeadAnchor = {
+    anchor: headAnchor,
+    briefHeight: headBrief?.height ?? null,
+    viewportHeight: deepScroller!.clientHeight,
+    ids: transcriptIds().slice(0, 3),
+    headTrace,
+    stableBriefDom: headNodeAfter === headNodeBefore,
+    readsAtHead,
+  };
+  failures.push(
+    ...failuresOf([
+      [headAnchor?.id === "deep-task-row", "the tall Task brief is anchorable at the physical head"],
+      [headNodeBefore !== null && headNodeAfter === headNodeBefore, "the brief DOM stays mounted once the head is reached"],
+      [deepEntry()?.messageStart === 0, "the final older cursor reaches the physical head"],
+      [
+        headTrace.filter((page) => Number(page.promptRows) > 0).length === 1 &&
+          Number(headTrace.at(-1)?.promptRows) === 1,
+        "the prompt is introduced once, on the last page",
+      ],
+      [
+        userPromptRows().length === 1 && promptIds()[0] === "deep-task-row",
+        "the head draws exactly one identified prompt",
+      ],
+      [deepRows().slice(0, DEEP_TOTAL).every((index, offset) => index === offset), "all older children retain true transcript order"],
+    ]),
+  );
+  console.log("SCOPED_DEEP_TRACE " + JSON.stringify({ trace: deepPagingTrace, head: facts.deepHeadAnchor, window: facts.deepWindow }));
+
+  // 11. A live child can arrive while the requested older page is still in
+  //     flight. That live growth is not the page commit: the loading hold and
+  //     the reading-line correction must wait for the older read to finish.
+  flushSync(() => {
+    root?.unmount();
+    root = null;
+  });
+  flushSync(() => {
+    useAppStore.setState({
+      activeSessionId: SESSION,
+      messages: [
+        anchorTaskRecord(),
+        message("anchor-parent-main", "user", "ordinary top-level main row"),
+      ],
+    } as never);
+  });
+  mountTab(ANCHOR_DELEGATION);
+  const anchorEntry = () => entry(SESSION, ANCHOR_DELEGATION);
+  const anchorReads = () => scopedReads().filter((read) => read.scope?.id === ANCHOR_DELEGATION);
+  const anchorChildIds = () =>
+    transcriptIds().filter((id) => id.startsWith("child-anchor-"));
+  await until(
+    () => anchorReads().length === 1 && anchorEntry()?.status === "ready",
+    "the anchor chain's first page",
+  );
+  await frames(3);
+  let anchorScroller = scroller();
+  if (!anchorScroller) throw new Error("anchor transcript scroller missing");
+  failures.push(
+    ...failuresOf([
+      [anchorEntry()?.messageStart === 30, "the anchor fixture opens on its bounded tail page"],
+      [
+        same(anchorChildIds(), Array.from({ length: 20 }, (_, offset) => anchorRowId(30 + offset))),
+        "the anchor fixture's initial children render in order",
+      ],
+      [
+        promptIds().length === 0 && transcriptIds().filter((id) => id === ANCHOR_TASK_ID).length === 0,
+        "a bounded tail page inside the run draws no Task prompt",
+      ],
+      [
+        document.body.textContent?.includes("ordinary top-level main row") === false,
+        "ordinary main rows stay outside the anchor chain",
+      ],
+    ]),
+  );
+
+  holdOlderReads(ANCHOR_DELEGATION);
+  const beforeHeldAnchorRead = anchorReads().length;
+  await reachTop();
+  await until(
+    () => anchorReads().length === beforeHeldAnchorRead + 1,
+    "the held anchor older read",
+  );
+  await frames(2);
+  const heldAnchorBoundary = readingLine(anchorScroller);
+  const heldAnchorOffset = heldAnchorBoundary
+    ? fragmentOffset(anchorScroller, heldAnchorBoundary.id)
+    : null;
+  const heldLoadingBeforeLive = document.querySelector<HTMLElement>(
+    '[data-testid="subagent-history-older-loading"]',
+  );
+  const rowsBeforeLive = anchorEntry()?.messages.length ?? 0;
+  const liveAnchor = "child-anchor-live";
+  flushSync(() => {
+    useAppStore.setState({
+      messages: [
+        anchorTaskRecord(),
+        message("anchor-parent-main", "user", "ordinary top-level main row"),
+        message(liveAnchor, "assistant", "live anchor child", {
+          parentToolCallId: ANCHOR_CALL,
+          agentName: "explorer",
+        }),
+      ],
+    } as never);
+  });
+  await frames(4);
+  const liveWhilePending = {
+    loadingBeforeLive: heldLoadingBeforeLive?.getAttribute("aria-hidden"),
+    refreshing: anchorEntry()?.refreshing,
+    rows: anchorEntry()?.messages.length,
+    rowsBeforeLive,
+    liveRendered: transcriptIds().filter((id) => id === liveAnchor).length,
+    loading: document
+      .querySelector<HTMLElement>('[data-testid="subagent-history-older-loading"]')
+      ?.getAttribute("aria-hidden"),
+    anchor: readingLine(anchorScroller),
+    offset: heldAnchorBoundary
+      ? fragmentOffset(anchorScroller, heldAnchorBoundary.id)
+      : null,
+    boundary: heldAnchorBoundary,
+    boundaryOffset: heldAnchorOffset,
+  };
+  failures.push(
+    ...failuresOf([
+      [liveWhilePending.refreshing === true, "a live child preserves the pending older read state"],
+      [
+        (liveWhilePending.rows ?? 0) > rowsBeforeLive && liveWhilePending.liveRendered === 1,
+        "the live child joins the chain while the older read is pending",
+      ],
+      [
+        liveWhilePending.loading === "false",
+        "live growth does not clear the older-page loading state early",
+      ],
+      [
+        liveWhilePending.boundary !== null &&
+          liveWhilePending.anchor?.id === liveWhilePending.boundary.id &&
+          liveWhilePending.offset !== null &&
+          Math.abs(liveWhilePending.offset - (heldAnchorOffset ?? 0)) < 2,
+        "live growth alone leaves the held visible anchor and offset unchanged",
+      ],
+    ]),
+  );
+
+  releaseOlderReads();
+  await until(
+    () =>
+      anchorEntry()?.refreshing === false &&
+      anchorEntry()?.messageStart === 20 &&
+      (anchorEntry()?.messages.length ?? 0) >= rowsBeforeLive + 10,
+    "the released anchor older page",
+  );
+  await frames(4);
+  const settledAfterLive = {
+    anchor: readingLine(anchorScroller),
+    offset: heldAnchorBoundary
+      ? fragmentOffset(anchorScroller, heldAnchorBoundary.id)
+      : null,
+    boundary: heldAnchorBoundary,
+    boundaryOffset: heldAnchorOffset,
+    loading: document
+      .querySelector<HTMLElement>('[data-testid="subagent-history-older-loading"]')
+      ?.getAttribute("aria-hidden"),
+  };
+  failures.push(
+    ...failuresOf([
+      [
+        settledAfterLive.boundary !== null &&
+          settledAfterLive.anchor?.id === settledAfterLive.boundary.id &&
+          settledAfterLive.offset !== null &&
+          Math.abs(settledAfterLive.offset - (heldAnchorOffset ?? 0)) < 2,
+        "the released older page restores the same visible anchor and offset after live growth",
+      ],
+      [
+        settledAfterLive.loading === "true",
+        "the older-page loading state settles only after the page lands",
+      ],
+      [anchorReads().at(-1)?.messageBefore === 30, "the delayed read keeps its requested cursor"],
+    ]),
+  );
+  facts.anchorDelayedRead = { liveWhilePending, settledAfterLive };
+
+  let checkpoint = list()?.querySelector<HTMLElement>(
+    `[data-message-id="${ANCHOR_HANDOFF_ID}"]`,
+  ) ?? null;
+  const checkpointTrace: Array<Record<string, unknown>> = [];
+  facts.anchorCheckpointPosition = {
+    ids: transcriptIds().slice(0, 32),
+    checkpoint: transcriptIds().indexOf(ANCHOR_HANDOFF_ID),
+    rowBefore: transcriptIds().indexOf(anchorRowId(ANCHOR_CHECKPOINT_ROW - 1)),
+    rowAfter: transcriptIds().indexOf(anchorRowId(ANCHOR_CHECKPOINT_ROW + 1)),
+  };
+  failures.push(
+    ...failuresOf([
+      [
+        checkpoint?.classList.contains("transcript-handoff-row") === true,
+        "the accepted checkpoint exposes its stable source message id",
+      ],
+      [
+        transcriptIds().indexOf(ANCHOR_HANDOFF_ID) ===
+          transcriptIds().indexOf(anchorRowId(ANCHOR_CHECKPOINT_ROW - 1)) + 1,
+        "the checkpoint keeps its physical position between its neighbouring children",
+      ],
+    ]),
+  );
+
+  const placeCheckpoint = () => {
+    if (!checkpoint) return;
+    checkpoint.scrollIntoView({ block: "start" });
+    const line = Math.min(120, anchorScroller.clientHeight / 4);
+    const height = checkpoint.getBoundingClientRect().height;
+    anchorScroller.scrollTop -= Math.max(0, line - height + 12);
+  };
+  const keepCheckpointThroughPage = async (expanded: boolean, step: number) => {
+    if (!checkpoint) return;
+    placeCheckpoint();
+    await frames(3);
+    const before = readingLine(anchorScroller);
+    const beforeOffset = before ? fragmentOffset(anchorScroller, before.id) : null;
+    const head = checkpoint.querySelector<HTMLButtonElement>(".transcript-handoff-head");
+    const isExpanded = head?.getAttribute("aria-expanded") === "true";
+    if (isExpanded !== expanded) head?.click();
+    await frames(3);
+    placeCheckpoint();
+    await frames(3);
+    const beforeRead = anchorReads().length;
+    holdOlderReads(ANCHOR_DELEGATION);
+    await reachTop(110);
+    await until(
+      () => anchorReads().length === beforeRead + 1,
+      `the ${expanded ? "expanded" : "collapsed"} checkpoint older read`,
+    );
+    await frames(2);
+    const boundary = readingLine(anchorScroller);
+    const boundaryOffset = boundary ? fragmentOffset(anchorScroller, boundary.id) : null;
+    const loadingHeld = document
+      .querySelector<HTMLElement>('[data-testid="subagent-history-older-loading"]')
+      ?.getAttribute("aria-hidden");
+    const reads = anchorReads().map((read) => read.messageBefore ?? "latest");
+    releaseOlderReads();
+    await until(
+      () => anchorEntry()?.refreshing === false && anchorReads().length === beforeRead + 1,
+      `the ${expanded ? "expanded" : "collapsed"} checkpoint page settlement`,
+    );
+    await frames(4);
+    const after = readingLine(anchorScroller);
+    const afterOffset = after ? fragmentOffset(anchorScroller, after.id) : null;
+    const currentNode = list()?.querySelector<HTMLElement>(
+      `[data-message-id="${ANCHOR_HANDOFF_ID}"]`,
+    ) ?? null;
+    const currentHead = currentNode?.querySelector<HTMLButtonElement>(".transcript-handoff-head");
+    checkpointTrace.push({
+      step,
+      expanded,
+      before,
+      beforeOffset,
+      boundary,
+      boundaryOffset,
+      after,
+      afterOffset,
+      loadingHeld,
+      settledLoading: document
+        .querySelector<HTMLElement>('[data-testid="subagent-history-older-loading"]')
+        ?.getAttribute("aria-hidden"),
+      sameDom: currentNode === checkpoint,
+      currentExpanded: currentHead?.getAttribute("aria-expanded") === "true",
+      bodyText: currentNode?.querySelector(".transcript-handoff-body")?.textContent ?? "",
+      cursor: anchorReads().at(-1)?.messageBefore,
+      reads,
+    });
+    failures.push(
+      ...failuresOf([
+        [
+          before?.id === ANCHOR_HANDOFF_ID,
+          `the ${expanded ? "expanded" : "collapsed"} checkpoint is the fragment at the reading line before paging`,
+        ],
+        [
+          boundary !== null && after !== null && boundary.id === after.id,
+          `the ${expanded ? "expanded" : "collapsed"} reach keeps the same visible fragment`,
+        ],
+        [
+          boundaryOffset !== null &&
+            afterOffset !== null &&
+            Math.abs(afterOffset - boundaryOffset) < 2,
+          `the ${expanded ? "expanded" : "collapsed"} checkpoint keeps its viewport offset`,
+        ],
+        [currentNode === checkpoint, `the ${expanded ? "expanded" : "collapsed"} checkpoint DOM stays mounted`],
+        [
+          (currentHead?.getAttribute("aria-expanded") === "true") === expanded,
+          `the ${expanded ? "expanded" : "collapsed"} checkpoint keeps its disclosure state`,
+        ],
+        [loadingHeld === "false", "checkpoint paging exposes loading while its read is held"],
+        [
+          promptIds().length === (anchorEntry()?.messageStart === 0 ? 1 : 0) &&
+            (promptIds().length === 0 || promptIds()[0] === ANCHOR_TASK_ID),
+          "the prompt is drawn only once the retained window reaches the run head",
+        ],
+        [
+          document
+            .querySelector<HTMLElement>('[data-testid="subagent-history-older-loading"]')
+            ?.getAttribute("aria-hidden") === "true",
+          "checkpoint paging hides loading after settlement",
+        ],
+      ]),
+    );
+  };
+  await keepCheckpointThroughPage(false, 1);
+  // Give the expanded state its own anchored window: the same chain is
+  // reopened and paged once so the checkpoint again sits near the top band.
+  flushSync(() => {
+    root?.unmount();
+    root = null;
+  });
+  flushSync(() => {
+    const bucket = { ...(store().subagentHistory[SESSION] ?? {}) };
+    delete bucket[ANCHOR_DELEGATION];
+    useAppStore.setState({
+      activeSessionId: SESSION,
+      messages: [
+        anchorTaskRecord(),
+        message("anchor-parent-main", "user", "ordinary top-level main row"),
+        message(liveAnchor, "assistant", "live anchor child", {
+          parentToolCallId: ANCHOR_CALL,
+          agentName: "explorer",
+        }),
+      ],
+      subagentHistory: { [SESSION]: bucket },
+    } as never);
+  });
+  mountTab(ANCHOR_DELEGATION);
+  anchorScroller = scroller();
+  await until(
+    () => anchorEntry()?.status === "ready" && anchorEntry()?.messageStart === 30,
+    "the anchor chain's reopened tail page",
+  );
+  await frames(3);
+  const beforeReanchorRead = anchorReads().length;
+  await reachTop();
+  await until(
+    () => anchorReads().length === beforeReanchorRead + 1 && anchorEntry()?.messageStart === 20,
+    "the anchor chain's reanchored page",
+  );
+  await frames(3);
+  checkpoint = list()?.querySelector<HTMLElement>(
+    `[data-message-id="${ANCHOR_HANDOFF_ID}"]`,
+  ) ?? null;
+  await keepCheckpointThroughPage(true, 2);
+  const headBoundary = readingLine(anchorScroller);
+  const headBoundaryOffset = headBoundary
+    ? fragmentOffset(anchorScroller, headBoundary.id)
+    : null;
+  const promptRowsBeforeHead = promptIds().length;
+  const messageStartBeforeHead = anchorEntry()?.messageStart;
+  for (let attempt = 0; attempt < 3 && anchorEntry()?.messageStart !== 0; attempt += 1) {
+    const beforeRead = anchorReads().length;
+    await reachTop();
+    try {
+      await until(
+        () => anchorReads().length >= beforeRead + 1 && anchorEntry()?.messageStart === 0,
+        "the checkpoint chain's final head page",
+        10_000,
+      );
+    } catch {
+      // The reach may land a frame late; the loop retries, the assertions below
+      // still state the final truth.
+    }
+  }
+  await until(
+    () => anchorEntry()?.messageStart === 0,
+    "the checkpoint chain's head window",
+    30_000,
+  );
+  await frames(4);
+  const headSettled = readingLine(anchorScroller);
+  const headSettledOffset = headSettled
+    ? fragmentOffset(anchorScroller, headSettled.id)
+    : null;
+  failures.push(
+    ...failuresOf([
+      [
+        promptRowsBeforeHead === (messageStartBeforeHead === 0 ? 1 : 0),
+        `the prompt is drawn exactly when the window reaches the run head (${messageStartBeforeHead})`,
+      ],
+      [
+        same(promptIds(), [ANCHOR_TASK_ID]) && userPromptRows().length === 1,
+        `the head page introduces the Task prompt once (${promptIds().join(",")})`,
+      ],
+      [
+        headBoundary !== null &&
+          headSettled !== null &&
+          headSettled.id === headBoundary.id &&
+          headSettledOffset !== null &&
+          headBoundaryOffset !== null &&
+          Math.abs(headSettledOffset - headBoundaryOffset) < 2,
+        `the visible anchor survives the prompt's introduction (${headBoundary?.id}: ${String(
+          headBoundaryOffset,
+        )} → ${String(headSettledOffset)})`,
+      ],
+      [
+        document
+          .querySelector<HTMLElement>('[data-testid="subagent-history-older-loading"]')
+          ?.getAttribute("aria-hidden") === "true",
+        "the head page settles its loading furniture",
+      ],
+    ]),
+  );
+  facts.anchorCheckpointTrace = checkpointTrace;
+  const finalAnchorIds = transcriptIds();
+  const expectedAnchorIds = [
+    ANCHOR_TASK_ID,
+    ...Array.from({ length: ANCHOR_CHECKPOINT_ROW }, (_, index) => anchorRowId(index)),
+    ANCHOR_HANDOFF_ID,
+    ...Array.from(
+      { length: ANCHOR_TOTAL - ANCHOR_CHECKPOINT_ROW - 1 },
+      (_, index) => anchorRowId(index + ANCHOR_CHECKPOINT_ROW + 1),
+    ),
+    liveAnchor,
+  ];
+  failures.push(
+    ...failuresOf([
+      [same(finalAnchorIds, expectedAnchorIds), "brief, children, checkpoint, and live row keep true transcript order"],
+      [finalAnchorIds.filter((id) => id === ANCHOR_TASK_ID).length === 1, "the anchor Task brief appears once after three prepends"],
+      [finalAnchorIds.includes("anchor-parent-main") === false, "the anchor scope never admits an ordinary main row"],
+      [anchorEntry()?.messageStart === 0, "the checkpoint pages reach the physical head"],
+      [checkpointTrace.length === 2 || checkpoint === null, "collapsed and expanded checkpoint anchors both exercised"],
+    ]),
+  );
+  console.log(
+    "SCOPED_ANCHOR_TRACE " +
+      JSON.stringify({ delayed: facts.anchorDelayedRead, checkpoints: checkpointTrace, ids: finalAnchorIds }),
+  );
 
   facts.channels = channels.length;
   facts.scopedReads = scopedReads();

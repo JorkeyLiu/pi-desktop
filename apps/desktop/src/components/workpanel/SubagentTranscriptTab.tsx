@@ -37,6 +37,7 @@ import {
   useRef,
   useState,
   type UIEventHandler,
+  type WheelEventHandler,
 } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/app-store";
@@ -60,6 +61,7 @@ import {
 import { DisclosureAnchorContext } from "../../lib/disclosure-anchor-context";
 import { TranscriptDisclosureProvider } from "../../features/chat/transcript/disclosure";
 import { buildSubagentTranscript } from "../../lib/subagent-transcript";
+import { subagentHistoryRunPromptVisible } from "../../lib/subagent-history";
 import {
   AssistantErrorMessage,
   MessageAttachmentImage,
@@ -218,8 +220,11 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     };
   }, [messages, activeDelegationId]);
   const transcriptResult = useMemo(
-    () => buildSubagentTranscript(messages, activeDelegationId),
-    [messages, activeDelegationId],
+    () =>
+      buildSubagentTranscript(messages, activeDelegationId, {
+        promptVisible: (call) => subagentHistoryRunPromptVisible(history.entry, call),
+      }),
+    [messages, activeDelegationId, history.entry],
   );
   // A handoff checkpoint is numbered by its place among this tab's accepted
   // checkpoints: the runtime persists no generation number, and the row must
@@ -549,6 +554,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     is the way back to the tail from there.
   */
   const olderInFlight = useRef(false);
+  const [olderLoading, setOlderLoading] = useState(false);
   const latestInFlight = useRef(false);
   /** Rows mounted when the older read was requested; the hold settles on more. */
   const olderRowsBefore = useRef(0);
@@ -563,6 +569,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     if (olderInFlight.current) return;
     if (!history.hasMoreBefore || history.refreshing || history.status === "loading") return;
     olderInFlight.current = true;
+    setOlderLoading(true);
     olderRowsBefore.current = history.messages.length;
     holdReadingPosition();
     history.loadOlder();
@@ -575,12 +582,15 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
   // The read's own state finishes before the rows it asked for are drawn, so
   // the hold settles on the commit that mounts them: the page's height above
   // the reading position is measured from the rows, not from the answer.
+  // Live rows can grow the mounted list while that same read is still pending;
+  // they are not the older-page commit and must not release its hold or label.
   useLayoutEffect(() => {
-    if (!olderInFlight.current) return;
+    if (!olderInFlight.current || history.refreshing) return;
     if (history.messages.length <= olderRowsBefore.current) return;
     olderInFlight.current = false;
+    setOlderLoading(false);
     settleReadingPosition();
-  }, [history.messages, settleReadingPosition]);
+  }, [history.messages, history.refreshing, settleReadingPosition]);
   // A read that moves nothing - an overlapping page, or the head - has no rows
   // to settle on, so its own finish releases the hold and the next reach.
   useEffect(() => {
@@ -588,6 +598,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     const timer = window.setTimeout(() => {
       if (!olderInFlight.current) return;
       olderInFlight.current = false;
+      setOlderLoading(false);
       settleReadingPosition();
     }, 300);
     return () => window.clearTimeout(timer);
@@ -637,6 +648,27 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     } else if (!atBottom) {
       atNewerBoundary.current = false;
     }
+  };
+  const handleWheel: WheelEventHandler<HTMLDivElement> = (event) => {
+    const el = scrollRef.current;
+    if (
+      !el ||
+      event.deltaY >= 0 ||
+      !presented.current ||
+      !transcriptHasLayout(el) ||
+      !isHistoryRevealPosition(el, isPinned())
+    ) return;
+    // A tall Task brief can remain the visible anchor while older children
+    // prepend after it. The scroller then stays at the top and emits no second
+    // scroll event for another wheel reach, so the boundary latch must not
+    // suppress the next explicit upward gesture. Defer the read until after
+    // the wheel's native scroll so the hold captures the reader's final offset.
+    atOlderBoundary.current = true;
+    requestAnimationFrame(() => {
+      const current = scrollRef.current;
+      if (!current || !isHistoryRevealPosition(current, isPinned())) return;
+      requestOlder();
+    });
   };
 
   // Several delegation tabs can be open at once, so an explicit search hit
@@ -815,6 +847,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
             ref={scrollRef}
             className="subagent-transcript-scroll"
             onScroll={handleScroll}
+            onWheel={handleWheel}
             role="log"
             aria-live="polite"
             aria-label={t("panel.subagent")}
@@ -824,15 +857,17 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
               {/* Boundary paging has no control of its own: reaching the top
                 reads the previous page and holds the fragment in view, exactly
                 like the main transcript. The line only states the read. */}
-              {olderInFlight.current && history.hasMoreBefore ? (
-                <div
-                  className="subagent-transcript-earlier"
-                  role="status"
-                  data-testid="subagent-history-older-loading"
-                >
+              <div
+                className="subagent-transcript-earlier transcript-history-loading"
+                role="status"
+                aria-live="polite"
+                aria-hidden={!olderLoading}
+                data-testid="subagent-history-older-loading"
+              >
+                <span className="subagent-transcript-earlier-label transcript-history-loading-label">
                   {t("chat.loadingEarlierMessages")}
-                </div>
-              ) : null}
+                </span>
+              </div>
               {history.status === "loading" && !transcriptResult ? (
                 <div className="subagent-transcript-loading" role="status" data-testid="subagent-history-loading">
                   {t("chat.loadingSession")}
@@ -853,20 +888,22 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                 </div>
               ) : null}
               {transcriptResult ? (
-                transcriptResult.turns.map((turn, turnIndex) => (
-                  <Fragment key={`turn-${turnIndex}`}>
-                    <div className="message-row user">
-                      <div className="message-col">
-                        <div className="message-bubble">
-                          {turn.task || !turn.attachments?.length ? (
-                            <div className="message-user-text selectable">
-                              {turn.task || t("panel.subagentTaskEmpty")}
-                            </div>
-                          ) : null}
-                          <SubagentUserAttachments attachments={turn.attachments} />
+                transcriptResult.turns.map((turn) => (
+                  <Fragment key={turn.callId}>
+                    {turn.showPrompt ? (
+                      <div className="message-row user" data-message-id={turn.messageId}>
+                        <div className="message-col">
+                          <div className="message-bubble">
+                            {turn.task || !turn.attachments?.length ? (
+                              <div className="message-user-text selectable">
+                                {turn.task || t("panel.subagentTaskEmpty")}
+                              </div>
+                            ) : null}
+                            <SubagentUserAttachments attachments={turn.attachments} />
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    ) : null}
                     {turn.rows.map((row) => (
                       <Fragment key={`${row.kind}-${row.message.id}`}>
                         {row.kind === "tool" ? (
@@ -888,6 +925,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                           key={`thinking-${row.message.id}`}
                           message={row.message}
                           streaming={isThinkingActive(row.message, isRunning)}
+                          anchorId={(row.message.content || "").trim() || row.message.error ? undefined : row.message.id}
                         />
                       ) : row.kind === "steering-user" ? (
                         <div

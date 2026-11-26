@@ -2361,15 +2361,29 @@ validation still needed.
 - **Preconditions**: One delegate chain long enough to page many times at a
  100-row page size (the scoped-history fixtures' 1009 chain child rows), a built
   desktop, and a host that records its `session.get` answers.
-- **Steps**: 1) Open the chain's `Task` card and scroll to the visible bottom /
-  top of the tab until automatic boundary paging reaches the chain head,
-  recording each read and the visible message across the first prepend. 2) Assert
-  the visible rows and the entry's cursors. 3) Search a distant child row and
-  assert the window that results. 4) Click the jump control — once when it is
-  the only request in flight, and once while a boundary read is still
-  outstanding — and assert the fresh tail read and the scroll position.
-  5) Re-publish live rows while a historical window is open, then close and
-  reopen the tab.
+- **Steps**: 1) Open the chain's `Task` card and use real upward wheel input at
+  the tab's visible top until automatic boundary paging reaches the chain head.
+  Record the first three older reads, each read's scope echo and cursor, the
+  first visible message-id anchor and its viewport offset before/after the
+  prepend, every Task brief's DOM identity/order, the rendered user rows inside
+  `.subagent-transcript-list`, and the older-loading box; hold each older host
+  answer until the pre-dispatch boundary anchor, the pre-commit prompt set, and
+  the post-commit observation are all captured. 2) Assert the visible rows,
+  stable brief identity, fixed anchor-excluded loading furniture, hidden settled
+  indicator, and the entry's cursors. 3)
+  Search a distant child row and assert the window that results. 4) Click the
+  jump control — once when it is the only request in flight, and once while a
+  boundary read is still outstanding — and assert the fresh tail read and the
+  scroll position. 5) Re-publish live rows while a historical window is open,
+  then close and reopen the tab. 6) In the tall-brief rendered fixture, page to
+  the physical head and assert the brief itself is the first visible anchor.
+  7) Hold one older read while a live child arrives, then release it; with an
+  accepted handoff checkpoint at the reading line, page once collapsed and once
+  expanded, comparing the checkpoint's source-id anchor before and after.
+  8) Open the tail page, which is cut inside the chain's root run, and assert
+  that it draws no root Task prompt; page upward until the window reaches
+  `child-1-0` and assert the root prompt appears once, as that run's own user
+  row, with the visible anchor holding.
 - **Expected**: Every read asks for the cursor the answer itself stated —
   `messageStart` for an older page, `messageEnd` plus one page for a forward
   page — and no read is triggered by a control: reaching the visible top or
@@ -2380,19 +2394,44 @@ validation still needed.
   and a forward read that cannot move the window stops that direction at that
   boundary instead of repeating itself (nothing was fetched, so there is nothing
   to retry; the jump control or a search focus is what selects a new window).
-  A prepend preserves the reader's place: the fragment visible before the read
-  still sits at the same viewport offset afterwards. A search on a distant child
-  row replaces the window with the contiguous page around that target and draws
-  nothing else — no island, no omission marker, no second range. The jump
-  control reads the newest page first (one tail read, no cursor) — even when a
-  boundary read is still outstanding, which it supersedes rather than waiting
-  for — and then scrolls to the bottom of that fresh window, so it can never
-  land on the bottom of a stale range. While a historical window is open, live
+  Across at least three real-wheel older pages, the same visible message-id
+  anchor stays within 2 px of its prior viewport offset, including when that
+  anchor is the Task brief; each root/resume brief appears once in chain order
+  and keeps the same DOM node. Older children retain true transcript order and
+  no ordinary top-level main row enters the local scoped transcript. The
+  older-loading box stays mounted at fixed height, is excluded from native
+  anchoring, and hides its label after each read. A tall brief that remains
+  stationary still accepts another upward wheel at the boundary. A search on a
+  distant child row replaces the window with the contiguous page around that
+  target and draws nothing else — no island, no omission marker, no second
+  range.
+  A Task prompt is a chronological opening, not a context header: the user rows
+  read from `.subagent-transcript-list .message-row.user` — never the main pane's
+  Task card, never assistant-only rows — are absent while a window is cut inside
+  a run, stay absent across consecutive older pages that still start inside it,
+  and appear exactly once, as that run's own Task row, only on the page whose
+  window reaches that run's first selected child. Probes taken before, during,
+  and after each held commit show the same prompt set, so no prompt flashes
+  above children a partial window already holds. A later `Task(resume)` run
+  opens at its own chain position even while the chain still has older rows, and
+  a known-empty chain or live-only run still draws its opening. Every chain
+  `Task` row stays available out of band for chain identity and tab naming.
+  A live child arriving while an older read is pending leaves the loading
+  label visible and the hold intact; the requested page's commit is what
+  restores the anchor. The checkpoint root carries its source message id
+  collapsed and expanded, keeps one DOM node, and holds the reading offset
+  across a prepend in both states. The real-host boundary anchor is measured
+  while the host response is held, before any older rows can prepend.
+  The jump control reads the newest page first (one tail read, no cursor)
+  — even when a boundary read is still outstanding, which it supersedes rather
+  than waiting for — and then scrolls to the bottom of that fresh window, so it
+  can never land on the bottom of a stale range. While a historical window is open, live
   rows outside it are not drawn as adjacent; a reopen that no live row touched
   costs no read, and a live-touched one costs exactly one newest-page read that
   extends the window when that page is adjacent and replaces it when it is not.
 - **Specs linked**: `04-ux/08-component-spec.md` (§5.7 delegate history
-  window), `03-runtime/06-host-rpc-protocol.md`, ADR 0335
+  window), `03-runtime/06-host-rpc-protocol.md`,
+  `03-runtime/01-ipc-protocol.md` (`historyRuns`), ADR 0335, ADR 0341
 - **Acceptance**: C (session open and scroll), F (persistence), Quality
 - **Milestone**: M5
 - **Status**: Passed. `apps/desktop/test/scoped-subagent-history.test.mjs`,
@@ -2415,6 +2454,40 @@ validation still needed.
   reaches the tail, a nested-child search from a partial tail window spends one
   focus read that replaces the window with the target page, and the jump after
   it spends exactly one tail read and re-bottoms.
+
+  Current-source evidence — tested source is HEAD
+  `96bd5c1b36ebf438684c67acafe479b35b75addc` plus this dirty-tree fix, base
+  `96bd5c1b3`; Node `v24.12.0`, pnpm `12.8.1`, Electron `43.6.0` via the
+  compatible-binary override, and isolated/no-provider fixtures. Focused Node
+  regressions pass 27, fail 0, skip 1 of 28 (the skip is the Electron-only
+  handoff layout test, whose checkout-local binary is absent; its checkpoint
+  identity and rendered anchor are covered by the SSR assertion and the
+  rendered fixture). `node scripts/e2e-scoped-subagent-history.mjs` passes with
+  `failures: []`: three older pages use cursors `900,800,700` and hold
+  `child-deep-903/803/703` at 98.5625 → 98.625 px with `promptRows: 0`; the
+  head trace walks nine pages `messageStart` 800 → 0 with `promptRows` 0 through
+  page 8 and 1 only on the page that reaches the run head, keeping the tall
+  `deep-task-row` brief (2126 px) as the physical-head anchor at 31.390625 px
+  and the fixed 31.390625 px anchor-excluded loading box; the delayed live read
+  keeps the loading label visible while pending and restores
+  `child-anchor-33` from 98.5625 to 99.015625 px after the requested page
+  commits; a collapsed and an expanded `anchor-handoff` root each stay one DOM
+  node and hold `child-anchor-14` from 90.953125 to 90.546875 px across a
+  prepend. `node scripts/e2e-scoped-history-real-host.mjs` exits 0 with
+  `defects: []`: the initial tail page (`messageStart` 911) draws only
+  `task-2-msg` and `task-3-msg`, a focused child window draws no prompt, and
+  three real CDP wheel pages at cursors 911/811/711 keep their pre-commit
+  boundary anchors `child-1-911` (116.171875 px), `child-1-812` (119.5625 px),
+  and `child-1-712` (80.5625 px) with a measured drift of at most 0.0625 px and
+  the same `[task-2-msg, task-3-msg]` prompt set before, during, and after each
+  commit; page 1 to the head retains all 1009 child rows in 11 pages from
+  `child-1-0`, every `Task` brief exactly once, in the flattened order
+  `TASK_1`, `child-1-0..1000`, `TASK_2`, `child-2-0..4`, `TASK_3`,
+  `child-3-a,b,c`, and no ordinary root/main/TaskWait row. Result provenance:
+  worktree state `433255ad4261617a`, source `04881c45ede2586e`, renderer entry
+  `e6b1f49f7964` (`index-BsU1TRbJ.js`), host `455980544242`, 8 main and 16
+  delegation reads, `statusEntries` 20 at run time (the tree has since gained
+  documentation-only edits).
 
 #### E2E-207c: A main-window change never disturbs an open delegation panel
 
@@ -2488,15 +2561,18 @@ validation still needed.
   `delegationId`. 4) Request a delegation page with an id that no longer exists.
 - **Expected**: Steps 1–3 show the same conversation, in transcript order,
   made of the chain's direct child rows across all of its runs, with the
-  chain's original description naming the tab. The echoed `historyScope` is the
+  chain's original description naming the tab. Each accepted root and resume
+  Task brief appears exactly once at its own chain position, keyed by stable
+  call identity and anchored by its source message id; older children precede
+  later children without duplicating a brief. The echoed `historyScope` is the
   same canonical identity in all three — the root dispatch's `delegationId` —
   and every `Task` / `Task(resume)` message of the chain arrives as
-  `historyContext` outside the page budget, so the brief is the first readable
-  row in every case. Step 4 returns no session (the host answers `session:
-  null`) and the panel shows its unavailable state rather than an empty one.
+  `historyContext` outside the page budget. Step 4 returns no session (the host
+  answers `session: null`) and the panel shows its unavailable state rather than
+  an empty one.
 - **Specs linked**: `03-runtime/06-host-rpc-protocol.md`,
   `03-runtime/01-ipc-protocol.md`, `04-ux/08-component-spec.md` (§5.7), ADR 0279,
-  ADR 0335
+  ADR 0335, ADR 0341
 - **Acceptance**: C (session open), F (persistence), Quality
 - **Milestone**: M5
 - **Status**: Passed. Host unit/contract coverage — `cargo test -p host-core`
@@ -2514,6 +2590,15 @@ validation still needed.
   the window with the contiguous page around it (no island, no omission
   marker), and the jump control then spent exactly one tail read and
   re-bottomed on the newest page.
+
+  Current-source identity evidence — the same tested source/base and isolated
+  Electron environment recorded in E2E-207g. The renderer/model regressions pass
+  within the 27-pass/1-skip focused run: source-message and call identities
+  remain distinct for root/resume briefs, each brief renders once at its chain
+  position, and thinking-only children expose a source-message anchor.
+  The real-host run passes with the full flattened order `TASK_1`,
+  `child-1-0..1000`, `TASK_2`, `child-2-0..4`, `TASK_3`, `child-3-a,b,c`, with
+  no ordinary root/main/TaskWait row and no defects.
 
 #### E2E-207e: A settled result survives close, restart, and truncation without a prefix rewrite
 

@@ -195,6 +195,13 @@ test("an accepted handoff renders as a numbered checkpoint, not as a tool row", 
     ]);
     // Exactly the two accepted submissions are checkpoints.
     assert.equal((html.match(/transcript-handoff-row/g) ?? []).length, 2);
+    assert.deepEqual(
+      Array.from(html.matchAll(/<div class="transcript-handoff-row"[^>]*>/g), (match) =>
+        match[0].match(/data-message-id="([^"]+)"/)?.[1],
+      ),
+      ["h1", "h2"],
+      "accepted checkpoint roots keep their stable source message identities",
+    );
     // Numbered by their order in this tab's own filtered transcript.
     assert.match(html, /Context handoff · #1/);
     assert.match(html, /Context handoff · #2/);

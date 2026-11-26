@@ -912,6 +912,18 @@ type SessionDetail = SessionSummary & {
   historyScope?: SessionHistoryScope;
   /** 该链的每一条 Task / Task(resume) 消息，不计入页预算（仅 delegation 作用域）。 */
   historyContext?: UiMessage[];
+  /** 链上每一次 Task / Task(resume) 运行的物理开端（ADR 0341）：链级索引而非页边界，
+   *  且对尚无已选中子行的运行不编造子行索引。仅 delegation 作用域；缺失时省略。 */
+  historyRuns?: SessionHistoryRun[];
+};
+
+type SessionHistoryRun = {
+  callId: string;
+  taskMessageId: string;
+  /** 该运行自身 Task 行的物理索引。 */
+  taskIndex: number;
+  /** 该运行最小的已选中子行索引；没有已选中子行时省略。 */
+  firstChildIndex?: number;
 };
 
 type SessionHistoryScope =

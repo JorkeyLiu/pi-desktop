@@ -1499,7 +1499,9 @@ not a working claim, is what the reader sees.
   (§9.9): a trim or eviction can drop old rows, and only a main-window change
   is guaranteed not to. The header and process follow that own source, so a
   running child's thinking, tool calls, and answer fragments arrive and stream
-  there, not through the main pane.
+  there, not through the main pane. Live row growth while an older read is
+  still pending does not commit that page: the older-loading label stays
+  visible and the reading hold waits for the requested read to finish.
 - A chain is read across all of its executed `Task(resume)` runs, so a delegation opened
   by a resumed run is the same child conversation as its original dispatch, and
   an older caller's `Task` tool-call id resolves to it too. A rejected resume —
@@ -1534,13 +1536,35 @@ not a working claim, is what the reader sees.
   (the chain's root `delegationId`, not the call id that asked). The main pane
   never pretends the child row is part of its own page, and reading the child
   never widens the main page.
-- The task description is the Task call's `task` argument, rendered as the
-  conversation's first selectable user row. The delegate's thinking, tool rows,
-  and answer fragments reuse the same components and styling as the main
-  conversation. Card titles, the task brief, and step summaries use the
-  available width and wrap or clamp to multiple lines; long paths, commands,
-  and tool summaries in the live process wrap inside the dock instead of
-  becoming one-line ellipses.
+- The task description is each accepted Task call's `task` argument, rendered
+  once as that turn's selectable user row. Root and resume briefs keep their
+  source message identity (`data-message-id`) and stable call identity across
+  history-page merges; each appears once at its own chain position, followed by
+  that call's children in transcript order. Ordinary top-level main rows are not
+  part of a local delegation-scoped transcript. The delegate's thinking, tool
+  rows, and answer fragments reuse the same components and styling as the main
+  conversation. A thinking-only row carries the source message identity so it
+  can anchor a prepend even when no answer or tool fragment is visible. Card
+  titles, the task brief, and step summaries use the available width and wrap or
+  clamp to multiple lines; long paths, commands, and tool summaries in the live
+  process wrap inside the dock instead of becoming one-line ellipses.
+- The task prompt is a chronological opening, not a context header. A run's
+  prompt is drawn only when the retained contiguous window actually covers that
+  run's first selected child, and then exactly once, in run order; a run with no
+  selected child yet (known empty, or live and not yet durable) is an opening at
+  the scope tail rather than a fabricated position. Every chain `Task` row stays
+  available out of band as context for chain identity, tab naming, and metrics,
+  but ownership alone never makes a prompt visible. A latest or focused window
+  cut inside a run — and every older page that still starts inside it — draws no
+  prompt above children the window already holds; the page that reaches the
+  run's first child introduces the prompt once and the visible-fragment hold
+  keeps the reader's offset. A later `Task(resume)` run opens at its own chain
+  position even while the chain has older rows. Visibility comes from the
+  backend's per-run physical opening (§ `historyRuns` in
+  `03-runtime/06-host-rpc-protocol.md`), never from `createdAt`, prompt text, or
+  the chain-wide `hasMoreBefore`. An older backend that serves scoped history
+  without that metadata is handled conservatively: a partial window draws no
+  prompt, and only a window that reaches the chain head may draw them.
 - The dock has one scroll owner, the panel body. The scroll owner is
   keyboard-focusable and exposed as a polite `role="log"` so streamed rows
   remain discoverable without forcing focus changes. The live process is
@@ -1552,7 +1576,9 @@ not a working claim, is what the reader sees.
   client area.
   While pinned to the latest output, the panel body follows new process rows;
   a real upward gesture pauses follow and exposes the standard jump-to-latest
-  control.
+  control. Older-loading furniture stays mounted at a fixed height, hides its
+  label when idle, and is excluded from native scroll anchoring so showing or
+  removing the indicator cannot shift the transcript.
 - The tab is the child's own conversation. Its strip label names the work the
   delegate was given — the delegation chain's original task description, the
   role when an older log carries none, then the localized unnamed label — and the
@@ -2384,7 +2410,9 @@ replaced.
   action.
 - Semantics: a labelled `role="group"`, not 8.4a's `role="separator"`. A
   separator makes its content presentational, which would remove the expand
-  control from the accessibility tree.
+  control from the accessibility tree. The collapsed and expanded checkpoint
+  root carries its source message id (`data-message-id`), so it can anchor a
+  prepend like an ordinary tool row.
 - Body: the whole handoff the delegate authored and submitted, under the same
   labeled section head every tool detail block carries (§9.3): a localized
   heading that names the bytes and one compact copy control that copies the
@@ -3298,12 +3326,17 @@ coexist as independent tabs. The tab renders the delegation as a conversation:
   answer that cannot move the window stops that direction at that boundary
   instead of repeating the same read: nothing was fetched, so there is nothing
   to retry, and the explicit latest read — or a search focus — is what selects
-  a new window. A prepend holds the fragment the reader was reading: the
-  hook captures it before the read and applies the correction once the page's
-  rows are mounted (layout phase, after the disclosure hold and before follow),
-  falling back to the content height the scroller gained when the browser
-  skipped laying that fragment out, so rows growing above the reading line do
-  not move the reader's place.
+  a new window. A prepend holds the fragment the reader was reading, including a
+  Task brief or thinking-only row: the hook captures it before the read and
+  applies the correction once the page's rows are mounted (layout phase, after
+  the disclosure hold and before follow), falling back to the content height the
+  scroller gained when the browser skipped laying that fragment out, so rows
+  growing above the reading line do not move the reader's place. If a tall brief
+  itself remains stationary while older children mount after it, no second
+  scroll event is emitted; another explicit upward wheel at the older boundary
+  still requests the next page instead of waiting for the boundary latch to
+  clear. The older-loading indicator's box is always mounted and anchor-excluded,
+  so its visible label changes do not introduce an uncorrected layout jump.
 - A search focus and a jump to latest select a window instead of merging a
   page into the one on screen. A focused child message switches the window to
   the contiguous page around that target — a page that belongs somewhere else is
