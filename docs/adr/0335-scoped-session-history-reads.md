@@ -31,6 +31,13 @@
   re-read stored reports (§9; ADR 0089). Reading stays a projection over
   persisted rows: no execution, no new storage, and no delivery boundary for
   history-only entries.
+- Amendment (2026-11, one contiguous reading window): the delegation panel now
+  holds the same thing as the main transcript — one contiguous selected interval
+  of the pages its reader read, with no per-chain row budget, no bounded tail
+  bridge, and no focus island or omission marker. A search target and a jump to
+  latest *select* a window instead of merging a distant page into the current
+  one, boundary scrolling pages in the main transcript's direction, and the
+  100-row live tail is bounded on its own outside that interval (§8, §10).
 
 ## Context
 
@@ -207,9 +214,11 @@ migration and tests before one is introduced.
 ### 8. Renderer live state is per surface and bounded
 
 Each surface owns its loaded rows, its paging cursor, and its in-flight read.
-None of these are shared through the other surface, and each keeps the existing
-bounded-window discipline (ADR 0130 / ADR 0137): the delegation panel holds a
-bounded set of its own rows rather than an unbounded copy per open tab.
+None of these are shared through the other surface. Both surfaces hold the same
+thing — one contiguous selected interval of physical pages — and keep the same
+bounded-window discipline (ADR 0130 / ADR 0137): a delegation panel holds the
+pages its reader actually read for that chain, not a copy per open tab, and it
+projects them through the main transcript's own window arithmetic.
 
 ### 9. Restart delegation reads rebuild a projection
 
@@ -236,29 +245,66 @@ the page cursors and flags, and the read state. Live child rows are routed into
 the entry when they are published, so a main read, a window replacement,
 reduction, restore, or paging cannot take them out of the panel — only the
 panel's own read changes its content. A live row after the last durable read
-marks the entry stale; reopening it refreshes the tail and merges that page over
-rows it already holds instead of resetting them, and a failed read keeps its
-loaded rows as a retryable detail (only an entry with nothing to show becomes an
-error).
+marks the entry stale, and reopening it is a latest read rather than a merge:
+the newest page extends the window when it is adjacent and replaces it when it
+is not, so the entry keeps one interval and never gains a second one. A failed
+read keeps its loaded rows as a retryable detail (only an entry with nothing to
+show becomes an error).
 
 The cache is bounded by resource limits, not by a promise that every row ever
-loaded stays resident. One chain keeps 400 rows — oldest non-focus rows trimmed
-first, with its older cursor left in place so paging can re-read what was
-trimmed, and a trim that leaves the search focus as an island states the gap —
-and one session keeps its 12 most recently read chains. Eviction or trimming can
-drop loaded rows; only the main reading window's own changes are guaranteed not
-to.
+loaded stays resident, but the reader's own reading window is not one of them.
+A panel keeps the contiguous pages the reader actually read for that chain —
+the same policy as the main transcript, with no row budget — so paging to the
+chain's head and paging back into its tail leaves one interval that holds
+every page read. Only the live tail is bounded on its own, at 100 rows per
+chain, because live rows are not a physical page: they carry no bounds and
+never evict a page the reader is reading. Dropping the oldest of them leaves a
+hole between the retained window and what is kept, so the entry stops claiming
+the tail instead of presenting the remainder as contiguous — `hasMoreAfter`
+stays true and the explicit latest read refills it. One session keeps its 12
+most recently read chains; eviction drops a whole chain, while no read inside a
+chain drops a page the reader read.
 
-A tail synchronization reads the newest page, then bridges backwards over the
-physical `messageBefore` cursor until its range joins the rows the entry holds
-or reaches the chain's head, merging the walked pages oldest first. The walk is
-finite: at most 20 pages, 2000 selected rows, and every answer must move the
-cursor toward the entry or the read stops with a retryable error that leaves the
-loaded rows intact. A wider gap keeps a contiguous newest window plus the
-retained focus island, states the omission where adjacency breaks, sets
-`hasMoreBefore` true and its older cursor to the window's real first page, so
-every omitted row stays reachable through ordinary "show earlier" paging rather
-than vanishing.
+A search focus and a jump to latest select an interval rather than merge into
+one. Focus reads the page around the target, so the window switches to that
+contiguous range — a page that belongs somewhere else is never appended to the
+current or latest range to make the two look like one conversation — and a
+window that does not reach the tail stops drawing live rows as though they were
+adjacent to it. Jumping to latest releases follow, reads the newest page, and
+scrolls to the bottom of that fresh window, so the control can never land on
+the bottom of a stale range; an explicit jump is not answered by a boundary
+read that is still outstanding — it supersedes that request, so the pane lands
+on the range its last action asked for. A focus target the chain holds only as
+a live row, and does not draw in the held window, is still a focus: the panel
+reads the page around that target, because a row the reader cannot see has no
+interval to browse. Still, a live row the reader is already watching survives
+every replacement: the page confirms it, or it keeps the place its
+announcement order gave it relative to the rows the page names. A page that
+repeats a range the window already holds confirms those rows instead of being
+discarded: the answer is the newest value for every id it names, so the stale
+streaming copy gives way to the durable one.
+
+Paging follows the main transcript's direction. Reaching the visible top reads
+the page before the window's oldest bound (the cursor is that bound, handed
+straight back to the backend that stated it), and reaching the visible bottom
+reads the page after its newest bound, from the window's own physical end plus
+one page. A forward answer that cannot move the window stops that direction at
+that boundary instead of repeating the same request: nothing was fetched, so
+there is nothing to retry, and the explicit latest read — or a search focus —
+is what selects a new window. Prepending a page holds the fragment the
+reader was reading: the fragment is captured before the read and the correction
+is applied once its rows are mounted, so height added above the reading line
+does not move it — including rows the browser skipped laying out, where the
+content height the scroller gained is that distance.
+
+Remote and native backends cannot select a scope: `history-scope-forward.ts`
+forwards the delegation scope only to the local host, so their answers are the
+legacy physical transcript with the chain's rows filtered out of it, and their
+cursor is opaque. The panel therefore reads older rows only with the cursor the
+answer stated, and answers a forward request by reading the newest page. No
+physical cursor is derived from row counts for those backends, because a cursor
+that was never stated cannot be computed; the interval they can address is the
+one their answers describe, and the panel states no range it cannot page.
 
 ## Consequences
 
@@ -271,14 +317,24 @@ than vanishing.
 - The panel owns its rows: the chain's entry, not the main viewport, is what a
   tab renders, and a main read, window replacement, reduction, restore, or paging
   cannot remove a child row the panel already holds.
-- The cached rows are bounded, not promised: 400 rows per chain and 12 chains
-  per session, with the older cursor kept so paging re-reads a trimmed range. A
-  trim or eviction drops rows; only a main reading-window change is guaranteed
-  not to.
-- A tail synchronization is finite and honest about its bound: 20 pages of a
-  100-row scope (2000 selected rows) either join the loaded range or replace it
-  with a contiguous newest window, a retained focus row, a stated omission, and
-  an older cursor that still pages every omitted row back in.
+- The reader's own window is preserved: a panel keeps every contiguous page it
+  read, like the main transcript, so paging older and newer moves within one
+  interval instead of evicting the other side. Resource bounds apply outside
+  that interval: 12 chains per session, and a 100-row live tail per chain whose
+  trim stops the window from claiming the tail until the latest read refills it.
+- A search target and a jump to latest select a window instead of merging one.
+  Focus shows the contiguous range around the target and nothing else, and the
+  jump reads the newest page before scrolling to it, so neither can present two
+  disjoint ranges as one conversation or land on the bottom of a stale range.
+- Automatic boundary paging behaves like the main transcript: reaching an edge
+  continues the interval one page in that direction, a prepend holds the
+  fragment the reader was reading, and a forward answer that cannot move the
+  window stops that direction at that boundary rather than repeating the same
+  read; the explicit latest read or a search focus is what resets it.
+- A backend that cannot select a scope keeps its existing limits. Remote and
+  native answers stay unscoped, page backward only with the cursor they stated,
+  and serve a forward request from the newest page; the renderer invents no
+  physical cursor for them and states no range it cannot page.
 - A resumed chain reads as one child conversation from its root dispatch, even
   when the reader opened it by the newest run's id or by a legacy call id.
 - A chain's recorded state becomes stable to read: checkpoints and the final
@@ -312,9 +368,17 @@ than vanishing.
   invariant this record has to protect, and it cannot survive a restart in which
   the panel's rows were never loaded.
 - **Retain every row a panel ever loaded:** rejected. A chain can grow without
-  bound while the app runs, so the panel keeps a bounded cache with an older
-  cursor and an explicit omission marker — paging is the way back, and no view
-  claims the whole chain is resident.
+  bound while the app runs, and a row set that claims every row ever read is not
+  a window any cursor can describe. The panel instead keeps one contiguous
+  selected interval — the pages the reader actually read — with the cursors the
+  answers stated, and resource bounds (12 chains, a 100-row live tail) sit
+  outside that interval rather than trimming it.
+- **Bridge a distant range with a bounded backward walk:** rejected. A walk that
+  stops after N pages leaves two ranges in one transcript: the rows it kept and
+  the rows it gave up on, with an omission marker in between and no way to page
+  the nearer side without another control. Selecting the target or the tail as a
+  new contiguous window is the honest form of the same intent, and it costs one
+  read instead of a walk.
 - **Re-snapshot the `Task` row for every checkpoint:** rejected. Every snapshot
   would rewrite a historical line and make the row's value depend on the last
   reader; the overlay carries the same information while leaving the prefix

@@ -4,13 +4,7 @@ import { dedupeSessionMessages, orderRowsByLiveAnnouncement, upsertLiveSessionMe
 import { subagentChainCallIds } from "./subagent-chain";
 import { delegationIdForMessage } from "./subagent-panel";
 import { isDelegationStartTool } from "./tool-display";
-import {
-  emptyPageWindow,
-  mergePageWindow,
-  withoutPageWindowRows,
-  type PageWindow,
-  type PageWindowPage,
-} from "./page-window";
+import { mergePageWindow, type PageWindowPage } from "./page-window";
 
 /**
  * One delegate's conversation, read from its own scoped history page instead
@@ -45,36 +39,12 @@ export const SUBAGENT_HISTORY_LIMIT = 12;
 export const SUBAGENT_HISTORY_PAGE_SIZE = 100;
 export const SUBAGENT_HISTORY_CONTENT_LIMIT = 64 * 1024;
 /**
- * Rows one cached chain's *reading window* keeps. The window is a set of
- * physical pages, and a page that would overflow the budget is dropped from the
- * side the reader is not reading: an older read keeps the older page it just
- * asked for and drops the newest one, and a forward read does the reverse. The
- * cursors and flags therefore always describe the pages the entry still holds.
- * It sits well above one page, so ordinary paging and a live tail never touch
- * it; only a chain whose live stream grew far past its page budget is trimmed,
- * and the dropped side stays reachable through the matching control.
- */
-export const SUBAGENT_HISTORY_MESSAGE_LIMIT = 400;
-/**
  * Live rows one chain may hold past its reading window. Live rows are the
  * parent's publication tail, not a physical page: they never evict a page the
  * reader is reading, so they are bounded on their own instead of sharing the
- * window budget.
+ * reading window.
  */
 export const SUBAGENT_HISTORY_LIVE_TAIL_LIMIT = 100;
-/**
- * Backward reads one tail synchronization issues before it stops joining the
- * gap and keeps only the newest pages. A gap wider than this is not abandoned
- * silently: the window states the omission, and the rows before it stay reachable
- * through ordinary "show earlier" paging.
- */
-export const SUBAGENT_HISTORY_BRIDGE_PAGES = 20;
-/**
- * A tail synchronization answered without moving the bridge closer to the
- * newest rows, so continuing would repeat the same request forever.
- */
-export const SUBAGENT_HISTORY_BRIDGE_STALLED =
-  "Subagent history did not move closer to the newest rows.";
 /** Identities one chain may be addressed by before the aliases stop growing. */
 const MAX_ALIASES = 6;
 /** The backend's answer for a chain it no longer knows. */
@@ -89,48 +59,43 @@ export type SubagentHistoryEntry = {
   /** Identities already resolved onto this entry, including `tabKey`. */
   aliases: string[];
   status: SubagentHistoryStatus;
-  /** Scoped child rows, in physical order. */
+  /** Scoped child rows this entry owns, in physical order. */
   messages: UiMessage[];
-  /** Root `Task` records identifying the chain, outside the page budget. */
+  /** Root `Task` records identifying the chain, outside the reading window. */
   context: UiMessage[];
   messageStart: number;
-  /** Last physical index of the rows this entry holds, when the backend says. */
+  /** Exclusive physical end of the rows this entry holds, when the backend says. */
   messageEnd?: number;
   /**
-   * The physical pages this entry's reading window holds, oldest first. Each
-   * page carries its exclusive physical bounds and the rows it contributed, so
-   * the older cursor is the oldest retained page's own start and the newest
-   * bound is the newest retained page's own end. Rows the budget dropped are
-   * not in the window, which is what keeps the cursor from naming a range the
-   * entry cannot show.
+   * The physical pages this entry's reading window holds, oldest first.
+   *
+   * They are one *contiguous* interval: a page joins the window only when its
+   * physical range meets the side it was read for (older reads join the oldest
+   * retained page, newer reads the newest), so the retained pages never state
+   * two ranges as one conversation. Overlapping answers replace the earlier
+   * copy of the same range, and a page that belongs somewhere else — a search
+   * target or a fresh tail — starts a new window instead of being appended to
+   * a distant one.
    */
   pages: PageWindowPage[];
   hasMoreBefore: boolean;
   /**
-   * Whether the scope has selected rows after the newest row this entry holds.
-   * Only a read that reached the scope's tail clears it; a tail synchronization
-   * that could not join the gap leaves it set.
+   * Whether the scope has selected rows newer than the window's newest row.
+   * False means the window reaches the scope's tail, which is also the follow
+   * state: only a window at the tail takes live output.
    */
   hasMoreAfter: boolean;
-  /**
-   * The first row of a run that is not adjacent to the previous rendered row:
-/**
-   * The retained row after which rows were omitted: a trimmed focus island, or
-   * a tail synchronization that kept only the newest pages. The view states the
-   * omission there instead of presenting the two ranges as one conversation.
-   */
-  omittedAfterId?: string;
   /**
    * Live rows this chain routed in that no durable page has confirmed yet,
    * oldest first, always a subset of `messages`.
    *
    * A running child row exists only in the parent's live array until its tool
    * ends, so a read issued before that end cannot contain it. Keeping the
-   * unconfirmed rows here is what lets every durable merge — including the
-   * window replacement a wide gap forces — put them back instead of erasing a
-   * row the reader is watching. A page that names the row confirms it, and the
-   * live copy retires exactly once. A call appears here once, holding the state
-   * its latest live event published, so repeated publications cannot grow it.
+   * unconfirmed rows here is what lets every durable read put them back instead
+   * of erasing a row the reader is watching. A page that names the row confirms
+   * it, and the live copy retires exactly once. A call appears here once, holding
+   * the state its latest live event published, so repeated publications cannot
+   * grow it.
    */
   livePending: UiMessage[];
   /**
@@ -153,6 +118,13 @@ export type SubagentHistoryEntry = {
   /** False when the backend answered the legacy physical transcript. */
   scoped: boolean;
   /**
+   * A newer page was requested from the window's own physical end and the
+   * answer did not move past it, so automatic forward paging must stop asking
+   * for the same page. The window keeps its rows and `hasMoreAfter`; the
+   * explicit latest read is the way to the tail.
+   */
+  laterStalled?: boolean;
+  /**
    * True while the chain's first durable page is still owed: a delegation read
    * answered with no session even though the parent already published the
    * chain's live `Task` dispatch, whose durable record the persistence outbox
@@ -171,8 +143,15 @@ export type SubagentHistoryEntry = {
 /** Per-session buckets, keyed by the tab identity that opened the entry. */
 export type SubagentHistoryBuckets = Record<string, Record<string, SubagentHistoryEntry>>;
 
-/** The direction one page tightens: its own window, older rows, or the tail. */
-export type SubagentHistoryDirection = "initial" | "before" | "latest";
+/**
+ * Where a page belongs relative to the window the entry holds.
+ *
+ * `initial` reads a chain's first durable page, `before` grows the window
+ * backwards, `after` grows it forwards, `focus` starts a window around a
+ * search target, and `latest` reads the scope's newest page — joining the
+ * window when it is adjacent and starting a fresh tail window when it is not.
+ */
+export type SubagentHistoryDirection = "initial" | "before" | "after" | "focus" | "latest";
 
 export function createSubagentHistoryEntry(
   sessionId: string,
@@ -239,9 +218,9 @@ export function aliasesWith(aliases: readonly string[], next: string | undefined
  /**
   * History baseline order for the delegate view: creation time, arrival-tied.
   *
-  * This is the durable skeleton's own order — the rows the live tail does not
-  * name stay on it (paging, focus islands, and context keep the semantics the
-  * existing scoped-history tests pin down). It is not the tool order
+ * This is the durable skeleton's own order — the rows the live tail does not
+ * name stay on it (paging and context keep the semantics the existing
+ * scoped-history tests pin down). It is not the tool order
   * authority: rows the live tail names keep the first-announcement order the
   * transcript already showed (see `orderRowsByLiveAnnouncement`), because
   * completion re-stamps `createdAt` and durable pages arrive in finish order.
@@ -387,48 +366,51 @@ export function subagentHistoryLiveTaskState(
   return settled ? "settled" : "running";
 }
 
- /**
-  * The rows a delegate view renders: the chain's own cached rows plus the live
-  * tail that belongs to it.
-  *
-  * The entry already owns the rows ingestion persisted; this merge keeps the
-  * view correct for the publication boundary between a live event and a render,
-  * and it resolves the chain over both views at once — a continuation opens its
-  * own `Task(resume …)` call after the page was read, so only reading the cached
-  * page and the live tail together keeps that segment on the tab that already
-  * represents the chain.
-  *
-  * Two position rules, one authority each. The history baseline is
-  * chronological (`orderedRows`): rows the live tail does not name keep the
-  * creation-time order the existing scoped-history tests pin down, so paging,
-  * focus islands, and context keep their semantics. The live overlay
-  * (`orderRowsByLiveAnnouncement`) owns rows the live tail names: they keep
-  * the first-announcement order the transcript already showed, because
-  * completion re-stamps `createdAt` and durable pages arrive in finish order.
-  * For those live-named rows `createdAt` is display metadata, never a
-  * position key — a re-stamp or refresh only replaces values. Live rows stay
-  * authoritative for an id the cache already holds, so a completed child row
-  * replaces its streaming copy.
-  */
- export function subagentHistoryMessages(
-   entry: SubagentHistoryEntry | undefined,
-   live: readonly UiMessage[],
- ): UiMessage[] {
+/**
+ * The rows a delegate view renders: the chain's own cached rows plus the live
+ * tail that belongs to it.
+ *
+ * The entry already owns the rows ingestion persisted; this merge keeps the
+ * view correct for the publication boundary between a live event and a render,
+ * and it resolves the chain over both views at once — a continuation opens its
+ * own `Task(resume …)` call after the page was read, so only reading the cached
+ * page and the live tail together keeps that segment on the tab that already
+ * represents the chain.
+ *
+ * Two position rules, one authority each. The history baseline is
+ * chronological (`orderedRows`): rows the live tail does not name keep the
+ * creation-time order the existing scoped-history tests pin down, so paging and
+ * context keep their semantics. The live overlay
+ * (`orderRowsByLiveAnnouncement`) owns rows the live tail names: they keep the
+ * first-announcement order the transcript already showed, because completion
+ * re-stamps `createdAt` and durable pages arrive in finish order. For those
+ * live-named rows `createdAt` is display metadata, never a position key — a
+ * re-stamp or refresh only replaces values. Live rows stay authoritative for an
+ * id the cache already holds, so a completed child row replaces its streaming
+ * copy.
+ *
+ * A window that does not reach the tail is a historical range: the live tail
+ * it cannot show is not part of that conversation, so only rows the window
+ * holds are drawn. The chain still keeps the newer rows it routed in, and the
+ * explicit latest read is what brings them on screen (ADR 0335).
+ */
+export function subagentHistoryMessages(
+  entry: SubagentHistoryEntry | undefined,
+  live: readonly UiMessage[],
+): UiMessage[] {
   if (!entry) return [...live];
-  // Chronological history baseline first: the entry's own order already
-  // carries live announcement order for ingested rows, but paging prepends
-  // older pages ahead of focus islands, so the baseline must be restored by
-  // creation time. Completion re-stamps `createdAt` on the same id, so the
-  // baseline sort below only runs over rows the live tail does not name —
-  // live-named rows keep their entry slots here and the overlay restores
-  // their announcement order next. Either set alone would regress the other:
-  // a full re-sort moves a re-stamped A after B, entry order alone strands
-  // a paged focus island behind its older page.
-  const base = dedupeSessionMessages([...entry.context, ...entry.messages]);
+  const windowIds = subagentHistoryWindowIds(entry);
+  const visible = windowIds
+    ? entry.messages.filter((row) => windowIds.has(row.id))
+    : entry.messages;
+  const base = dedupeSessionMessages([...entry.context, ...visible]);
   if (!live.length) return orderedRows(base);
   const owned = ownedChainRows(entry, live);
   if (!owned.context.length && !owned.messages.length) return orderedRows(base);
-  const ownedIds = new Set([...owned.context, ...owned.messages].map((row) => row.id));
+  const mergeable = windowIds
+    ? owned.messages.filter((row) => windowIds.has(row.id))
+    : owned.messages;
+  const ownedIds = new Set([...owned.context, ...mergeable].map((row) => row.id));
   let output = base;
   for (const message of live) {
     if (!ownedIds.has(message.id)) continue;
@@ -453,34 +435,72 @@ export function subagentHistoryLiveTaskState(
   // Live overlay second: rows the live tail names keep the first-announcement
   // order among themselves; durable-only rows never move for them.
   return orderRowsByLiveAnnouncement(next, liveOrder, (message) => liveOrder.has(message.id));
- }
+}
+
+/**
+ * Whether the window reaches the scope's tail, so live output belongs in it.
+ *
+ * It is the one follow state of the panel, and it is derived from the read
+ * that reached the tail rather than from scroll position: a window that still
+ * has rows after it is a historical range and stays one until a latest read
+ * replaces or extends it.
+ */
+export function subagentHistoryIsFollowing(entry: SubagentHistoryEntry | undefined): boolean {
+  return entry?.hasMoreAfter !== true;
+}
+
+/**
+ * Row identities the contiguous window holds, or `undefined` when every row
+ * the entry owns belongs to the view — a window that reaches the tail, or one
+ * that has not read a durable page yet.
+ */
+function subagentHistoryWindowIds(entry: SubagentHistoryEntry): Set<string> | undefined {
+  if (entry.hasMoreAfter !== true || !entry.pages?.length) return undefined;
+  return new Set(entry.pages.flatMap((page) => page.ids));
+}
+
+/**
+ * Whether the rendered window holds this row.
+ *
+ * The entry can own rows the view does not draw: a historical window draws
+ * only the ids its own pages contributed, so a live row past it is held
+ * without being presented. A search target is already shown only when this
+ * answers true — otherwise the reader's hit is exactly the case that has to
+ * read the window around it.
+ */
+export function subagentHistoryHoldsWindowRow(
+  entry: SubagentHistoryEntry | undefined,
+  messageId: string,
+): boolean {
+  if (!entry?.messages.some((row) => row.id === messageId)) return false;
+  const windowIds = subagentHistoryWindowIds(entry);
+  return windowIds === undefined || windowIds.has(messageId);
+}
 
 /**
  * Bound the live tail without touching the reading window.
  *
  * Live rows are the parent's publication tail: they carry no physical page
- * bounds, and they are always newer than the pages the entry read. Sharing the
- * window budget with them is what used to let a background publication evict
- * the page a reader was reading, so the live tail is bounded on its own. The
- * rows it drops stay recoverable: they sit after the window, and the forward
- * control re-reads them from the durable transcript.
+ * bounds, and they are always newer than the pages the entry read. Sharing one
+ * bound with them is what used to let a background publication evict the page a
+ * reader was reading, so the live tail is bounded on its own. Dropping the
+ * oldest of those rows leaves a hole between the window and what is retained,
+ * so the entry stops claiming the tail: the view keeps the durable window and
+ * an explicit latest read refills it.
  */
 function limitLiveRows(
   entry: SubagentHistoryEntry,
   limit: number,
 ): SubagentHistoryEntry {
   if (limit <= 0) return entry;
-  const focusId = entry.focus?.messageId;
   const pageIds = new Set((entry.pages ?? []).flatMap((page) => page.ids));
-  const live = entry.messages.filter((row) => !pageIds.has(row.id) && row.id !== focusId);
+  const live = entry.messages.filter((row) => !pageIds.has(row.id));
   if (live.length <= limit) return entry;
   const dropped = new Set(live.slice(0, live.length - limit).map((row) => row.id));
   return {
     ...entry,
     messages: entry.messages.filter((row) => !dropped.has(row.id)),
     livePending: (entry.livePending ?? []).filter((row) => !dropped.has(row.id)),
-    // Rows newer than the window exist beyond what the entry now holds, so the
-    // forward control stays available until a durable read states the tail.
     hasMoreAfter: true,
   };
 }
@@ -545,10 +565,10 @@ function samePendingRows(held: readonly UiMessage[], next: readonly UiMessage[])
  * live row is therefore never displayed from an older unsettled copy of the
  * same call, whichever read path built the rows.
  *
- * Retention is bounded by the two budgets, not by the merge that produced the
- * rows: a page read keeps only the pages its window holds, and a live
- * publication keeps only its own tail. Pending holds one version per call and
- * always a subset of `messages`, so a chain that keeps streaming cannot
+ * Retention is bounded by the reading window and the live tail, not by the merge
+ * that produced the rows: a page read keeps only the pages its window holds, and
+ * a live publication keeps only its own tail. Pending holds one version per call
+ * and is always a subset of `messages`, so a chain that keeps streaming cannot
  * accumulate rows past the window plus the tail. Pending state only spans the
  * distance between a live event and the durable row that records the same call.
  */
@@ -664,8 +684,8 @@ export function applySubagentLiveRows(
   );
 }
 
-/** The tail page merged over what the entry already holds. */
-function mergeTailRows(existing: readonly UiMessage[], page: readonly UiMessage[]): UiMessage[] {
+/** The page merged over what the entry already holds, newest value per row. */
+function mergePageRows(existing: readonly UiMessage[], page: readonly UiMessage[]): UiMessage[] {
   if (!page.length) return [...existing];
   if (!existing.length) return dedupeSessionMessages([...page]);
   const pageById = new Map(page.map((row) => [row.id, row]));
@@ -676,21 +696,81 @@ function mergeTailRows(existing: readonly UiMessage[], page: readonly UiMessage[
 }
 
 /**
+ * One page built from a scoped answer: its own physical bounds and the rows it
+ * contributed. A cursor derived from row order is not honest here, because a
+ * sparse page has no per-row physical index; only the answer states its range.
+ */
+function pageOf(entry: SubagentHistoryEntry, detail: SessionDetail): PageWindowPage {
+  const pageStart = detail.messageStart ?? entry.messageStart;
+  return {
+    start: pageStart,
+    end: detail.messageEnd ?? entry.messageEnd ?? pageStart + (detail.messages ?? []).length,
+    ids: (detail.messages ?? []).map((row) => row.id),
+    hasMoreBefore: detail.hasMoreBefore === true,
+    hasMoreAfter: detail.hasMoreAfter === true,
+  };
+}
+
+/**
+ * Rows a replacing page keeps but cannot position: the live rows it does not
+ * name.
+ *
+ * A live row has no physical index yet, so the page cannot say where it
+ * belongs in the new range; the order the entry already held can. The row
+ * lands after every page row that preceded it in that order, before the first
+ * one that followed it, and at the end when the held order names no page row at
+ * all (the entry held only live rows, which are newer than this read).
+ *
+ * That keeps a page which confirms a later sibling from moving an earlier
+ * running row behind it, while a live row that outran the read still follows
+ * the durable rows it came after.
+ */
+function placeLiveRows(
+  held: readonly UiMessage[],
+  page: readonly UiMessage[],
+  live: readonly UiMessage[],
+): UiMessage[] {
+  const next = dedupeSessionMessages([...page]);
+  const liveById = new Map(live.map((row) => [row.id, row]));
+  const positionOf = (id: string) => next.findIndex((existing) => existing.id === id);
+  for (const [index, row] of held.entries()) {
+    const liveRow = liveById.get(row.id);
+    if (!liveRow || positionOf(row.id) >= 0) continue;
+    let after: number | undefined;
+    let before: number | undefined;
+    for (const [other, heldRow] of held.entries()) {
+      if (other === index) continue;
+      const position = positionOf(heldRow.id);
+      if (position < 0) continue;
+      if (other < index) after = after === undefined ? position : Math.max(after, position);
+      else if (before === undefined) before = position;
+    }
+    const at = after !== undefined ? after + 1 : before !== undefined ? before : next.length;
+    next.splice(at, 0, liveRow);
+  }
+  return next;
+}
+
+/**
  * Apply one scoped read to an entry.
  *
- * Reads never erase: an `initial` page, an older page, and a tail refresh all
- * merge onto the rows the entry already owns, so a read that lands while a
- * live row was already routed in cannot take that row away. `initial` adopts
- * the echoed canonical identity and its page joins the held window, so the
- * published cursor always names the page the window starts on; `before`
- * moves the older cursor backward; `latest` replaces overlapping ids with the
- * durable version, appends the ids the entry did not hold yet, and adopts the
- * newer cursor, `hasMoreAfter`, and the tail's `messageEnd`.
+ * The entry holds ONE contiguous selected interval, so every answer either
+ * joins that interval on the side it was read for or starts a new one; it is
+ * never appended to a distant range. `initial` adopts the first durable page,
+ * `before` grows the window backwards, `after` grows it forwards, `focus`
+ * replaces the window with the page around a search target, and `latest`
+ * replaces it with the scope's newest page unless that page provably overlaps
+ * the held range.
  *
- * Root `Task` rows identify the chain and sit outside its page budget, so
- * context merges monotonically rather than resetting on a page that omits it.
- * An empty page is a legitimate state for this scope — a delegate that never
- * produced a row — while an entry that already holds rows stays ready.
+ * A page that cannot move the window's edge ends that direction instead: rows
+ * keep their physical ranges, so appending an unjoined page is exactly how two
+ * disjoint windows would be presented as one conversation. `initial` and
+ * `focus` speak for both sides; the joining directions speak only for their own
+ * side, and the opposite side keeps the flag it already had.
+ *
+ * Reads never erase a row the reader is watching: root `Task` context merges
+ * monotonically, and live rows no durable page has named yet are put back into
+ * the entry (the view decides what of that belongs in a historical range).
  */
 export function applySubagentHistoryPage(
   entry: SubagentHistoryEntry,
@@ -699,16 +779,72 @@ export function applySubagentHistoryPage(
   touched: number,
 ): SubagentHistoryEntry {
   const rows = detail.messages ?? [];
-  const initial = direction === "initial";
-  const merged =
-    direction === "latest"
-      ? mergeTailRows(entry.messages, rows)
-      : dedupeSessionMessages([...rows, ...entry.messages]);
+  const pageIds = new Set(rows.map((row) => row.id));
+  const page = pageOf(entry, detail);
+  const held = entry.pages ?? [];
+  const windowStart = held.length ? held[0].start : undefined;
+  const windowEnd = held.length ? held[held.length - 1].end : undefined;
+  const replaceWindow =
+    direction === "initial" ||
+    direction === "focus" ||
+    (direction === "latest" &&
+      (windowStart === undefined ||
+        windowEnd === undefined ||
+        page.start >= windowEnd));
+  // A joining answer has to move the edge the read asked for. A backward answer
+  // that starts at or below the window's own oldest bound did not move it, and
+  // a forward answer whose newest selected row is still inside the window did
+  // not either: both are dropped instead of doubling a range.
+  const joins =
+    !replaceWindow &&
+    (direction === "before"
+      ? windowStart !== undefined && page.start < windowStart
+      : windowEnd !== undefined && page.end > windowEnd);
+  const stalledBefore = !replaceWindow && !joins && direction === "before";
+  const stalledAfter = !replaceWindow && !joins && direction === "after";
+  const pages = replaceWindow
+    ? [page]
+    : joins
+      ? mergePageWindow({
+          window: {
+            pages: held,
+            hasMoreBefore: entry.hasMoreBefore,
+            hasMoreAfter: entry.hasMoreAfter,
+          },
+          page,
+          direction: direction === "before" ? "before" : "after",
+        }).pages
+      : [...held];
+  const oldest = pages[0];
+  const newest = pages[pages.length - 1];
+  // A joining page lands on its side: an older page prepends (its durable
+  // values are the newest answer for the ids it names), and a newer one
+  // appends over the rows the entry already holds. A replacing page takes the
+  // old selected range with it, but not the live rows the reader is already
+  // watching: those have no physical index yet, so they keep the place the
+  // announcement order gave them (see `placeLiveRows`).
+  const pendingIds = new Set((entry.livePending ?? []).map((row) => row.id));
+  const heldLive = entry.messages.filter(
+    (row) => pendingIds.has(row.id) && !pageIds.has(row.id),
+  );
+  // The answer is the newest value for every id it names, so the rows the entry
+  // already holds take the page's copy — a range that repeats what the window
+  // holds still confirms a finished child row instead of leaving its stale
+  // streaming copy on screen. It never appends a row: a page that does not
+  // extend the window has no position to give one.
+  const pageById = new Map(rows.map((row) => [row.id, row]));
+  const baseRows = replaceWindow
+    ? placeLiveRows(entry.messages, rows, heldLive)
+    : !joins
+      ? entry.messages.map((row) => pageById.get(row.id) ?? row)
+      : direction === "before"
+        ? dedupeSessionMessages([...rows, ...entry.messages])
+        : mergePageRows(entry.messages, rows);
   // The page confirms the live rows it names; the rest are newer than this
   // read and stay until a later page names them.
   const { messages, livePending } = reconcileLiveRows(
-    merged,
-    new Set(rows.map((row) => row.id)),
+    baseRows,
+    pageIds,
     entry.livePending ?? [],
   );
   const pageContext = detail.historyContext?.length
@@ -721,63 +857,20 @@ export function applySubagentHistoryPage(
       : entry.canonicalId;
   let aliases = aliasesWith(entry.aliases, canonicalId);
   for (const row of context) aliases = aliasesWith(aliases, delegationIdForMessage(row));
-  const pageStart = detail.messageStart;
-  // The answer is one physical page of the chain's sparse selection: its own
-  // bounds and the rows it contributed. A cursor derived from row order cannot
-  // be honest here, because a sparse page has no per-row physical index.
-  const page: PageWindowPage = {
-    start: pageStart ?? entry.messageStart,
-    end: detail.messageEnd ?? entry.messageEnd ?? pageStart ?? entry.messageStart,
-    ids: rows.map((row) => row.id),
-    hasMoreBefore: detail.hasMoreBefore === true,
-    hasMoreAfter: detail.hasMoreAfter === true,
-  };
-  // Every page joins the pages the entry already holds, including a focus page
-  // read from an entry that is already loaded: a page that lands beside or
-  // inside the held range must extend the window, not replace it, or rows the
-  // entry still shows would lose the physical range that their cursor states.
-  // An entry with no pages (its first durable answer, or one that held only
-  // live rows) has nothing to join, so the answer becomes the window.
-  const window: PageWindow = {
-    pages: entry.pages ?? [],
-    hasMoreBefore: entry.hasMoreBefore,
-    hasMoreAfter: entry.hasMoreAfter,
-  };
-  const windowed = mergePageWindow({
-    window,
-    page,
-    direction: initial ? "after" : direction === "before" ? "before" : "after",
-    limit: SUBAGENT_HISTORY_MESSAGE_LIMIT,
-  });
-  // A first answer has no page to be merged beside, so it states both sides
-  // itself: the window may begin or end where that page does. A page joining an
-  // existing window speaks only for the side it lands on.
-  if (initial && !window.pages.length) {
-    windowed.hasMoreBefore = page.hasMoreBefore === true;
-    windowed.hasMoreAfter = page.hasMoreAfter === true;
-  }
-  const focusId = entry.focus?.messageId;
-  // Rows of the pages the budget dropped leave with their page. Keeping a row
-  // whose physical range is not in the window is exactly what would let the
-  // cursor skip it later; the retained pages are the window the entry claims.
-  const retained = withoutPageWindowRows(messages, windowed.droppedIds, focusId);
-  /*
-    A focus row whose own page the budget dropped stays as an island: the rows
-    the window kept after it belong to a separate range, so the hole is recorded
-    instead of hidden. The island is the one row the reading window may hold
-    past its budget. Trimming a retained page row to pay for it would move the
-    cursor off the window's first page again — the skip this window exists to
-    prevent — so the island is stated, not paid for.
-  */
-  const focusIsland =
-    focusId !== undefined &&
-    retained.some((row) => row.id === focusId) &&
-    !windowed.pages.some((held) => held.ids.includes(focusId));
-  const omittedAfterId = focusIsland
-    ? focusId
-    : entry.omittedAfterId && retained.some((row) => row.id === entry.omittedAfterId)
-      ? entry.omittedAfterId
-      : undefined;
+  const hasMoreBefore = replaceWindow
+    ? page.hasMoreBefore === true
+    : stalledBefore
+      ? false
+      : direction === "before"
+        ? page.hasMoreBefore === true
+        : entry.hasMoreBefore;
+  const hasMoreAfter = replaceWindow
+    ? page.hasMoreAfter === true
+    : stalledAfter
+      ? entry.hasMoreAfter
+      : direction === "after" || direction === "latest"
+        ? page.hasMoreAfter === true
+        : entry.hasMoreAfter;
   return {
     ...entry,
     canonicalId,
@@ -785,133 +878,26 @@ export function applySubagentHistoryPage(
     // The status describes the delegate's own conversation: root `Task`
     // records identify the chain, but a chain with no child row yet has no
     // messages to show.
-    status: retained.length ? "ready" : "empty",
-    messages: retained,
+    status: messages.length ? "ready" : "empty",
+    messages,
     context,
     livePending,
-    messageStart: windowed.messageStart,
-    messageEnd: windowed.messageEnd,
-    pages: windowed.pages,
-    hasMoreBefore: windowed.hasMoreBefore,
-    hasMoreAfter: windowed.hasMoreAfter,
-    omittedAfterId,
+    messageStart: oldest?.start ?? entry.messageStart,
+    messageEnd: newest?.end ?? entry.messageEnd,
+    pages,
+    hasMoreBefore,
+    hasMoreAfter,
+    laterStalled: stalledAfter ? true : undefined,
     // A live row that arrived while this read was in flight is not in its
     // answer, so the entry stays stale and the next open refreshes the tail
     // instead of trusting this read.
     finalized: entry.liveDuringRead !== true,
     liveDuringRead: false,
     refreshing: false,
-    scoped: initial
-      ? detail.historyScope !== undefined
-      : entry.scoped || detail.historyScope !== undefined,
-    pendingDurable: false,
-    error: undefined,
-    retryDirection: undefined,
-    touched,
-  };
-}
-
-/**
- * Keep the newest contiguous pages one tail synchronization walked.
- *
- * A gap wider than a single synchronization may join would otherwise force
- * either an unbounded chain of reads or a silently incomplete history, so the
- * entry keeps a contiguous newest window instead: it reaches the scope's tail,
- * its rows are adjacent to each other, and the entry's older cursor moves to
- * the window's first page so ordinary "show earlier" paging re-reads the rows
- * the window left out. The search focus survives as its own retained row, and
- * the entry names the omission the view must state rather than presenting two
- * non-adjacent ranges as one conversation. The previously loaded rows are the
- * ones the window drops; nothing claims the scope starts there.
- */
-export function applySubagentHistoryTailWindow(
-  entry: SubagentHistoryEntry,
-  pages: readonly SessionDetail[],
-  touched: number,
-): SubagentHistoryEntry {
-  const focusId = entry.focus?.messageId;
-  const focusRow = focusId ? entry.messages.find((row) => row.id === focusId) : undefined;
-  // The window leaves room for one more older page and for the focus row itself,
-  // so the next explicit "show earlier" adds to the retained range instead of
-  // immediately trimming the rows it just read. One page is always kept.
-  const windowBudget =
-    SUBAGENT_HISTORY_MESSAGE_LIMIT - SUBAGENT_HISTORY_PAGE_SIZE - 1;
-  const retained: SessionDetail[] = [];
-  let retainedRows = 0;
-  for (let index = pages.length - 1; index >= 0; index -= 1) {
-    const size = (pages[index].messages ?? []).length;
-    if (retained.length && retainedRows + size > windowBudget) break;
-    retained.unshift(pages[index]);
-    retainedRows += size;
-  }
-  let messages = dedupeSessionMessages(retained.flatMap((page) => page.messages ?? []));
-  // A focus row outside the window is retained as its own range and needs a slot
-  // of its own: drop the window's oldest page rather than exceeding the budget.
-  while (
-    retained.length > 1 &&
-    messages.length >= SUBAGENT_HISTORY_MESSAGE_LIMIT - 1 &&
-    focusRow &&
-    !messages.some((row) => row.id === focusRow.id)
-  ) {
-    retained.shift();
-    messages = dedupeSessionMessages(retained.flatMap((page) => page.messages ?? []));
-  }
-  const oldest = retained[0] ?? pages[0];
-  const newest = retained[retained.length - 1] ?? pages[pages.length - 1];
-  const retainedPages: PageWindowPage[] = retained.map((page) => ({
-    start: page.messageStart ?? 0,
-    end: page.messageEnd ?? page.messageStart ?? 0,
-    ids: (page.messages ?? []).map((row) => row.id),
-    hasMoreBefore: page.hasMoreBefore === true,
-    hasMoreAfter: page.hasMoreAfter === true,
-  }));
-  let context = entry.context;
-  let aliases = entry.aliases;
-  let canonicalId = entry.canonicalId;
-  let scoped = entry.scoped;
-  for (const page of pages) {
-    context = dedupeSessionMessages([...context, ...(page.historyContext ?? [])]);
-    if (page.historyScope?.kind === "delegation" && page.historyScope.id) {
-      canonicalId = page.historyScope.id;
-    }
-    scoped = scoped || page.historyScope !== undefined;
-  }
-  for (const row of context) aliases = aliasesWith(aliases, delegationIdForMessage(row));
-  aliases = aliasesWith(aliases, canonicalId);
-  let omittedAfterId: string | undefined;
-  if (focusRow && !messages.some((row) => row.id === focusRow.id)) {
-    messages = [focusRow, ...messages];
-    omittedAfterId = focusRow.id;
-  }
-  // Every page the walk read confirms the rows it named, including pages the
-  // window itself could not keep. A live row none of them named has no durable
-  // copy yet, so it is put back after the retained run instead of erased by
-  // the replacement.
-  const confirmed = new Set(
-    pages.flatMap((page) => (page.messages ?? []).map((row) => row.id)),
-  );
-  const reconciled = reconcileLiveRows(messages, confirmed, entry.livePending ?? []);
-  return {
-    ...entry,
-    canonicalId,
-    aliases,
-    status: reconciled.messages.length ? "ready" : "empty",
-    messages: reconciled.messages,
-    context,
-    livePending: reconciled.livePending,
-    omittedAfterId,
-    messageStart: retainedPages[0]?.start ?? oldest?.messageStart ?? entry.messageStart,
-    messageEnd:
-      retainedPages[retainedPages.length - 1]?.end ?? newest?.messageEnd ?? entry.messageEnd,
-    pages: retainedPages,
-    hasMoreBefore: true,
-    hasMoreAfter: false,
-    // A window that predates a live row does not finalize the entry: the next
-    // open reads the tail again instead of trusting it.
-    finalized: entry.liveDuringRead !== true,
-    liveDuringRead: false,
-    refreshing: false,
-    scoped,
+    scoped:
+      direction === "initial" || direction === "focus"
+        ? detail.historyScope !== undefined
+        : entry.scoped || detail.historyScope !== undefined,
     pendingDurable: false,
     error: undefined,
     retryDirection: undefined,

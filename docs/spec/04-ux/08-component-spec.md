@@ -1492,8 +1492,9 @@ not a working claim, is what the reader sees.
   a row that already reached its end, on any read path. Live content and read lifecycle have
   separate owners: a live publication never marks an in-flight read finished,
   and a read whose answer was captured before a live row arrived leaves the
-  entry stale, so a reopen refreshes the tail and merges it over the rows it
-  already holds rather than resetting them; a failed read keeps those rows on
+  entry stale, so a reopen reads the newest page again — extending the window
+  when that page is adjacent and replacing it when it is not — and never merges
+  a distant tail into the held range; a failed read keeps those rows on
   screen with the failure stated inline and a retry. The rows are bounded
   (§9.9): a trim or eviction can drop old rows, and only a main-window change
   is guaranteed not to. The header and process follow that own source, so a
@@ -3272,42 +3273,56 @@ coexist as independent tabs. The tab renders the delegation as a conversation:
   take those rows away. The entry, not the main viewport, is the tab's source of
   truth.
 - Live rows arrive through the entry even when no read is in flight, and a live
-  row after the last durable read leaves it stale: reopening refreshes only the
-  tail and merges that page over what is already held instead of resetting it.
+  row after the last durable read leaves it stale: reopening is a latest read,
+  so the newest page extends the window when it is adjacent and replaces it
+  when it is not — never a second range merged onto the held one.
   A failed refresh keeps the loaded rows laid out in the tab, with the failure
   stated inline and a retry that repeats the same read; only a tab with nothing
   to show yet becomes a failed panel.
-- The owned rows are bounded twice, and neither bound cuts the other: the
-  reading window keeps whole pages up to 400 rows, and the live tail keeps 100
-  rows of its own. A chain's page is never cut to fit the row budget, so a
-  window is the pages it holds and nothing else — at the chain head that is the
-  head's own short page plus the full pages that fit, 309 rows for a 9-row
-  head. The main transcript window runs the same page arithmetic with no
-  budget, so its union of pages is unchanged. Paging is directional: an older read drops the newest page, a forward
-  read drops the oldest one, and the one page just read always survives. The
-  published cursors (`messageStart`/`messageEnd`) come from the retained pages,
-  so a cursor can never name a range the window does not hold; a dropped page's
-  rows leave with it and the state the view shows is the window's own. One
-  session keeps its 12 most recently read chains.
-- An explicit `Show earlier messages` click is the only older-page trigger and
-  holds the fragment in view: the hook captures it before the read, applies the
-  correction once the page's rows are mounted (layout phase, after the
-  disclosure hold and before follow), so rows growing above the reading line
-  do not move the reader's place. The tab states an omission when a budget
-  leaves its search focus as an island — the gap marker sits where adjacency
-  breaks, the island is the one row outside the window budget — and only the
-  main reading window's own changes are guaranteed not to remove loaded rows.
-- Reaching the newest rows after the tab already holds older ones is a joined,
-  bounded walk, not a jump: the newest page is read first, then the panel bridges
-  backwards over the physical `messageBefore` cursor until the walked range
-  overlaps the rows it holds or reaches the chain's head, and the walked pages
-  merge oldest first. The walk stops after 20 pages — 2000 selected rows — or
-  earlier when an answer cannot move the cursor; a stopped walk keeps the loaded
-  rows and offers the retry. A gap wider than the walk keeps a contiguous newest
-  window plus the retained focus row, prints the localized
-  "Earlier messages are omitted here" marker where the two ranges stop being
-  adjacent, keeps `Show earlier messages` active above the window, and re-reads
-  every omitted row through that control.
+- The tab holds one contiguous reading window, the same thing the main
+  transcript holds: a page joins it only when its physical range meets the side
+  it was read for, and every page the reader read stays — there is no per-chain
+  row budget, so a reader who pages to the chain's head and back to its tail
+  keeps one interval rather than two disjoint ranges. Only the live tail is
+  bounded on its own, at 100 rows per chain, because live rows carry no physical
+  page: they never evict a page the reader is reading. When that bound drops
+  rows, the window stops claiming the tail instead of drawing the remainder as
+  contiguous — `hasMoreAfter` stays true and the explicit latest read refills
+  it. Resource bounds apply outside the window: one session keeps its 12 most
+  recently read chains, and eviction drops a whole chain.
+- Boundary scrolling pages the window in the main transcript's direction, with
+  no paging control of its own: reaching the visible top reads the page before
+  the window's oldest bound (that bound is the cursor, handed back to the
+  backend that stated it), and reaching the visible bottom reads the page after
+  its newest bound, from the window's own physical end plus one page. A forward
+  answer that cannot move the window stops that direction at that boundary
+  instead of repeating the same read: nothing was fetched, so there is nothing
+  to retry, and the explicit latest read — or a search focus — is what selects
+  a new window. A prepend holds the fragment the reader was reading: the
+  hook captures it before the read and applies the correction once the page's
+  rows are mounted (layout phase, after the disclosure hold and before follow),
+  falling back to the content height the scroller gained when the browser
+  skipped laying that fragment out, so rows growing above the reading line do
+  not move the reader's place.
+- A search focus and a jump to latest select a window instead of merging a
+  page into the one on screen. A focused child message switches the window to
+  the contiguous page around that target — a page that belongs somewhere else is
+  never appended to the current or latest range — and the tab then draws only
+  that range: live rows outside it are not presented as adjacent. Jumping to
+  latest releases follow, reads the newest page, and scrolls to the bottom of
+  that fresh window, so the control can never land on the bottom of a stale
+  range; a live row the reader is already watching survives the replacement,
+  confirmed by the page or keeping the place its announcement order gave it
+  relative to the rows the page names. Follow is a window property
+  (`hasMoreAfter === false`), so a historical range takes no live output until
+  an explicit latest read reaches the tail again.
+- A backend that cannot select a scope keeps its own limits. The delegation
+  scope is forwarded only to the local host, so remote and native answers are
+  the legacy physical transcript with the chain's rows filtered out of it and an
+  opaque cursor; the tab pages older rows only with the cursor the answer
+  stated and serves a forward request by reading the newest page. No physical
+  cursor is derived from row counts for those backends, and the tab states no
+  range it cannot page.
 - The tab's scroll area is the pane's only scrollbar — the composer sits below
   it and never scrolls — and it reserves that trailing gutter whether or not the
   rows overflow, so opening a long command detail never narrows the transcript

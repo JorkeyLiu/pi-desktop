@@ -406,8 +406,6 @@ export const es = {
     loadingLaterMessages: "Cargando mensajes posteriores…",
     laterFailedRetry: "Reintentar la carga de mensajes posteriores",
     "showEarlierMessages": "Mostrar mensajes anteriores",
-    "showLatestMessages": "Mostrar mensajes más recientes",
-    "omittedEarlierMessages": "Los mensajes anteriores se omiten aquí",
     "copy": "Copiar",
     "copied": "Copiado",
     "copyFailed": "No se pudo copiar al portapapeles",

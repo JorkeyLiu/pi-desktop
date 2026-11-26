@@ -130,6 +130,17 @@ function createDurableHost() {
   const starts = new Map();
   const ended = [];
   const tasks = new Map();
+  // The last shape each running child row was published with while this
+  // simulator could still see it. A durable store is written from the row at
+  // the time the call ended, and never rewritten by what happens to the parent
+  // transcript afterwards — so a parked tab or a replaced live tail cannot
+  // change what the durable page answers.
+  const shapes = new Map();
+  const remember = () => {
+    for (const row of useAppStore.getState().messages) {
+      if (row.parentToolCallId) shapes.set(row.id, { ...row });
+    }
+  };
   const taskRow = (callId) => {
     const live = useAppStore.getState().messages.find((row) => row.toolCallId === callId);
     return {
@@ -149,27 +160,34 @@ function createDurableHost() {
     },
     starts,
     ended,
+    remember,
     async getSession(id, options) {
       const scope = options?.historyScope;
       const scopeId = scope?.id ?? "";
       const chainCallIds = new Set(
         [...tasks.keys()].filter((callId) => callId === scopeId || `d-${callId}` === scopeId),
       );
-       const children = ended
-         .filter(({ callId }) => {
-           const live = useAppStore.getState().messages.find((row) => row.id === callId);
-           return live?.parentToolCallId && chainCallIds.has(live.parentToolCallId);
-         })
-         .map(({ callId, ts }) => {
-           const live = useAppStore.getState().messages.find((row) => row.id === callId);
-           return {
-             ...live,
-             createdAt: at(starts.get(callId) ?? ts),
-             toolCompletedAt: at(ts),
-             toolStatus: "success",
-             status: "complete",
-           };
-         });
+      // A durable page is in physical order, which is the order the calls
+      // started, not the order they finished: B ends first here and still
+      // sits after A in the chain's history.
+      const children = ended
+        .filter(({ callId }) => {
+          const shape = shapes.get(callId);
+          return shape?.parentToolCallId && chainCallIds.has(shape.parentToolCallId);
+        })
+        .sort((left, right) => {
+          const leftStart = starts.get(left.callId) ?? left.ts;
+          const rightStart = starts.get(right.callId) ?? right.ts;
+          return leftStart - rightStart;
+        })
+        .map(({ callId, ts }) => ({
+          ...shapes.get(callId),
+          id: callId,
+          createdAt: at(starts.get(callId) ?? ts),
+          toolCompletedAt: at(ts),
+          toolStatus: "success",
+          status: "complete",
+        }));
        if (options?.messageBefore !== undefined) {
          return {
            session: {
@@ -307,7 +325,11 @@ async function runBashScenario(label, { sameMs = false, lateOpen = false, backgr
          const envelope = envelopes[fed++];
          if (envelope.event.type === "tool_start") host.noteStart(envelope.event.toolCallId, envelope.ts);
          if (envelope.event.type === "tool_end") host.noteEnd(envelope.event.toolCallId, envelope.ts);
-         useAppStore.getState().handleAgentEvent(envelope);
+        useAppStore.getState().handleAgentEvent(envelope);
+        // A durable store keeps the shape a child row was last published with
+        // while it was still visible; the parent transcript dropping that row
+        // later does not rewrite history.
+        host.remember();
        }
      };
      const snapshot = async (stage, extra = {}) => {

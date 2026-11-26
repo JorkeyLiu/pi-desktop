@@ -57,6 +57,8 @@ This log freezes previously open questions into concrete decisions.
 | D664 | Explicit images always travel; capability metadata stays informational | **Supersede the transport and Settings clauses of ADR 0101 / D197 and ADR 0218 / D392: `Model.input` always advertises `image` for runtime chat transports, so pi-ai can never replace an explicit user image with its omission placeholder. A new prompt, a steer/follow-up, restored user history, and tool-result image blocks are carried within the existing 10 MB per-image and 30 MB history bounds regardless of catalog modalities, unknown/custom ids, or a stored `supportsImages` value; published modalities and the override remain metadata on `modelConfig` and are never mutated. An over-size or unreadable explicit current-turn image fails visibly (`PAYLOAD_TOO_LARGE` / `UNSUPPORTED`) instead of silently becoming `@path`; over-budget history keeps its existing replayed path fallback. The Settings image-input toggle is removed, document input keeps its override, and catalog/discovery capability collection is unchanged. The persisted `supportsImages` field stays accepted as backward-compatible metadata. No IPC, protocol, schema, ownership, or provider-account change. See ADR 0334, `03-runtime/02-agent-runtime.md` §5c/§6, `03-runtime/13-model-catalog-and-selection.md` §11, `04-ux/06-settings-ia.md`, and E2E-CHAT-image-transport-metadata.** | Catalog rows are routinely text-only for gateways, custom endpoints, relays, and newly released models that accept images, so the metadata gate silently converted the user's own picture into a path; the delegated-child transport already carried it unconditionally. |
  | D665 | Secondary destinations open in one in-app floating window | **Supersede the full-page phrase of D062 / D063 / D090 while keeping their rail, search, elevated-card, and destination contract: Settings, Extensions, and Scheduled are three contents of one centered, fixed in-app window over chat, and `page` addresses a single window slot — `chat` means no window, any other value is the presented one. Exactly one window is presented; selecting another destination swaps the presented content instead of stacking a second root window or appending a navigation entry. The plate is one quiet integrated surface on the Settings content background with a subtle border and shadow and no OS-style title band: the destination's own header carries the single visible title, the accessible name stays on the dialog, and a floating close control sits top-right over reserved content space. It is content-sized (Settings 1120x820, Extensions 900x700, Scheduled 1200x760, each `min(size, viewport - 48px)`) and becomes a near-fullscreen inset below 860px width or 640px height; it cannot be dragged, resized, or promoted to its own native window. Plates stay mounted after their first open so scroll offsets, unsaved editor drafts, and in-flight reads survive a switch, while the presented plate is the only visible, interactive, non-`aria-hidden`/`inert` one. The chat shell stays mounted, inert, and never `hidden` or replaced, preserving its transcript, scroll position, composer draft, and running turn, and the runtime work panel keeps its dock behind the window. Dismissal is one path — floating close control, scrim, Escape, the presented footer destination toggle, and an external close — so no destination owns a back-to-app control. Escape closes one surface per press: a nested dialog, sheet, menu, or inline editor claims it first through the shared escape-owner registry only while actually open, so a retained closed menu cannot pin the owner set, and a retained but hidden nested surface cannot claim it. Opening saves the opener and focuses the plate container itself — never the close control, whose hover tooltip would otherwise paint uninvited — while the close control stays the first Tab stop; dismissal restores the opener, while an external close (a scheduled run opened into chat, a conversation switch) leaves focus on the composer; Tab is trapped in the plate and yields to a nested modal dialog or body-portaled menu. The shared blocking-overlay counter detaches native plugin views while a window is open. Settings tab/anchor/nonce deep links keep opening the window on that destination, affected nested popups keep their existing behavior, and reopening Scheduled restores the remembered task and run origin. Page modules warm from one loader table shared with an idle warmup scheduled after `ready` that only imports modules — never mounts pages or reads APIs — so a first open paints its shell immediately and chat startup keeps priority. Conversation history becomes chat-only: opening a destination never records an entry and `Cmd/Ctrl+[` / `Cmd/Ctrl+]` are inert while a window is presented. No IPC, host protocol, schema, storage, permission, or Plugin SDK change.** | The secondary destinations were full pages, so every visit was a round trip the user had to navigate back from: the chat surface, its scroll, and its draft disappeared behind the page, Plugins rewired the footer button into a history step, and scheduled runs reused destination history to return. One inert floating window keeps chat as the only home and removes return navigation entirely while the plate stays an in-app surface rather than a second operating-system window. |
 | D666 | Independent same-turn tool calls run in parallel | **Supersede ADR 0062 §4's execution-mode policy: parent sessions and delegated `SubagentRun` instances both use pinned pi-agent-core's parallel default for every tool batch, including mixed ordinary/`Task` calls. Dependencies are issued in later model turns. Remove runtime-owned blanket sequential declarations while preserving explicit extension modes, scoped tool selection, permission/mode/deferred admission, cancellation, delegate caps, result and usage identities, the shared same-path `PathMutex`, and host per-session mutation admission. No tool-group API, new scheduler, protocol, data, or UI change. See ADR 0340 and E2E-TOOL-BATCH-PARALLEL.** | Tool-name sequencing serialized unrelated work and duplicated one policy across the parent, shared catalog, extensions, and children. The upstream loop already starts a batch together and returns source-ordered results; resource owners, not blanket tool flags, must express real constraints. |
+| D667 | Delegate history browses one continuous window | **Amend ADR 0335 §8/§10 and the delegation clauses of `04-ux/08-component-spec.md` §5.7: the work-panel delegate tab holds what the main transcript holds — one contiguous selected interval of physical pages, with no 400-row window budget, no 20-page tail bridge, and no focus island or omission marker. A page joins only when its range meets the side it was read for; a search focus and a jump to latest select a new contiguous window (the jump reads the newest page before scrolling to it), and reaching a visible boundary pages one page in that direction while a post-settle prepend hold keeps the reading fragment. The 100-row live tail stays bounded on its own and stops claiming the tail when it trims; remote and native answers stay unscoped, page backward only with the cursor they stated, and serve forward requests from the newest page. Renderer-only; no host, Rust, persistence, or wire-contract change. See ADR 0335 and E2E-207g.** | A per-chain row budget plus a bounded backward bridge produced two disjoint ranges inside one transcript, an omission marker, and two paging controls; the main transcript's own unbounded contiguous policy is simpler and is what the same browsing surface should use. |
+
 
 ## B. Secondary implementation defaults
 
@@ -7994,3 +7996,44 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   `03-runtime/02-agent-runtime.md` §8,
   `03-runtime/03-tools-and-permissions.md` §4d, and
   E2E-TOOL-BATCH-PARALLEL.
+
+## 2026-11-26 — Delegate history browses one continuous window (D667)
+
+- D667 amends ADR 0335 §8/§10: the work-panel delegate tab keeps one
+  contiguous selected interval of physical pages, the same browsing policy the
+  main transcript uses. The 400-row per-chain window budget, the 20-page
+  backward tail bridge, the focus island, the omission marker, and the
+  explicit Show-earlier / Show-latest controls are removed.
+- A page joins the window only when its physical range meets the side it was
+  read for. A search focus and a jump to latest select a new contiguous window
+  instead of merging a distant page into the current or latest one, and the
+  jump reads the newest page before it scrolls, so the control cannot land on
+  the bottom of a stale range; an explicit jump also supersedes a boundary read
+  that is still in flight instead of silently landing on the older answer.
+- Reopening a chain whose rows were touched live is a latest read rather than
+  a merge: exactly one newest page, which extends the window when that page is
+  adjacent and becomes the window when it is not.
+- Reaching a visible boundary pages one page in that direction, exactly the
+  main transcript's direction: the older cursor is the window's own
+  `messageStart`, the forward cursor is its `messageEnd` plus one page, and a
+  forward answer that cannot move the window stops that direction at that
+  boundary: nothing was fetched, so there is nothing to retry, and the explicit
+  latest read — or a search focus — is what selects a new window. A
+  post-settle prepend hold keeps the fragment the reader was reading, including
+  when `content-visibility` skipped laying it out.
+- Only the live tail stays bounded on its own at 100 rows per chain; when it
+  trims, the window stops claiming the tail (`hasMoreAfter` true) and the
+  explicit latest read refills it. Live rows the reader is already watching
+  survive every replacement, confirmed by the page or keeping the place their
+  announcement order gave them relative to the rows the page names.
+- Remote and native backends drop the delegation scope, so their answers stay
+  the legacy physical transcript with an opaque cursor: the panel pages older
+  rows only with the cursor those answers stated and serves a forward request
+  from the newest page. No host, Rust, persistence, or wire-contract change is
+  involved.
+- Evidence: `apps/desktop/test/scoped-subagent-history.test.mjs`,
+  `apps/desktop/test/subagent-tab-scoped-history.test.mjs`,
+  `apps/desktop/test/transcript-subagent-bash-parallel.test.mjs`,
+  `node scripts/e2e-scoped-subagent-history.mjs`, and
+  `node scripts/e2e-scoped-history-real-host.mjs`. See ADR 0335,
+  `04-ux/08-component-spec.md` §5.7, and E2E-207g.

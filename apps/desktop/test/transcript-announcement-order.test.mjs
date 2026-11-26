@@ -8,8 +8,8 @@
  * For those rows `createdAt` is display metadata, never a position key.
  * Rows the live tail does not name stay on the chronological history
  * baseline (`createdAt` order with arrival tiebreak): the delegate view
- * restores `orderedRows`, so paging, focus islands, and context keep the
- * semantics the existing scoped-history tests pin down. No completion or
+ * restores `orderedRows`, so paging and context keep the semantics the
+ * existing scoped-history tests pin down. No completion or
  * status re-sort may move a row the baseline already placed.
  */
  import assert from "node:assert/strict";

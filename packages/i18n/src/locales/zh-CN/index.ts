@@ -408,8 +408,6 @@ export const zhCN = {
     loadingLaterMessages: "正在加载后续消息…",
     laterFailedRetry: "重试加载后续消息",
     showEarlierMessages: "显示更早的消息",
-    showLatestMessages: "显示最新消息",
-    omittedEarlierMessages: "更早的消息在此处略过",
     copy: "复制",
     copied: "已复制",
     copyFailed: "复制到剪贴板失败",

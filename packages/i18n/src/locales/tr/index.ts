@@ -415,8 +415,6 @@ export const tr = {
     loadingLaterMessages: "Sonraki mesajlar yükleniyor…",
     laterFailedRetry: "Sonraki mesajları yeniden yükle",
     showEarlierMessages: "Önceki iletileri göster",
-    showLatestMessages: "En yeni iletileri göster",
-    omittedEarlierMessages: "Önceki mesajlar burada atlanmıştır",
     copy: "Kopyala",
     copied: "Kopyalandı",
     copyFailed: "Panoya kopyalanamadı",

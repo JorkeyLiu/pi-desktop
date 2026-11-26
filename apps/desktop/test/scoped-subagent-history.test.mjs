@@ -17,15 +17,14 @@ register(new URL("./helpers/ts-import-hooks.mjs", import.meta.url));
 const { useAppStore } = await import("../src/stores/app-store.ts");
 const { api } = await import("../src/lib/api.ts");
 const {
-  SUBAGENT_HISTORY_BRIDGE_PAGES,
-  SUBAGENT_HISTORY_BRIDGE_STALLED,
   SUBAGENT_HISTORY_LIMIT,
   SUBAGENT_HISTORY_LIVE_TAIL_LIMIT,
-  SUBAGENT_HISTORY_MESSAGE_LIMIT,
+  SUBAGENT_HISTORY_PAGE_SIZE,
   applySubagentHistoryPage,
   applySubagentLiveRows,
   createSubagentHistoryEntry,
   findSubagentHistoryEntry,
+  subagentHistoryIsFollowing,
   subagentHistoryMessages,
 } = await import("../src/lib/subagent-history.ts");
 
@@ -749,7 +748,7 @@ test("a chain touched by live rows refreshes its tail once on reopen", async (t)
   const sessionId = "topic-delegate-refresh";
   seedStore(sessionId);
   let reads = 0;
-  t.mock.method(api, "getSession", async (id) => {
+  t.mock.method(api, "getSession", async (id, options = {}) => {
     reads += 1;
     if (reads === 1) {
       return page(id, [childRow(10, "call-1")], {
@@ -758,6 +757,16 @@ test("a chain touched by live rows refreshes its tail once on reopen", async (t)
         hasMoreAfter: true,
         scope: delegation("d1"),
         context: [taskRow("call-1", "d1")],
+      });
+    }
+    if (options.messageBefore === 20) {
+      // The range the refreshed window left behind is one ordinary older read.
+      return page(id, [childRow(10, "call-1")], {
+        messageStart: 10,
+        messageEnd: 11,
+        hasMoreBefore: false,
+        hasMoreAfter: true,
+        scope: delegation("d1"),
       });
     }
     return page(
@@ -775,6 +784,7 @@ test("a chain touched by live rows refreshes its tail once on reopen", async (t)
       {
         messageStart: 20,
         messageEnd: 21,
+        hasMoreBefore: true,
         scope: delegation("d1"),
         context: [taskRow("call-1", "d1")],
       },
@@ -793,7 +803,7 @@ test("a chain touched by live rows refreshes its tail once on reopen", async (t)
   useAppStore.setState({ messages: [] });
 
   await useAppStore.getState().ensureSubagentHistory({ sessionId, tabKey: "d1" });
-  const entry = findSubagentHistoryEntry(
+  let entry = findSubagentHistoryEntry(
     useAppStore.getState().subagentHistory,
     sessionId,
     "d1",
@@ -801,16 +811,30 @@ test("a chain touched by live rows refreshes its tail once on reopen", async (t)
   assert.equal(reads, 2, "a stale chain refreshes once when it is reopened");
   assert.deepEqual(
     entry.messages.map((message) => message.id),
-    ["child-10", "child-20", "child-21"],
-    "the refresh keeps what the entry held and recovers the events it missed",
+    ["child-20", "child-21"],
+    "the tail read replaces the target range instead of stating a gap",
   );
   assert.equal(entry.messages.at(-1).content, "durable final answer");
   assert.equal(entry.finalized, true, "a durable read finalizes the entry");
   assert.equal(entry.hasMoreAfter, false, "the tail read states the real tail");
   assert.equal(entry.messageEnd, 21);
+  assert.equal(entry.hasMoreBefore, true, "the rows before the window stay reachable");
+
+  // The interval the refresh left behind is reached by ordinary older paging,
+  // from the refreshed window's own cursor.
+  await useAppStore.getState().loadOlderSubagentHistory({ sessionId, tabKey: "d1" });
+  entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(reads, 3);
+  assert.deepEqual(entry.pages.map((held) => held.start), [10, 20]);
+  assert.deepEqual(entry.messages.map((message) => message.id), [
+    "child-10",
+    "child-20",
+    "child-21",
+  ]);
+  assert.equal(entry.messageStart, 10);
 
   await useAppStore.getState().ensureSubagentHistory({ sessionId, tabKey: "d1" });
-  assert.equal(reads, 2, "a finalized chain costs no read on reopen");
+  assert.equal(reads, 3, "a finalized chain costs no read on reopen");
 });
 
 test("a failed tail refresh keeps the chain available with its rows", async (t) => {
@@ -864,15 +888,16 @@ test("a failed tail refresh keeps the chain available with its rows", async (t) 
 
   await useAppStore.getState().retrySubagentHistory({ sessionId, tabKey: "d1" });
   entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
-  // The retry reads the tail page, then walks backward once to join the rows
-  // between it and the page the entry already held.
-  assert.equal(reads, 4, "the retry repeats the tail read and joins the gap");
+  // The retry repeats the read that failed: the tail page, once.
+  assert.equal(reads, 3, "the retry repeats the tail read");
   assert.equal(entry.status, "ready");
   assert.equal(entry.error, undefined);
   assert.deepEqual(
     entry.messages.map((message) => message.id),
-    ["child-10", "child-20", "child-21"],
+    ["child-20", "child-21"],
+    "the retried tail page becomes the contiguous window",
   );
+  assert.equal(entry.pages.length, 1);
 });
 
 test("a chain the host no longer knows is unavailable, not an empty delegate", async (t) => {
@@ -904,151 +929,113 @@ test("a chain the host no longer knows is unavailable, not an empty delegate", a
   assert.deepEqual(entry.context.map((message) => message.id), ["call-1-row"]);
 });
 
-test("a search range reaches newer rows without losing the target or loaded rows", async (t) => {
+test("a search range switches the window to the target and newer rows page forward", async (t) => {
   const sessionId = "topic-delegate-search-forward";
   seedStore(sessionId);
   const calls = [];
-  t.mock.method(api, "getSession", async (id, options = {}) => {
-    calls.push({ id, options });
-    if (options.messageAround) {
-      return page(id, [childRow(10, "call-1"), childRow(11, "call-1")], {
-        messageStart: 10,
-        messageEnd: 12,
-        hasMoreBefore: true,
-        hasMoreAfter: true,
-        scope: delegation("d1"),
-        context: [taskRow("call-1", "d1")],
-      });
-    }
-    if (options.messageBefore === 30) {
-      // The page between the target range and the newest page. Without it the
-      // panel would show `10, 11, 30, 31` as one conversation and silently drop
-      // the rows that belong between them.
-      return page(id, [childRow(20, "call-1"), childRow(21, "call-1")], {
-        messageStart: 20,
-        messageEnd: 22,
-        hasMoreBefore: true,
-        hasMoreAfter: true,
-        scope: delegation("d1"),
-      });
-    }
-    if (options.messageBefore === 20) {
-      return page(id, [childRow(10, "call-1"), childRow(11, "call-1")], {
-        messageStart: 10,
-        messageEnd: 12,
-        hasMoreBefore: true,
-        hasMoreAfter: true,
-        scope: delegation("d1"),
-      });
-    }
-    return page(
-      id,
-      [
-        childRow(30, "call-1"),
-        {
-          id: "child-31",
-          role: "assistant",
-          content: "the delegate's final answer",
-          parentToolCallId: "call-1",
-          createdAt: stamp(31),
-        },
-      ],
-      { messageStart: 30, messageEnd: 32, scope: delegation("d1") },
-    );
-  });
+  const selected = Array.from({ length: 1000 }, (_, index) => index);
+  t.mock.method(
+    api,
+    "getSession",
+    sparseTransport({
+      calls,
+      selected,
+      window: Array.from({ length: 100 }, (_, offset) => 400 + offset),
+    }),
+  );
+  const entryOf = () =>
+    findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
 
   await useAppStore.getState().ensureSubagentHistory({
     sessionId,
     tabKey: "d1",
-    messageId: "child-11",
+    messageId: "child-450",
     query: "final answer",
     requestId: 7,
   });
-  const opened = findSubagentHistoryEntry(
-    useAppStore.getState().subagentHistory,
-    sessionId,
-    "d1",
-  );
-  assert.equal(calls[0].options.messageAround, "child-11", "the target range is read, not the chain");
+  const opened = entryOf();
+  assert.equal(calls[0].options.messageAround, "child-450", "the target range is read, not the chain");
   assert.equal(calls[0].options.messageBefore, undefined);
   assert.equal(calls[0].options.historyScope.id, "d1");
-  assert.equal(opened.focus.messageId, "child-11");
-  assert.deepEqual(
-    opened.messages.map((message) => message.id),
-    ["child-10", "child-11"],
-  );
+  assert.equal(opened.focus.messageId, "child-450");
+  assert.deepEqual(opened.messages.map((message) => message.id), childRows(
+    Array.from({ length: 100 }, (_, offset) => 400 + offset),
+  ).map((row) => row.id));
+  assert.equal(opened.messageStart, 400, "the window starts at the target's page");
+  assert.equal(opened.messageEnd, 500);
   assert.equal(opened.hasMoreAfter, true, "the range states that newer rows exist");
-  assert.equal(opened.messageEnd, 12);
 
+  // Reaching the bottom pages forward, the direction the main transcript uses.
+  await useAppStore.getState().loadNewerSubagentHistory({ sessionId, tabKey: "d1" });
+  const forward = entryOf();
+  assert.equal(calls.at(-1).options.messageBefore, 600, "the forward cursor is the window's end plus a page");
+  assert.deepEqual(forward.pages.map((held) => held.start), [400, 500]);
+  assert.equal(forward.messageEnd, 600);
+  assert.equal(forward.messageStart, 400, "the target's page stays in the window");
+  await useAppStore.getState().loadNewerSubagentHistory({ sessionId, tabKey: "d1" });
+  assert.deepEqual(entryOf().pages.map((held) => held.start), [400, 500, 600]);
+
+  // Jumping to the latest replaces the whole range: the reader asked for the
+  // tail, not for the rows between the target and it.
   await useAppStore.getState().loadLatestSubagentHistory({ sessionId, tabKey: "d1" });
-  const merged = findSubagentHistoryEntry(
-    useAppStore.getState().subagentHistory,
-    sessionId,
-    "d1",
-  );
-  assert.equal(calls.length, 4, "the tail read and two bridge pages, and nothing more");
-  assert.equal(calls[1].options.messageAround, undefined, "the tail read centers on nothing");
-  assert.equal(calls[1].options.messageBefore, undefined);
-  assert.deepEqual(
-    calls.slice(2).map((call) => call.options.messageBefore),
-    [30, 20],
-    "the bridge walks backward from the newest page to the loaded range",
-  );
-  assert.deepEqual(
-    merged.messages.map((message) => message.id),
-    ["child-10", "child-11", "child-20", "child-21", "child-30", "child-31"],
-    "every selected row between the target and the tail is represented",
-  );
-  assert.equal(merged.focus.messageId, "child-11", "the search target keeps its focus");
-  assert.equal(merged.messageStart, 10, "the older cursor does not move forward");
-  assert.equal(merged.messageEnd, 32);
+  const merged = entryOf();
+  assert.equal(calls.at(-1).options.messageBefore, undefined, "the latest read centers on nothing");
+  assert.deepEqual(merged.pages.map((held) => held.start), [900], "the tail page is the window");
+  assert.equal(merged.focus.messageId, "child-450", "the search target keeps its focus");
+  assert.equal(merged.messageStart, 900);
+  assert.equal(merged.messageEnd, 1000);
   assert.equal(merged.hasMoreAfter, false, "the tail has been reached");
   assert.equal(merged.hasMoreBefore, true);
-  assert.equal(merged.omittedAfterId, undefined, "the joined range states no omission");
-  assert.deepEqual(
-    subagentHistoryMessages(merged, []).map((message) => message.id),
-    ["call-1-row", "child-10", "child-11", "child-20", "child-21", "child-30", "child-31"],
+  assert.equal("omittedAfterId" in merged, false, "the window states no omission: it is one range");
+  const view = subagentHistoryMessages(merged, [])
+    .map((message) => message.id)
+    .filter((id) => id.startsWith("child-"));
+  assert.ok(
+    view.every((id, index) => id === `child-${900 + index}`),
+    "the view is one contiguous interval after the jump",
   );
 });
 
 /*
- * A single answer wider than the row budget is the range the read asked for,
- * and a sparse page has no per-row physical index: trimming rows off its oldest
- * side would leave the entry's older cursor naming rows it no longer holds,
- * which is the skip the page window exists to prevent. So the budget keeps
- * whole pages and this one page stays whole — the declared page size (100) is
- * what bounds ordinary paging, and only a legacy answer wider than that reaches
- * this case.
+ * A single answer wider than the page size is the range the read asked for.
+ * A sparse page has no per-row physical index, so trimming rows off its oldest
+ * side would leave the entry's older cursor naming rows it no longer holds —
+ * the skip the contiguous window exists to prevent. The window therefore keeps
+ * whole pages and this page stays whole; the declared page size (100) is what
+ * bounds ordinary paging, and only a legacy answer wider than that reaches this
+ * case.
  */
-test("a single wide legacy page is kept whole, and its own bounds stay the cursor", () => {
+test("a single wide page is kept whole, and its own bounds stay the cursor", () => {
   const entry = {
-    ...createSubagentHistoryEntry("topic-delegate-cap", "d1", 1),
+    ...createSubagentHistoryEntry("topic-delegate-wide-page", "d1", 1),
     focus: { messageId: "child-0", query: "", requestId: 1 },
   };
-  const rows = Array.from({ length: SUBAGENT_HISTORY_MESSAGE_LIMIT + 20 }, (_, index) =>
+  // Wider than one page: a legacy or already-joined answer is a range the
+  // reader asked to see, so nothing trims it down to the page size.
+  const rows = Array.from({ length: SUBAGENT_HISTORY_PAGE_SIZE * 4 + 20 }, (_, index) =>
     childRow(index, "call-1"),
   );
   const applied = applySubagentHistoryPage(
     entry,
     {
-      id: "topic-delegate-cap",
+      id: "topic-delegate-wide-page",
       title: "Conversation",
       messages: rows,
       messageStart: 0,
       messageEnd: rows.length,
-      hasMoreBefore: true,
+      hasMoreBefore: false,
       hasMoreAfter: false,
       messageCount: rows.length,
       historyScope: delegation("d1"),
       historyContext: [taskRow("call-1", "d1")],
     },
-    "initial",
+    "focus",
     1,
   );
   assert.equal(applied.messages.length, rows.length, "the wide page is kept whole");
   assert.equal(applied.messageStart, 0, "the older cursor is the page's own start");
   assert.equal(applied.messageEnd, rows.length, "the window's end is the page's own exclusive end");
-  assert.equal(applied.hasMoreBefore, true);
+  assert.equal(applied.hasMoreBefore, false);
   assert.equal(applied.hasMoreAfter, false);
   assert.equal(applied.pages.length, 1, "the window states the one page it holds");
   assert.equal(applied.pages[0].ids.length, rows.length);
@@ -1109,60 +1096,45 @@ function sparseTransport({ calls, selected, window, context = [taskRow("call-1",
   };
 }
 
-test("the tail sync bridges every sparse page between the target and the newest rows", async (t) => {
-  const sessionId = "topic-delegate-sparse-bridge";
-  seedStore(sessionId);
-  const target = Array.from({ length: 10 }, (_, offset) => 1000 + offset);
-  const blocks = [3000, 7000].map((start) =>
-    Array.from({ length: 100 }, (_, offset) => start + offset),
-  );
-  const tail = Array.from({ length: 100 }, (_, offset) => 9900 + offset);
-  // The physical transcript spans 1000…10000; only these rows belong to the chain.
-  const selected = [...target, ...blocks.flat(), ...tail];
-  const calls = [];
-  t.mock.method(api, "getSession", sparseTransport({ calls, selected, window: target }));
-
-  await useAppStore.getState().ensureSubagentHistory({
-    sessionId,
-    tabKey: "d1",
-    messageId: "child-1005",
-    query: "final answer",
-    requestId: 3,
+test("a latest page that overlaps the held window joins it instead of replacing it", () => {
+  const detail = (start, count, extra = {}) => ({
+    id: "topic-delegate-overlap",
+    title: "Conversation",
+    messages: childRows(Array.from({ length: count }, (_, offset) => start + offset)),
+    messageStart: start,
+    messageEnd: start + count,
+    hasMoreBefore: start > 0,
+    hasMoreAfter: false,
+    messageCount: 5000,
+    historyScope: delegation("d1"),
+    historyContext: [taskRow("call-1", "d1")],
+    ...extra,
   });
-  await useAppStore.getState().loadLatestSubagentHistory({ sessionId, tabKey: "d1" });
-  const entry = findSubagentHistoryEntry(
-    useAppStore.getState().subagentHistory,
-    sessionId,
-    "d1",
-  );
-  const observed = calls.map((call) =>
-    call.options.messageAround ? "around" : call.options.messageBefore ?? "tail",
-  );
-  assert.deepEqual(
-    observed,
-    ["around", "tail", 9900, 7000, 3000],
-    "the tail read, then one backward read per sparse page, each in the chain's scope",
-  );
-  assert.deepEqual(
-    entry.messages.map((message) => message.id),
-    [...target, ...blocks.flat(), ...tail].map((index) => `child-${index}`),
-    "every selected row between the target and the tail is represented",
-  );
-  assert.equal(entry.focus.messageId, "child-1005", "the search target keeps its focus");
-  assert.equal(entry.messageStart, 1000, "the oldest loaded row's cursor stays where it was");
-  assert.equal(entry.messageEnd, 10000);
-  assert.equal(entry.hasMoreAfter, false, "only a joined walk states the real tail");
-  assert.equal(entry.hasMoreBefore, false);
-  assert.equal(entry.omittedAfterId, undefined, "a joined range states no omission");
-  assert.equal(
-    subagentHistoryMessages(entry, []).map((message) => message.id).length,
-    entry.messages.length + 1,
-    "the joined rows read as one conversation under the chain's root Task",
+  let entry = createSubagentHistoryEntry("topic-delegate-overlap", "d1", 1);
+  entry = applySubagentHistoryPage(entry, detail(600, 100), "initial", 1);
+  entry = applySubagentHistoryPage(entry, detail(500, 100), "before", 2);
+  assert.deepEqual(entry.pages.map((held) => held.start), [500, 600]);
+
+  // The tail page starts inside the held range: its rows overlap what is
+  // already here, so the two ranges are provably one interval.
+  entry = applySubagentHistoryPage(entry, detail(650, 100), "latest", 3);
+  assert.deepEqual(entry.pages.map((held) => held.start), [500, 600, 650]);
+  assert.equal(entry.messageStart, 500, "the older cursor does not move");
+  assert.equal(entry.messageEnd, 750, "the window now ends at the newest page");
+  assert.equal(entry.hasMoreAfter, false);
+  assert.equal(entry.hasMoreBefore, true);
+  const view = subagentHistoryMessages(entry, [])
+    .map((message) => message.id)
+    .filter((id) => id.startsWith("child-"));
+  assert.equal(view.length, 250, "the overlapping page adds its new rows only");
+  assert.ok(
+    view.every((id, index) => id === `child-${500 + index}`),
+    "the joined rows are one contiguous selection",
   );
 });
 
-test("a tail sync that cannot move closer stops with an error and keeps its rows", async (t) => {
-  const sessionId = "topic-delegate-stall";
+test("the jump to latest spends one read and never walks a gap", async (t) => {
+  const sessionId = "topic-delegate-one-tail-read";
   seedStore(sessionId);
   const calls = [];
   t.mock.method(api, "getSession", async (id, options = {}) => {
@@ -1177,7 +1149,7 @@ test("a tail sync that cannot move closer stops with an error and keeps its rows
         context: [taskRow("call-1", "d1")],
       });
     }
-    // The scope answers the same newest page for every cursor it is sent.
+    // The scope answers the same newest page for every request it is sent.
     return page(id, [childRow(30, "call-1")], {
       messageStart: 30,
       messageEnd: 31,
@@ -1200,26 +1172,91 @@ test("a tail sync that cannot move closer stops with an error and keeps its rows
     sessionId,
     "d1",
   );
-  assert.equal(calls.length, 3, "the tail read and one attempt that made no progress");
-  assert.equal(entry.status, "ready", "the loaded rows stay available");
-  assert.equal(entry.error, SUBAGENT_HISTORY_BRIDGE_STALLED);
-  assert.deepEqual(
-    entry.messages.map((message) => message.id),
-    ["child-10", "child-11"],
-    "a stalled bridge never erases what the entry held",
-  );
-  assert.equal(entry.hasMoreAfter, true, "an unjoined gap is never stated as the tail");
-  assert.equal(entry.retryDirection, "latest", "the failure names the read to repeat");
+  assert.equal(calls.length, 2, "the focus read and one tail read");
+  assert.equal(entry.status, "ready", "the panel stays available");
+  assert.equal(entry.error, undefined, "a distant tail is not an error");
+  assert.deepEqual(entry.pages.map((held) => held.start), [30], "the tail page is the window");
+  assert.deepEqual(entry.messages.map((message) => message.id), ["child-30"]);
+  assert.equal(entry.hasMoreAfter, false, "the read states the real tail");
 
-  await useAppStore.getState().retrySubagentHistory({ sessionId, tabKey: "d1" });
+  // A second latest read re-reads the same page: it replaces the copy of that
+  // range instead of doubling it or walking backwards again.
+  await useAppStore.getState().loadLatestSubagentHistory({ sessionId, tabKey: "d1" });
   entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
-  assert.equal(calls.length, 5, "the retry repeats the same bounded attempt, not a loop");
-  assert.equal(entry.error, SUBAGENT_HISTORY_BRIDGE_STALLED);
-  assert.deepEqual(entry.messages.map((message) => message.id), ["child-10", "child-11"]);
-  assert.equal(entry.hasMoreAfter, true);
+  assert.equal(calls.length, 3, "one read per latest request");
+  assert.equal(entry.pages.length, 1);
+  assert.deepEqual(entry.messages.map((message) => message.id), ["child-30"]);
 });
 
-test("a gap wider than one sync keeps a contiguous newest window and states the omission", async (t) => {
+test("forward paging reads from the window's own end and stops when a page gains nothing", async (t) => {
+  const sessionId = "topic-delegate-forward";
+  seedStore(sessionId);
+  const calls = [];
+  let stalled = true;
+  const pageOf = (id, rows, extra) =>
+    page(id, rows.map((index) => childRow(index, "call-1")), {
+      scope: delegation("d1"),
+      context: [taskRow("call-1", "d1")],
+      ...extra,
+    });
+  t.mock.method(api, "getSession", async (id, options = {}) => {
+    calls.push({ id, options });
+    if (options.messageAround) {
+      return pageOf(
+        id,
+        Array.from({ length: 100 }, (_, offset) => 100 + offset),
+        { messageStart: 100, messageEnd: 200, hasMoreBefore: true, hasMoreAfter: true },
+      );
+    }
+    if (stalled) {
+      // The answer repeats rows the window already holds.
+      return pageOf(
+        id,
+        Array.from({ length: 100 }, (_, offset) => 100 + offset),
+        { messageStart: 100, messageEnd: 200, hasMoreBefore: true, hasMoreAfter: true },
+      );
+    }
+    return pageOf(
+      id,
+      Array.from({ length: 100 }, (_, offset) => 200 + offset),
+      { messageStart: 200, messageEnd: 300, hasMoreBefore: true, hasMoreAfter: false },
+    );
+  });
+
+  await useAppStore.getState().ensureSubagentHistory({
+    sessionId,
+    tabKey: "d1",
+    messageId: "child-150",
+    query: "",
+    requestId: 1,
+  });
+  await useAppStore.getState().loadNewerSubagentHistory({ sessionId, tabKey: "d1" });
+  let entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(calls.length, 2, "the focus read and one forward read");
+  assert.equal(
+    calls.at(-1).options.messageBefore,
+    300,
+    "the forward page is asked for from the window's exclusive end plus one page",
+  );
+  assert.equal(entry.laterStalled, true, "a page that gained nothing stops the direction");
+  assert.equal(entry.hasMoreAfter, true, "newer rows still exist beyond the window");
+  assert.deepEqual(entry.pages.map((held) => held.start), [100]);
+  assert.equal(entry.messages.length, 100, "the stalled answer never erases the window");
+  assert.equal(entry.error, undefined, "a stall is not a read failure");
+
+  stalled = false;
+  await useAppStore.getState().loadNewerSubagentHistory({ sessionId, tabKey: "d1" });
+  entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(calls.length, 3);
+  assert.deepEqual(entry.pages.map((held) => held.start), [100, 200], "the next page is joined");
+  assert.equal(entry.messageStart, 100, "the older cursor does not move");
+  assert.equal(entry.messageEnd, 300);
+  assert.equal(entry.hasMoreAfter, false, "the joined page reached the tail");
+  assert.equal(entry.laterStalled, undefined, "a page that moved the window clears the stall");
+  assert.equal(entry.messages.length, 200);
+});
+
+test("a latest read past a wide gap starts the tail window and pages back through it", async (t) => {
   const sessionId = "topic-delegate-wide-gap";
   seedStore(sessionId);
   const target = [10, 11];
@@ -1243,55 +1280,40 @@ test("a gap wider than one sync keeps a contiguous newest window and states the 
     sessionId,
     "d1",
   );
-  assert.equal(
-    calls.length,
-    2 + SUBAGENT_HISTORY_BRIDGE_PAGES,
-    "one tail read and no more than the bounded walk",
-  );
-  assert.ok(
-    entry.messages.length <= SUBAGENT_HISTORY_MESSAGE_LIMIT,
-    "the retained window stays inside the row budget",
-  );
-  assert.equal(entry.messages[0].id, "child-11", "the focus survives as its own retained range");
-  assert.equal(entry.omittedAfterId, "child-11", "the omission is stated at the retained row");
   assert.deepEqual(
-    entry.messages.slice(1, 3).map((message) => message.id),
-    ["child-2200", "child-2201"],
-    "the retained rows are one contiguous newest run",
+    calls.map((call) => (call.options.messageAround ? "around" : call.options.messageBefore ?? "tail")),
+    ["around", "tail"],
+    "the jump to latest is one tail read, not a walk across the gap",
   );
-  assert.equal(entry.messages.length, 201, "the window leaves room for one older page");
-  assert.equal(entry.messageStart, 2200, "older paging resumes at the window's own first row");
+  assert.deepEqual(entry.pages.map((held) => held.start), [2300], "the tail page is the window");
+  assert.equal(entry.messages.length, SUBAGENT_HISTORY_PAGE_SIZE, "the target's rows are not kept beside it");
+  assert.equal(entry.messages[0].id, "child-2300");
+  assert.equal(entry.messageStart, 2300);
   assert.equal(entry.messageEnd, 2400);
   assert.equal(entry.hasMoreAfter, false, "the window reaches the tail");
-  assert.equal(entry.hasMoreBefore, true, "the dropped rows are still reachable");
+  assert.equal(entry.hasMoreBefore, true, "the rows between the target and the tail stay reachable");
+  assert.equal("omittedAfterId" in entry, false, "the window states no omission: it is one range");
 
   await useAppStore.getState().loadOlderSubagentHistory({ sessionId, tabKey: "d1" });
+  assert.equal(
+    calls.at(-1).options.messageBefore,
+    2300,
+    "ordinary paging walks the gap from the window's first row",
+  );
   const paged = findSubagentHistoryEntry(
     useAppStore.getState().subagentHistory,
     sessionId,
     "d1",
   );
-  assert.equal(
-    calls.at(-1).options.messageBefore,
-    2200,
-    "ordinary paging walks the gap from the window's first row",
+  assert.deepEqual(paged.pages.map((held) => held.start), [2200, 2300]);
+  assert.equal(paged.messageStart, 2200);
+  const view = subagentHistoryMessages(paged, [])
+    .map((message) => message.id)
+    .filter((id) => id.startsWith("child-"));
+  assert.ok(
+    view.every((id, index) => id === `child-${2200 + index}`),
+    "each step keeps one contiguous selection: the page read joins the window",
   );
-  assert.equal(paged.omittedAfterId, "child-11", "the omission stays stated while the gap is paged");
-  const view = subagentHistoryMessages(paged, []).map((message) => message.id);
-  assert.deepEqual(
-    view.slice(0, 3),
-    ["call-1-row", "child-11", "child-2100"],
-    "the page the window left out is read without skipping a row",
-  );
-
-  await useAppStore.getState().loadOlderSubagentHistory({ sessionId, tabKey: "d1" });
-  assert.equal(calls.at(-1).options.messageBefore, 2100, "each step moves one page closer");
-  const next = subagentHistoryMessages(
-    findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1"),
-    [],
-  ).map((message) => message.id);
-  assert.ok(next.includes("child-2050"), "repeated older paging keeps walking the gap's rows");
-  assert.equal(next[1], "child-11", "the focus range is never dropped while the gap is paged");
 });
 
 
@@ -1461,11 +1483,12 @@ test("a stale tail window keeps the live running child row and its steering row"
   );
 
   // The read was issued before the tool started, so its answer cannot name the
-  // row; the gap is wider than one synchronization, so it keeps a newest window.
+  // row. The target's window is far from the tail, so this latest read starts
+  // the tail as a new contiguous window and the live row is put back beside it.
   gates[0].release();
   await tailRead;
   entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
-  assert.equal(entry.omittedAfterId, "child-11", "the wide gap is stated, not hidden");
+  assert.equal(entry.pages.length, 1, "the latest read starts one contiguous tail window");
   assert.ok(
     rowIds(entry).includes(STEER_ID),
     "the durable row the read did name stays",
@@ -1481,10 +1504,9 @@ test("a stale tail window keeps the live running child row and its steering row"
     "the still-running row keeps its live state",
   );
   assert.ok(
-    entry.messages.length <= SUBAGENT_HISTORY_MESSAGE_LIMIT,
-    "the retained window keeps its row budget",
+    entry.messages.length <= SUBAGENT_HISTORY_PAGE_SIZE + entry.livePending.length,
+    "the window holds its own page and the live row it did not name",
   );
-  assert.equal(entry.refreshing, false, "the read releases its own refresh state");
   assert.equal(
     entry.finalized,
     false,
@@ -1654,8 +1676,8 @@ test("repeated live publications of one call hold a single unconfirmed row", asy
     "the unconfirmed set stays a subset of the tab's own rows",
   );
   assert.ok(
-    entry.livePending.length <= SUBAGENT_HISTORY_MESSAGE_LIMIT,
-    "repeat publications stay inside the row budget",
+    entry.livePending.length <= SUBAGENT_HISTORY_LIVE_TAIL_LIMIT,
+    "repeat publications stay inside the live tail's own bound",
   );
 
   // The call ends: the newest live state is the one the tab holds and the one
@@ -1758,118 +1780,15 @@ test("a completion that predates any durable page survives the window replacemen
   );
 });
 /*
- * A completed child chain's ShowEarlier click can land while the entry already
- * holds its full row budget: the older page it read is then 100 rows wider than
- * the room left. Whatever the window keeps, the rows the click asked for must
- * stay reachable and the older cursor must name the oldest row the entry still
- * holds. A cursor that moves below rows the trim dropped makes the next click
- * skip a whole physical page while the button still promises "earlier".
+ * One contiguous interval, the policy the main transcript follows: a reader
+ * keeps every page it actually read, so boundary scrolling walks the chain
+ * backwards without a row budget and without ever holding two ranges.
  */
-test("ShowEarlier after a full cache keeps the requested older page reachable", async (t) => {
-  const sessionId = "topic-delegate-full-cache-older";
+test("the reading window keeps every page it read in one contiguous interval", async (t) => {
+  const sessionId = "topic-delegate-continuous-window";
   seedStore(sessionId);
   const calls = [];
   const selected = Array.from({ length: 1000 }, (_, index) => index);
-  t.mock.method(api, "getSession", sparseTransport({ calls, selected }));
-
-  await useAppStore.getState().ensureSubagentHistory({ sessionId, tabKey: "d1" });
-  for (let page = 0; page < 3; page += 1) {
-    await useAppStore.getState().loadOlderSubagentHistory({ sessionId, tabKey: "d1" });
-  }
-  const entryOf = () =>
-    findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
-  let entry = entryOf();
-  assert.equal(
-    entry.messages.length,
-    SUBAGENT_HISTORY_MESSAGE_LIMIT,
-    "the entry holds its full row budget before the click",
-  );
-  assert.equal(entry.messages[0].id, "child-600", "the oldest retained row is the cursor");
-  assert.equal(entry.messageStart, 600, "the entry's older cursor is the oldest row it holds");
-  assert.equal(entry.hasMoreBefore, true);
-
-  await useAppStore.getState().loadOlderSubagentHistory({ sessionId, tabKey: "d1" });
-  assert.equal(calls.at(-1).options.messageBefore, 600, "the click pages backward from the oldest retained row");
-  entry = entryOf();
-  const view = subagentHistoryMessages(entry, []).map((message) => message.id);
-  const oldestPhysical = Number(entry.messages[0].id.slice("child-".length));
-  assert.ok(
-    view.includes("child-500") && view.includes("child-599"),
-    `the older page the click read is reachable afterwards (oldest held ${entry.messages[0].id}, cursor ${entry.messageStart}, rows ${entry.messages.length})`,
-  );
-  assert.ok(
-    entry.messages.length <= SUBAGENT_HISTORY_MESSAGE_LIMIT,
-    "the reachable window stays inside the row budget",
-  );
-  assert.equal(
-    entry.messageStart,
-    oldestPhysical,
-    "the older cursor names the oldest row the entry actually holds",
-  );
-});
-
-/*
- * The page window is bounded by pages, not by a row count: a read keeps the
- * side the reader asked for and drops the page at the opposite side, so the
- * cursors it publishes always name the pages it still holds.
- */
-test("a full reading window drops the page at the opposite side and states the range it keeps", async (t) => {
-  const sessionId = "topic-delegate-page-budget";
-  seedStore(sessionId);
-  const calls = [];
-  const selected = Array.from({ length: 700 }, (_, index) => index);
-  t.mock.method(api, "getSession", sparseTransport({ calls, selected }));
-  const entryOf = () =>
-    findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
-
-  await useAppStore.getState().ensureSubagentHistory({ sessionId, tabKey: "d1" });
-  for (let read = 0; read < 3; read += 1) {
-    await useAppStore.getState().loadOlderSubagentHistory({ sessionId, tabKey: "d1" });
-  }
-  let entry = entryOf();
-  assert.deepEqual(
-    entry.pages.map((held) => held.start),
-    [300, 400, 500, 600],
-    "four 100-row pages fill the window",
-  );
-  assert.equal(entry.messages.length, SUBAGENT_HISTORY_MESSAGE_LIMIT);
-  assert.equal(entry.messageStart, 300);
-  assert.equal(entry.messageEnd, 700);
-
-  // The next older read asks for 200…299, and the window is full: the newest
-  // page is what has to go, not the page the reader asked for.
-  await useAppStore.getState().loadOlderSubagentHistory({ sessionId, tabKey: "d1" });
-  assert.equal(calls.at(-1).options.messageBefore, 300, "the read pages backward from the window's start");
-  entry = entryOf();
-  assert.deepEqual(entry.pages.map((held) => held.start), [200, 300, 400, 500]);
-  assert.equal(entry.messages.length, SUBAGENT_HISTORY_MESSAGE_LIMIT);
-  assert.equal(entry.messageStart, 200);
-  assert.equal(entry.messageEnd, 600, "the newest retained page's own exclusive end");
-  assert.equal(entry.hasMoreBefore, true);
-  assert.equal(entry.hasMoreAfter, true, "the dropped newest page still has rows after the window");
-  const oldest = entry.messages[0].id.slice("child-".length);
-  const view = subagentHistoryMessages(entry, [])
-    .map((message) => message.id)
-    .filter((id) => id.startsWith("child-"));
-  assert.equal(Number(oldest), 200, "the older cursor names the oldest row the entry holds");
-  assert.equal(view.length, SUBAGENT_HISTORY_MESSAGE_LIMIT, "the window renders exactly what it holds");
-  assert.equal(
-    view[0],
-    "child-200",
-    "the oldest physical row the cursor reaches is the first row rendered",
-  );
-  assert.equal(view.at(-1), "child-599");
-  assert.ok(
-    view.every((id, index) => id === `child-${200 + index}`),
-    "the retained range is contiguous: no row between the cursor and the last page is skipped",
-  );
-});
-
-test("a forward read at the window budget keeps the newest page and does not duplicate rows", async (t) => {
-  const sessionId = "topic-delegate-forward-recovery";
-  seedStore(sessionId);
-  const calls = [];
-  const selected = Array.from({ length: 700 }, (_, index) => index);
   t.mock.method(api, "getSession", sparseTransport({ calls, selected }));
   const entryOf = () =>
     findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
@@ -1878,51 +1797,138 @@ test("a forward read at the window budget keeps the newest page and does not dup
   for (let read = 0; read < 4; read += 1) {
     await useAppStore.getState().loadOlderSubagentHistory({ sessionId, tabKey: "d1" });
   }
-  let entry = entryOf();
-  assert.deepEqual(entry.pages.map((held) => held.start), [200, 300, 400, 500]);
-  assert.equal(entry.messageStart, 200);
-  assert.equal(entry.messageEnd, 600);
-
-  // The reader jumps forward again: the newest page rejoins the window and the
-  // oldest one leaves, so the tail becomes reachable without exceeding the
-  // budget and without a row being read twice.
-  await useAppStore.getState().loadLatestSubagentHistory({ sessionId, tabKey: "d1" });
-  entry = entryOf();
-  assert.deepEqual(entry.pages.map((held) => held.start), [300, 400, 500, 600]);
-  assert.equal(entry.messages.length, SUBAGENT_HISTORY_MESSAGE_LIMIT);
-  assert.equal(entry.messageStart, 300, "the older cursor follows the page the budget dropped");
-  assert.equal(entry.messageEnd, 700);
-  assert.equal(entry.hasMoreBefore, true, "the dropped older page is still reachable backwards");
-  assert.equal(entry.hasMoreAfter, false, "the tail has been reached");
-  assert.ok(entry.messages.some((message) => message.id === "child-699"), "the newest row is reachable");
+  const entry = entryOf();
+  assert.deepEqual(
+    entry.pages.map((held) => held.start),
+    [500, 600, 700, 800, 900],
+    "every page the reader asked for stays in the window",
+  );
+  assert.equal(entry.messages.length, 5 * SUBAGENT_HISTORY_PAGE_SIZE);
+  assert.equal(entry.messageStart, 500, "the older cursor names the oldest retained page");
+  assert.equal(entry.messageEnd, 1000, "the window ends at the scope's tail");
+  assert.equal(entry.hasMoreBefore, true, "more rows sit before the window");
+  assert.equal(entry.hasMoreAfter, false, "the window reaches the tail");
+  assert.ok(subagentHistoryIsFollowing(entry), "a window at the tail follows live output");
   const view = subagentHistoryMessages(entry, [])
     .map((message) => message.id)
     .filter((id) => id.startsWith("child-"));
-  const unique = new Set(view);
-  assert.equal(unique.size, view.length, "a page that rejoins the window is not duplicated");
+  assert.equal(view.length, entry.messages.length, "the view draws the whole interval");
   assert.ok(
-    view.every((id, index) => id === `child-${300 + index}`),
-    "the range is contiguous across the join",
+    view.every((id, index) => id === `child-${500 + index}`),
+    "the retained rows are contiguous: no row between the cursor and the tail is skipped",
   );
+  assert.equal("omittedAfterId" in entry, false, "the window model has no omission field");
 });
 
 /*
- * A search target is a row the reader asked to keep in view. When the page
- * holding it is the page the budget drops, the row stays as an island and the
- * hole after it is recorded instead of hidden. Paying for the island by
- * trimming the oldest retained page row is what would move the cursor off the
- * window's first page again.
+ * A search target is a row the reader asked to see. The answer starts the
+ * window there — one contiguous interval around the target — instead of
+ * appending a distant page to the range already on screen.
  */
-test("a focus row whose page the budget drops stays as a recorded island", () => {
-  const detail = (start, count, extra = {}) => ({
-    id: "topic-delegate-focus-island",
+test("a focus page starts a new contiguous window around the target", () => {
+  const detail = (start, count) => ({
+    id: "topic-delegate-focus-window",
     title: "Conversation",
-    messages: childRows(
-      Array.from({ length: count }, (_, offset) => start + offset),
-    ),
+    messages: childRows(Array.from({ length: count }, (_, offset) => start + offset)),
     messageStart: start,
     messageEnd: start + count,
-    hasMoreBefore: true,
+    hasMoreBefore: start > 0,
+    hasMoreAfter: start + count < 5000,
+    messageCount: 5000,
+    historyScope: delegation("d1"),
+    historyContext: [taskRow("call-1", "d1")],
+  });
+  let entry = {
+    ...createSubagentHistoryEntry("topic-delegate-focus-window", "d1", 1),
+    focus: { messageId: "child-450", query: "", requestId: 2 },
+  };
+  entry = applySubagentHistoryPage(entry, detail(600, 100), "initial", 1);
+  entry = applySubagentHistoryPage(entry, detail(500, 100), "before", 2);
+  assert.deepEqual(entry.pages.map((held) => held.start), [500, 600]);
+
+  entry = applySubagentHistoryPage(entry, detail(400, 100), "focus", 3);
+  assert.deepEqual(entry.pages.map((held) => held.start), [400], "the target's page becomes the window");
+  assert.equal(entry.messageStart, 400);
+  assert.equal(entry.messageEnd, 500);
+  assert.equal(entry.hasMoreBefore, true, "rows before the target stay pageable");
+  assert.equal(entry.hasMoreAfter, true, "rows after the target stay pageable");
+  assert.ok(!subagentHistoryIsFollowing(entry), "a historical window does not follow live output");
+  const ids = entry.messages.map((message) => message.id);
+  assert.deepEqual(ids, childRows(Array.from({ length: 100 }, (_, offset) => 400 + offset)).map((row) => row.id));
+  for (const index of [500, 599, 600, 699]) {
+    assert.ok(!ids.includes(`child-${index}`), `child-${index} left with the window it belonged to`);
+  }
+  assert.equal(entry.messages.length, SUBAGENT_HISTORY_PAGE_SIZE, "no island row is kept");
+});
+
+/*
+ * "Jump to latest" reads the scope's newest page and selects it. A page far
+ * from the loaded window starts a fresh tail window; it is never appended to a
+ * distant range, and no omission marker stands in for the rows between them.
+ */
+test("a latest read replaces a distant window with the tail page", async (t) => {
+  const sessionId = "topic-delegate-latest-window";
+  seedStore(sessionId);
+  const calls = [];
+  const selected = Array.from({ length: 1000 }, (_, index) => index);
+  t.mock.method(api, "getSession", sparseTransport({ calls, selected, window: [400, 401, 402] }));
+  const entryOf = () =>
+    findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+
+  await useAppStore.getState().ensureSubagentHistory({
+    sessionId,
+    tabKey: "d1",
+    messageId: "child-401",
+    query: "answer",
+    requestId: 7,
+  });
+  let entry = entryOf();
+  assert.deepEqual(entry.pages.map((held) => held.start), [400]);
+  assert.equal(entry.hasMoreAfter, true);
+
+  await useAppStore.getState().loadLatestSubagentHistory({ sessionId, tabKey: "d1" });
+  entry = entryOf();
+  assert.deepEqual(
+    calls.map((call) => (call.options.messageAround ? "around" : call.options.messageBefore ?? "tail")),
+    ["around", "tail"],
+    "the latest read is one tail page, with no bridge walk",
+  );
+  assert.deepEqual(entry.pages.map((held) => held.start), [900], "the tail page becomes the window");
+  assert.equal(entry.messageStart, 900);
+  assert.equal(entry.messageEnd, 1000);
+  assert.equal(entry.hasMoreAfter, false);
+  assert.equal(entry.hasMoreBefore, true, "the rows the window left behind stay reachable");
+  assert.ok(subagentHistoryIsFollowing(entry));
+  assert.equal(entry.messages.length, SUBAGENT_HISTORY_PAGE_SIZE, "the old range is not still held");
+  const view = subagentHistoryMessages(entry, [])
+    .map((message) => message.id)
+    .filter((id) => id.startsWith("child-"));
+  assert.ok(
+    view.every((id, index) => id === `child-${900 + index}`),
+    "the view is exactly the tail interval",
+  );
+  // Ordinary older paging walks back from the tail, one contiguous page at a time.
+  await useAppStore.getState().loadOlderSubagentHistory({ sessionId, tabKey: "d1" });
+  entry = entryOf();
+  assert.equal(calls.at(-1).options.messageBefore, 900);
+  assert.deepEqual(entry.pages.map((held) => held.start), [800, 900]);
+  assert.equal(entry.messageStart, 800);
+});
+
+/*
+ * A forward page is asked for from the window's own exclusive end. An answer
+ * that does not move past it ends that direction: the window keeps its rows,
+ * the fact that newer rows exist is kept, and the explicit latest read is the
+ * way on. No read loop, no borrowed cursor arithmetic.
+ */
+test("a forward page that cannot move the window stops asking", () => {
+  const detail = (start, count, extra = {}) => ({
+    id: "topic-delegate-forward-stall",
+    title: "Conversation",
+    messages: childRows(Array.from({ length: count }, (_, offset) => start + offset)),
+    messageStart: start,
+    messageEnd: start + count,
+    hasMoreBefore: start > 0,
     hasMoreAfter: false,
     messageCount: 5000,
     historyScope: delegation("d1"),
@@ -1930,110 +1936,46 @@ test("a focus row whose page the budget drops stays as a recorded island", () =>
     ...extra,
   });
   let entry = {
-    ...createSubagentHistoryEntry("topic-delegate-focus-island", "d1", 1),
-    focus: { messageId: "child-650", query: "", requestId: 2 },
+    ...createSubagentHistoryEntry("topic-delegate-forward-stall", "d1", 1),
+    focus: { messageId: "child-150", query: "", requestId: 2 },
   };
-  entry = applySubagentHistoryPage(entry, detail(600, 100), "initial", 1);
-  for (const start of [500, 400, 300]) {
-    entry = applySubagentHistoryPage(entry, detail(start, 100), "before", 2);
-  }
-  assert.equal(entry.messages.length, SUBAGENT_HISTORY_MESSAGE_LIMIT);
-  assert.equal(entry.messageStart, 300);
-
-  entry = applySubagentHistoryPage(entry, detail(200, 100), "before", 3);
-  assert.deepEqual(entry.pages.map((held) => held.start), [200, 300, 400, 500]);
-  assert.equal(entry.messageStart, 200, "the cursor stays on the window's first page");
-  assert.equal(entry.messageEnd, 600);
+  entry = applySubagentHistoryPage(
+    entry,
+    detail(100, 100, { hasMoreAfter: true }),
+    "focus",
+    1,
+  );
   assert.equal(entry.hasMoreAfter, true);
-  assert.ok(
-    entry.messages.some((message) => message.id === "child-650"),
-    "the focused row survives the page drop",
-  );
-  assert.equal(entry.omittedAfterId, "child-650", "the hole after the island is recorded");
-  assert.equal(
-    entry.messages.length,
-    SUBAGENT_HISTORY_MESSAGE_LIMIT + 1,
-    "the island is the one row the window holds past its budget",
-  );
-  // The other rows of the dropped page leave with their page: the entry never
-  // keeps a row whose physical range its window no longer claims.
-  const ids = entry.messages.map((message) => message.id);
-  for (const index of [600, 620, 649, 651, 699]) {
-    assert.ok(!ids.includes(`child-${index}`), `child-${index} left with the dropped page`);
-  }
-  assert.ok(
-    !ids.some((id) => id.startsWith("child-6") && id !== "child-650"),
-    "no row of the dropped page remains except the recorded island",
-  );
-});
+  const before = entry.messages.map((message) => message.id);
 
-/*
- * A search page read from an entry that already holds a window joins the held
- * pages instead of replacing them. Replacing the pages would leave the held
- * rows on screen while the cursor names only the focus page, and the next
- * older read would skip the range the reader is looking at.
- */
-test("a focus page read from a loaded window joins it and keeps the window cursor", () => {
-  const detail = (start, count) => ({
-    id: "topic-delegate-focus-merge",
-    title: "Conversation",
-    messages: childRows(
-      Array.from({ length: count }, (_, offset) => start + offset),
-    ),
-    messageStart: start,
-    messageEnd: start + count,
-    hasMoreBefore: true,
-    hasMoreAfter: false,
-    messageCount: 5000,
-    historyScope: delegation("d1"),
-    historyContext: [taskRow("call-1", "d1")],
-  });
-  let entry = {
-    ...createSubagentHistoryEntry("topic-delegate-focus-merge", "d1", 1),
-    focus: { messageId: "child-450", query: "", requestId: 2 },
-  };
-  entry = applySubagentHistoryPage(entry, detail(700, 100), "initial", 1);
-  for (const start of [600, 800, 900]) {
-    entry = applySubagentHistoryPage(
-      entry,
-      detail(start, 100),
-      start === 900 ? "latest" : "before",
-      2,
-    );
-  }
-  assert.deepEqual(entry.pages.map((held) => held.start), [600, 700, 800, 900]);
-  entry = applySubagentHistoryPage(entry, detail(400, 100), "initial", 3);
-  assert.deepEqual(
-    entry.pages.map((held) => held.start),
-    [600, 700, 800, 900],
-    "the focus page joins the held window without replacing it",
-  );
-  assert.equal(entry.messageStart, 600, "the published cursor names the retained window");
-  assert.equal(entry.messageEnd, 1000);
-  assert.equal(entry.hasMoreAfter, false, "the retained window still ends at the scope's tail");
-  assert.equal(entry.hasMoreBefore, true, "the dropped focus page stays reachable backwards");
-  assert.equal(entry.messages.length, SUBAGENT_HISTORY_MESSAGE_LIMIT + 1);
-  assert.ok(entry.messages.some((message) => message.id === "child-450"));
-  assert.equal(entry.omittedAfterId, "child-450");
-  const ids = entry.messages.map((message) => message.id);
-  for (const index of [400, 449, 451, 499]) {
-    assert.ok(!ids.includes(`child-${index}`), `child-${index} left with the dropped page`);
-  }
+  // The answer repeats rows the window already holds: it cannot widen the edge.
+  const stalled = applySubagentHistoryPage(entry, detail(120, 60), "after", 2);
+  assert.equal(stalled.laterStalled, true, "the direction is recorded as stalled");
+  assert.equal(stalled.hasMoreAfter, true, "newer rows still exist beyond the window");
+  assert.deepEqual(stalled.messages.map((message) => message.id), before);
+  assert.deepEqual(stalled.pages.map((held) => held.start), [100]);
+
+  // A page that really follows the window is joined and clears the stall.
+  const joined = applySubagentHistoryPage(entry, detail(200, 100), "after", 3);
+  assert.equal(joined.laterStalled, undefined);
+  assert.deepEqual(joined.pages.map((held) => held.start), [100, 200]);
+  assert.equal(joined.messageStart, 100);
+  assert.equal(joined.messageEnd, 300);
+  assert.equal(joined.hasMoreAfter, false, "the joined page reached the tail");
+  assert.equal(joined.messages.length, 200);
 });
 
 /*
  * Live rows are the parent's publication tail, not a physical page. They are
- * bounded on their own so a background publication can never evict the page a
- * reader is reading; the rows a bounded tail drops sit after the window and
- * stay reachable through the forward control.
+ * bounded on their own, and a tail that had to drop its oldest row leaves a
+ * hole behind the window: the entry stops claiming the tail instead of drawing
+ * a disconnected run as the end of the conversation.
  */
-test("a live tail past its own budget keeps the reading window untouched", () => {
+test("a live tail past its own bound stops claiming the tail instead of hiding the hole", () => {
   const detail = (start, count) => ({
     id: "topic-delegate-live-tail",
     title: "Conversation",
-    messages: childRows(
-      Array.from({ length: count }, (_, offset) => start + offset),
-    ),
+    messages: childRows(Array.from({ length: count }, (_, offset) => start + offset)),
     messageStart: start,
     messageEnd: start + count,
     hasMoreBefore: start > 0,
@@ -2043,43 +1985,314 @@ test("a live tail past its own budget keeps the reading window untouched", () =>
     historyContext: [taskRow("call-1", "d1")],
   });
   let entry = createSubagentHistoryEntry("topic-delegate-live-tail", "d1", 1);
-  entry = applySubagentHistoryPage(entry, detail(300, 0), "initial", 1);
-  for (const start of [300, 200, 100, 0]) {
+  entry = applySubagentHistoryPage(entry, detail(900, 100), "initial", 1);
+  for (const start of [800, 700, 600, 500]) {
     entry = applySubagentHistoryPage(entry, detail(start, 100), "before", 2);
   }
-  assert.equal(entry.messages.length, SUBAGENT_HISTORY_MESSAGE_LIMIT, "the window is full");
+  assert.equal(entry.messages.length, 5 * SUBAGENT_HISTORY_PAGE_SIZE, "the window is untouched");
   const windowIds = entry.pages.flatMap((held) => held.ids);
   assert.deepEqual(
     windowIds,
-    Array.from({ length: SUBAGENT_HISTORY_MESSAGE_LIMIT }, (_, index) => `child-${index}`),
+    childRows(Array.from({ length: 500 }, (_, offset) => 500 + offset)).map((row) => row.id),
   );
 
   const live = [
     taskRow("call-1", "d1"),
-    ...childRows(Array.from({ length: 150 }, (_, offset) => 400 + offset)),
+    ...childRows(Array.from({ length: 150 }, (_, offset) => 1000 + offset)),
   ];
   const published = applySubagentLiveRows(entry, live);
   assert.ok(published, "live rows of this chain are routed in");
   assert.equal(
     published.hasMoreAfter,
     true,
-    "rows beyond the bounded tail stay stated as continuing",
+    "a trimmed live tail stops claiming the scope's tail",
   );
   assert.equal(
     published.messages.length,
-    SUBAGENT_HISTORY_MESSAGE_LIMIT + SUBAGENT_HISTORY_LIVE_TAIL_LIMIT,
-    "the window holds its budget and the tail holds its own",
+    SUBAGENT_HISTORY_PAGE_SIZE * 5 + SUBAGENT_HISTORY_LIVE_TAIL_LIMIT,
+    "the window holds its pages and the live tail holds its own bound",
   );
   const ids = published.messages.map((message) => message.id);
   assert.equal(new Set(ids).size, ids.length, "no row is held twice");
-  assert.deepEqual(
-    published.pages.flatMap((held) => held.ids),
-    windowIds,
-    "the reading window's pages are untouched by the publication",
-  );
-  for (const index of [400, 425, 449]) {
-    assert.ok(!ids.includes(`child-${index}`), `child-${index} is beyond the bounded tail`);
+  const view = subagentHistoryMessages(published, []).map((message) => message.id);
+  for (const index of [1000, 1049, 1100, 1149]) {
+    assert.ok(!view.includes(`child-${index}`), `child-${index} is not drawn as contiguous`);
   }
-  assert.ok(ids.includes("child-450"), "the oldest retained live row is the tail's own start");
-  assert.ok(ids.includes("child-549"), "the newest live row is retained");
+  assert.ok(
+    view.includes("child-500") && view.includes("child-999"),
+    "the durable window is what the historical view draws",
+  );
+});
+
+/**
+ * A client-side model of a delegation-scoped read over a sparse physical
+ * selection whose focus answers centre the page on the row asked for, the
+ * way the host does. `hold` slows one read so a test can keep it in flight
+ * while another request arrives.
+ */
+function scopedPageTransport({ calls, selected, hold }) {
+  const context = () => [taskRow("call-1", "d1")];
+  return async (id, options = {}) => {
+    calls.push({ id, options });
+    if (options.messageAround) {
+      const around = Number(String(options.messageAround).slice("child-".length));
+      const first = Math.max(
+        0,
+        Math.min(
+          selected.length - SUBAGENT_HISTORY_PAGE_SIZE,
+          around - SUBAGENT_HISTORY_PAGE_SIZE / 2,
+        ),
+      );
+      const slice = selected.slice(first, first + SUBAGENT_HISTORY_PAGE_SIZE);
+      return page(id, childRows(slice), {
+        messageStart: slice[0],
+        messageEnd: slice.at(-1) + 1,
+        hasMoreBefore: selected.some((index) => index < slice[0]),
+        hasMoreAfter: selected.some((index) => index > slice.at(-1)),
+        scope: delegation("d1"),
+        context: context(),
+      });
+    }
+    if (hold) await hold(options);
+    const cursor = options.messageBefore;
+    const eligible = cursor === undefined ? selected : selected.filter((index) => index < cursor);
+    const slice = eligible.slice(-SUBAGENT_HISTORY_PAGE_SIZE);
+    return page(id, slice.length ? childRows(slice) : [], {
+      messageStart: slice[0] ?? 0,
+      messageEnd: (slice.at(-1) ?? -1) + 1,
+      hasMoreBefore: slice.length ? selected.some((index) => index < slice[0]) : false,
+      hasMoreAfter: slice.length ? selected.some((index) => index > slice.at(-1)) : false,
+      scope: delegation("d1"),
+      context: context(),
+    });
+  };
+}
+
+/*
+ * "Jump to latest" is an explicit transition to the tail, so it supersedes a
+ * read that is still in flight instead of joining it. The older answer cannot
+ * decide where the pane lands: the tail read is what the reader asked for, and
+ * the late older page is dropped when it arrives.
+ */
+test("a jump to latest supersedes an older read that is still in flight", async (t) => {
+  const sessionId = "topic-delegate-latest-supersede";
+  seedStore(sessionId);
+  const calls = [];
+  const selected = Array.from({ length: 1000 }, (_, index) => index);
+  let releaseOlder;
+  const olderGate = new Promise((resolve) => {
+    releaseOlder = resolve;
+  });
+  t.mock.method(
+    api,
+    "getSession",
+    scopedPageTransport({
+      calls,
+      selected,
+      hold: async (options) => {
+        // The first older page stays unanswered until the test releases it.
+        if (options.messageBefore === 400) await olderGate;
+      },
+    }),
+  );
+  const entryOf = () =>
+    findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  const asKind = (call) =>
+    call.options.messageAround
+      ? "around"
+      : call.options.messageBefore === undefined
+        ? "tail"
+        : "before";
+
+  await useAppStore.getState().ensureSubagentHistory({
+    sessionId,
+    tabKey: "d1",
+    messageId: "child-450",
+    query: "",
+    requestId: 1,
+  });
+  assert.equal(entryOf().messageStart, 400, "the historical window is the target's page");
+  assert.equal(entryOf().hasMoreAfter, true, "newer rows exist past that window");
+  assert.deepEqual(calls.map(asKind), ["around"]);
+
+  // The reader reaches the visible top: the older page is requested and stays
+  // unanswered, so the chain has one read in flight.
+  const olderRead = useAppStore.getState().loadOlderSubagentHistory({ sessionId, tabKey: "d1" });
+  assert.deepEqual(calls.map(asKind), ["around", "before"], "the older page is in flight");
+  assert.equal(entryOf().refreshing, true);
+
+  // Jumping to the tail while that read is in flight must read the newest page
+  // itself, not hand back the older request.
+  const latestRead = useAppStore.getState().loadLatestSubagentHistory({ sessionId, tabKey: "d1" });
+  await Promise.race([latestRead, new Promise((resolve) => setTimeout(resolve, 100))]);
+  assert.notEqual(latestRead, olderRead, "the jump starts a read of its own");
+  assert.deepEqual(
+    calls.map(asKind),
+    ["around", "before", "tail"],
+    "the jump reads the newest page while the older page is still outstanding",
+  );
+  let entry = entryOf();
+  assert.equal(entry.messageStart, 900, "the tail page is the window the jump selects");
+  assert.equal(entry.hasMoreAfter, false, "the jump reached the tail");
+  assert.equal(entry.refreshing, false);
+
+  // The late older answer is dropped: it cannot move the pane back off the tail.
+  releaseOlder();
+  await Promise.race([olderRead, new Promise((resolve) => setTimeout(resolve, 100))]);
+  entry = entryOf();
+  assert.equal(calls.length, 3, "the older answer costs no further read");
+  assert.equal(entry.messageStart, 900, "the tail window survives the late older answer");
+  assert.equal(entry.hasMoreAfter, false);
+  assert.deepEqual(
+    entry.messages.map((message) => message.id),
+    childRows(Array.from({ length: 100 }, (_, offset) => 900 + offset)).map((row) => row.id),
+  );
+});
+
+/*
+ * A chain can own a live row the current rendered window does not hold: a
+ * historical window draws only its own contiguous range, so a live row past
+ * it is owned but not shown. A search hit on that row must therefore read the
+ * window around the target instead of deciding from the owned rows that the
+ * target is already presented.
+ */
+test("a focus target held only as a live row reads the window around it", async (t) => {
+  const sessionId = "topic-delegate-focus-live-row";
+  seedStore(sessionId);
+  const calls = [];
+  const selected = Array.from({ length: 1100 }, (_, index) => index);
+  t.mock.method(api, "getSession", scopedPageTransport({ calls, selected }));
+  const entryOf = () =>
+    findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  const liveRow = { ...childRow(900, "call-1"), toolStatus: "running" };
+
+  await useAppStore.getState().ensureSubagentHistory({
+    sessionId,
+    tabKey: "d1",
+    messageId: "child-450",
+    query: "",
+    requestId: 1,
+  });
+  // The chain's stream publishes a row newer than the target window.
+  useAppStore.setState({
+    activeSessionId: sessionId,
+    messages: [taskRow("call-1", "d1"), liveRow],
+  });
+  const live = useAppStore.getState().messages;
+  let entry = entryOf();
+  assert.ok(
+    entry.messages.some((message) => message.id === "child-900"),
+    "the chain owns the live row",
+  );
+  assert.ok(
+    !subagentHistoryMessages(entry, live).some((message) => message.id === "child-900"),
+    "the historical window does not draw that live row",
+  );
+  assert.equal(subagentHistoryIsFollowing(entry), false, "the window is historical");
+
+  // The reader opens the tab on the searched row: it is owned but not rendered,
+  // so the window has to move to it.
+  await useAppStore.getState().ensureSubagentHistory({
+    sessionId,
+    tabKey: "d1",
+    messageId: "child-900",
+    query: "delegate answer",
+    requestId: 9,
+  });
+  assert.equal(calls.length, 2, "the owned-but-unrendered target spends one focus read");
+  assert.equal(calls[1].options.messageAround, "child-900", "the read centres on the target");
+  entry = entryOf();
+  assert.equal(entry.messageStart, 850, "the window switches to the target's page");
+  assert.equal(entry.messageEnd, 950);
+  const rendered = subagentHistoryMessages(entry, live)
+    .map((message) => message.id)
+    .filter((id) => id.startsWith("child-"));
+  assert.equal(rendered.length, SUBAGENT_HISTORY_PAGE_SIZE);
+  assert.ok(rendered.includes("child-900"), "the searched row is in the rendered window");
+  assert.ok(
+    rendered.every((id, index) => id === `child-${850 + index}`),
+    "the rendered rows are one contiguous interval around the target",
+  );
+});
+
+/*
+ * A durable answer that names rows the window already holds is the newest
+ * value for those ids even when the page does not extend the window: a
+ * repeated tail read of the same range is exactly how a finished child row
+ * stops being displayed from its stale streaming copy.
+ */
+test("a same-range tail refresh confirms the held live row's durable value", async (t) => {
+  const sessionId = "topic-delegate-same-page-confirm";
+  seedStore(sessionId);
+  const calls = [];
+  let durable = false;
+  t.mock.method(api, "getSession", async (id) => {
+    calls.push({ id });
+    const rows = childRows(Array.from({ length: 100 }, (_, offset) => 900 + offset)).map((row) =>
+      row.id === "child-950" ? { ...row, toolStatus: "success" } : row,
+    );
+    return page(id, durable ? rows : rows.filter((row) => row.id !== "child-950"), {
+      messageStart: 900,
+      messageEnd: 1000,
+      hasMoreBefore: true,
+      hasMoreAfter: false,
+      scope: delegation("d1"),
+      context: [taskRow("call-1", "d1")],
+    });
+  });
+  const entryOf = () =>
+    findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+
+  await useAppStore.getState().ensureSubagentHistory({ sessionId, tabKey: "d1" });
+  let entry = entryOf();
+  assert.deepEqual(entry.pages.map((held) => held.start), [900]);
+  assert.equal(entry.hasMoreAfter, false);
+  assert.equal(entry.messageStart, 900);
+
+  // The child's call is still running: its row exists only in the live array.
+  useAppStore.setState({
+    activeSessionId: sessionId,
+    messages: [
+      taskRow("call-1", "d1"),
+      { ...childRow(950, "call-1"), toolStatus: "running", content: "read file-950" },
+    ],
+  });
+  entry = entryOf();
+  assert.equal(
+    entry.messages.find((message) => message.id === "child-950").toolStatus,
+    "running",
+    "the live row is what the chain holds while the call runs",
+  );
+  assert.deepEqual(
+    entry.livePending.map((row) => row.id),
+    ["child-950"],
+    "the running row is unconfirmed",
+  );
+  assert.equal(entry.finalized, false);
+
+  // The call ends and the same range is read again: the page names the row.
+  durable = true;
+  await useAppStore.getState().loadLatestSubagentHistory({ sessionId, tabKey: "d1" });
+  entry = entryOf();
+  assert.equal(calls.length, 2, "one newest-page read, no page walk");
+  assert.deepEqual(entry.pages.map((held) => held.start), [900], "the range did not extend");
+  assert.equal(entry.messageStart, 900);
+  assert.equal(entry.messageEnd, 1000);
+  assert.equal(
+    entry.messages.find((message) => message.id === "child-950").toolStatus,
+    "success",
+    "the durable value replaces the stale live status",
+  );
+  assert.equal(entry.messages.filter((message) => message.id === "child-950").length, 1);
+  assert.deepEqual(entry.livePending, [], "the confirmed row is retired");
+  assert.equal(entry.finalized, true, "the entry now matches the store");
+
+  // Nothing arrived after that answer, so reopening the tab costs no read.
+  await useAppStore.getState().ensureSubagentHistory({ sessionId, tabKey: "d1" });
+  assert.equal(calls.length, 2, "a finalized reopen spends no read");
+  assert.equal(
+    entryOf().messages.find((message) => message.id === "child-950").toolStatus,
+    "success",
+    "the finalized row is not downgraded",
+  );
 });

@@ -280,75 +280,61 @@ test("a failed refresh keeps the delegate's rows beside its inline error", async
   }
 });
 
-test("the show-latest trigger appears only while the scope has newer rows", async () => {
+test("a historical window keeps the jump control and never draws the live tail as contiguous", async () => {
   const { vite, render, useAppStore } = await setup();
   try {
+    const target = childAnswer("a-11", "call-1", "the search target");
     seed(useAppStore, {
-      mainMessages: [],
-      entries: [delegateEntry({ hasMoreAfter: true })],
-    });
-    const withNewer = render();
-    assert.match(withNewer, /data-testid="subagent-show-latest"/);
-    assert.match(withNewer, /Show latest messages/);
-
-    seed(useAppStore, {
-      mainMessages: [],
-      entries: [delegateEntry({ hasMoreAfter: false })],
-    });
-    const atTail = render();
-    assert.doesNotMatch(atTail, /Show latest messages/);
-  } finally {
-    await vite.close();
-  }
-});
-
-test("the show-earlier trigger appears only while the page has older rows", async () => {
-  const { vite, render, useAppStore } = await setup();
-  try {
-    seed(useAppStore, {
-      mainMessages: [],
-      entries: [delegateEntry({ hasMoreBefore: true })],
-    });
-    const withOlder = render();
-    assert.match(withOlder, /Show earlier messages/);
-
-    seed(useAppStore, {
-      mainMessages: [],
-      entries: [delegateEntry({ hasMoreBefore: false })],
-    });
-    const atHead = render();
-    assert.doesNotMatch(atHead, /Show earlier messages/);
-  } finally {
-    await vite.close();
-  }
-});
-
-test("a retained range states the omission it stands on", async () => {
-  const { vite, render, useAppStore } = await setup();
-  try {
-    seed(useAppStore, {
-      mainMessages: [],
+      mainMessages: [
+        message("u-1", "user", "Summarize the issue"),
+        childAnswer("a-2100", "call-1", "the newest live row"),
+      ],
       entries: [
         delegateEntry({
-          messages: [
-            childAnswer("a-11", "call-1", "the search target"),
-            childAnswer("a-2100", "call-1", "the newest page"),
+          messages: [target],
+          pages: [
+            {
+              start: 10,
+              end: 12,
+              ids: [target.id],
+              hasMoreBefore: false,
+              hasMoreAfter: true,
+            },
           ],
-          omittedAfterId: "a-11",
+          hasMoreAfter: true,
         }),
       ],
     });
     const html = render();
-    assert.match(html, /data-testid="subagent-history-omitted"/, "the omission is stated in place");
-    assert.match(html, /Earlier messages are omitted here/);
-    assert.ok(
-      html.indexOf("a-11") < html.indexOf("subagent-history-omitted"),
-      "the statement follows the retained row it belongs to",
-    );
-    assert.ok(
-      html.indexOf("subagent-history-omitted") < html.indexOf("a-2100"),
-      "the two ranges are never presented as one contiguous conversation",
-    );
+    assert.match(html, /the search target/, "the window around the target renders");
+    assert.doesNotMatch(html, /the newest live row/, "a disconnected live row is not drawn");
+    assert.match(html, /class="jump-latest-btn subagent-transcript-jump"/, "the range keeps its jump control");
+    assert.doesNotMatch(html, /data-testid="subagent-history-omitted"/, "no omission marker exists");
+    assert.doesNotMatch(html, /Show latest messages/, "there is no separate show-latest control");
+    assert.doesNotMatch(html, /Show earlier messages/, "there is no separate show-earlier control");
+  } finally {
+    await vite.close();
+  }
+});
+
+test("a window at the tail draws the live rows it follows", async () => {
+  const { vite, render, useAppStore } = await setup();
+  try {
+    const page = childAnswer("a-10", "call-1", "the durable tail row");
+    seed(useAppStore, {
+      mainMessages: [childAnswer("a-11", "call-1", "the streaming row")],
+      entries: [
+        delegateEntry({
+          messages: [page, childAnswer("a-11", "call-1", "the streaming row")],
+          pages: [{ start: 10, end: 11, ids: [page.id], hasMoreBefore: true }],
+          hasMoreAfter: false,
+        }),
+      ],
+    });
+    const html = render();
+    assert.match(html, /the durable tail row/);
+    assert.match(html, /the streaming row/, "a window at the tail keeps following live output");
+    assert.doesNotMatch(html, /class="jump-latest-btn subagent-transcript-jump"/, "a tail window has nothing later");
   } finally {
     await vite.close();
   }

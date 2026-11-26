@@ -99,11 +99,6 @@ const FINAL_REPORT =
 const CHAIN_CHILD_TOTAL = 1001 + 5 + 3;
 const TOP_LEVEL_TOTAL = 150;
 const ORDINARY_ROWS = 140;
-const PANEL_PAGE_ROWS = 100;
-const PANEL_ROW_BUDGET = 400;
-// Head (9 rows) plus three full 100-row pages: the largest whole-page window
-// under the 400-row budget, so paging to the chain head never cuts a page.
-const PANEL_HEAD_ROWS = 9 + 3 * PANEL_PAGE_ROWS;
 
 const timestamp = (second) =>
   new Date(Date.UTC(2026, 9, 18, 0, 0, second)).toISOString();
@@ -829,8 +824,7 @@ async function tabState() {
         rowIds: list
           ? Array.from(list.querySelectorAll('.message-row.assistant[data-message-id]')).map((row) => row.getAttribute('data-message-id'))
           : [],
-        earlier: Boolean(document.querySelector('.subagent-transcript-earlier:not([data-testid="subagent-show-latest"]) .link-btn')),
-        showLatest: Boolean(document.querySelector('[data-testid="subagent-show-latest"] .link-btn')),
+        jump: Boolean(document.querySelector('.subagent-transcript-jump')),
         empty: Boolean(document.querySelector('[data-testid="subagent-history-empty"]')),
         failed: Boolean(document.querySelector('[data-testid="subagent-history-error"]')),
       };
@@ -1014,65 +1008,263 @@ try {
   assert(firstTab.status.length > 0, "the panel renders the chain status label");
   result.phases.panelOpen = { read: compactEvent(firstPanelRead), tab: firstTab };
 
+  // ----------------- 3b. search a nested child -> its owning tab, from a partial window
+  // The panel opened on the scope's tail page, so the early nested child is
+  // outside the window: the focus read must replace it with the target's page.
+  const searchFrom = mark();
+  await desktop.evaluate(
+    `(() => {
+      const button = document.querySelector('button[aria-label="Search"]');
+      if (!button) throw new Error('search control missing');
+      button.click();
+    })()`,
+  );
+  await until(
+    () => desktop.evaluate(`Boolean(document.querySelector('.search-input'))`),
+    "search dialog",
+  );
+  await desktop.evaluate(
+    `(() => {
+      const input = document.querySelector('.search-input');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, ${JSON.stringify(NESTED_TOKEN)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`,
+  );
+  await until(
+    () =>
+      desktop.evaluate(
+        `Array.from(document.querySelectorAll('.search-message-hit')).some((hit) => hit.textContent.includes(${JSON.stringify(NESTED_TOKEN)}))`,
+      ),
+    "the nested child search hit",
+    30_000,
+  );
+  await desktop.evaluate(
+    `Array.from(document.querySelectorAll('.search-message-hit')).find((hit) => hit.textContent.includes(${JSON.stringify(NESTED_TOKEN)})).click()`,
+  );
+  await until(
+    () => desktop.evaluate(`!document.querySelector('.search-dialog')`),
+    "search dialog closes",
+  );
+  const physicalSearchRead = await until(
+    () =>
+      readsFor(
+        searchFrom,
+        (event) =>
+          event.params.messageAround === NESTED_TARGET &&
+          event.params.historyScope === undefined,
+      )[0],
+    "the physical search read",
+  );
+  assert.equal(physicalSearchRead.params.messageLimit, 60);
+  assert.equal(physicalSearchRead.params.contentLimit, 64 * 1024);
+  assert.equal(physicalSearchRead.summary.navigationParentId, TASK_1, "physical search resolves the owning Task");
+  // The search request is made under the parent tool-call id, while the tab it
+  // lands in already holds the delegation identity. The focus has to reach the
+  // mounted surface, so the target row must be rendered and marked there.
+  const searchFocusDeadline = Date.now() + 8_000;
+  let focused = { present: false };
+  while (Date.now() < searchFocusDeadline) {
+    focused = await desktop.evaluate(
+      `(() => {
+        const list = document.querySelector('.subagent-transcript-list');
+        const row = list ? list.querySelector('[data-message-id="${NESTED_TARGET}"]') : null;
+        const scroller = document.querySelector('.subagent-transcript-scroll');
+        // A literal-text hit paints through the CSS Highlight registry; the
+        // source class only marks source-only owners (link destinations, markup).
+        const highlight = globalThis.CSS?.highlights?.get('transcript-search');
+        let ranges = 0;
+        let anchored = false;
+        if (highlight) {
+          for (const range of highlight) {
+            ranges += 1;
+            if (range.startContainer.parentElement?.closest('[data-message-id]') === row) anchored = true;
+          }
+        }
+        const viewport = scroller ? scroller.getBoundingClientRect() : { top: 0, height: 0 };
+        const box = row ? row.getBoundingClientRect() : { top: 0 };
+        return row ? {
+          present: true,
+          highlighted: row.classList.contains('transcript-search-source-match') || anchored,
+          highlightRanges: ranges,
+          topGap: box.top - viewport.top,
+          viewportHeight: viewport.height,
+          activeTabId: document.querySelector('.work-panel-tab.active')?.getAttribute('data-work-panel-tab-id') ?? null,
+        } : {
+          present: false,
+          activeTabId: document.querySelector('.work-panel-tab.active')?.getAttribute('data-work-panel-tab-id') ?? null,
+          panelRows: list ? list.querySelectorAll('[data-message-id]').length : 0,
+        };
+      })()`,
+    );
+    if (focused.present) break;
+    await delay(200);
+  }
+  const scopedFocusRead = readsFor(
+    searchFrom,
+    (event) =>
+      event.summary?.historyScope?.kind === "delegation" &&
+      event.params.messageAround === NESTED_TARGET,
+  )[0];
+  assert(scopedFocusRead, "the focused search spent a delegation-scoped read");
+  assert.equal(
+    scopedFocusRead.params.historyScope.id,
+    DELEGATION,
+    "the focus read follows the tab the open request landed in, not the identity that asked",
+  );
+  assert.equal(scopedFocusRead.summary.historyScope.id, DELEGATION, "the scope answer echoes the tab chain");
+  assert.equal(focused.present, true, `the focused target is missing from the open panel: ${JSON.stringify(focused)}`);
+  assert.equal(focused.highlighted, true, `the focused target carries the search highlight: ${JSON.stringify(focused)}`);
+  assert.ok(
+    focused.topGap >= 0 && focused.topGap <= Math.max(120, focused.viewportHeight * 0.5),
+    `the focused target is scrolled into the panel viewport: ${JSON.stringify(focused)}`,
+  );
+  assert.equal(focused.activeTabId, `subagent:${DELEGATION}`, "the focus lands in the chain's own tab");
+  const _focusView = () =>
+    desktop.evaluate(
+      `(() => {
+        const list = document.querySelector('.subagent-transcript-list');
+        const ids = list
+          ? Array.from(list.querySelectorAll('.message-row.assistant[data-message-id]')).map((row) => row.getAttribute('data-message-id'))
+          : [];
+        const scroller = document.querySelector('.subagent-transcript-scroll');
+        return {
+          rows: ids.length,
+          uniqueRows: new Set(ids).size,
+          firstRow: ids[0] ?? null,
+          lastRow: ids[ids.length - 1] ?? null,
+          focusVisible: ids.includes(${JSON.stringify(NESTED_TARGET)}),
+          omittedMarker: Boolean(document.querySelector('[data-testid="subagent-history-omitted"]')),
+          jump: Boolean(document.querySelector('.subagent-transcript-jump')),
+          distanceFromBottom: scroller ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight : null,
+        };
+      })()`,
+    );
+  const focusedPage = await _focusView();
+  const mainSearchIds = await mainRowIds();
+  assert(!mainSearchIds.includes(NESTED_TARGET), "the main transcript still holds no child row");
+  // The focused read replaced the tail window with the one page it selected:
+  // one contiguous window around the target, none of the distant tail.
+  assert.equal(
+    focusedPage.rows,
+    scopedFocusRead.summary.returnedRows,
+    "the focused window is exactly the page the read selected",
+  );
+  assert.equal(focusedPage.uniqueRows, focusedPage.rows, "the focused page repeats no row");
+  assert.equal(focusedPage.focusVisible, true, "the target sits inside the focused window");
+  assert(
+    focusedPage.lastRow !== "child-3-c",
+    "the distant tail is not kept as an island beside the target",
+  );
+  assert.equal(focusedPage.omittedMarker, false, "no omission marker stands in for the distance");
+  assert.equal(focusedPage.jump, true, "a historical focused window offers the jump control");
+  result.phases.searchNested = {
+    physicalRead: compactEvent(physicalSearchRead),
+    scopedFocusRead: compactEvent(scopedFocusRead),
+    focused,
+    page: focusedPage,
+    mainRows: mainSearchIds.length,
+  };
+  await desktop.screenshot("03-search-nested-focused.png");
+
+  // ----------------- 3c. the jump reads the scope's newest page
+  // It replaces the focused window with the tail page: one read, one contiguous
+  // window, scrolled to the rows that read selected.
+  const latestFrom = mark();
+  await desktop.evaluate(`document.querySelector('.subagent-transcript-jump').click()`);
+  const latestState = await until(
+    async () => {
+      const state = await _focusView();
+      return state.lastRow === "child-3-c" && !state.focusVisible && state.distanceFromBottom !== null && state.distanceFromBottom < 2
+        ? state
+        : null;
+    },
+    "the newest delegate page after the jump",
+    30_000,
+  );
+  assert.equal(latestState.uniqueRows, latestState.rows, "the newest page repeats no row");
+  assert.equal(latestState.omittedMarker, false, "the tail window states no omission");
+  const latestReads = readsFor(
+    latestFrom,
+    (event) => event.summary?.historyScope?.kind === "delegation",
+  ).map((event) => ({
+    seq: event.seq,
+    id: event.params?.historyScope?.id,
+    messageBefore: event.params?.messageBefore ?? null,
+    messageAround: event.params?.messageAround ?? null,
+    messageLimit: event.params?.messageLimit,
+    returnedRows: event.summary?.returnedRows,
+    hasMoreBefore: event.summary?.hasMoreBefore,
+  }));
+  assert.equal(latestReads.length, 1, "the jump spends exactly one tail read");
+  assert.equal(latestReads[0].id, DELEGATION, "the tail read stays inside the chain");
+  assert.equal(latestReads[0].messageBefore, null, "the jump reads the newest page, not a cursor");
+  assert.equal(latestReads[0].messageAround, null, "the jump does not re-centre the window");
+  assert.equal(latestState.rows, latestReads[0].returnedRows, "the jump draws the rows it selected");
+  result.phases.searchLatest = { after: latestState, reads: latestReads };
+  await desktop.screenshot("03b-search-latest.png");
+
   // ------------------------------------------- 4. older panel pages to head
+  // The panel has no paging control: reaching its own top boundary continues
+  // the one contiguous interval one page earlier, exactly the main
+  // transcript's direction. Every page it reads stays in that interval.
   const olderPanelFrom = mark();
+  const olderPanelReads = () =>
+    readsFor(
+      olderPanelFrom,
+      (event) =>
+        event.summary?.historyScope?.kind === "delegation" &&
+        typeof event.params.messageBefore === "number",
+    );
+  const panelAtBottom = () =>
+    desktop.evaluate(
+      `(() => {
+        const scroller = document.querySelector('.subagent-transcript-scroll');
+        return scroller
+          ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 2
+          : false;
+      })()`,
+    );
+  // A real upward wheel is the gesture that hands the viewport to the reader;
+  // without it the pane is still following and a boundary reach would just be
+  // re-bottomed.
+  const drivePanelToTop = () =>
+    desktop.evaluate(
+      `(() => {
+        const scroller = document.querySelector('.subagent-transcript-scroll');
+        if (!scroller) return false;
+        scroller.dispatchEvent(
+          new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -120, deltaMode: 0 }),
+        );
+        scroller.scrollTop = 60;
+        return true;
+      })()`,
+    );
+  // The first page is still settling its follow when the panel opens: wait for
+  // its bottom before the first boundary reach.
+  await until(panelAtBottom, "the panel's first page settles at its bottom", 30_000);
+  await delay(200);
   let panelPages = 1;
   let panelRowsRead = firstPanelRead.summary.returnedRows;
   let panelMessageStart = firstPanelRead.summary.messageStart;
-  while (true) {
-    // The control is absent at the head and disabled while a page is merging;
-    // wait for it to become clickable before deciding paging is over.
-    let hasEarlier = false;
-    const probe = [];
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      const state = await desktop.evaluate(
-        `(() => {
-          const button = document.querySelector('.subagent-transcript-earlier:not([data-testid="subagent-show-latest"]) .link-btn');
-          return {
-            button: button ? (button.disabled ? "disabled" : "ready") : "absent",
-            status: document.querySelector('.subagent-transcript-status')?.textContent ?? null,
-            loading: Boolean(document.querySelector('[data-testid="subagent-history-loading"]')),
-            failure: Boolean(document.querySelector('[data-testid="subagent-history-error"]')),
-            rows: document.querySelectorAll('.subagent-transcript-list [data-message-id]').length,
-            surface: Boolean(document.querySelector('.subagent-transcript-tab')),
-          };
-        })()`,
-      );
-      probe.push({ attempt, ...state });
-      if (state.button === "absent") break;
-      if (state.button === "ready") {
-        hasEarlier = true;
-        break;
+  while (panelPages < 30) {
+    let next;
+    for (let attempt = 0; attempt < 3 && !next; attempt += 1) {
+      assert.equal(await drivePanelToTop(), true, "the panel transcript reaches its top boundary");
+      try {
+        next = await until(
+          () => olderPanelReads()[panelPages - 1],
+          `older delegate page ${panelPages}`,
+          attempt === 0 ? 10_000 : 4_000,
+        );
+      } catch {
+        // A reach the pane re-bottomed, or the chain's head: only the head
+        // ends paging, and the first row says which one it was.
+        if ((await tabState()).rowIds[0] === "child-1-0") break;
+        if (attempt < 2) await delay(250);
       }
-      await delay(150);
     }
-    (result.evidence.panelPagingProbe ??= []).push({ panelPages, probe: probe.slice(-4) });
-    if (!hasEarlier) break;
-    await desktop.evaluate(
-      `document.querySelector('.subagent-transcript-earlier:not([data-testid="subagent-show-latest"]) .link-btn').click()`,
-    );
-    const next = await until(
-      () =>
-        readsFor(
-          olderPanelFrom,
-          (event) =>
-            event.summary?.historyScope?.kind === "delegation" &&
-            typeof event.params.messageBefore === "number",
-        )[panelPages - 1],
-      `older delegate page ${panelPages}`,
-    );
-    // The read arriving is not the merge: wait for the earlier control to
-    // leave its loading state before the next click.
-    await until(
-      () =>
-        desktop.evaluate(
-          `(() => {
-            const button = document.querySelector('.subagent-transcript-earlier:not([data-testid="subagent-show-latest"]) .link-btn');
-            return !button || !button.disabled;
-          })()`,
-        ),
-      `the merge for delegate page ${panelPages}`,
-    );
+    if (!next) break;
     assert.equal(next.params.messageBefore, panelMessageStart, "older panel read uses the page cursor");
     assert.equal(next.params.messageLimit, 100);
     assert.equal(next.params.contentLimit, 64 * 1024);
@@ -1081,39 +1273,48 @@ try {
     panelRowsRead += next.summary.returnedRows;
     panelPages += 1;
     panelMessageStart = next.summary.messageStart;
-    assert(panelPages < 30, "panel paging terminates");
+    // The read arriving is not the merge: wait for the rows to land before the
+    // next boundary reach, or the pane still holds the page in flight.
+    await until(
+      async () => (await tabState()).rowIds.length === panelRowsRead,
+      `the merge of delegate page ${panelPages}`,
+      30_000,
+    );
   }
-  assert.equal(panelRowsRead, CHAIN_CHILD_TOTAL, "older paging loads every chain child row once");
+  const pagingDiagnostic = {
+    pages: panelPages,
+    tabRows: (await tabState()).rowIds.length,
+    reads: olderPanelReads().map((event) => ({
+      before: event.params.messageBefore ?? null,
+      rows: event.summary?.returnedRows,
+      start: event.summary?.messageStart,
+    })),
+  };
+  assert.equal(
+    panelRowsRead,
+    CHAIN_CHILD_TOTAL,
+    `older paging loads every chain child row once ${JSON.stringify(pagingDiagnostic)}`,
+  );
   assert.equal(panelPages, 11, "1009 child rows page as ten full pages plus a nine-row head");
   const loadedTab = await tabState();
-  // The reading window is bounded by whole pages, not by a row count that cuts
-  // one: ten pages already exceed the 400-row budget, so paging to the head keeps
-  // the pages between the head and the budget and drops the newest ones whole.
-  // The head's own nine-row page plus three full pages is therefore 309 rows,
-  // the first row is the chain's first child row, and the newest page is still
-  // reachable through the forward control instead of being trimmed row by row.
+  // One contiguous interval: the head it paged to and the tail it opened on
+  // both stay in the window, because keeping the pages read is the policy.
   assert.equal(
     loadedTab.rowIds.length,
-    PANEL_HEAD_ROWS,
-    `the panel keeps whole pages up to the ${PANEL_ROW_BUDGET}-row budget at the head`,
+    CHAIN_CHILD_TOTAL,
+    "the window keeps every page it read",
   );
   assert.equal(
     loadedTab.rowIds[0],
     "child-1-0",
     "the retained window starts at the chain's first child row",
   );
-  assert(
-    loadedTab.rowIds.includes("child-1-9"),
-    "the page right after the head's short page stays whole",
+  assert.equal(
+    loadedTab.rowIds.at(-1),
+    "child-3-c",
+    "the retained window still ends at the chain's tail",
   );
-  assert(
-    loadedTab.rowIds.at(-1) === "child-1-308",
-    "the retained window ends on its oldest page's last row",
-  );
-  assert(!loadedTab.rowIds.includes("child-1-309"), "the page after the window left whole");
-  assert(!loadedTab.rowIds.includes("child-3-c"), "the newest segment left the window with its page");
-  assert.equal(loadedTab.earlier, false, "the earlier trigger disappears at the chain head");
-  assert.equal(loadedTab.showLatest, true, "the dropped newest pages stay reachable forwards");
+  assert.equal(new Set(loadedTab.rowIds).size, loadedTab.rowIds.length, "no row repeats");
   const retainedHeadId = "child-1-0";
   result.phases.panelPaging = {
     pages: panelPages,
@@ -1124,59 +1325,40 @@ try {
   };
   await desktop.screenshot("02-panel-full-chain.png");
 
-  // --------------------------- 4b. the forward control recovers the newest pages
-  // The panel now holds the head of the chain with a hole after its pages. The
-  // forward control is the only trigger that asks for the newest page again, so
-  // a click must rejoin the tail without keeping the rows in between, and the
-  // recovered window must be the newest pages with no gap and no duplicate row.
+  // --------------------------- 4b. the jump control re-bottoms the interval
+  // The window already reaches the tail, so the control has nothing newer to
+  // read: it hands the view back to the rows it holds, without a read.
   const headFrom = mark();
-  await desktop.evaluate(`document.querySelector('[data-testid="subagent-show-latest"] .link-btn').click()`);
+  await desktop.evaluate(`document.querySelector('.subagent-transcript-jump')?.click()`);
   const reloadedTab = await until(
     async () => {
       const tab = await tabState();
-      const settled = tab.rowIds.length > 0 && tab.rowIds.at(-1) === "child-3-c" && !tab.showLatest ? tab : null;
-      return settled;
+      const distance = await desktop.evaluate(
+        `(() => {
+          const scroller = document.querySelector('.subagent-transcript-scroll');
+          return scroller ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight : Infinity;
+        })()`,
+      );
+      return distance < 2 ? tab : null;
     },
-    "the newest pages after the forward control",
+    "the jump back to the bottom of the loaded interval",
     30_000,
   );
+  assert.deepEqual(reloadedTab.rowIds, loadedTab.rowIds, "the jump keeps the contiguous interval");
   assert.equal(
-    reloadedTab.rowIds.length,
-    PANEL_ROW_BUDGET,
-    "the forward control refills the window to its page budget",
+    readsFor(headFrom, (event) => event.summary?.historyScope?.kind === "delegation").length,
+    0,
+    "a window at the tail spends no read to reach its own bottom",
   );
-  assert.equal(
-    reloadedTab.rowIds[0],
-    "child-1-609",
-    "the recovered window starts on its own page boundary",
-  );
-  assert.deepEqual(
-    reloadedTab.rowIds.slice(1).filter((id, index) => {
-      const previous = reloadedTab.rowIds[index];
-      const [, segment, ordinal] = id.split("-");
-      if (segment !== "1") return false;
-      return `child-1-${Number(ordinal) - 1}` !== previous;
-    }),
-    [],
-    "the recovered segment is contiguous",
-  );
-  assert.equal(new Set(reloadedTab.rowIds).size, reloadedTab.rowIds.length, "no row repeats after the recovery");
-  assert(reloadedTab.rowIds.includes("child-3-c"), "the newest chain segment rejoins");
-  assert.equal(reloadedTab.earlier, true, "the head it left behind stays reachable backwards");
-  const forwardReads = readsFor(headFrom, (event) => event.summary?.historyScope?.kind === "delegation");
-  assert(forwardReads.length >= 1, "showing latest spends a delegation-scoped read");
-  for (const read of forwardReads) {
-    assert.equal(read.params.historyScope.id, DELEGATION);
-    assert.equal(read.params.messageLimit, 100, "the recovery stays inside one page");
-    assert.equal(read.params.contentLimit, 64 * 1024);
-  }
-  assert(readsFor(headFrom, (event) => event.params?.messageAround !== undefined).length === 0);
-  result.phases.panelLatest = { tab: reloadedTab, reads: forwardReads.length };
+  assert.equal(new Set(reloadedTab.rowIds).size, reloadedTab.rowIds.length, "no row repeats");
+  assert.equal(reloadedTab.rowIds.at(-1), "child-3-c", "the newest chain segment is still the last row");
+  result.phases.panelLatest = { tab: reloadedTab, reads: 0 };
   await desktop.screenshot("02b-panel-latest-recovered.png");
 
-  // The reference state for the durability phases below is the recovered newest
-  // window: the forward control ended on the scope's tail, so the cache holds
-  // the newest page the later reopen and refresh are compared against.
+  // The reference state for the durability phases below is that contiguous
+  // window: it reaches the scope's tail and is what the reopen and tail
+  // refresh are compared against.
+
   const signature = {
     activeTabId: reloadedTab.activeTabId,
     status: reloadedTab.status,
@@ -1208,7 +1390,7 @@ try {
   const finalizedTab = await until(
     async () => {
       const tab = await tabState();
-      return tab.rowIds.length === PANEL_ROW_BUDGET ? tab : null;
+      return tab.rowIds.length === CHAIN_CHILD_TOTAL ? tab : null;
     },
     "the finalized cached rows",
   );
@@ -1328,9 +1510,10 @@ try {
   // Closing the view keeps the facts the panel already read. Re-publishing the
   // active session's live rows while the view is closed is the production
   // transition that marks the entry stale: a live `Task` row of the chain
-  // arrives after its last durable answer. The reopen must therefore read
-  // exactly one newest page, merge it over the 400 rows already held, and never
-  // ask for an older page or re-centre. The first case above is the control.
+  // arrives after its last durable answer. The reopen is therefore a latest
+  // read — one newest page, which extends the window when it is adjacent and
+  // becomes the window when it is not — and it never asks for an older page or
+  // re-centres. The first case above is the control.
   const closeFrom = mark();
   await desktop.evaluate(
     `document.querySelector('.work-panel-tab.active .work-panel-tab-close').click()`,
@@ -1399,16 +1582,13 @@ try {
     () => readsFor(reopenFrom, (event) => event.summary?.historyScope?.kind === "delegation")[0],
     "the stale entry's tail refresh",
   );
-  // The answer arriving is not the merge: wait for the earlier control to leave
-  // its refreshing state before reading the settled rows.
+  // The answer arriving is not the merge: wait for the pane to draw the rows it
+  // already held before reading the settled state.
   await until(
-    () =>
-      desktop.evaluate(
-        `(() => {
-          const button = document.querySelector('.subagent-transcript-earlier .link-btn');
-          return !button || !button.disabled;
-        })()`,
-      ),
+    async () => {
+      const tab = await tabState();
+      return tab.rowIds.at(-1) === "child-3-c";
+    },
     "the stale tail refresh merge",
   );
   const staleTab = await tabState();
@@ -1441,7 +1621,7 @@ try {
     "every tail row merges over a held row",
   );
   assert.deepEqual(staleTab.rowIds, signature.rowIds, "the refresh merges over the held page without a reset");
-  assert.equal(staleTab.rowIds.length, PANEL_ROW_BUDGET);
+  assert.equal(staleTab.rowIds.length, CHAIN_CHILD_TOTAL);
   assert.equal(
     staleTab.rowIds[0],
     signature.rowIds[0],
@@ -1460,193 +1640,6 @@ try {
     },
   };
 
-  // --------------------------------- 9. search a nested child -> its owning tab
-  const searchFrom = mark();
-  await desktop.evaluate(
-    `(() => {
-      const button = document.querySelector('button[aria-label="Search"]');
-      if (!button) throw new Error('search control missing');
-      button.click();
-    })()`,
-  );
-  await until(
-    () => desktop.evaluate(`Boolean(document.querySelector('.search-input'))`),
-    "search dialog",
-  );
-  await desktop.evaluate(
-    `(() => {
-      const input = document.querySelector('.search-input');
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-      setter.call(input, ${JSON.stringify(NESTED_TOKEN)});
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    })()`,
-  );
-  await until(
-    () =>
-      desktop.evaluate(
-        `Array.from(document.querySelectorAll('.search-message-hit')).some((hit) => hit.textContent.includes(${JSON.stringify(NESTED_TOKEN)}))`,
-      ),
-    "the nested child search hit",
-    30_000,
-  );
-  await desktop.evaluate(
-    `Array.from(document.querySelectorAll('.search-message-hit')).find((hit) => hit.textContent.includes(${JSON.stringify(NESTED_TOKEN)})).click()`,
-  );
-  await until(
-    () => desktop.evaluate(`!document.querySelector('.search-dialog')`),
-    "search dialog closes",
-  );
-  const physicalSearchRead = await until(
-    () =>
-      readsFor(
-        searchFrom,
-        (event) =>
-          event.params.messageAround === NESTED_TARGET &&
-          event.params.historyScope === undefined,
-      )[0],
-    "the physical search read",
-  );
-  assert.equal(physicalSearchRead.params.messageLimit, 60);
-  assert.equal(physicalSearchRead.params.contentLimit, 64 * 1024);
-  assert.equal(physicalSearchRead.summary.navigationParentId, TASK_1, "physical search resolves the owning Task");
-  // The search request is made under the parent tool-call id, while the tab it
-  // lands in already holds the delegation identity. The focus has to reach the
-  // mounted surface, so the target row must be rendered and marked there.
-  const searchFocusDeadline = Date.now() + 8_000;
-  let focused = { present: false };
-  while (Date.now() < searchFocusDeadline) {
-    focused = await desktop.evaluate(
-      `(() => {
-        const list = document.querySelector('.subagent-transcript-list');
-        const row = list ? list.querySelector('[data-message-id="${NESTED_TARGET}"]') : null;
-        const scroller = document.querySelector('.subagent-transcript-scroll');
-        // A literal-text hit paints through the CSS Highlight registry; the
-        // source class only marks source-only owners (link destinations, markup).
-        const highlight = globalThis.CSS?.highlights?.get('transcript-search');
-        let ranges = 0;
-        let anchored = false;
-        if (highlight) {
-          for (const range of highlight) {
-            ranges += 1;
-            if (range.startContainer.parentElement?.closest('[data-message-id]') === row) anchored = true;
-          }
-        }
-        const viewport = scroller ? scroller.getBoundingClientRect() : { top: 0, height: 0 };
-        const box = row ? row.getBoundingClientRect() : { top: 0 };
-        return row ? {
-          present: true,
-          highlighted: row.classList.contains('transcript-search-source-match') || anchored,
-          highlightRanges: ranges,
-          topGap: box.top - viewport.top,
-          viewportHeight: viewport.height,
-          activeTabId: document.querySelector('.work-panel-tab.active')?.getAttribute('data-work-panel-tab-id') ?? null,
-        } : {
-          present: false,
-          activeTabId: document.querySelector('.work-panel-tab.active')?.getAttribute('data-work-panel-tab-id') ?? null,
-          panelRows: list ? list.querySelectorAll('[data-message-id]').length : 0,
-        };
-      })()`,
-    );
-    if (focused.present) break;
-    await delay(200);
-  }
-  const scopedFocusRead = readsFor(
-    searchFrom,
-    (event) =>
-      event.summary?.historyScope?.kind === "delegation" &&
-      event.params.messageAround === NESTED_TARGET,
-  )[0];
-  assert(scopedFocusRead, "the focused search spent a delegation-scoped read");
-  assert.equal(
-    scopedFocusRead.params.historyScope.id,
-    DELEGATION,
-    "the focus read follows the tab the open request landed in, not the identity that asked",
-  );
-  assert.equal(scopedFocusRead.summary.historyScope.id, DELEGATION, "the scope answer echoes the tab chain");
-  assert.equal(focused.present, true, `the focused target is missing from the open panel: ${JSON.stringify(focused)}`);
-  assert.equal(focused.highlighted, true, `the focused target carries the search highlight: ${JSON.stringify(focused)}`);
-  assert.ok(
-    focused.topGap >= 0 && focused.topGap <= Math.max(120, focused.viewportHeight * 0.5),
-    `the focused target is scrolled into the panel viewport: ${JSON.stringify(focused)}`,
-  );
-  assert.equal(focused.activeTabId, `subagent:${DELEGATION}`, "the focus lands in the chain's own tab");
-  const focusGap = await desktop.evaluate(
-    `(() => {
-      const list = document.querySelector('.subagent-transcript-list');
-      const ids = list
-        ? Array.from(list.querySelectorAll('.message-row.assistant[data-message-id]')).map((row) => row.getAttribute('data-message-id'))
-        : [];
-      return {
-        rows: ids.length,
-        uniqueRows: new Set(ids).size,
-        lastRow: ids[ids.length - 1] ?? null,
-        omittedMarker: Boolean(document.querySelector('[data-testid="subagent-history-omitted"]')),
-        showLatest: Boolean(document.querySelector('[data-testid="subagent-show-latest"]')),
-        earlier: Boolean(document.querySelector('.subagent-transcript-earlier .link-btn')),
-      };
-    })()`,
-  );
-  const mainSearchIds = await mainRowIds();
-  assert(!mainSearchIds.includes(NESTED_TARGET), "the main transcript still holds no child row");
-  assert.equal(focusGap.uniqueRows, focusGap.rows, "the focused page repeats no row");
-  result.phases.searchNested = {
-    physicalRead: compactEvent(physicalSearchRead),
-    scopedFocusRead: compactEvent(scopedFocusRead),
-    focused,
-    gap: focusGap,
-    mainRows: mainSearchIds.length,
-  };
-  await desktop.screenshot("03-search-nested-focused.png");
-
-  // The focused page is a retained island: the rows between it and the newest
-  // page the tab already held are omitted, so the view states that omission and
-  // offers the newest messages again. Showing them must reach the real tail.
-  assert.equal(focusGap.omittedMarker, true, "the omitted gap after the focused island is stated");
-  assert.equal(focusGap.showLatest, true, "the newest-page control is offered from the focused island");
-  const latestFrom = mark();
-  await desktop.evaluate(`document.querySelector('[data-testid="subagent-show-latest"] button').click()`);
-  const latestState = await until(
-    async () => {
-      const state = await desktop.evaluate(
-        `(() => {
-          const list = document.querySelector('.subagent-transcript-list');
-          const ids = list
-            ? Array.from(list.querySelectorAll('.message-row.assistant[data-message-id]')).map((row) => row.getAttribute('data-message-id'))
-            : [];
-          return {
-            rows: ids.length,
-            uniqueRows: new Set(ids).size,
-            lastRow: ids[ids.length - 1] ?? null,
-            focusVisible: ids.includes(${JSON.stringify(NESTED_TARGET)}),
-            omittedMarker: Boolean(document.querySelector('[data-testid="subagent-history-omitted"]')),
-            showLatest: Boolean(document.querySelector('[data-testid="subagent-show-latest"]')),
-            earlier: Boolean(document.querySelector('.subagent-transcript-earlier .link-btn')),
-            status: document.querySelector('.subagent-transcript-status')?.textContent ?? "",
-          };
-        })()`,
-      );
-      return state.lastRow === "child-3-c" && !state.showLatest ? state : null;
-    },
-    "the newest delegate page after showing latest",
-    30_000,
-  );
-  assert.equal(latestState.uniqueRows, latestState.rows, "the rejoined newest page repeats no row");
-  assert.equal(latestState.focusVisible, true, "the focused target survives the newest-page sync");
-  assert.equal(latestState.omittedMarker, true, "the omission between the island and the newest pages is still stated");
-  const latestReads = readsFor(
-    latestFrom,
-    (event) => event.summary?.historyScope?.kind === "delegation",
-  ).map((event) => ({
-    seq: event.seq,
-    id: event.params?.historyScope?.id,
-    messageBefore: event.params?.messageBefore ?? null,
-    messageLimit: event.params?.messageLimit,
-    returnedRows: event.summary?.returnedRows,
-    hasMoreBefore: event.summary?.hasMoreBefore,
-  }));
-  assert(latestReads.every((read) => read.id === DELEGATION), "every newest-page read stays inside the chain");
-  result.phases.searchLatest = { after: latestState, reads: latestReads };
-  await desktop.screenshot("03b-search-latest.png");
 
   // ------------------------------------------------- rest: stop desktop cleanly
   const consoleErrorsBeforeSettlement = desktop.consoleErrors.slice();

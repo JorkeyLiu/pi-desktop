@@ -406,8 +406,6 @@ export const fr = {
     loadingLaterMessages: "Chargement des messages suivants…",
     laterFailedRetry: "Réessayer de charger les messages suivants",
     "showEarlierMessages": "Afficher les messages précédents",
-    "showLatestMessages": "Afficher les messages les plus récents",
-    "omittedEarlierMessages": "Les messages antérieurs sont omis ici",
     "copy": "Copier",
     "copied": "Copié",
     "copyFailed": "Impossible de copier dans le presse-papiers",

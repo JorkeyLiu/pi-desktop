@@ -3,17 +3,15 @@ import { api } from "../../lib/api";
 import {
   applySubagentHistoryFailure,
   applySubagentHistoryPage,
-  applySubagentHistoryTailWindow,
   applySubagentLiveRows,
   createSubagentHistoryEntry,
   findSubagentHistoryEntry,
   setSubagentHistoryEntry,
-  SUBAGENT_HISTORY_BRIDGE_PAGES,
-  SUBAGENT_HISTORY_BRIDGE_STALLED,
   SUBAGENT_HISTORY_CONTENT_LIMIT,
   SUBAGENT_HISTORY_PAGE_SIZE,
   SUBAGENT_HISTORY_UNAVAILABLE,
   subagentHistoryHasRows,
+  subagentHistoryHoldsWindowRow,
   subagentHistoryLiveIds,
   subagentHistoryScope,
   subagentHistoryTouchesLive,
@@ -59,7 +57,9 @@ export type SubagentHistoryActions = {
   ensureSubagentHistory: (input: SubagentHistoryInput & SubagentHistoryFocus) => Promise<void>;
   /** Read one older page of the entry's own scope. */
   loadOlderSubagentHistory: (input: SubagentHistoryInput) => Promise<void>;
-  /** Read the scope's newest page and merge it over what the entry holds. */
+  /** Read one newer page of the entry's own scope, at the boundary. */
+  loadNewerSubagentHistory: (input: SubagentHistoryInput) => Promise<void>;
+  /** Read the scope's newest page: joined when adjacent, replaced when not. */
   loadLatestSubagentHistory: (input: SubagentHistoryInput) => Promise<void>;
   /** Read again after a failure; the failed read's own direction is repeated. */
   retrySubagentHistory: (input: SubagentHistoryInput) => Promise<void>;
@@ -235,103 +235,71 @@ export function createSubagentHistoryRuntime(
   }
 
   /**
-   * Tail synchronization: read the scope's newest page and join the rows between
-   * it and the rows the entry already holds.
+   * The one explicit transition to the scope's tail.
    *
-   * A forward read has no cursor of its own, so a tail that sits past the entry's
-   * own physical range would leave the rows in between unrepresented: the panel
-   * would show the target range, then jump to the newest one, and ordinary older
-   * paging walks the wrong way. The bridge therefore reads backward from the
-   * newest page with the existing physical `messageBefore` cursor until its
-   * range meets the range the entry holds (an overlap, or the scope's head),
-   * then merges the walked pages oldest first. Every merged page is adjacent to
-   * the next one in the selection, the entry's older cursor does not move, and
-   * `hasMoreAfter` is cleared only by a read that really reached the tail.
-   *
-   * The walk is bounded: each answer must move the cursor toward the entry, so
-   * a repeated or empty page stops the synchronization with an explicit error
-   * that leaves the loaded rows and a retry intact. A gap wider than the walk
-   * bound keeps a contiguous newest window instead and records the omission,
-   * rather than dropping the middle rows without saying so.
+   * It reads the newest page and hands it to the window: an answer that
+   * provably overlaps what the entry holds is joined to it, and one that does
+   * not starts a fresh tail window. The entry therefore either stays one
+   * contiguous interval or replaces it — never a target range followed by a
+   * distant newest one — and the renderer scrolls to the rows this read
+   * selected rather than to the bottom of what it held before.
    */
-  async function latest(input: SubagentHistoryInput) {
+  async function latest(input: SubagentHistoryInput, supersede = false) {
     const previous = entryFor(input);
-    if (!previous || previous.refreshing || previous.status === "loading") return;
+    // An explicit jump supersedes a read that is still in flight: the reader
+    // asked for the tail, so the older answer cannot decide the window. Any
+    // other latest read waits for the read it would otherwise duplicate.
+    if (!previous || (!supersede && (previous.refreshing || previous.status === "loading"))) return;
     const { current } = openRead(input);
     try {
       const newest = await read(input.sessionId, pageOptions(previous));
-      let entry = current();
+      const entry = current();
       if (!entry) return;
       if (!newest.session) {
         publish(applySubagentHistoryFailure(entry, SUBAGENT_HISTORY_UNAVAILABLE, "latest"));
         return;
       }
-      const head = newest.session;
-      const heldEnd = entry.messageEnd;
-      const headStart = head.messageStart;
-      if (
-        !entry.messages.length ||
-        heldEnd === undefined ||
-        headStart === undefined ||
-        headStart <= heldEnd
-      ) {
-        // The entry's own range already reaches the newest page, or it holds
-        // nothing to bridge from.
-        publish(applySubagentHistoryPage(entry, head, "latest", entry.touched));
-        return;
-      }
-      // Walked pages, oldest first. The newest page ends at the scope's tail.
-      const walked: SessionDetail[] = [head];
-      let cursor = headStart;
-      let joined = false;
-      for (let attempt = 0; attempt < SUBAGENT_HISTORY_BRIDGE_PAGES; attempt += 1) {
-        const answer = await read(input.sessionId, {
-          ...pageOptions(entry),
-          messageBefore: cursor,
-        });
-        entry = current();
-        if (!entry) return;
-        if (!answer.session) {
-          publish(applySubagentHistoryFailure(entry, SUBAGENT_HISTORY_UNAVAILABLE, "latest"));
-          return;
-        }
-        const page = answer.session;
-        const pageStart = page.messageStart;
-        const pageEnd = page.messageEnd;
-        if (!page.messages?.length || pageStart === undefined) {
-          publish(applySubagentHistoryFailure(entry, SUBAGENT_HISTORY_BRIDGE_STALLED, "latest"));
-          return;
-        }
-        walked.unshift(page);
-        // Overlap with the rows the entry holds, or the scope's head, means the
-        // walked range now joins the entry's range without a hole.
-        if (
-          (pageEnd !== undefined && pageEnd <= heldEnd) ||
-          page.hasMoreBefore === false
-        ) {
-          joined = true;
-          break;
-        }
-        if (pageStart >= cursor) {
-          publish(applySubagentHistoryFailure(entry, SUBAGENT_HISTORY_BRIDGE_STALLED, "latest"));
-          return;
-        }
-        cursor = pageStart;
-      }
-      entry = current();
-      if (!entry) return;
-      if (!joined) {
-        publish(applySubagentHistoryTailWindow(entry, walked, entry.touched));
-        return;
-      }
-      let merged = entry;
-      for (const page of walked) merged = applySubagentHistoryPage(merged, page, "latest", entry.touched);
-      // Only a joined walk may state that nothing follows the newest row.
-      publish({ ...merged, hasMoreAfter: false });
+      publish(applySubagentHistoryPage(entry, newest.session, "latest", entry.touched));
     } catch (error) {
       if (!current()) return;
       failRead(input, error, "latest");
     }
+  }
+
+  /**
+   * Read the page that follows the window, the direction the main transcript
+   * pages when the reader reaches its bottom.
+   *
+   * A scoped page is selected from a physical `messageBefore` cursor, so the
+   * next page is asked for from the window's own exclusive end plus one page —
+   * the bound a sparse selection needs to reach rows beyond the held range. A
+   * backend that answered the legacy physical transcript, or a window without a
+   * reliable end, is never handed arithmetic on a number it did not state:
+   * those reads degrade to the explicit latest read, exactly as the main
+   * reader's own tail resync does.
+   */
+  async function newer(input: SubagentHistoryInput) {
+    const current = entryFor(input);
+    if (!current || current.refreshing || current.status === "loading") return;
+    if (!current.hasMoreAfter) return;
+    if (current.scoped !== true || current.messageEnd === undefined) {
+      await latest(input);
+      return;
+    }
+    await readPage(input, "after", {
+      ...pageOptions(current),
+      messageBefore: current.messageEnd + SUBAGENT_HISTORY_PAGE_SIZE,
+    });
+  }
+
+  /**
+   * The cursor one older read pages from, or `undefined` when the answer gave
+   * none. A backend whose cursor is opaque still answers with the cursor to
+   * hand back; a window with no cursor has no pageable history, so no read is
+   * spent guessing at one.
+   */
+  function olderCursor(entry: SubagentHistoryEntry): number | undefined {
+    return entry.messageStart > 0 ? entry.messageStart : undefined;
   }
 
   async function ensure(input: SubagentHistoryInput & SubagentHistoryFocus) {
@@ -343,9 +311,11 @@ export function createSubagentHistoryRuntime(
           requestId: input.requestId ?? 0,
         }
       : null;
-    // A target the page already holds needs no read: the tab highlights the row
-    // it has instead of replacing the range around it.
-    if (current && focus && current.messages.some((message) => message.id === focus.messageId)) {
+    // A target the rendered window already holds needs no read: the tab
+    // highlights the row it has instead of replacing the range around it. An
+    // owned row outside that window — a live row past a historical range — is
+    // not presented, so it is read around like any other target.
+    if (current && focus && subagentHistoryHoldsWindowRow(current, focus.messageId)) {
       publish({ ...current, focus });
       return;
     }
@@ -361,18 +331,20 @@ export function createSubagentHistoryRuntime(
     // holds: a stale entry refreshes its tail, an empty one starts at the tail.
     const base = current ?? createSubagentHistoryEntry(input.sessionId, input.tabKey);
     if (focus) {
-      // A target this chain does not hold yet needs the range around it; the
-      // page merges over the rows already loaded, so neither the target view
-      // nor the older rows are lost.
+      // A target this chain does not hold yet needs the range around it. The
+      // answer starts a window there instead of joining a distant loaded
+      // range: one contiguous interval, centred on the row the reader asked
+      // for, and the rows after it are paged forward from this window.
       await readPage(
         input,
-        "initial",
+        "focus",
         { ...pageOptions(base), messageAround: focus.messageId },
         { focus },
       );
     } else if (subagentHistoryHasRows(base) && !firstDurablePageOwed(base)) {
-      // Sending a refresh rather than a reset keeps everything the entry already
-      // holds: a stale entry refreshes its tail, an empty one starts there.
+      // Sending a refresh rather than a reset keeps the rows the entry holds
+      // when the newest page joins them, and replaces a range that no longer
+      // reaches the tail.
       await readPage(input, "latest", pageOptions(base));
     } else {
       // Live rows are not a physical range, so the chain's first durable page
@@ -393,18 +365,27 @@ export function createSubagentHistoryRuntime(
     }
   }
 
-
   async function older(input: SubagentHistoryInput) {
     const current = entryFor(input);
     if (!current || current.refreshing || current.status === "loading") return;
     if (!current.hasMoreBefore) return;
-    await readPage(input, "before", { ...pageOptions(current), messageBefore: current.messageStart });
+    // The window's own oldest bound is the answer's cursor, handed straight
+    // back to the backend that stated it. A window that has none cannot page
+    // older rows without inventing a position, so it spends no read.
+    const cursor = olderCursor(current);
+    if (cursor === undefined) return;
+    await readPage(input, "before", { ...pageOptions(current), messageBefore: cursor });
   }
 
-  function run(input: SubagentHistoryInput, task: () => Promise<void>) {
+  /**
+   * Start one read and register its own promise under the chain.
+   *
+   * Each read deletes only its own entry, so a request that started while an
+   * older one was still outstanding cannot be unregistered by that older read
+   * when it finally settles.
+   */
+  function startRead(input: SubagentHistoryInput, task: () => Promise<void>) {
     const key = keyOf(input);
-    const running = inflight.get(key);
-    if (running) return running;
     const request = task().finally(() => {
       if (inflight.get(key) === request) inflight.delete(key);
     });
@@ -412,10 +393,28 @@ export function createSubagentHistoryRuntime(
     return request;
   }
 
+  /**
+   * Join the read already in flight for this chain.
+   *
+   * Two automatic reads of the same direction are one read: a scroll that
+   * repeats a boundary request joins the page already being fetched. Only an
+   * explicit request that must not be joined with an older one (`startRead`)
+   * starts a second.
+   */
+  function run(input: SubagentHistoryInput, task: () => Promise<void>) {
+    const running = inflight.get(keyOf(input));
+    if (running) return running;
+    return startRead(input, task);
+  }
+
   const actions: SubagentHistoryActions = {
     ensureSubagentHistory: (input) => run(input, () => ensure(input)),
     loadOlderSubagentHistory: (input) => run(input, () => older(input)),
-    loadLatestSubagentHistory: (input) => run(input, () => latest(input)),
+    loadNewerSubagentHistory: (input) => run(input, () => newer(input)),
+    // The explicit jump to the tail supersedes any read still in flight: it
+    // must read the newest page itself instead of handing back an older
+    // request whose answer the pane would then be scrolled to.
+    loadLatestSubagentHistory: (input) => startRead(input, () => latest(input, true)),
     retrySubagentHistory: (input) =>
       run(input, async () => {
         const current = entryFor(input);
@@ -423,15 +422,28 @@ export function createSubagentHistoryRuntime(
           await ensure(input);
           return;
         }
-        // Retry repeats the read that failed: an older page, a tail refresh, or
-        // the entry's first page. A failed read never finalized, so `ensure`
-        // refreshes a loaded entry instead of trusting it.
+        // Retry repeats the read that failed: an older page, a newer page, the
+        // tail, a search range, or the entry's first page. A failed read never
+        // finalized, so `ensure` refreshes a loaded entry instead of trusting it.
         if (current.retryDirection === "before" && current.hasMoreBefore) {
           await older(input);
           return;
         }
+        if (current.retryDirection === "after" && current.hasMoreAfter) {
+          await newer(input);
+          return;
+        }
         if (current.retryDirection === "latest" && subagentHistoryHasRows(current)) {
           await latest(input);
+          return;
+        }
+        if (current.retryDirection === "focus" && current.focus?.messageId) {
+          await ensure({
+            ...input,
+            messageId: current.focus.messageId,
+            query: current.focus.query,
+            requestId: current.focus.requestId,
+          });
           return;
         }
         await ensure({ sessionId: input.sessionId, tabKey: input.tabKey });
