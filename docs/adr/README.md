@@ -382,6 +382,7 @@ Each ADR includes:
 | 0334 | [Explicit images always travel; capability metadata stays informational](0334-explicit-image-transport-metadata-informational.md) | Accepted (supersedes the transport and settings clauses of ADR 0101 / ADR 0218) |
 | 0335 | [Scoped session history reads](0335-scoped-session-history-reads.md) | Accepted for implementation (implemented and verified in the uncommitted feature branch; the scoped-read and restart-recovery E2E scenarios passed as host-unit plus real rendered evidence; supersedes the window-selection clauses of ADR 0120 and the E2E-207a selection contract) |
 | 0339 | [Bounded line comparison for review diffs](0339-bounded-review-diff-comparison.md) | Accepted (records the engine, resource ownership, and record-evidence reuse limits) |
+| 0341 | [The subagent Task prompt is a chronological opening](0341-subagent-task-prompt-chronology.md) | Accepted for implementation (additive scoped-response run metadata; supersedes the ADR 0335 page-head rendering clause) |
 | plugin-fetch-redirect-policy | [Host-enforced plugin fetch redirect policy](plugin-fetch-redirect-policy.md) | Accepted (implementation candidate for #1475) |
 
 | local-agent-remote-workspace-tools | [Local Agent and model requests for remote workspaces](local-agent-remote-workspace-tools.md) | Accepted for implementation |

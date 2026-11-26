@@ -1,5 +1,4 @@
 import { toolResultPayload } from "../../lib/tool-presentation";
-import { isThinkingActive } from "../../lib/turn-process";
 import { SubagentStopButton } from "../../features/chat/transcript/SubagentStopButton";
 import {
   collectDelegationStatuses,
@@ -27,16 +26,18 @@ import { api } from "../../lib/api";
 import {
   isHistoryRevealPosition,
   isLaterRevealPosition,
+  isReaderForwardReach,
   transcriptHasLayout,
 } from "../../lib/transcript-scroll";
 import {
-  Fragment,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type UIEventHandler,
+  type WheelEventHandler,
 } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/app-store";
@@ -60,20 +61,20 @@ import {
 import { DisclosureAnchorContext } from "../../lib/disclosure-anchor-context";
 import { TranscriptDisclosureProvider } from "../../features/chat/transcript/disclosure";
 import { buildSubagentTranscript } from "../../lib/subagent-transcript";
-import {
-  AssistantErrorMessage,
-  MessageAttachmentImage,
-  ThinkingRow,
-} from "../../features/chat/transcript/shared";
-import { useOpenChatFileRef } from "../../hooks/use-preview-target";
-import { ToolRow } from "../../features/chat/transcript/ToolRow";
-import {
-  SubagentHandoffCheckpointRow,
-  handoffCheckpoint,
-} from "../../features/chat/transcript/SubagentHandoffCheckpoint";
+import { subagentHistoryRunPromptVisible } from "../../lib/subagent-history";
+import { handoffCheckpoint } from "../../features/chat/transcript/SubagentHandoffCheckpoint";
 import { WorkingIndicator } from "../../features/chat/transcript/ActivityGroup";
-import { Markdown } from "../Markdown";
-import type { MessageAttachment } from "@pi-desktop/shared";
+import { SubagentTranscriptRows } from "../../features/chat/transcript/SubagentTranscriptRows";
+import {
+  useSubagentPaneVisible,
+  useSubagentRowHydration,
+} from "../../features/chat/transcript/hooks/use-subagent-row-hydration";
+import {
+  buildSubagentTranscriptUnits,
+  stabilizeSubagentTranscriptUnits,
+  subagentVisibleRows,
+  type SubagentTranscriptUnit,
+} from "../../lib/subagent-hydration";
 import { delegateModelId, delegateThinkingLevel } from "../../features/chat/transcript/model";
 
 /**
@@ -124,33 +125,6 @@ function formatCount(value: number, language: string): string {
     return `${value}`;
   }
 }
-/**
- * The images a user sent to the child, rendered in the transcript's own
- * attachment language (chip + hover preview + click-to-open), so an
- * image-only steer still shows what actually reached the delegate.
- */
-function SubagentUserAttachments({ attachments }: { attachments?: MessageAttachment[] }) {
-  const { t } = useTranslation();
-  const openFile = useOpenChatFileRef();
-  const images = (attachments ?? []).filter((attachment) => attachment.kind === "image");
-  if (!images.length) return null;
-  return (
-    <span
-      className="message-attachments"
-      role="list"
-      aria-label={t("chat.messageAttachments")}
-    >
-      {images.map((attachment) => (
-        <MessageAttachmentImage
-          key={`${attachment.ref}:${attachment.name}`}
-          attachment={attachment}
-          onOpenFile={openFile}
-        />
-      ))}
-    </span>
-  );
-}
-
 
 function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
   const { t, i18n } = useTranslation();
@@ -218,8 +192,26 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     };
   }, [messages, activeDelegationId]);
   const transcriptResult = useMemo(
-    () => buildSubagentTranscript(messages, activeDelegationId),
-    [messages, activeDelegationId],
+    () =>
+      buildSubagentTranscript(messages, activeDelegationId, {
+        promptVisible: (call) => subagentHistoryRunPromptVisible(history.entry, call),
+      }),
+    [messages, activeDelegationId, history.entry],
+  );
+  // The turns are the data; the flat unit list is what the pane mounts, so a
+  // hydration batch is a row offset inside it rather than a second projection.
+  // Units of rows that did not change are reused, which lets the memoized row
+  // components bail out of a batch commit.
+  const unitCacheRef = useRef<readonly SubagentTranscriptUnit[] | null>(null);
+  const transcriptUnits = useMemo(() => {
+    const built = buildSubagentTranscriptUnits(transcriptResult?.turns);
+    const stable = stabilizeSubagentTranscriptUnits(unitCacheRef.current, built);
+    unitCacheRef.current = stable;
+    return stable;
+  }, [transcriptResult]);
+  const transcriptKeys = useMemo(
+    () => transcriptUnits.map((unit) => unit.key),
+    [transcriptUnits],
   );
   // A handoff checkpoint is numbered by its place among this tab's accepted
   // checkpoints: the runtime persists no generation number, and the row must
@@ -524,6 +516,14 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     else void sendContinue();
   };
 
+  // The forward boundary and follow's own re-pin both ask whether the range
+  // this pane ends at is the chain's newest row. The reader's window can sit
+  // anywhere in the chain, so its bottom is the tail only while no later page
+  // remains; both questions read the same fact through this ref, updated on
+  // every render, instead of a second copy of the entry's state.
+  const hasMoreAfterRef = useRef(history.hasMoreAfter);
+  hasMoreAfterRef.current = history.hasMoreAfter;
+  const loadedEndIsLatest = useCallback(() => !hasMoreAfterRef.current, []);
   const {
     scrollRef,
     contentRef,
@@ -535,8 +535,12 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     holdReadingPosition,
     settleReadingPosition,
     isPinned,
+    readerIntentAt,
     disclosureAnchorNotifier,
-  } = useFollowScroll();
+  } = useFollowScroll({
+    repinRequiresGesture: true,
+    loadedEndIsLatest,
+  });
   /*
     Boundary paging, the main transcript's direction and its own gates:
     approaching the visible top continues the interval one page earlier and
@@ -549,6 +553,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     is the way back to the tail from there.
   */
   const olderInFlight = useRef(false);
+  const [olderLoading, setOlderLoading] = useState(false);
   const latestInFlight = useRef(false);
   /** Rows mounted when the older read was requested; the hold settles on more. */
   const olderRowsBefore = useRef(0);
@@ -556,42 +561,163 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
   const presented = useRef(false);
   const atOlderBoundary = useRef(false);
   const atNewerBoundary = useRef(false);
+  /**
+   * A hydration batch is about to add rows above the reader.
+   *
+   * The reading position is captured synchronously before that commit and
+   * applied once the rows are laid out, so every batch of a page keeps the same
+   * visible fragment instead of only the page's last commit doing it.
+   */
+  const batchHoldRef = useRef(false);
+  /**
+   * A top reach that found the loaded rows still mounting.
+   *
+   * The reach is not dropped, and it is not answered by mounting the page in
+   * one commit either: the batches the pane is already spending keep running,
+   * each one holding the reader's fragment, and the older page is asked for
+   * only once every loaded row is laid out. A gesture therefore changes the
+   * order of work, never the size of a commit.
+   */
+  const readAfterReveal = useRef(false);
+  /** Whether the pane has a visible box: a hidden pane schedules no batches. */
+  const paneVisible = useSubagentPaneVisible(scrollRef);
+  const hydration = useSubagentRowHydration({
+    keys: transcriptKeys,
+    visible: paneVisible,
+    beforeBatch: () => {
+      if (!olderInFlight.current && !readAfterReveal.current) return;
+      holdReadingPosition();
+      batchHoldRef.current = true;
+    },
+  });
+  /** The rows of the loaded transcript that are mounted right now. */
+  const visibleUnits = subagentVisibleRows(transcriptUnits, hydration);
+  /**
+   * Whether this commit is still presenting the rows it has loaded.
+   *
+   * Derived from the rows the commit actually mounts rather than from the
+   * pump's last published state: a response and the batch that mounts it land
+   * in different commits, so the state is one commit behind the list it
+   * describes. The pane's own status attribute, the loading hold, and the
+   * deferred top read all ask this question, so they all read this answer.
+   */
+  const hydrationPending = visibleUnits.length < transcriptUnits.length;
   useLayoutEffect(() => {
     if (history.messages.length) presented.current = true;
   }, [history.messages]);
-  const requestOlder = () => {
-    if (olderInFlight.current) return;
-    if (!history.hasMoreBefore || history.refreshing || history.status === "loading") return;
+  /**
+   * Ask the host for the older page this pane has already reached for.
+   *
+   * The label, the reading hold, and the row count the page commits against are
+   * all captured in the same task as the reach, so only the page's own answer
+   * can settle it.
+   */
+  const beginOlderRead = () => {
     olderInFlight.current = true;
-    olderRowsBefore.current = history.messages.length;
+    setOlderLoading(true);
+    /** Rows loaded when the read was requested; the read is the page's commit. */
+    olderRowsBefore.current = transcriptUnits.length;
     holdReadingPosition();
     history.loadOlder();
   };
+  /**
+   * The deferred reach reads through this holder so the effect that flushes it
+   * never captures a stale row count from an earlier commit.
+   */
+  const beginOlderReadRef = useRef(beginOlderRead);
+  const requestOlder = () => {
+    if (olderInFlight.current) return;
+    if (!history.hasMoreBefore || history.refreshing || history.status === "loading") return;
+    // A reach at the top while the rows this pane already loaded are still
+    // arriving mounts them first. The top of a partly mounted page is not a
+    // page boundary, so asking the host for more from there would read ahead of
+    // rows the reader cannot see yet. The reach stays armed and the pane's own
+    // batches keep running - one batch per frame, never the whole page in one
+    // commit - and the boundary reads its older page once they are laid out.
+    if (hydrationPending) {
+      holdReadingPosition();
+      readAfterReveal.current = true;
+      return;
+    }
+    beginOlderRead();
+  };
+  /**
+   * The commit's own hydration state, for event handlers.
+   *
+   * A scroll handler runs after a commit, so it must not read the render it was
+   * closed over: a window whose rows are still mounting is not a page boundary.
+   * A latch armed by that transient clamp would page forward from a half-built
+   * window - a replaced focus window mounts its rows above the viewport and
+   * then sits at the bottom for a moment, which is not a reader reach.
+   */
+  const hydrationPendingRef = useRef(hydrationPending);
+  useLayoutEffect(() => {
+    hydrationPendingRef.current = hydrationPending;
+  });
   const requestNewer = () => {
+    if (hydrationPendingRef.current) return;
     if (history.refreshing || history.status === "loading") return;
     if (!history.hasMoreAfter || history.laterStalled) return;
     history.loadNewer();
   };
   // The read's own state finishes before the rows it asked for are drawn, so
-  // the hold settles on the commit that mounts them: the page's height above
+  // the hold settles on the commits that mount them: the page's height above
   // the reading position is measured from the rows, not from the answer.
+  // Live rows can grow the loaded list while that same read is still pending;
+  // they are not the older-page commit and must not release its hold or label.
+  // The read finishing is a precondition, not the whole condition: a page that
+  // arrived still has to mount every row it added, and the label says so until
+  // the last batch lands.
   useLayoutEffect(() => {
-    if (!olderInFlight.current) return;
-    if (history.messages.length <= olderRowsBefore.current) return;
+    if (!olderInFlight.current || history.refreshing || hydrationPending) return;
+    if (transcriptUnits.length <= olderRowsBefore.current) return;
     olderInFlight.current = false;
+    setOlderLoading(false);
     settleReadingPosition();
-  }, [history.messages, settleReadingPosition]);
+  }, [
+    history.messages,
+    history.refreshing,
+    hydrationPending,
+    transcriptUnits.length,
+    settleReadingPosition,
+  ]);
+  // A batch adds rows above the reader without the read publishing again, so
+  // the reading position is applied once per batch: the same fragment keeps the
+  // same viewport offset across every commit of the page, not only its last.
+  useLayoutEffect(() => {
+    if (!batchHoldRef.current) return;
+    batchHoldRef.current = false;
+    settleReadingPosition();
+  }, [visibleUnits.length, settleReadingPosition]);
+  // A reach that arrived while the loaded rows were still mounting revealed
+  // them first; the older page it pointed at is read now, after those rows are
+  // laid out, so a partly mounted page is never skipped by a host read.
+  useLayoutEffect(() => {
+    beginOlderReadRef.current = beginOlderRead;
+    if (!readAfterReveal.current || hydrationPending) return;
+    readAfterReveal.current = false;
+    if (olderInFlight.current || !atOlderBoundary.current) return;
+    if (!history.hasMoreBefore || history.refreshing || history.status === "loading") return;
+    beginOlderReadRef.current();
+  }, [
+    beginOlderRead,
+    hydrationPending,
+    history.hasMoreBefore,
+    history.refreshing,
+    history.status,
+  ]);
   // A read that moves nothing - an overlapping page, or the head - has no rows
   // to settle on, so its own finish releases the hold and the next reach.
   useEffect(() => {
-    if (!olderInFlight.current || history.refreshing) return;
+    if (!olderInFlight.current || history.refreshing || hydrationPending) return;
     const timer = window.setTimeout(() => {
-      if (!olderInFlight.current) return;
+      if (!olderInFlight.current || hydrationPending) return;
       olderInFlight.current = false;
+      setOlderLoading(false);
       settleReadingPosition();
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [history.messages, history.refreshing, settleReadingPosition]);
+  }, [history.messages, history.refreshing, hydrationPending, settleReadingPosition]);
   /**
    * The one explicit return to the tail: it reads the scope's newest page and
    * scrolls to the rows that read selected, so a pressed control never lands on
@@ -609,6 +735,14 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
       return;
     }
     latestInFlight.current = true;
+    // The explicit tail read supersedes both the older page still in flight and
+    // the batches that page queued: neither may land in the window the read
+    // replaces, and the reader must not be scrolled to a stale bottom.
+    olderInFlight.current = false;
+    setOlderLoading(false);
+    batchHoldRef.current = false;
+    readAfterReveal.current = false;
+    hydration.stop();
     releaseFollow();
     history.loadLatest();
   };
@@ -630,13 +764,60 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     } else if (!atTop) {
       atOlderBoundary.current = false;
     }
-    const atBottom = isLaterRevealPosition(el);
+    // The newer boundary is only a boundary once the window is built: every
+    // row the read loaded has to be laid out before a bottom reach means the
+    // reader reached the window's end rather than a half-mounted run.
+    // It is also only a boundary for a reader who drove it here. This pane
+    // grows its own rows above a released reader, the browser compensates by
+    // moving the offset down, and the last compensation lands on the window's
+    // bottom - a clamp that looks exactly like a reach. Reading forward
+    // therefore needs the reader's own gesture - a wheel, a touch scroll, a
+    // scrollbar drag, or a native scrolling key, every one of which the follow
+    // hook records.
+    //
+    // The window's bottom is not the chain's newest row while later pages
+    // remain: a reader who reaches it continues the window and a local pin
+    // cannot veto that read. The jump control follows its own rule and stays
+    // available whenever later rows exist.
+    const atBottom = isReaderForwardReach({
+      now: performance.now(),
+      lastReaderInputAt: readerIntentAt(),
+      pinned: isPinned(),
+      hydrationPending: hydrationPendingRef.current,
+      atRangeBottom: isLaterRevealPosition(el),
+      hasMoreAfter: hasMoreAfterRef.current,
+    });
     if (atBottom && !atNewerBoundary.current) {
       atNewerBoundary.current = true;
       requestNewer();
     } else if (!atBottom) {
       atNewerBoundary.current = false;
     }
+  };
+  const handleWheel: WheelEventHandler<HTMLDivElement> = (event) => {
+    const el = scrollRef.current;
+    // The wheel's own direction only says whether this is a top reach; the
+    // follow hook has already recorded the gesture itself, whichever way it
+    // points, because a downward wheel is what makes the window's end a reach
+    // instead of a clamp.
+    if (
+      !el ||
+      event.deltaY >= 0 ||
+      !presented.current ||
+      !transcriptHasLayout(el) ||
+      !isHistoryRevealPosition(el, isPinned())
+    ) return;
+    // A tall Task brief can remain the visible anchor while older children
+    // prepend after it. The scroller then stays at the top and emits no second
+    // scroll event for another wheel reach, so the boundary latch must not
+    // suppress the next explicit upward gesture. Defer the read until after
+    // the wheel's native scroll so the hold captures the reader's final offset.
+    atOlderBoundary.current = true;
+    requestAnimationFrame(() => {
+      const current = scrollRef.current;
+      if (!current || !isHistoryRevealPosition(current, isPinned())) return;
+      requestOlder();
+    });
   };
 
   // Several delegation tabs can be open at once, so an explicit search hit
@@ -652,13 +833,26 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     return present ? { ...focus, sessionId: activeSessionId ?? "" } : null;
   }, [activeSessionId, history.focus, messages]);
 
+  // A search hit is mounted before it is aligned: the focus effect can only
+  // find a row that is in the DOM, so the pane's own batches bring the row it
+  // names into the mounted run (bounded, one batch per frame, exactly like the
+  // rest of the page), and the aligned install happens on the commit where that
+  // row is actually mounted. A hit is never answered by mounting the page in one
+  // commit.
+  // The focus effect re-installs when the mounted rows change as well as when
+  // the loaded ones do: a batch that mounts the target is the commit that can
+  // align it.
+  const transcriptContentVersion = useMemo(
+    () => ({ units: transcriptUnits, mounted: visibleUnits.length }),
+    [transcriptUnits, visibleUnits],
+  );
   useTranscriptSearchFocus({
     target: searchTarget,
     source:
       messages.find((message) => message.id === searchTarget?.messageId)?.content ?? "",
     scrollRef,
     contentRef,
-    contentVersion: messages,
+    contentVersion: transcriptContentVersion,
     // Only a fresh hit owns the viewport: the same hit re-installs on every
     // content commit and must not release follow (or drop a page's reading
     // position hold) each time the window grows.
@@ -815,24 +1009,36 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
             ref={scrollRef}
             className="subagent-transcript-scroll"
             onScroll={handleScroll}
+            onWheel={handleWheel}
             role="log"
             aria-live="polite"
             aria-label={t("panel.subagent")}
             tabIndex={0}
           >
-            <div ref={contentRef} className="subagent-transcript-list">
+            {/* The loaded rows arrive in batches; the attribute states whether
+              every row of the loaded window is mounted yet, so a reader (and
+              the rendered tests) can tell "still mounting" from "at the head". */}
+            <div
+              ref={contentRef}
+              className="subagent-transcript-list"
+              data-hydration-state={hydrationPending ? "pending" : "ready"}
+              data-hydration-loaded={transcriptUnits.length}
+              data-hydration-mounted={visibleUnits.length}
+            >
               {/* Boundary paging has no control of its own: reaching the top
                 reads the previous page and holds the fragment in view, exactly
                 like the main transcript. The line only states the read. */}
-              {olderInFlight.current && history.hasMoreBefore ? (
-                <div
-                  className="subagent-transcript-earlier"
-                  role="status"
-                  data-testid="subagent-history-older-loading"
-                >
+              <div
+                className="subagent-transcript-earlier transcript-history-loading"
+                role="status"
+                aria-live="polite"
+                aria-hidden={!olderLoading}
+                data-testid="subagent-history-older-loading"
+              >
+                <span className="subagent-transcript-earlier-label transcript-history-loading-label">
                   {t("chat.loadingEarlierMessages")}
-                </div>
-              ) : null}
+                </span>
+              </div>
               {history.status === "loading" && !transcriptResult ? (
                 <div className="subagent-transcript-loading" role="status" data-testid="subagent-history-loading">
                   {t("chat.loadingSession")}
@@ -853,87 +1059,11 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                 </div>
               ) : null}
               {transcriptResult ? (
-                transcriptResult.turns.map((turn, turnIndex) => (
-                  <Fragment key={`turn-${turnIndex}`}>
-                    <div className="message-row user">
-                      <div className="message-col">
-                        <div className="message-bubble">
-                          {turn.task || !turn.attachments?.length ? (
-                            <div className="message-user-text selectable">
-                              {turn.task || t("panel.subagentTaskEmpty")}
-                            </div>
-                          ) : null}
-                          <SubagentUserAttachments attachments={turn.attachments} />
-                        </div>
-                      </div>
-                    </div>
-                    {turn.rows.map((row) => (
-                      <Fragment key={`${row.kind}-${row.message.id}`}>
-                        {row.kind === "tool" ? (
-                        // An accepted self-handoff is a context checkpoint, not
-                        // an ordinary tool invocation: it renders as the
-                        // transcript's own divider row. A pending, running, or
-                        // refused call keeps the tool row and its lifecycle.
-                        handoffCheckpoint(row.message) ? (
-                          <SubagentHandoffCheckpointRow
-                            key={row.message.id}
-                            message={row.message}
-                            times={handoffOrdinals.get(row.message.id)}
-                          />
-                        ) : (
-                          <ToolRow key={row.message.id} message={row.message} />
-                        )
-                      ) : row.kind === "thinking" ? (
-                        <ThinkingRow
-                          key={`thinking-${row.message.id}`}
-                          message={row.message}
-                          streaming={isThinkingActive(row.message, isRunning)}
-                        />
-                      ) : row.kind === "steering-user" ? (
-                        <div
-                          className="message-row user"
-                          data-message-id={row.message.id}
-                          key={`steering-${row.message.id}`}
-                        >
-                          <div className="message-col">
-                            <div className="message-bubble">
-                              {row.message.content ? (
-                                <div className="message-user-text selectable">
-                                  {row.message.content}
-                                </div>
-                              ) : null}
-                              <SubagentUserAttachments attachments={row.message.attachments} />
-                              {row.message.error ? (
-                                <AssistantErrorMessage message={row.message} />
-                              ) : null}
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div
-                          className="message-row assistant"
-                          data-message-id={row.message.id}
-                          key={`answer-${row.message.id}`}
-                        >
-                          <div className="message-col">
-                            <div className="message-bubble">
-                              {row.message.content ? (
-                                <div className="prose-chat selectable">
-                                  <Markdown source={row.message.content} />
-                                </div>
-                              ) : null}
-                              {row.message.error ? (
-                                <AssistantErrorMessage message={row.message} />
-                              ) : null}
-                            </div>
-                          </div>
-                        </div>
-                        )}
-
-                      </Fragment>
-                    ))}
-                  </Fragment>
-                ))
+                <SubagentTranscriptRows
+                  units={visibleUnits}
+                  handoffOrdinals={handoffOrdinals}
+                  running={isRunning}
+                />
               ) : history.status === "empty" ? (
                 <div className="subagent-transcript-empty" role="status" data-testid="subagent-history-empty">
                   {t("panel.subagentHistoryEmpty")}

@@ -12,8 +12,16 @@ import { delegateTaskAgent } from "./subagent-task-call";
  * the turn's own user row, which has no text when the user sent images only.
  */
 export type SubagentTranscriptTurn = {
+  callId: string;
+  messageId: string;
   task: string;
   attachments?: MessageAttachment[];
+  /**
+   * Whether the turn's prompt is an opening the retained window actually
+   * reaches. A partial window inside a run keeps its children without
+   * redrawing the prompt above them; a run cut away entirely draws nothing.
+   */
+  showPrompt: boolean;
   rows: SubagentRunItem[];
 };
 
@@ -58,6 +66,7 @@ function chainCallIds(messages: readonly UiMessage[], delegationId: string): Set
 export function buildSubagentTranscript(
   messages: readonly UiMessage[],
   delegationId: string,
+  options: { promptVisible?: (call: UiMessage) => boolean } = {},
 ): SubagentTranscript | null {
   const target = delegationId.trim();
   if (!target) return null;
@@ -72,30 +81,38 @@ export function buildSubagentTranscript(
   const chain = chainCallIds(messages, target);
   if (chain.size === 0) return null;
 
+  // One pass over the conversation builds everything the turns need: the rows
+  // each Task call owns, the child-parent set acceptance reads, and the run's
+  // own agent attribution. Child rows arrive after the call they belong to,
+  // so acceptance is decided against the whole transcript: a rejected resume
+  // never started a run and opens no turn. A scan per call would re-read
+  // every row once per Task call.
+  const childParents = new Set<string>();
+  const childrenByCall = new Map<string, UiMessage[]>();
   // Attribution prefers what the delegate's own rows carried; a chain whose
   // delegate has not produced a row yet falls back to the requested agent.
-  const runAgentName = messages.find(
-    (message) =>
-      message.parentToolCallId &&
-      chain.has(message.parentToolCallId) &&
-      message.agentName,
-  )?.agentName;
+  let runAgentName: string | undefined;
+  for (const message of messages) {
+    const parent = message.parentToolCallId;
+    if (!parent) continue;
+    childParents.add(parent);
+    if (!runAgentName && message.agentName && chain.has(parent)) {
+      runAgentName = message.agentName;
+    }
+    const owned = childrenByCall.get(parent);
+    if (owned) owned.push(message);
+    else childrenByCall.set(parent, [message]);
+  }
   const requestedName = calls
     .filter((call) => chain.has(call.toolCallId as string))
     .map(requestedAgentName)
     .find(Boolean);
   const agentName = runAgentName || requestedName;
-
-   // Child rows arrive after the call they belong to, so acceptance is decided
-   // against the whole transcript: a rejected resume never started a run and
-   // opens no turn.
-   const childParents = new Set<string>();
-   for (const message of messages) if (message.parentToolCallId) childParents.add(message.parentToolCallId);
-   const turns: SubagentTranscriptTurn[] = [];
+  const turns: SubagentTranscriptTurn[] = [];
   for (const call of calls) {
     const callId = call.toolCallId as string;
     if (!chain.has(callId)) continue;
-     if (!isAcceptedSubagentCall(call, childParents.has(callId))) continue;
+    if (!isAcceptedSubagentCall(call, childParents.has(callId))) continue;
     const task = delegateTaskDescription(call);
     // A user continuation's `Task` marker is the parent ledger row for a run
     // the user started; its follow-up enters the child as a user row.
@@ -103,8 +120,7 @@ export function buildSubagentTranscript(
     let seedRendered = false;
     let turnAttachments: MessageAttachment[] | undefined;
     const rows: SubagentRunItem[] = [];
-    for (const message of messages) {
-      if (message.parentToolCallId !== callId) continue;
+    for (const message of childrenByCall.get(callId) ?? []) {
       if (message.role === "tool") {
         rows.push({ kind: "tool", message });
         continue;
@@ -140,7 +156,16 @@ export function buildSubagentTranscript(
         rows.push({ kind: "answer", message });
       }
     }
-    turns.push(turnAttachments ? { task, attachments: turnAttachments, rows } : { task, rows });
+    const identity = { callId, messageId: call.id };
+    const showPrompt = options.promptVisible ? options.promptVisible(call) : true;
+    const turn = turnAttachments
+      ? { ...identity, task, attachments: turnAttachments, showPrompt, rows }
+      : { ...identity, task, showPrompt, rows };
+    // A run whose opening is outside the window contributes no row at all:
+    // its children are outside too, and an empty turn would only redraw the
+    // prompt the reader's partial window has not reached.
+    if (!showPrompt && !rows.length) continue;
+    turns.push(turn);
   }
 
   return {

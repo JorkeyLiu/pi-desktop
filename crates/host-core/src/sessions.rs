@@ -377,6 +377,29 @@ pub struct SessionDetail {
     /// message page budget.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub history_context: Vec<UiMessage>,
+    /// Physical placement of each context Task row's run.
+    ///
+    /// Additive scoped-history metadata: it lets a renderer tell context the
+    /// chain needs from a run opening the retained window actually reaches.
+    /// Empty for the legacy physical read and for the main scope.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub history_runs: Vec<HistoryRun>,
+}
+
+/// Where one context Task row's run begins in the physical transcript.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryRun {
+    /// The Task call that opens this run.
+    pub call_id: String,
+    /// Physical Task row carrying the call; matches a `historyContext` id.
+    pub task_message_id: String,
+    /// Physical index of that Task row.
+    pub task_index: i64,
+    /// Physical index of the run's first selected child row, when it has one.
+    /// A run with no selected child yet is an empty or live opening.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_child_index: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1748,6 +1771,7 @@ pub fn get_session_with_options(
         compactions,
         history_scope: None,
         history_context: Vec::new(),
+        history_runs: Vec::new(),
     }))
 }
 
@@ -1778,6 +1802,7 @@ fn records_to_messages(
 struct ScopedReadParts {
     records: Vec<MessageRecord>,
     context: Vec<MessageRecord>,
+    runs: Vec<HistoryRun>,
     compactions: Vec<CompactionRecord>,
     message_start: Option<i64>,
     message_end: Option<i64>,
@@ -1907,9 +1932,26 @@ fn scoped_read_parts(
         .messages
     };
     transcripts::snapshots::overlay(db.data_dir(), id, &mut context)?;
+    // The context records are read one-for-one from `selection.context`, so
+    // they pair with the aligned call ids the selection recorded.
+    let runs = context
+        .iter()
+        .zip(selection.context.iter())
+        .zip(selection.context_calls.iter())
+        .map(|((record, index), call_id)| HistoryRun {
+            call_id: call_id.clone(),
+            task_message_id: record.id.clone(),
+            task_index: *index as i64,
+            first_child_index: selection
+                .first_child
+                .get(call_id)
+                .map(|first| *first as i64),
+        })
+        .collect();
     Ok(Some(ScopedReadParts {
         records: dedupe_records(read.messages),
         context,
+        runs,
         compactions: read.compactions,
         message_start,
         message_end,
@@ -2000,6 +2042,7 @@ pub fn get_session_scoped(
         compactions: parts.compactions,
         history_scope: Some(parts.canonical),
         history_context,
+        history_runs: parts.runs,
     }))
 }
 
@@ -2192,6 +2235,7 @@ pub fn fork_session_through(
         compactions,
         history_scope: None,
         history_context: Vec::new(),
+        history_runs: Vec::new(),
     })))
 }
 

@@ -10498,6 +10498,20 @@ mod tests {
             delegation["session"]["historyContext"][0]["id"],
             json!("task-msg")
         );
+        // Additive per-run metadata rides the same answer: camelCase physical
+        // facts, and the legacy/main reads omit it entirely.
+        assert_eq!(
+            delegation["session"]["historyRuns"],
+            json!([{
+                "callId": "call-1",
+                "taskMessageId": "task-msg",
+                "taskIndex": 1,
+                "firstChildIndex": 2,
+            }]),
+            "the run states its physical Task row and first selected child"
+        );
+        assert!(legacy["session"].get("historyRuns").is_none());
+        assert!(main["session"].get("historyRuns").is_none());
 
         for (scope, message) in [
             (
@@ -10573,6 +10587,15 @@ mod tests {
         assert_eq!(
             known["session"]["historyContext"][0]["id"],
             json!("task-msg")
+        );
+        assert_eq!(
+            known["session"]["historyRuns"],
+            json!([{
+                "callId": "call-1",
+                "taskMessageId": "task-msg",
+                "taskIndex": 1,
+            }]),
+            "an empty known chain names its opening and fabricates no child"
         );
         assert_eq!(
             known["session"]["historyScope"],

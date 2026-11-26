@@ -38,6 +38,28 @@ export type SessionHistoryReadOptions = {
 };
 
 /**
+ * Physical placement of one `Task` call a scoped delegation read names as
+ * context.
+ *
+ * Context alone says a chain exists, not that its run opening is on screen.
+ * These coordinates are chain-global physical facts: a renderer decides
+ * visibility by asking whether its retained contiguous window actually covers
+ * `firstChildIndex` (or, for a call with no selected child yet, whether the
+ * window reaches the tail past `taskIndex`). Live-only rows have no physical
+ * index and are therefore never listed here.
+ */
+export type SessionHistoryRun = {
+  /** The `Task` call that opens this run. */
+  callId: string;
+  /** Physical Task row carrying the call; matches a `historyContext` id. */
+  taskMessageId: string;
+  /** Physical index of that Task row. */
+  taskIndex: number;
+  /** Physical index of the run's first selected child, when it has one. */
+  firstChildIndex?: number;
+};
+
+/**
  * Which authority owns a session's transcript.
  *
  * - `desktop`: this desktop's own host-core (the default; older hosts omit the
@@ -126,6 +148,14 @@ export type SessionDetail = SessionSummary & {
    * a transcript row of its own.
    */
   historyContext?: UiMessage[];
+  /**
+   * Physical run openings for the same chain. Additive metadata sent with a
+   * scoped delegation read: it tells a renderer which context Task call has
+   * been *reached* by a window rather than merely owning chain context. Older
+   * hosts omit it; a renderer must then fall back to the conservative
+   * whole-chain rule instead of guessing a run head.
+   */
+  historyRuns?: SessionHistoryRun[];
   /** Zero-based offset of the first message returned by a bounded history read. */
   messageStart?: number;
   /** Exclusive physical end of a bounded read; not the deduplicated length. */

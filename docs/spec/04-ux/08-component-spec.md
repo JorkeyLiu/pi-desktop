@@ -1499,7 +1499,9 @@ not a working claim, is what the reader sees.
   (§9.9): a trim or eviction can drop old rows, and only a main-window change
   is guaranteed not to. The header and process follow that own source, so a
   running child's thinking, tool calls, and answer fragments arrive and stream
-  there, not through the main pane.
+  there, not through the main pane. Live row growth while an older read is
+  still pending does not commit that page: the older-loading label stays
+  visible and the reading hold waits for the requested read to finish.
 - A chain is read across all of its executed `Task(resume)` runs, so a delegation opened
   by a resumed run is the same child conversation as its original dispatch, and
   an older caller's `Task` tool-call id resolves to it too. A rejected resume —
@@ -1534,13 +1536,35 @@ not a working claim, is what the reader sees.
   (the chain's root `delegationId`, not the call id that asked). The main pane
   never pretends the child row is part of its own page, and reading the child
   never widens the main page.
-- The task description is the Task call's `task` argument, rendered as the
-  conversation's first selectable user row. The delegate's thinking, tool rows,
-  and answer fragments reuse the same components and styling as the main
-  conversation. Card titles, the task brief, and step summaries use the
-  available width and wrap or clamp to multiple lines; long paths, commands,
-  and tool summaries in the live process wrap inside the dock instead of
-  becoming one-line ellipses.
+- The task description is each accepted Task call's `task` argument, rendered
+  once as that turn's selectable user row. Root and resume briefs keep their
+  source message identity (`data-message-id`) and stable call identity across
+  history-page merges; each appears once at its own chain position, followed by
+  that call's children in transcript order. Ordinary top-level main rows are not
+  part of a local delegation-scoped transcript. The delegate's thinking, tool
+  rows, and answer fragments reuse the same components and styling as the main
+  conversation. A thinking-only row carries the source message identity so it
+  can anchor a prepend even when no answer or tool fragment is visible. Card
+  titles, the task brief, and step summaries use the available width and wrap or
+  clamp to multiple lines; long paths, commands, and tool summaries in the live
+  process wrap inside the dock instead of becoming one-line ellipses.
+- The task prompt is a chronological opening, not a context header. A run's
+  prompt is drawn only when the retained contiguous window actually covers that
+  run's first selected child, and then exactly once, in run order; a run with no
+  selected child yet (known empty, or live and not yet durable) is an opening at
+  the scope tail rather than a fabricated position. Every chain `Task` row stays
+  available out of band as context for chain identity, tab naming, and metrics,
+  but ownership alone never makes a prompt visible. A latest or focused window
+  cut inside a run — and every older page that still starts inside it — draws no
+  prompt above children the window already holds; the page that reaches the
+  run's first child introduces the prompt once and the visible-fragment hold
+  keeps the reader's offset. A later `Task(resume)` run opens at its own chain
+  position even while the chain has older rows. Visibility comes from the
+  backend's per-run physical opening (§ `historyRuns` in
+  `03-runtime/06-host-rpc-protocol.md`), never from `createdAt`, prompt text, or
+  the chain-wide `hasMoreBefore`. An older backend that serves scoped history
+  without that metadata is handled conservatively: a partial window draws no
+  prompt, and only a window that reaches the chain head may draw them.
 - The dock has one scroll owner, the panel body. The scroll owner is
   keyboard-focusable and exposed as a polite `role="log"` so streamed rows
   remain discoverable without forcing focus changes. The live process is
@@ -1552,7 +1576,9 @@ not a working claim, is what the reader sees.
   client area.
   While pinned to the latest output, the panel body follows new process rows;
   a real upward gesture pauses follow and exposes the standard jump-to-latest
-  control.
+  control. Older-loading furniture stays mounted at a fixed height, hides its
+  label when idle, and is excluded from native scroll anchoring so showing or
+  removing the indicator cannot shift the transcript.
 - The tab is the child's own conversation. Its strip label names the work the
   delegate was given — the delegation chain's original task description, the
   role when an older log carries none, then the localized unnamed label — and the
@@ -2384,7 +2410,9 @@ replaced.
   action.
 - Semantics: a labelled `role="group"`, not 8.4a's `role="separator"`. A
   separator makes its content presentational, which would remove the expand
-  control from the accessibility tree.
+  control from the accessibility tree. The collapsed and expanded checkpoint
+  root carries its source message id (`data-message-id`), so it can anchor a
+  prepend like an ordinary tool row.
 - Body: the whole handoff the delegate authored and submitted, under the same
   labeled section head every tool detail block carries (§9.3): a localized
   heading that names the bytes and one compact copy control that copies the
@@ -3290,6 +3318,64 @@ coexist as independent tabs. The tab renders the delegation as a conversation:
   contiguous — `hasMoreAfter` stays true and the explicit latest read refills
   it. Resource bounds apply outside the window: one session keeps its 12 most
   recently read chains, and eviction drops a whole chain.
+- One read is the local selected-row page policy: a local scoped read asks for
+  500 selected child rows, and the initial, latest, older and newer reads all
+  use that same row policy, so a chain of a few hundred rows costs one read
+  instead of one read per hundred rows. The live tail keeps its separate
+  smaller cap and the per-row content limit is unchanged; the policy changes
+  the request cadence, not which rows a reader can reach.
+- A 500-row page does not reach the DOM as one block: the first commit mounts a
+  bounded run near the newest row it loaded, later frames mount the rest of the
+  rows already loaded in bounded batches above that run, and the pane states
+  that state through `data-hydration-state` (`pending` until every loaded row is
+  mounted, then `ready`) with the loaded and mounted row counts beside it. Every
+  loaded row is eventually mounted — this is not a virtualizer: there is no row
+  budget, no height estimate, no spacer, and no offscreen unmount, so selection,
+  find, search, and a loaded row's own disclosure behave exactly as they did when
+  the list mounted synchronously. Nothing grows the mounted run by more than one
+  batch in one commit, and no gesture is exempt: the pane's first commit, a top
+  reach at its older boundary, and the alignment of a distant search hit all
+  travel through the same bounded batches, so reading upward cannot turn a page
+  into one heavy commit. A reader paging upward keeps the same visible
+  fragment across every batch of a prepended page, and the pane does not ask the
+  host for another page while rows it already loaded are still mounting: a top
+  reach found there keeps the older-loading state up, continues the bounded
+  batches, and issues its older read only once every loaded row is laid out. A
+  later page appended below a historical window is the same rule mirrored: the
+  rows the reader can see keep their place, the appended rows mount in bounded
+  batches below that run, and a reach at the bottom boundary while they are
+  still mounting reveals them before the pane reads again. The older-loading
+  state stays up until its page is both read and mounted. A search
+  hit is aligned on the commit that mounts the row it names while those batches
+  continue, and a latest read or a window replacement cancels the batches that
+  belonged to the window it replaced instead of mounting rows into a range that
+  is no longer there. A pane with no visible box — its own layout collapsed, or
+  the window it sits in hidden — keeps the rows it has already mounted and
+  schedules no further batch, and its state stays `pending`; the batches resume
+  from that same state, one batch per frame, when the pane or the window becomes
+  visible again.
+- Measured commit shape, on the shipped source: a 3500-row synthetic chain
+  presents a 32-row bounded first run and never grows the mounted run by more
+  than 128 rows in one commit (largest added 128, zero batches over the limit),
+  with every commit counted from the mounted count the pane itself reports; a
+  2104-row real-host chain opens from the tiny live run that was already on
+  screen and presents its 32-row bounded run on the first hydration commit,
+  again with no commit beyond 128. The forward (`after`) append is measured as
+  well, from the exact loaded bottom rather than a band above it: a wheel reach
+  that carries the pane onto `scrollHeight - clientHeight` appends one page in
+  four commits of 128/128/128/116 with the fragment at the reading line kept at
+  77.796875 px in every batch, and the same reach issued as a native `End` key
+  press appends the next page the same way, holding `child-deep-992` at
+  78.109375 px per batch.
+- Matched A/B on the same 1009-row synthetic chain (Electron renderer plus local
+  host, one warmup and three measured runs per variant), comparing this commit
+  shape with mounting the whole loaded page synchronously: first content 418 ms
+  (411–418) against 522 ms (518–528); worst first-window long task 61 ms
+  (53–64) against 108–117 ms; full hydration 605 ms (604–613) against 542 ms
+  (534–553); chain-head travel 3931 ms (3922–3933) against 3829 ms (3790–3842)
+  for the same two older reads. The bounded commit reaches content sooner and
+  halves the worst initial stall, and pays for that with a later hydration
+  completion and a slightly slower multi-page head journey.
 - Boundary scrolling pages the window in the main transcript's direction, with
   no paging control of its own: reaching the visible top reads the page before
   the window's oldest bound (that bound is the cursor, handed back to the
@@ -3298,12 +3384,31 @@ coexist as independent tabs. The tab renders the delegation as a conversation:
   answer that cannot move the window stops that direction at that boundary
   instead of repeating the same read: nothing was fetched, so there is nothing
   to retry, and the explicit latest read — or a search focus — is what selects
-  a new window. A prepend holds the fragment the reader was reading: the
-  hook captures it before the read and applies the correction once the page's
-  rows are mounted (layout phase, after the disclosure hold and before follow),
-  falling back to the content height the scroller gained when the browser
-  skipped laying that fragment out, so rows growing above the reading line do
-  not move the reader's place.
+  a new window. A prepend holds the fragment the reader was reading, including a
+  Task brief or thinking-only row: the hook captures it before the read and
+  applies the correction once the page's rows are mounted (layout phase, after
+  the disclosure hold and before follow), falling back to the content height the
+  scroller gained when the browser skipped laying that fragment out, so rows
+  growing above the reading line do not move the reader's place. If a tall brief
+  itself remains stationary while older children mount after it, no second
+  scroll event is emitted; another explicit upward wheel at the older boundary
+  still requests the next page instead of waiting for the boundary latch to
+  clear. The older-loading indicator's box is always mounted and anchor-excluded,
+  so its visible label changes do not introduce an uncorrected layout jump.
+- A delegate forward read belongs to the reader: its forward boundary holds
+  only while every loaded row is mounted and the reader reached it with their
+  own scroll intent — a wheel or trackpad, a touch, a scrollbar drag, or a
+  native scrolling key. This pane grows rows above a released reader, the
+  browser compensates by moving the offset down, and the last compensation
+  lands near the bottom — a layout clamp that must not read as a reach, and a
+  programmatic scroll write or clamp neither reads forward nor re-pins. The end
+  of a loaded range is not the chain's newest row while later pages remain: a
+  reader who reaches that exact bottom continues the window forward, and a
+  local pin cannot veto that read because the pin only speaks about the range
+  it holds. The jump control follows its own rule and stays available whenever
+  later rows exist, whatever the local pin says. Follow re-pin also requires
+  the reader's own intent in this pane, so a clamp cannot re-bottom a released
+  viewport or undo the alignment a search focus applied.
 - A search focus and a jump to latest select a window instead of merging a
   page into the one on screen. A focused child message switches the window to
   the contiguous page around that target — a page that belongs somewhere else is

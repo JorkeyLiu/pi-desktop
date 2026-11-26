@@ -691,11 +691,13 @@ export const ThinkingRow = memo(function ThinkingRow({
   streaming,
   autoOpen = false,
   onUserInteraction,
+  anchorId,
 }: {
   message: UiMessage;
   streaming: boolean;
   autoOpen?: boolean;
   onUserInteraction?: () => void;
+  anchorId?: string;
 }) {
   const { t } = useTranslation();
   const detailsId = useId();
@@ -716,7 +718,7 @@ export const ThinkingRow = memo(function ThinkingRow({
   );
   if (compact) {
     return isThinkingActive(message, streaming) ? (
-      <div className="tool-row thinking thinking-compact" role="status">
+      <div className="tool-row thinking thinking-compact" role="status" data-message-id={anchorId}>
         <span className="tool-row-icon" aria-hidden>
           <IconBrain size={15} />
         </span>
@@ -731,7 +733,7 @@ export const ThinkingRow = memo(function ThinkingRow({
   // generated summary, no newest-line ticker, and nothing cached to go stale.
   const preview = thinkingPreview(text);
   return (
-    <div className={`tool-row thinking ${open ? "open" : ""}`}>
+    <div className={`tool-row thinking ${open ? "open" : ""}`} data-message-id={anchorId}>
       <button
         ref={titleRef}
         className="tool-row-header"

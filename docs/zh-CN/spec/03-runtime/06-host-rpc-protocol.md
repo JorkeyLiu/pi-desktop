@@ -256,6 +256,15 @@ type ToolBudgetHealth = {
   `hasMoreBefore`/`hasMoreAfter` 按该作用域选中的行计算，`messageBefore` 是该选择上的物理排他游标，
   `messageStart`/`messageEnd` 仍是物理位置。增量字段，不升协议版本。
 
+  `delegation` 回答还可以携带 `historyRuns`：对回显 `historyContext` 中的每一次链上
+  `Task` / `Task(resume)` 调用给出该运行自己的物理开端，形状为
+  `{ callId, taskMessageId, taskIndex, firstChildIndex? }`（ADR 0341）。`taskIndex` 是该调用
+  自身 `Task` 行的物理位置；`firstChildIndex` 是该调用最小的已选中子行位置，调用尚无已选中
+  子行时省略该字段，因此不会编造位置。该字段描述链级物理事实而不是页边界 —— 运行提示是否在
+  屏幕上由渲染器按自己持有的连续窗口判断 —— 并且 `main`、无作用域、旧式与空回答都省略它。
+  渲染器读到省略该字段的旧主机会保守处理：部分窗口不绘制提示，只有到达链首的窗口才可能
+  绘制，且绝不依据 `messageStart` / `hasMoreBefore` 猜测某个运行的开端。
+
   `historyScope` 的形状也按上面的定义校验：`{ kind: "main" }` 或带裁剪后非空 `id` 的
   `{ kind: "delegation", id }`，其他形状一律 `INVALID_PARAMS`（1002）。在跨 IPC 之前，共享边界会
   先归一化该字段：未经信任或格式异常的取值解析为不作用域的读取，绝不会静默变成过滤读取；保留旧

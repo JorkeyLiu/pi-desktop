@@ -7,6 +7,10 @@ const tabSource = await readFile(
   new URL("../src/components/workpanel/SubagentTranscriptTab.tsx", import.meta.url),
   "utf8",
 );
+const rowsSource = await readFile(
+  new URL("../src/features/chat/transcript/SubagentTranscriptRows.tsx", import.meta.url),
+  "utf8",
+);
 const workPanelSource = await readFile(
   new URL("../src/components/workpanel/WorkPanel.tsx", import.meta.url),
   "utf8",
@@ -95,11 +99,21 @@ test("the delegation tab renders a message list with a child composer", () => {
   // through the latest id and no tab is stranded.
   assert.match(tabSource, /subagentChainLatestDelegationId\(messages, delegationId\)/);
   assert.doesNotMatch(tabSource, /isStaleSubagentTab/);
-  assert.match(tabSource, /buildSubagentTranscript\(messages, activeDelegationId\)/);
-  assert.match(tabSource, /className="message-row user"/);
-  assert.match(tabSource, /className="message-user-text selectable"/);
-  assert.match(tabSource, /className="message-row assistant"/);
-  assert.match(tabSource, /data-message-id=\{row\.message\.id\}/);
+  // The tab builds from the chain's scoped rows with the run-prompt
+  // visibility of the retained window, so a partial window never redraws a
+  // prompt it has not reached.
+  assert.match(tabSource, /buildSubagentTranscript\(messages, activeDelegationId, \{/);
+  assert.match(tabSource, /promptVisible: \(call\) => subagentHistoryRunPromptVisible/);
+  // The row language lives in the dedicated row module; the tab mounts it from
+  // the projected units, so a hydration batch grows the mounted run without the
+  // surface rebuilding every row.
+  assert.match(tabSource, /<SubagentTranscriptRows/);
+  assert.match(tabSource, /units=\{visibleUnits\}/);
+  assert.match(rowsSource, /className="message-row user"/);
+  assert.match(rowsSource, /className="message-user-text selectable"/);
+  assert.match(rowsSource, /className="message-row assistant"/);
+  assert.match(rowsSource, /data-message-id=\{unit\.messageId\}/);
+  assert.match(rowsSource, /data-message-id=\{message\.id\}/);
   // The child composer is the shared editor now, not a private textarea: the
   // panel reuses the main composer's input, box, and draft hook.
   assert.match(tabSource, /<ComposerShell className="subagent-transcript-shell"/);
@@ -151,7 +165,18 @@ test("the tab owns one scroll surface and pins to the latest output", () => {
     workPanelCss,
     /\.subagent-transcript-scroll \{[^}]*scrollbar-gutter: stable;/,
   );
-  assert.match(tabSource, /useFollowScroll\(\)/);
+  // This pane grows its own rows above a released reader, so a browser
+  // layout clamp must not read as a reach: the delegate opts out of re-pinning
+  // follow without a reader gesture, and it never treats the end of a loaded
+  // range as the tail while later rows remain.
+  assert.match(
+    tabSource,
+    /useFollowScroll\(\{\s*repinRequiresGesture: true,\s*loadedEndIsLatest,?\s*\}\)/,
+  );
+  assert.match(tabSource, /const loadedEndIsLatest = useCallback\(\(\) => !hasMoreAfterRef\.current/);
+  // A reader reach at the loaded end continues the window when later rows
+  // remain, which is the fact the boundary reads.
+  assert.match(tabSource, /hasMoreAfter: hasMoreAfterRef\.current,/);
   assert.match(tabSource, /ref=\{scrollRef\}/);
   assert.match(tabSource, /onScroll=\{handleScroll\}/);
   // The jump control selects the newest window before it scrolls: scrolling a

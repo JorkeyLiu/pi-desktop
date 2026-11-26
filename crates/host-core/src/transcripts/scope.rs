@@ -27,6 +27,15 @@ pub(crate) struct ScopedSelection {
     pub(crate) selected: Vec<usize>,
     /// Physical Task rows that identify the selected chain, ascending.
     pub(crate) context: Vec<usize>,
+    /// The Task call id of each context row, aligned with `context`.
+    pub(crate) context_calls: Vec<String>,
+    /// First selected child physical index per Task call id.
+    ///
+    /// A run's `Task` row physically precedes its children, so the smallest
+    /// selected child of a call is that call's own opening: the row after
+    /// which the run's prompt belongs. Physical coordinates only; live rows
+    /// have none and are never listed here.
+    pub(crate) first_child: std::collections::HashMap<String, usize>,
     /// Canonical scope echo: the stable chain identity when one exists.
     pub(crate) canonical: Option<HistoryScope>,
 }
@@ -48,37 +57,36 @@ pub(crate) fn select(layout: &TranscriptLayout, scope: &HistoryScope) -> ScopedS
     match scope {
         HistoryScope::Main => ScopedSelection {
             selected: layout.top_level_indices().to_vec(),
-            context: Vec::new(),
             canonical: Some(HistoryScope::Main),
+            ..ScopedSelection::default()
         },
         HistoryScope::Delegation { id } => {
             let target = id.trim();
             if target.is_empty() {
                 return ScopedSelection {
-                    selected: Vec::new(),
-                    context: Vec::new(),
                     canonical: Some(HistoryScope::Delegation { id: id.clone() }),
+                    ..ScopedSelection::default()
                 };
             }
             let chain = chain_call_ids(layout, target);
             if chain.is_empty() {
                 return ScopedSelection {
-                    selected: Vec::new(),
-                    context: Vec::new(),
                     canonical: Some(HistoryScope::Delegation {
                         id: target.to_string(),
                     }),
+                    ..ScopedSelection::default()
                 };
             }
             let mut selected = Vec::new();
-            let mut context = Vec::new();
+            let mut first_child = std::collections::HashMap::new();
+            let mut context_rows: Vec<(usize, String)> = Vec::new();
             let mut canonical = None;
             for task in layout
                 .task_calls()
                 .iter()
                 .filter(|task| chain.contains(&task.call_id))
             {
-                context.push(task.message_index);
+                context_rows.push((task.message_index, task.call_id.clone()));
                 if canonical.is_none() {
                     canonical = Some(HistoryScope::Delegation {
                         id: task
@@ -89,20 +97,24 @@ pub(crate) fn select(layout: &TranscriptLayout, scope: &HistoryScope) -> ScopedS
                 }
             }
             for index in 0..layout.message_count() {
-                if layout
-                    .parent_call_id(index)
-                    .is_some_and(|parent| chain.contains(parent))
-                {
-                    selected.push(index);
+                if let Some(parent) = layout.parent_call_id(index) {
+                    if chain.contains(parent) {
+                        first_child.entry(parent.to_string()).or_insert(index);
+                        selected.push(index);
+                    }
                 }
             }
-            context.sort_unstable();
+            context_rows.sort_unstable_by_key(|(index, _)| *index);
+            let context = context_rows.iter().map(|(index, _)| *index).collect();
+            let context_calls = context_rows.into_iter().map(|(_, call)| call).collect();
             let canonical = canonical.unwrap_or_else(|| HistoryScope::Delegation {
                 id: target.to_string(),
             });
             ScopedSelection {
                 selected,
                 context,
+                context_calls,
+                first_child,
                 canonical: Some(canonical),
             }
         }

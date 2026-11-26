@@ -91,7 +91,7 @@ export function SubagentHandoffCheckpointRow({
       ? t("chat.subagentHandoffCheckpoint")
       : t("chat.subagentHandoffCheckpointCount", { times });
   return (
-    <div className="transcript-handoff-row" role="group" aria-label={title}>
+    <div className="transcript-handoff-row" role="group" aria-label={title} data-message-id={message.id}>
       <button
         ref={titleRef}
         type="button"

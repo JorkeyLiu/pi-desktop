@@ -300,6 +300,114 @@ fn delegation_scope_counts_distinct_children_and_pages_by_physical_cursor() {
 }
 
 #[test]
+fn delegation_history_runs_mark_each_context_call_and_its_first_selected_child() {
+    let (db, session_id) = scoped_fixture();
+    let detail = get_session_scoped(
+        &db,
+        &session_id,
+        SessionReadOptions {
+            message_limit: Some(3),
+            ..options()
+        },
+        HistoryScope::Delegation {
+            id: "delegation-1".into(),
+        },
+    )
+    .unwrap()
+    .unwrap();
+    // The page is the tail window; the physical runs are chain-global, so a
+    // partial window still states each run's own opening without claiming the
+    // window reaches it.
+    let runs: Vec<(String, String, i64, Option<i64>)> = detail
+        .history_runs
+        .iter()
+        .map(|run| {
+            (
+                run.call_id.clone(),
+                run.task_message_id.clone(),
+                run.task_index,
+                run.first_child_index,
+            )
+        })
+        .collect();
+    assert_eq!(
+        runs,
+        vec![
+            ("call-1".into(), TASK_1.into(), 1, Some(2)),
+            ("call-2".into(), TASK_2.into(), 1003, Some(1004)),
+            ("call-3".into(), TASK_3.into(), 1007, Some(1008)),
+        ],
+        "each context Task row states its physical run opening"
+    );
+    // The nested Task belongs to call-1, not to this chain, so it is no run.
+    assert!(!detail
+        .history_runs
+        .iter()
+        .any(|run| run.call_id == "call-nested"));
+
+    // The main scope and the legacy physical read have no per-run metadata.
+    let main = get_session_scoped(&db, &session_id, options(), HistoryScope::Main)
+        .unwrap()
+        .unwrap();
+    assert!(main.history_runs.is_empty());
+    let legacy = get_session_with_options(&db, &session_id, options())
+        .unwrap()
+        .unwrap();
+    assert!(legacy.history_runs.is_empty());
+}
+
+#[test]
+fn a_known_chain_with_no_child_rows_still_states_its_run_opening() {
+    let db = test_db();
+    let session = create_session(&db, None, None, None, None, None).unwrap();
+    let messages = [
+        user_message(ROOT_USER, "root", &timestamp(0)),
+        task_message(
+            TASK_1,
+            "call-1",
+            "delegation-1",
+            "running",
+            &timestamp(1),
+            None,
+            None,
+        ),
+    ];
+    let records: Vec<MessageRecord> = messages
+        .iter()
+        .map(|message| ui_to_record(message).0)
+        .collect();
+    transcripts::write_transcript_with_compactions(
+        db.data_dir(),
+        &session.id,
+        &session.created_at,
+        &records,
+        &[],
+    )
+    .unwrap();
+    let detail = get_session_scoped(
+        &db,
+        &session.id,
+        options(),
+        HistoryScope::Delegation {
+            id: "delegation-1".into(),
+        },
+    )
+    .unwrap()
+    .unwrap();
+    assert!(detail.messages.is_empty());
+    assert_eq!(detail.history_context.len(), 1);
+    assert_eq!(
+        detail
+            .history_runs
+            .iter()
+            .map(|run| (run.call_id.as_str(), run.task_index, run.first_child_index))
+            .collect::<Vec<_>>(),
+        vec![("call-1", 1, None)],
+        "an empty known chain still names its opening, with no fabricated child"
+    );
+}
+
+#[test]
 fn delegation_resume_resolves_by_delegation_id_or_bare_call_id() {
     let (db, session_id) = scoped_fixture();
     let by_delegation = get_session_scoped(

@@ -1147,6 +1147,19 @@ type SessionDetail = SessionSummary & {
   /** Every Task / Task(resume) message of the chain, outside the page budget
    *  (delegation scope only). */
   historyContext?: UiMessage[];
+  /** Physical opening of each chain Task / Task(resume) run (ADR 0341):
+   *  chain-global indexes, never page bounds, and no fabricated child index for
+   *  a run without a selected child. Delegation scope only; omitted when absent. */
+  historyRuns?: SessionHistoryRun[];
+};
+
+type SessionHistoryRun = {
+  callId: string;
+  taskMessageId: string;
+  /** Physical index of the run's own Task row. */
+  taskIndex: number;
+  /** Smallest selected child index of this run, omitted when it has none. */
+  firstChildIndex?: number;
 };
 
 type SessionHistoryScope =

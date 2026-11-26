@@ -68,6 +68,21 @@ test("a scoped detail carries its echoed scope and optional chain context", () =
     historyContext: [message("task-1", { role: "tool", toolName: "Task", toolCallId: "call-1" })],
   };
   assert.deepEqual(detail.historyScope, { kind: "delegation", id: "d1" });
+  // Additive run metadata travels with the same answer; older responses omit
+  // it and the type stays valid.
+  const withRuns: SessionDetail = {
+    ...detail,
+    historyRuns: [
+      {
+        callId: "call-1",
+        taskMessageId: "task-1",
+        taskIndex: 1,
+        firstChildIndex: 2,
+      },
+    ],
+  };
+  assert.equal(withRuns.historyRuns?.[0]?.firstChildIndex, 2);
+  assert.equal(detail.historyRuns, undefined);
   assert.equal(detail.historyContext?.length, 1);
   // The legacy shape still compiles: no scope, no context, unchanged fields.
   const legacy: SessionDetail = { ...detail, historyScope: undefined, historyContext: undefined };
