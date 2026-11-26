@@ -1,8 +1,12 @@
 # ADR 0341: The subagent Task prompt is a chronological opening
 
-- Status: Accepted for implementation (implemented and verified in the
-  uncommitted feature branch: additive host/shared scoped-history metadata,
-  desktop renderer projection, host-unit and rendered/real-host E2E evidence)
+- Status: Accepted and implemented on
+  `jorkey/fix/subagent-history-paging-continuity` (commit `c1459c2d0`: additive
+  host/shared scoped-history metadata, desktop renderer projection, host-unit
+  and rendered/real-host E2E evidence). The page cadence and the commit shape
+  the renderer now uses for a loaded page are stated in
+  `04-ux/08-component-spec.md` §5.7 and E2E-207g; neither changes this
+  decision's claim about where a prompt may appear.
 - Date: 2026-11-26
 - Deciders: PI-Desktop core
 - Related: [ADR 0335](0335-scoped-session-history-reads.md) ·

@@ -11,6 +11,7 @@ import {
   isRecentScrollGesture,
   isScrollGestureInput,
   reduceTranscriptScroll,
+  repinsFollowAfterScroll,
   TRANSCRIPT_SCROLL_ROUNDING_TOLERANCE_PX,
   type ScrollInputType,
 } from "../lib/transcript-scroll";
@@ -46,6 +47,15 @@ export type FollowScroll = {
    * nested scroller reads the same position instead of guessing it from pixels.
    */
   isPinned: () => boolean;
+  /**
+   * When this scroller's reader last drove it with real input, whatever the
+   * kind: wheel, touch, a scrollbar drag, or a native scrolling key.
+   *
+   * A surface that must not mistake its own layout compensation for a reader
+   * reach asks this instead of watching one input kind, so every way a reader
+   * can scroll counts and a programmatic write carries no timestamp at all.
+   */
+  readerIntentAt: () => number;
   /** Provided around this scroller's rows so their disclosures can hold it. */
   disclosureAnchorNotifier: DisclosureAnchorNotifier;
 };
@@ -60,7 +70,29 @@ export type FollowScroll = {
  * hold also reaches the scroller this one is nested in, because growing these
  * rows grows that one's content as well.
  */
-export function useFollowScroll(): FollowScroll {
+/**
+ * How a nested scroller's follow state behaves for its surface.
+ *
+ * The defaults keep ToolRow's contract. The delegate transcript opts into the
+ * gesture rule because it grows its own rows above a released reader: the
+ * browser compensates that growth by moving the offset down, and that can land
+ * on the window's end without anyone reaching it. Such a compensation is a
+ * layout clamp, so it must not take the viewport back from the reader.
+ */
+export type FollowScrollOptions = {
+  /** A released viewport re-pins only from a real gesture, never from a clamp. */
+  readonly repinRequiresGesture?: boolean;
+  /**
+   * Whether this scroller's loaded end is the newest row of its own chain.
+   *
+   * A surface that pages forward reads a range whose end is not the tail: its
+   * bottom is where the next page begins, so it is never a position to follow.
+   * The surface answers this on every scroll event, and the default `true`
+   * keeps the plain stick-to-bottom contract for every other scroller.
+   */
+  readonly loadedEndIsLatest?: () => boolean;
+};
+export function useFollowScroll(options: FollowScrollOptions = {}): FollowScroll {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
@@ -294,10 +326,31 @@ export function useFollowScroll(): FollowScroll {
       setShowJump(!wasPinned);
       scheduleFollowScroll();
     } else {
-      pinnedRef.current = transition.pinned;
-      setShowJump(transition.showJump);
+      /*
+        A released viewport is only handed back by the reader. Rows growing
+        above them move the offset down through the browser's own compensation,
+        and that can land the scroller on the window's end; a surface that
+        grows its own rows therefore re-pins from a gesture and from nothing
+        else. A pinned viewport keeps following either way.
+      */
+      const repin = repinsFollowAfterScroll({
+        pinned: transition.pinned,
+        wasPinned,
+        readerIntent: gesturing,
+        repinRequiresGesture: options.repinRequiresGesture === true,
+        endIsLatest: options.loadedEndIsLatest
+          ? options.loadedEndIsLatest()
+          : true,
+      });
+      pinnedRef.current = repin;
+      setShowJump(repin ? transition.showJump : true);
     }
-  }, [cancelFollowScroll, scheduleFollowScroll]);
+  }, [
+    cancelFollowScroll,
+    options.loadedEndIsLatest,
+    options.repinRequiresGesture,
+    scheduleFollowScroll,
+  ]);
 
   useEffect(() => {
     const content = contentRef.current;
@@ -340,6 +393,7 @@ export function useFollowScroll(): FollowScroll {
     holdReadingPosition,
     settleReadingPosition,
     isPinned: () => pinnedRef.current,
+    readerIntentAt: () => lastScrollGestureAtRef.current,
     disclosureAnchorNotifier,
   };
 }

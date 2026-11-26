@@ -230,6 +230,78 @@ export function isRecentScrollGesture(
   return now - lastGestureAt <= TRANSCRIPT_SCROLL_GESTURE_WINDOW_MS;
 }
 
+/**
+ * Whether this scroll event is the reader asking the range for the next page.
+ *
+ * The later boundary is a reader reach, and only a reach may continue forward.
+ * A pane that grows its own rows above a released reader sees the browser
+ * compensate that growth by moving the offset down, and the last compensation
+ * lands on the range's end — geometry that looks exactly like a reach without
+ * anyone reaching. So the reach itself is the reader's own intent, not the
+ * wheel specifically: the follow hook records every input that can actually
+ * move this scroller — wheel, touch, a scrollbar drag, and the native scrolling
+ * keys — so a trackpad gesture, a touch scroll, or `End` continues forward
+ * exactly like a wheel does, while a programmatic write or a layout clamp,
+ * which carry no input, never does.
+ *
+ * A local pin is not one of those facts. The end of a loaded range is the
+ * newest row only when nothing newer exists: while later rows remain, a
+ * viewport pinned to that end says nothing about the tail, so a reader reach
+ * there still continues the range and the pin cannot veto it. Once the range
+ * really ends at the newest row, a pinned viewport is already there and the
+ * jump control is not a forward read.
+ */
+export function isReaderForwardReach(input: {
+  now: number;
+  /** When the reader last drove this scroller with real input. */
+  lastReaderInputAt: number;
+  /** Follow is pinned to the newest row of the range it has loaded. */
+  pinned: boolean;
+  /** A batch is still mounting rows the last read loaded. */
+  hydrationPending: boolean;
+  /** The scroller sits at the end of the range it has loaded. */
+  atRangeBottom: boolean;
+  /** That range still has newer rows beyond its end. */
+  hasMoreAfter: boolean;
+}): boolean {
+  if (!input.atRangeBottom) return false;
+  if (input.hydrationPending) return false;
+  if (!isRecentScrollGesture(input.now, input.lastReaderInputAt)) return false;
+  return input.hasMoreAfter || !input.pinned;
+}
+
+/**
+ * Whether follow comes back after a scroll event.
+ *
+ * Rows growing above a released reader move the offset down through the
+ * browser's own compensation, and that can land the scroller on the newest row
+ * it has loaded. A surface that grows its own rows therefore re-pins from a
+ * reader's gesture and from nothing else; a pinned viewport keeps following
+ * either way, and every other surface keeps the default rule.
+ *
+ * The row a range ends at is only the newest row there is when nothing newer
+ * exists beyond it. A surface whose loaded end can be historical therefore
+ * never treats that end as the tail: its bottom is where the next page starts,
+ * not where a reader wants to be held, so the reader's own gesture there
+ * continues the range instead of handing a released viewport back to follow.
+ */
+export function repinsFollowAfterScroll(input: {
+  /** The reducer's answer for this event. */
+  pinned: boolean;
+  /** Follow was pinned before this event. */
+  wasPinned: boolean;
+  /** Real reader input arrived inside the gesture window. */
+  readerIntent: boolean;
+  /** This surface grows its own rows above a released reader. */
+  repinRequiresGesture: boolean;
+  /** The row this surface's range ends at is the newest row of its chain. */
+  endIsLatest: boolean;
+}): boolean {
+  if (!input.pinned) return false;
+  if (!input.endIsLatest) return false;
+  return input.wasPinned || input.readerIntent || !input.repinRequiresGesture;
+}
+
 /** Keys whose native default moves the scroller the focused element sits in. */
 export const SCROLL_GESTURE_KEYS: ReadonlySet<string> = new Set([
   "ArrowUp",

@@ -15,6 +15,8 @@ import {
   shouldOfferLatestNavigation,
   transcriptHasLayout,
   wheelDirectionFromDelta,
+  isReaderForwardReach,
+  repinsFollowAfterScroll,
 } from "../src/lib/transcript-scroll.ts";
 
 function update(overrides = {}) {
@@ -119,6 +121,163 @@ test("a scroll event without recent user input is not a gesture", () => {
   assert.equal(isRecentScrollGesture(100, -Infinity), false);
 });
 
+test("the reader's own gesture at the range end continues forward", () => {
+  // Every input that can move this scroller is the same fact here: a recent
+  // intent timestamp. A wheel, a touch scroll, a scrollbar drag, and a native
+  // scrolling key all stamp it, so none of them is singled out.
+  assert.equal(
+    isReaderForwardReach({
+      now: 100,
+      lastReaderInputAt: 99,
+      pinned: false,
+      hydrationPending: false,
+      atRangeBottom: true,
+      hasMoreAfter: true,
+    }),
+    true,
+  );
+});
+
+test("a layout clamp at the range end never continues forward", () => {
+  // A released offset landing on the range's end through the browser's own
+  // compensation carries no reader input at all - and a window with later
+  // rows beyond it makes no difference to that.
+  for (const hasMoreAfter of [false, true]) {
+    assert.equal(
+      isReaderForwardReach({
+        now: 100,
+        lastReaderInputAt: -Infinity,
+        pinned: false,
+        hydrationPending: false,
+        atRangeBottom: true,
+        hasMoreAfter,
+      }),
+      false,
+    );
+  }
+});
+
+test("an expired reader intent no longer continues forward", () => {
+  assert.equal(
+    isReaderForwardReach({
+      now: TRANSCRIPT_SCROLL_GESTURE_WINDOW_MS + 1,
+      lastReaderInputAt: 0,
+      pinned: false,
+      hydrationPending: false,
+      atRangeBottom: true,
+      hasMoreAfter: true,
+    }),
+    false,
+  );
+});
+
+test("a reader reach at the exact loaded bottom continues forward from under a local pin", () => {
+  // The loaded bottom is not the global latest while later rows remain, so a
+  // pin sitting on it may not veto the read the reader's gesture asks for. This
+  // is the event that lands on the very end, after the reducer already answered
+  // "pinned" for a downward gesture inside the re-pin band.
+  assert.equal(
+    isReaderForwardReach({
+      now: 100,
+      lastReaderInputAt: 99,
+      pinned: true,
+      hydrationPending: false,
+      atRangeBottom: true,
+      hasMoreAfter: true,
+    }),
+    true,
+  );
+  // Once the range really ends at the newest row, follow sitting there is
+  // already at the tail and no forward read is owed.
+  assert.equal(
+    isReaderForwardReach({
+      now: 100,
+      lastReaderInputAt: 99,
+      pinned: true,
+      hydrationPending: false,
+      atRangeBottom: true,
+      hasMoreAfter: false,
+    }),
+    false,
+  );
+});
+
+test("a still-mounting range and a position away from the end never continue forward", () => {
+  // A window whose rows are still arriving is not a page boundary yet, and
+  // neither is a position above the end.
+  assert.equal(
+    isReaderForwardReach({
+      now: 100,
+      lastReaderInputAt: 99,
+      pinned: true,
+      hydrationPending: true,
+      atRangeBottom: true,
+      hasMoreAfter: true,
+    }),
+    false,
+  );
+  assert.equal(
+    isReaderForwardReach({
+      now: 100,
+      lastReaderInputAt: 99,
+      pinned: false,
+      hydrationPending: false,
+      atRangeBottom: false,
+      hasMoreAfter: true,
+    }),
+    false,
+  );
+});
+
+test("a released viewport re-pins only from the reader's own gesture", () => {
+  const base = {
+    pinned: true,
+    wasPinned: false,
+    readerIntent: false,
+    repinRequiresGesture: true,
+    endIsLatest: true,
+  };
+  assert.equal(repinsFollowAfterScroll(base), false);
+  assert.equal(repinsFollowAfterScroll({ ...base, readerIntent: true }), true);
+  // A pinned viewport keeps following with no gesture at all, and surfaces
+  // that do not grow their own rows keep the default rule.
+  assert.equal(repinsFollowAfterScroll({ ...base, wasPinned: true }), true);
+  assert.equal(
+    repinsFollowAfterScroll({ ...base, repinRequiresGesture: false }),
+    true,
+  );
+});
+
+test("a range that ends before the newest row never re-pins follow", () => {
+  // A historical window's bottom is where the next page starts, so a reader
+  // gesture there continues the range instead of handing a released viewport
+  // back to follow, and a pin that was already held there is dropped.
+  const base = {
+    pinned: true,
+    wasPinned: false,
+    readerIntent: true,
+    repinRequiresGesture: true,
+    endIsLatest: false,
+  };
+  assert.equal(repinsFollowAfterScroll(base), false);
+  assert.equal(repinsFollowAfterScroll({ ...base, wasPinned: true }), false);
+  assert.equal(
+    repinsFollowAfterScroll({ ...base, repinRequiresGesture: false }),
+    false,
+  );
+});
+
+test("a scroll event that releases follow is never re-pinned by the same event", () => {
+  const base = {
+    pinned: false,
+    wasPinned: true,
+    readerIntent: true,
+    repinRequiresGesture: true,
+    endIsLatest: true,
+  };
+  assert.equal(repinsFollowAfterScroll(base), false);
+});
+
 test("a collapsed scroller has no layout", () => {
   assert.equal(transcriptHasLayout({ scrollHeight: 0, clientHeight: 0 }), false);
   assert.equal(transcriptHasLayout({ scrollHeight: 800, clientHeight: 0 }), false);
@@ -221,6 +380,9 @@ test("the near-bottom band is the only automatic later-page trigger", () => {
     scrollTop, scrollHeight, clientHeight,
   });
   assert.equal(isLaterRevealPosition(at(1_500 - LATER_REVEAL_THRESHOLD_PX)), true);
+  // The exact loaded bottom is this boundary at distance zero, which is what a
+  // reader's own reach lands on when they scroll all the way down.
+  assert.equal(isLaterRevealPosition(at(1_500)), true);
   assert.equal(isLaterRevealPosition(at(1_500 - LATER_REVEAL_THRESHOLD_PX - 1)), false);
   // An underfilled window is at its own bottom, so it continues forward.
   assert.equal(isLaterRevealPosition(at(0, 400, 500)), true);

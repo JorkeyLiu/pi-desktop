@@ -3318,6 +3318,64 @@ coexist as independent tabs. The tab renders the delegation as a conversation:
   contiguous — `hasMoreAfter` stays true and the explicit latest read refills
   it. Resource bounds apply outside the window: one session keeps its 12 most
   recently read chains, and eviction drops a whole chain.
+- One read is the local selected-row page policy: a local scoped read asks for
+  500 selected child rows, and the initial, latest, older and newer reads all
+  use that same row policy, so a chain of a few hundred rows costs one read
+  instead of one read per hundred rows. The live tail keeps its separate
+  smaller cap and the per-row content limit is unchanged; the policy changes
+  the request cadence, not which rows a reader can reach.
+- A 500-row page does not reach the DOM as one block: the first commit mounts a
+  bounded run near the newest row it loaded, later frames mount the rest of the
+  rows already loaded in bounded batches above that run, and the pane states
+  that state through `data-hydration-state` (`pending` until every loaded row is
+  mounted, then `ready`) with the loaded and mounted row counts beside it. Every
+  loaded row is eventually mounted — this is not a virtualizer: there is no row
+  budget, no height estimate, no spacer, and no offscreen unmount, so selection,
+  find, search, and a loaded row's own disclosure behave exactly as they did when
+  the list mounted synchronously. Nothing grows the mounted run by more than one
+  batch in one commit, and no gesture is exempt: the pane's first commit, a top
+  reach at its older boundary, and the alignment of a distant search hit all
+  travel through the same bounded batches, so reading upward cannot turn a page
+  into one heavy commit. A reader paging upward keeps the same visible
+  fragment across every batch of a prepended page, and the pane does not ask the
+  host for another page while rows it already loaded are still mounting: a top
+  reach found there keeps the older-loading state up, continues the bounded
+  batches, and issues its older read only once every loaded row is laid out. A
+  later page appended below a historical window is the same rule mirrored: the
+  rows the reader can see keep their place, the appended rows mount in bounded
+  batches below that run, and a reach at the bottom boundary while they are
+  still mounting reveals them before the pane reads again. The older-loading
+  state stays up until its page is both read and mounted. A search
+  hit is aligned on the commit that mounts the row it names while those batches
+  continue, and a latest read or a window replacement cancels the batches that
+  belonged to the window it replaced instead of mounting rows into a range that
+  is no longer there. A pane with no visible box — its own layout collapsed, or
+  the window it sits in hidden — keeps the rows it has already mounted and
+  schedules no further batch, and its state stays `pending`; the batches resume
+  from that same state, one batch per frame, when the pane or the window becomes
+  visible again.
+- Measured commit shape, on the shipped source: a 3500-row synthetic chain
+  presents a 32-row bounded first run and never grows the mounted run by more
+  than 128 rows in one commit (largest added 128, zero batches over the limit),
+  with every commit counted from the mounted count the pane itself reports; a
+  2104-row real-host chain opens from the tiny live run that was already on
+  screen and presents its 32-row bounded run on the first hydration commit,
+  again with no commit beyond 128. The forward (`after`) append is measured as
+  well, from the exact loaded bottom rather than a band above it: a wheel reach
+  that carries the pane onto `scrollHeight - clientHeight` appends one page in
+  four commits of 128/128/128/116 with the fragment at the reading line kept at
+  77.796875 px in every batch, and the same reach issued as a native `End` key
+  press appends the next page the same way, holding `child-deep-992` at
+  78.109375 px per batch.
+- Matched A/B on the same 1009-row synthetic chain (Electron renderer plus local
+  host, one warmup and three measured runs per variant), comparing this commit
+  shape with mounting the whole loaded page synchronously: first content 418 ms
+  (411–418) against 522 ms (518–528); worst first-window long task 61 ms
+  (53–64) against 108–117 ms; full hydration 605 ms (604–613) against 542 ms
+  (534–553); chain-head travel 3931 ms (3922–3933) against 3829 ms (3790–3842)
+  for the same two older reads. The bounded commit reaches content sooner and
+  halves the worst initial stall, and pays for that with a later hydration
+  completion and a slightly slower multi-page head journey.
 - Boundary scrolling pages the window in the main transcript's direction, with
   no paging control of its own: reaching the visible top reads the page before
   the window's oldest bound (that bound is the cursor, handed back to the
@@ -3337,6 +3395,20 @@ coexist as independent tabs. The tab renders the delegation as a conversation:
   still requests the next page instead of waiting for the boundary latch to
   clear. The older-loading indicator's box is always mounted and anchor-excluded,
   so its visible label changes do not introduce an uncorrected layout jump.
+- A delegate forward read belongs to the reader: its forward boundary holds
+  only while every loaded row is mounted and the reader reached it with their
+  own scroll intent — a wheel or trackpad, a touch, a scrollbar drag, or a
+  native scrolling key. This pane grows rows above a released reader, the
+  browser compensates by moving the offset down, and the last compensation
+  lands near the bottom — a layout clamp that must not read as a reach, and a
+  programmatic scroll write or clamp neither reads forward nor re-pins. The end
+  of a loaded range is not the chain's newest row while later pages remain: a
+  reader who reaches that exact bottom continues the window forward, and a
+  local pin cannot veto that read because the pin only speaks about the range
+  it holds. The jump control follows its own rule and stays available whenever
+  later rows exist, whatever the local pin says. Follow re-pin also requires
+  the reader's own intent in this pane, so a clamp cannot re-bottom a released
+  viewport or undo the alignment a search focus applied.
 - A search focus and a jump to latest select a window instead of merging a
   page into the one on screen. A focused child message switches the window to
   the contiguous page around that target — a page that belongs somewhere else is

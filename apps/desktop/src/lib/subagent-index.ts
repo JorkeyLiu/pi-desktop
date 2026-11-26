@@ -429,6 +429,13 @@ function collectRosterMetrics(
  * three maps name a chain by its earliest call: the resume edges point a
  * continuation at the call it continues, and walking to the earliest ancestor
  * names the component without re-reading the conversation once per call.
+ *
+ * The walk is resolved once per call and path-compressed: a call that reaches
+ * an already-resolved ancestor takes that ancestor's root as its own. Resume
+ * edges may also close into a cycle, which has no fixpoint ancestor; those
+ * starts keep the bounded-walk answer keyed by their own call instead of
+ * entering the compressed map, so one start's parity answer never becomes
+ * another start's root.
  */
 function batchMaps(
   calls: readonly CallRow[],
@@ -446,13 +453,50 @@ function batchMaps(
   for (const [prior, next] of resumeLink) {
     if (!parentOf.has(next)) parentOf.set(next, prior);
   }
-  const rootOf = (callId: string): string => {
+  // The bounded walk every compressed answer must agree with: an ancestor
+  // chain that closes into a cycle stops after the same number of hops for
+  // every start, so a cycle's answer depends on where the walk started.
+  const walkRoot = (callId: string): string => {
     let root = callId;
     for (let guard = 0; guard <= calls.length; guard += 1) {
       const parent = parentOf.get(root);
       if (!parent || parent === root) break;
       root = parent;
     }
+    return root;
+  };
+  const compressed = new Map<string, string>();
+  const cycleRoots = new Map<string, string>();
+  const rootOf = (callId: string): string => {
+    const memoized = compressed.get(callId) ?? cycleRoots.get(callId);
+    if (memoized !== undefined) return memoized;
+    const path: string[] = [];
+    const seen = new Set<string>();
+    let node = callId;
+    let root: string | undefined;
+    while (root === undefined) {
+      const known = compressed.get(node);
+      if (known !== undefined) {
+        root = known;
+        break;
+      }
+      if (seen.has(node)) break; // a resume cycle has no earliest ancestor
+      seen.add(node);
+      const parent = parentOf.get(node);
+      if (!parent || parent === node) {
+        root = node;
+        break;
+      }
+      path.push(node);
+      node = parent;
+    }
+    if (root === undefined) {
+      const bounded = walkRoot(callId);
+      cycleRoots.set(callId, bounded);
+      return bounded;
+    }
+    for (const step of path) compressed.set(step, root);
+    compressed.set(callId, root);
     return root;
   };
   // Session order decides: the chain's first description is its title, and a

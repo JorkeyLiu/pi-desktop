@@ -96,9 +96,62 @@ const FINAL_REPORT =
   "Final settled report: the cache misses were traced to a stale session index after restart. " +
   "The index now refreshes from the transcript prefix before the first read, and the restart replay is bounded " +
   "to top-level records. Checkpoint generation one records the installed handoff.";
-const CHAIN_CHILD_TOTAL = 1001 + 5 + 3;
+/**
+ * The renderer's local Subagent page policy, read from the source this build
+ * ships. One read returns at most this many selected child rows, so the
+ * expected read count follows the policy instead of a copied literal.
+ */
+const SUBAGENT_PAGE = Number(
+  /SUBAGENT_HISTORY_PAGE_SIZE = (\d+)/.exec(
+    readFileSync(join(root, "apps/desktop/src/lib/subagent-history.ts"), "utf8"),
+  )?.[1],
+);
+assert(Number.isFinite(SUBAGENT_PAGE) && SUBAGENT_PAGE > 0, "the subagent page policy is stated in the renderer source");
+/**
+ * How the loaded rows of a delegate page reach the DOM: a bounded first run,
+ * then bounded batches. Both are read from the source this build ships for the
+ * same reason as the page policy - the assertion states the shipped commit
+ * shape, not a copied literal.
+ */
+const SUBAGENT_HYDRATION_FIRST_ROWS = Number(
+  /SUBAGENT_HYDRATION_FIRST_ROWS = (\d+)/.exec(
+    readFileSync(join(root, "apps/desktop/src/lib/subagent-hydration.ts"), "utf8"),
+  )?.[1],
+);
+const SUBAGENT_HYDRATION_STEP_ROWS = Number(
+  /SUBAGENT_HYDRATION_STEP_ROWS = (\d+)/.exec(
+    readFileSync(join(root, "apps/desktop/src/lib/subagent-hydration.ts"), "utf8"),
+  )?.[1],
+);
+assert(
+  Number.isFinite(SUBAGENT_HYDRATION_FIRST_ROWS) && SUBAGENT_HYDRATION_FIRST_ROWS > 0,
+  "the subagent first mount is stated in the renderer source",
+);
+assert(
+  Number.isFinite(SUBAGENT_HYDRATION_STEP_ROWS) && SUBAGENT_HYDRATION_STEP_ROWS > 0,
+  "the subagent batch size is stated in the renderer source",
+);
+/**
+ * The chain this real-host fixture pages through: four whole pages plus a short
+ * head. Three older reads still start inside the root run's children and the
+ * fourth is the read that reaches its first child, so the real-wheel trace
+ * keeps both its multi-page coverage and its one prompt-entry observation at
+ * the current page policy. The two resume runs add their five and three rows.
+ */
+const CHAIN_CHILD_TOTAL = 4 * SUBAGENT_PAGE + 101;
+const FIRST_RUN_CHILDREN = CHAIN_CHILD_TOTAL - 8;
 const TOP_LEVEL_TOTAL = 150;
 const ORDINARY_ROWS = 140;
+/** Physical index of each run's own `Task` row and of its first selected child. */
+const CALL_1_TASK_INDEX = 1;
+const CALL_1_FIRST_CHILD = CALL_1_TASK_INDEX + 1;
+const CALL_2_TASK_INDEX = CALL_1_TASK_INDEX + 1 + FIRST_RUN_CHILDREN + ORDINARY_ROWS;
+const CALL_2_FIRST_CHILD = CALL_2_TASK_INDEX + 1;
+const CALL_3_TASK_INDEX = CALL_2_FIRST_CHILD + 5 + 1;
+const CALL_3_FIRST_CHILD = CALL_3_TASK_INDEX + 1;
+/** The chain's own selected range: every child row it owns, in physical order. */
+const CHAIN_SELECTION_START = CALL_1_FIRST_CHILD;
+const CHAIN_SELECTION_END = CALL_3_FIRST_CHILD + 3;
 
 const timestamp = (second) =>
   new Date(Date.UTC(2026, 9, 18, 0, 0, second)).toISOString();
@@ -149,7 +202,7 @@ function fixtureMessages() {
   const rows = [];
   rows.push(message("root-user", "user", "Fix the cache after restart."));
   rows.push(taskRow(TASK_1, CALL_1, DELEGATION, "completed", undefined));
-  for (let index = 0; index <= 1000; index += 1) {
+  for (let index = 0; index < FIRST_RUN_CHILDREN; index += 1) {
     const id = `child-1-${index}`;
     rows.push(
       childRow(
@@ -304,6 +357,7 @@ function summarize(method, params, result) {
     returnedRows: messages.length,
     childRows: messages.filter((message) => message.parentToolCallId).length,
     messageIds: compactIds,
+    messageIdsCompacted: compactIds.length !== ids.length,
     historyContextIds: (session.historyContext ?? []).map((message) => message.id),
     historyRuns: session.historyRuns ?? null,
     taskRows,
@@ -681,6 +735,192 @@ function readsFor(fromSeq, predicate = () => true) {
   );
 }
 
+/**
+ * Sample every commit that changes what the delegate list draws.
+ *
+ * The probe lives in the renderer, before the panel exists: it watches the
+ * document for a `.subagent-transcript-list` appearing and then samples that
+ * list's own commits - the rows drawn, and the mounted/loaded counts the pane
+ * reports for that commit. It is a MutationObserver, not a poll, so a sample
+ * belongs to exactly one commit and a window replacement is reported as a
+ * replacement instead of being smeared into the batch that followed it.
+ */
+async function installHydrationProbe() {
+  await desktop.evaluate(
+    `(() => {
+      if (globalThis.__scopedHydrationCommits) return 0;
+      const commits = [];
+      globalThis.__scopedHydrationCommits = commits;
+      const observed = new WeakSet();
+      // Row identity, not just counts: a replacement can land as a commit that
+      // draws more rows than the window it replaced (a tiny live window becomes
+      // a page's bounded first run), and a count alone would report that as
+      // growth. Rows the new commit kept decide both: an interval that keeps
+      // none of its previous rows is a replacement, and removed is what it
+      // actually dropped.
+      const readList = (element) => ({
+        rows: element.querySelectorAll("[data-message-id]").length,
+        state: element.getAttribute("data-hydration-state"),
+        mounted: Number(element.getAttribute("data-hydration-mounted") ?? "-1"),
+        loaded: Number(element.getAttribute("data-hydration-loaded") ?? "-1"),
+        ids: Array.from(element.querySelectorAll("[data-message-id]")).map((row) =>
+          row.getAttribute("data-message-id"),
+        ),
+      });
+      const attach = (element) => {
+        if (observed.has(element)) return;
+        observed.add(element);
+        let previous = readList(element);
+        commits.push({ attach: true, ...previous, added: 0, removed: 0, at: performance.now() });
+        const sample = () => {
+          const next = readList(element);
+          if (next.rows === previous.rows && next.mounted === previous.mounted && next.state === previous.state) return;
+          const previousIds = new Set(previous.ids);
+          const retained = next.ids.filter((id) => previousIds.has(id)).length;
+          commits.push({
+            attach: false,
+            ...next,
+            added: Math.max(0, next.rows - retained),
+            removed: Math.max(0, previous.rows - retained),
+            at: performance.now(),
+          });
+          previous = next;
+        };
+        new MutationObserver(sample).observe(element, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["data-hydration-state", "data-hydration-mounted", "data-hydration-loaded"],
+        });
+      };
+      const scan = () => {
+        for (const element of document.querySelectorAll(".subagent-transcript-list")) attach(element);
+      };
+      scan();
+      new MutationObserver(scan).observe(document.body, { childList: true, subtree: true });
+      return 1;
+    })()`,
+  );
+}
+
+/**
+ * Classify the sampled commits into window starts and batches.
+ *
+ * A window start is the first commit of a list plus every commit that kept
+ * none of the rows the previous window drew (a replaced interval: a latest or
+ * focus read, a chain change, a restart). Every other commit that grew the
+ * mounted run is a batch, and the product-controlled claim is that each of
+ * them stays inside one configured batch - there is no gesture, head entry,
+ * wheel reach, focus, or latest read that mounts a page in one commit.
+ */
+async function hydrationBatchSummary() {
+  const commits = await desktop.evaluate(
+    `globalThis.__scopedHydrationCommits ? globalThis.__scopedHydrationCommits.slice() : null`,
+  );
+  assert(Array.isArray(commits) && commits.length > 0, "the renderer sampled delegate hydration commits");
+  const samples = commits.map((commit, index) => ({
+    index,
+    attach: commit.attach === true,
+    rows: commit.rows,
+    added: commit.added,
+    removed: commit.removed,
+    state: commit.state,
+    mounted: commit.mounted,
+    loaded: commit.loaded,
+    at: Math.round(commit.at),
+    growth: commit.mounted - (index === 0 ? 0 : commits[index - 1].mounted),
+  }));
+  const windowStarts = samples.filter((sample) => sample.index === 0 || sample.attach || sample.removed > 0);
+  const batches = samples.filter(
+    (sample) => !windowStarts.includes(sample) && sample.removed === 0 && sample.growth > 0,
+  );
+  // Every window presents the bounded first run before any batch. A window can
+  // open on the tiny live run that opened the pane before its page arrived, so
+  // the bounded run is the first mount that reaches it rather than necessarily
+  // the attach commit; a page smaller than the first run completes in one mount.
+  const windows = windowStarts.map((start, order) => {
+    const from = samples.indexOf(start);
+    const next = windowStarts[order + 1];
+    return samples.slice(from, next ? samples.indexOf(next) : samples.length);
+  });
+  const windowFirstRunMounts = windows.map((window) => {
+    const loaded = window.reduce((max, sample) => Math.max(max, sample.loaded), 0);
+    const expected = Math.min(SUBAGENT_HYDRATION_FIRST_ROWS, loaded);
+    return window.find((sample) => sample.mounted === expected)?.mounted ?? -1;
+  });
+  const visibilityState = await desktop.evaluate("document.visibilityState");
+  return {
+    samples,
+    windowStarts,
+    batches,
+    windowStartMounts: windowStarts.map((sample) => sample.mounted),
+    windowFirstRunMounts,
+    windowsWithoutFirstRun: windowFirstRunMounts.filter((mounted) => mounted < 0).length,
+    maxBatchGrowth: batches.reduce((max, sample) => Math.max(max, sample.growth), 0),
+    overStepBatches: batches.filter((sample) => sample.growth > SUBAGENT_HYDRATION_STEP_ROWS),
+    oversizedWindowStarts: windowStarts.filter(
+      (sample) => sample.mounted > SUBAGENT_HYDRATION_FIRST_ROWS,
+    ),
+    largestAdded: samples.reduce((max, sample) => Math.max(max, sample.added), 0),
+    replacements: samples.filter((sample) => !sample.attach && sample.removed > 0).length,
+    visibilityState,
+  };
+}
+
+/**
+ * Assert the sampled commit shape for every product-controlled batch this run
+ * produced. Nothing is filtered or excused: the head entry, each wheel reach,
+ * the distant focus read, and the latest read all have to land inside one batch
+ * per commit, and each replaced window has to start with the bounded first run.
+ */
+async function assertHydrationBatches(label) {
+  const summary = await hydrationBatchSummary();
+  assert.equal(
+    summary.visibilityState,
+    "visible",
+    `${label}: the measured pane runs in a visible window (${summary.visibilityState})`,
+  );
+  assert.deepEqual(
+    summary.overStepBatches.map((sample) => `${sample.mounted}@${sample.index}`),
+    [],
+    `${label}: no commit grows the mounted run by more than one batch`,
+  );
+  assert(
+    summary.maxBatchGrowth <= SUBAGENT_HYDRATION_STEP_ROWS,
+    `${label}: the largest batch commit is ${summary.maxBatchGrowth} rows (limit ${SUBAGENT_HYDRATION_STEP_ROWS})`,
+  );
+  assert.deepEqual(
+    summary.oversizedWindowStarts.map((sample) => `${sample.mounted}@${sample.index}`),
+    [],
+    `${label}: every window starts with the bounded first run`,
+  );
+  assert(
+    summary.largestAdded <= SUBAGENT_HYDRATION_STEP_ROWS,
+    `${label}: no commit adds more than one batch of rows (largest ${summary.largestAdded})`,
+  );
+  // The bounded first run is a real mount, not just a budget: each window has
+  // to present it before its later batches. A window that opened on a tiny live
+  // run reaches it on its first hydration commit instead of at attach.
+  assert.equal(
+    summary.windowsWithoutFirstRun,
+    0,
+    `${label}: every window presents the bounded first run (${summary.windowFirstRunMounts.join(
+      ",",
+    )})`,
+  );
+  return {
+    samples: summary.samples.length,
+    windowStarts: summary.windowStarts.length,
+    windowStartMounts: summary.windowStartMounts,
+    windowFirstRunMounts: summary.windowFirstRunMounts,
+    batches: summary.batches.length,
+    maxBatchGrowth: summary.maxBatchGrowth,
+    largestAdded: summary.largestAdded,
+    replacements: summary.replacements,
+    visibilityState: summary.visibilityState,
+  };
+}
+
 async function launchDesktop() {
   const port = await freePort();
   desktopOutput = "";
@@ -723,6 +963,9 @@ async function launchDesktop() {
     "desktop app shell ready",
     90_000,
   );
+  // The commit probe has to exist before the panel's first commit, or the
+  // bounded first mount it must measure would pass unseen.
+  await installHydrationProbe();
   return port;
 }
 
@@ -875,6 +1118,9 @@ async function tabState() {
         sameBriefDom: briefDomStability['${TASK_1}'],
         briefDomStability,
         anchor,
+        hydrationState: list?.getAttribute('data-hydration-state') ?? null,
+        hydrationLoaded: Number(list?.getAttribute('data-hydration-loaded') ?? '-1'),
+        hydrationMounted: Number(list?.getAttribute('data-hydration-mounted') ?? '-1'),
         geometry: scroller ? {
           scrollTop: scroller.scrollTop,
           scrollHeight: scroller.scrollHeight,
@@ -892,6 +1138,30 @@ async function tabState() {
         failed: Boolean(document.querySelector('[data-testid="subagent-history-error"]')),
       };
     })()`,
+  );
+}
+
+/**
+ * Wait until the pane presents every row it has loaded.
+ *
+ * A 500-row page reaches the pane in batches: the read finishing and the page
+ * being drawn are different moments, so any assertion about a page's rows,
+ * order, prompts, or reading anchor waits for this. `loaded > 0` keeps the
+ * commit that applies a response - which still reports the empty window it
+ * drew before - from satisfying the wait.
+ */
+async function awaitHydration(label) {
+  await until(
+    async () => {
+      const tab = await tabState();
+      return (
+        tab.hydrationState === "ready" &&
+        tab.hydrationLoaded > 0 &&
+        tab.hydrationMounted === tab.hydrationLoaded
+      );
+    },
+    `the mounted rows of ${label}`,
+    30_000,
   );
 }
 
@@ -1055,7 +1325,7 @@ try {
     "the panel's first delegation-scoped read",
   );
   assert.equal(firstPanelRead.params.historyScope.id, DELEGATION);
-  assert.equal(firstPanelRead.params.messageLimit, 100);
+  assert.equal(firstPanelRead.params.messageLimit, SUBAGENT_PAGE);
   assert.equal(firstPanelRead.params.contentLimit, 64 * 1024);
   assert.equal(firstPanelRead.params.messageBefore, undefined);
   assert.equal(firstPanelRead.params.messageAround, undefined);
@@ -1073,18 +1343,19 @@ try {
       firstChildIndex: run.firstChildIndex,
     })),
     [
-      { callId: CALL_1, taskMessageId: TASK_1, taskIndex: 1, firstChildIndex: 2 },
-      { callId: CALL_2, taskMessageId: TASK_2, taskIndex: 1143, firstChildIndex: 1144 },
-      { callId: CALL_3, taskMessageId: TASK_3, taskIndex: 1150, firstChildIndex: 1151 },
+      { callId: CALL_1, taskMessageId: TASK_1, taskIndex: CALL_1_TASK_INDEX, firstChildIndex: CALL_1_FIRST_CHILD },
+      { callId: CALL_2, taskMessageId: TASK_2, taskIndex: CALL_2_TASK_INDEX, firstChildIndex: CALL_2_FIRST_CHILD },
+      { callId: CALL_3, taskMessageId: TASK_3, taskIndex: CALL_3_TASK_INDEX, firstChildIndex: CALL_3_FIRST_CHILD },
     ],
     "the host states each run's physical Task row and first selected child",
   );
   assert(firstPanelRead.summary.childRows === firstPanelRead.summary.returnedRows);
-  assert.equal(firstPanelRead.summary.returnedRows, 100);
+  assert.equal(firstPanelRead.summary.returnedRows, SUBAGENT_PAGE);
   assert.equal(firstPanelRead.summary.hasMoreBefore, true);
+  await awaitHydration("the panel's first page");
   const firstTab = await tabState();
   assert.equal(firstTab.activeTabId, `subagent:${DELEGATION}`);
-  assert(firstTab.rowIds.includes("child-1-1000"), "latest delegate page renders");
+  assert(firstTab.rowIds.includes(`child-1-${FIRST_RUN_CHILDREN - 1}`), "latest delegate page renders");
   assert(firstTab.rowIds.includes("child-3-c"), "the third chain segment renders");
   assert(firstTab.empty === false && firstTab.failed === false);
   assert(firstTab.status.length > 0, "the panel renders the chain status label");
@@ -1244,6 +1515,7 @@ try {
         };
       })()`,
     );
+  await awaitHydration("the focused window");
   const focusedPage = await _focusView();
   const focusedTab = await tabState();
   assert.deepEqual(
@@ -1259,7 +1531,12 @@ try {
   assert.equal(
     focusedPage.rows,
     scopedFocusRead.summary.returnedRows,
-    "the focused window is exactly the page the read selected",
+    "the focused window is exactly the page the read selected " +
+      JSON.stringify({
+        page: focusedPage,
+        read: compactEvent(scopedFocusRead),
+        readsSinceSearch: readsFor(searchFrom, () => true).length,
+      }),
   );
   assert.equal(focusedPage.uniqueRows, focusedPage.rows, "the focused page repeats no row");
   assert.equal(focusedPage.focusVisible, true, "the target sits inside the focused window");
@@ -1277,6 +1554,264 @@ try {
     mainRows: mainSearchIds.length,
   };
   await desktop.screenshot("03-search-nested-focused.png");
+
+  // ---------------- 3b. a reader reach at the exact loaded bottom continues
+  // The focused window is historical: newer rows exist beyond its end, so its
+  // bottom is where the next page begins - not the chain's newest row. A real
+  // wheel that carries the pane onto exactly `scrollHeight - clientHeight` is a
+  // reader reach there, so the window continues forward from its own end
+  // instead of re-pinning a viewport that is nowhere near the tail.
+  const forwardFrom = mark();
+  // The held request is the wire fact to read: the gate withholds the answer,
+  // so no response exists yet when the reach has to be measured.
+  const forwardRequests = () =>
+    hostRequests(forwardFrom).filter(
+      (event) =>
+        event.method === "session.get" &&
+        event.params?.historyScope?.kind === "delegation" &&
+        typeof event.params.messageBefore === "number",
+    );
+  const forwardReads = () =>
+    readsFor(
+      forwardFrom,
+      (event) =>
+        event.summary?.historyScope?.kind === "delegation" &&
+        typeof event.params.messageBefore === "number",
+    );
+  const forwardPointer = () =>
+    desktop.evaluate(
+      `(() => {
+        const scroller = document.querySelector('.subagent-transcript-scroll');
+        if (!scroller) return null;
+        const rect = scroller.getBoundingClientRect();
+        return {
+          x: rect.left + rect.width / 2,
+          y: rect.top + Math.min(rect.height / 2, 240),
+          geometry: {
+            scrollTop: scroller.scrollTop,
+            scrollHeight: scroller.scrollHeight,
+            clientHeight: scroller.clientHeight,
+            distanceFromBottom: scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight,
+          },
+          jump: Boolean(document.querySelector('.subagent-transcript-jump')),
+        };
+      })()`,
+    );
+  const focusedEnd = scopedFocusRead.summary.messageEnd;
+  const forwardReady = await tabState();
+  assert.equal(
+    forwardReady.hydrationState,
+    "ready",
+    "the forward reach is made once every loaded row is laid out",
+  );
+  const forwardRowsBefore = forwardReady.rowIds.length;
+  // The commit probe already sampled everything before this reach; the slice
+  // from here belongs to the appended page alone.
+  const forwardProbeFrom = await desktop.evaluate(
+    "globalThis.__scopedHydrationCommits ? globalThis.__scopedHydrationCommits.length : 0",
+  );
+  // Hold the host answer after the request reaches the proxy, so the reach is
+  // measured at the exact end before the appended page can grow the pane.
+  writeFileSync(proxy.gatePath, "hold forward delegation read\n");
+  let forwardReach = null;
+  let forwardRequest = null;
+  let forwardAnchorAtReach = null;
+  try {
+    let view = await forwardPointer();
+    assert(view, "the delegate pane is open for the forward reach");
+    await desktop.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved", x: view.x, y: view.y, pointerType: "mouse",
+    });
+    for (let attempt = 0; attempt < 40 && !forwardRequest; attempt += 1) {
+      await desktop.send("Input.dispatchMouseEvent", {
+        type: "mouseWheel", x: view.x, y: view.y,
+        deltaX: 0, deltaY: 2_000, pointerType: "mouse",
+      });
+      await delay(30);
+      view = await forwardPointer();
+      forwardRequest = forwardRequests()[0] ?? null;
+      if (forwardRequest) {
+        forwardReach = view;
+        forwardAnchorAtReach = (await tabState()).anchor;
+      }
+    }
+  } finally {
+    rmSync(proxy.gatePath, { force: true });
+  }
+  assert(
+    forwardRequest,
+    `the exact loaded bottom spends a forward read (${JSON.stringify(forwardReach)})`,
+  );
+  const forwardAnswer = await until(
+    () => hostEvents(forwardFrom, "response").find((event) => event.seq === forwardRequest.seq),
+    "the held forward answer",
+    20_000,
+  );
+  const forwardSummary = forwardAnswer.summary;
+  assert.equal(
+    forwardReach.geometry.distanceFromBottom,
+    0,
+    `the reach lands on the exact loaded bottom (${forwardReach.geometry.distanceFromBottom}px from it)`,
+  );
+  assert.equal(
+    forwardReach.jump,
+    true,
+    "the tail control stays available at the exact end before any latest read",
+  );
+  assert.equal(forwardRequest.params.historyScope.id, DELEGATION, "the forward read stays inside the chain");
+  assert.equal(forwardRequest.params.messageAround ?? null, null, "the forward read is a cursor read, not a re-centre");
+  assert.equal(forwardRequest.params.messageLimit, SUBAGENT_PAGE);
+  assert.equal(forwardRequest.params.contentLimit, 64 * 1024);
+  assert.equal(
+    forwardRequest.params.messageBefore,
+    focusedEnd + SUBAGENT_PAGE,
+    "the forward read pages from the window's own end",
+  );
+  assert.equal(forwardSummary.historyScope.id, DELEGATION, "the forward answer echoes the scope");
+  assert(
+    forwardSummary.returnedRows > 0 && forwardSummary.returnedRows <= SUBAGENT_PAGE,
+    `the forward answer holds at most one page (${forwardSummary.returnedRows})`,
+  );
+  assert.equal(
+    forwardSummary.messageStart,
+    focusedEnd,
+    "the forward page joins the window at its own end",
+  );
+  assert.equal(
+    forwardSummary.messageEnd,
+    forwardRequest.params.messageBefore,
+    "the page ends where its cursor pointed",
+  );
+  assert.equal(forwardSummary.hasMoreBefore, true, "the appended window still states rows older than it");
+  assert.equal(forwardSummary.hasMoreAfter, true, "the appended window still states rows newer than it");
+  const forwardRows = forwardRowsBefore + forwardSummary.returnedRows;
+  await until(
+    async () => (await tabState()).rowIds.length === forwardRows,
+    "the append of the forward page",
+    30_000,
+  );
+  // A second reader reach at the exact end while the appended rows are still
+  // mounting reveals what is already loaded instead of spending another read.
+  let sawAppendMounting = false;
+  const appendDeadline = Date.now() + 5_000;
+  while (Date.now() < appendDeadline) {
+    const state = await tabState();
+    if (state.hydrationState === "pending") {
+      sawAppendMounting = true;
+      const view = await forwardPointer();
+      if (view) {
+        await desktop.send("Input.dispatchMouseEvent", {
+          type: "mouseMoved", x: view.x, y: view.y, pointerType: "mouse",
+        });
+        await desktop.send("Input.dispatchMouseEvent", {
+          type: "mouseWheel", x: view.x, y: view.y,
+          deltaX: 0, deltaY: 2_000, pointerType: "mouse",
+        });
+      }
+      break;
+    }
+    if (state.hydrationLoaded >= forwardRows) break;
+    await delay(40);
+  }
+  await awaitHydration("the appended delegate page");
+  const forwardTab = await tabState();
+  // The appended page reaches the pane in bounded batches, never one commit
+  // per page: this reach's own slice of the commit probe states the shape.
+  const forwardCommits = await desktop.evaluate(
+    `(globalThis.__scopedHydrationCommits ?? []).slice(${forwardProbeFrom}).map((commit) => ({
+      added: commit.added,
+      removed: commit.removed,
+      attach: commit.attach === true,
+      state: commit.state,
+      mounted: commit.mounted,
+      loaded: commit.loaded,
+    }))`,
+  );
+  const forwardGrowthCommits = forwardCommits.filter((commit) => commit.added > 0);
+  assert(forwardCommits.length > 0, "the appended page was sampled as commits");
+  assert.equal(
+    forwardCommits.filter((commit) => commit.removed > 0 || commit.attach).length,
+    0,
+    "the appended page replaces no window",
+  );
+  assert(
+    forwardCommits.every((commit) => commit.added <= SUBAGENT_HYDRATION_STEP_ROWS),
+    `no appended commit mounts more than one batch (${forwardCommits.map((commit) => commit.added).join(",")})`,
+  );
+  assert(
+    forwardGrowthCommits.length >= 2,
+    `the appended page mounts in more than one commit (${forwardGrowthCommits.length})`,
+  );
+  const forwardOrdinal = Number((/^child-1-(\d+)$/.exec(forwardTab.rowIds[0] ?? "") ?? [])[1]);
+  const forwardExpectedIds = Array.from(
+    { length: forwardRows },
+    (_, offset) => `child-1-${forwardOrdinal + offset}`,
+  );
+  assert.deepEqual(
+    forwardTab.rowIds,
+    forwardExpectedIds,
+    "the appended page joins the window as one contiguous interval and repeats no row",
+  );
+  assert.equal(
+    forwardTab.rowIds.includes(NESTED_TARGET),
+    true,
+    "the target the search focused is not dropped by the append",
+  );
+  assert.equal(forwardTab.jump, true, "the appended window still offers the jump control");
+  assert.deepEqual(forwardTab.userPromptIds, [], "a window still inside the run draws no Task prompt");
+  assert.deepEqual(forwardTab.taskBriefIds, [], "no run head is inside the appended window");
+  assert.equal(forwardTab.hydrationState, "ready", "every loaded row of the appended window is mounted");
+  assert.equal(
+    forwardTab.hydrationMounted,
+    forwardTab.hydrationLoaded,
+    "the appended window mounts every row it loaded",
+  );
+  assert.equal(
+    forwardRequests().length,
+    1,
+    `the exact-bottom reach spends exactly one forward request (${forwardRequests().length})`,
+  );
+  assert.equal(
+    forwardReads().length,
+    1,
+    `the exact-bottom reach spends exactly one forward answer (${forwardReads().length})`,
+  );
+  const forwardAnchorAfter = forwardTab.anchor;
+  assert(
+    forwardAnchorAtReach &&
+      forwardAnchorAfter &&
+      forwardAnchorAtReach.id === forwardAnchorAfter.id &&
+      Math.abs(forwardAnchorAfter.offset - forwardAnchorAtReach.offset) < 2,
+    `the visible fragment keeps its offset across the append (${
+      forwardAnchorAtReach ? `${forwardAnchorAtReach.id}@${forwardAnchorAtReach.offset}` : "none"
+    } -> ${forwardAnchorAfter ? `${forwardAnchorAfter.id}@${forwardAnchorAfter.offset}` : "none"})`,
+  );
+  result.phases.searchForward = {
+    from: { start: scopedFocusRead.summary.messageStart, end: focusedEnd },
+    reach: { ...forwardReach.geometry, jump: forwardReach.jump },
+    input: "CDP Input.dispatchMouseEvent mouseWheel; host response held until pre-commit measurement",
+    request: compactEvent({ ...forwardRequest, summary: undefined }),
+    page: compactEvent(forwardAnswer),
+    after: {
+      rows: forwardTab.rowIds.length,
+      firstRow: forwardTab.rowIds[0] ?? null,
+      lastRow: forwardTab.rowIds[forwardTab.rowIds.length - 1] ?? null,
+      uniqueRows: new Set(forwardTab.rowIds).size,
+      jump: forwardTab.jump,
+      prompts: forwardTab.userPromptIds,
+      hydration: { state: forwardTab.hydrationState, loaded: forwardTab.hydrationLoaded, mounted: forwardTab.hydrationMounted },
+      anchor: forwardAnchorAfter,
+    },
+    appendBatches: {
+      commits: forwardCommits.length,
+      growth: forwardGrowthCommits.map((commit) => commit.added),
+      maxGrowth: forwardCommits.reduce((max, commit) => Math.max(max, commit.added), 0),
+    },
+    sawAppendMounting,
+    requests: forwardRequests().length,
+    reads: forwardReads().length,
+  };
+  await desktop.screenshot("03a-search-forward.png");
 
   // ----------------- 3c. the jump reads the scope's newest page
   // It replaces the focused window with the tail page: one read, one contiguous
@@ -1311,8 +1846,11 @@ try {
   assert.equal(latestReads[0].id, DELEGATION, "the tail read stays inside the chain");
   assert.equal(latestReads[0].messageBefore, null, "the jump reads the newest page, not a cursor");
   assert.equal(latestReads[0].messageAround, null, "the jump does not re-centre the window");
-  assert.equal(latestState.rows, latestReads[0].returnedRows, "the jump draws the rows it selected");
+  // The jump drew a bounded run first and hydrates the rest: the row count it
+  // selected is only readable once every loaded row is mounted.
+  await awaitHydration("the jumped-to tail page");
   const latestTab = await tabState();
+  assert.equal(latestTab.rowIds.length, latestReads[0].returnedRows, "the jump draws the rows it selected");
   assert.deepEqual(
     latestTab.taskBriefIds,
     [TASK_2, TASK_3],
@@ -1381,6 +1919,12 @@ try {
           },
           anchor,
           promptIds: Array.from(scroller.querySelectorAll('.message-row.user')).map((row) => row.getAttribute('data-message-id')),
+          promptIds: Array.from(scroller.querySelectorAll('.message-row.user')).map((row) => row.getAttribute('data-message-id')),
+          hydration: {
+            state: scroller.querySelector('.subagent-transcript-list')?.getAttribute('data-hydration-state') ?? null,
+            loaded: Number(scroller.querySelector('.subagent-transcript-list')?.getAttribute('data-hydration-loaded') ?? '-1'),
+            mounted: Number(scroller.querySelector('.subagent-transcript-list')?.getAttribute('data-hydration-mounted') ?? '-1'),
+          },
         };
       })()`,
     );
@@ -1436,6 +1980,7 @@ try {
         before: before.geometry,
         beforeAnchor: before.anchor,
         beforePrompts: before.promptIds,
+        hydrationBefore: before.hydration,
         gesture,
         preCommit,
         requestSeq: request?.seq ?? null,
@@ -1475,7 +2020,7 @@ try {
     }
     if (!next) break;
     assert.equal(next.params.messageBefore, panelMessageStart, "older panel read uses the page cursor");
-    assert.equal(next.params.messageLimit, 100);
+    assert.equal(next.params.messageLimit, SUBAGENT_PAGE);
     assert.equal(next.params.contentLimit, 64 * 1024);
     assert.equal(next.summary.historyScope.id, DELEGATION);
     assert(next.summary.childRows === next.summary.returnedRows);
@@ -1494,17 +2039,27 @@ try {
       `the loading indicator settles after delegate page ${panelPages}`,
       30_000,
     );
+    // The page's rows, prompts, and anchor are only final once every loaded row
+    // is mounted: the merge above can still be mid-batch.
+    await awaitHydration(`delegate page ${panelPages}`);
     const after = await tabState();
-    if (panelPages <= 4) {
+    if (panelPages <= 5) {
       const page = panelPages - 1;
-      const expectedBriefs =
-        next.summary.messageStart <= 2 ? [TASK_1, TASK_2, TASK_3] : [TASK_2, TASK_3];
+      // Three older pages still start inside the root run and must draw no
+      // prompt; the fourth is the read that reaches its first child, which
+      // introduces that run's prompt once, above the children it already held.
+      // The scoped cursor is a physical index, so the root run's head is the
+      // physical position of its first child, not the session's row zero.
+      const reachesHead = next.summary.messageStart === CALL_1_FIRST_CHILD;
+      const expectedBriefs = reachesHead ? [TASK_1, TASK_2, TASK_3] : [TASK_2, TASK_3];
+      const expectedPromptAfter = reachesHead ? [TASK_1, ...reach.beforePrompts] : reach.beforePrompts;
       panelPagingTrace.push({
         page,
         input: reach.input,
         before: reach.before,
         beforeAnchor: reach.beforeAnchor,
         gesture: reach.gesture,
+        hydrationBefore: reach.hydrationBefore,
         preCommit: reach.preCommit,
         requestSeq: reach.requestSeq,
         after: after.geometry,
@@ -1522,6 +2077,11 @@ try {
       assert(reach.preCommit?.anchor && after.anchor, "a pre-commit rendered fragment anchors each older page");
       assert.equal(reach.requestSeq, next.seq, "the measured boundary belongs to the held host request");
       assert.equal(after.anchor.id, reach.preCommit.anchor.id, `page ${page} keeps the visible fragment identity`);
+      assert.equal(
+        reach.hydrationBefore.state,
+        "ready",
+        `page ${page} reveals every loaded row before it reads more history`,
+      );
       assert(
         Math.abs(after.anchor.offset - reach.preCommit.anchor.offset) < 2,
         `page ${page} keeps the visible fragment offset (${reach.preCommit.anchor.offset} -> ${after.anchor.offset})`,
@@ -1544,18 +2104,34 @@ try {
       );
       assert.deepEqual(
         after.userPromptIds,
-        reach.beforePrompts,
-        `page ${page} lands the older page without redrawing a Task prompt`,
+        expectedPromptAfter,
+        `page ${page} ${reachesHead ? "introduces the run-head prompt once" : "lands the older page without redrawing a Task prompt"}`,
       );
       assert.equal(after.loading.ariaHidden, "true", `page ${page} hides the settled loading label`);
       assert.equal(after.loading.labelVisibility, "hidden", `page ${page} removes the settled loading label visually`);
       assert.equal(after.loading.overflowAnchor, "none", `page ${page} excludes loading furniture from native anchoring`);
   }
 }
-  assert.equal(panelPagingTrace.length, 3, "three real-wheel older pages have a complete rendered trace");
+  assert.equal(
+    panelPagingTrace.length,
+    4,
+    "three real-wheel older pages inside the run plus the page that reaches its head have a complete rendered trace",
+  );
+  // Every product-controlled commit this run spent - the panel's first bounded
+  // mount, each wheel boundary page, the head entry, the distant focus read,
+  // and the latest read - is asserted from the renderer's own sampled commits.
+  // A replaced window is reported separately, so nothing is excused or filtered.
+  result.phases.hydrationBatches = await assertHydrationBatches(
+    `the delegate transcript after ${panelPagingTrace.length} older pages`,
+  );
   assert.deepEqual(
     panelPagingTrace.map((page) => page.cursor),
-    [firstPanelRead.summary.messageStart, firstPanelRead.summary.messageStart - 100, firstPanelRead.summary.messageStart - 200],
+    [
+      firstPanelRead.summary.messageStart,
+      firstPanelRead.summary.messageStart - SUBAGENT_PAGE,
+      firstPanelRead.summary.messageStart - 2 * SUBAGENT_PAGE,
+      firstPanelRead.summary.messageStart - 3 * SUBAGENT_PAGE,
+    ],
     "real-wheel older reads progress through the stated page cursors",
   );
   const pagingDiagnostic = {
@@ -1572,11 +2148,16 @@ try {
     CHAIN_CHILD_TOTAL,
     `older paging loads every chain child row once ${JSON.stringify(pagingDiagnostic)}`,
   );
-  assert.equal(panelPages, 11, "1009 child rows page as ten full pages plus a nine-row head");
+  assert.equal(
+    panelPages,
+    Math.ceil(CHAIN_CHILD_TOTAL / SUBAGENT_PAGE),
+    `${CHAIN_CHILD_TOTAL} child rows page as whole ${SUBAGENT_PAGE}-row reads plus a short head`,
+  );
+  await awaitHydration("the chain head window");
   const loadedTab = await tabState();
   const expectedMessageIds = [
     TASK_1,
-    ...Array.from({ length: 1001 }, (_, index) => `child-1-${index}`),
+    ...Array.from({ length: FIRST_RUN_CHILDREN }, (_, index) => `child-1-${index}`),
     TASK_2,
     ...Array.from({ length: 5 }, (_, index) => `child-2-${index}`),
     TASK_3,
@@ -1703,6 +2284,7 @@ try {
   await driveMainScroll({ position: "end", untilTasks: [TASK_3] });
   await driveMainScroll({ position: "start", untilTasks: [TASK_1] });
   await delay(400);
+  await awaitHydration("the panel after the main window change");
   const afterMainChange = await tabState();
   assert.equal(afterMainChange.activeTabId, signature.activeTabId);
   assert.equal(afterMainChange.status, signature.status);
@@ -1721,6 +2303,7 @@ try {
     "reopened main window",
   );
   await delay(500);
+  await awaitHydration("the reopened panel");
   const afterReselect = await tabState();
   assert.deepEqual(afterReselect.rowIds, signature.rowIds, "re-selecting the session keeps the panel rows");
   assert.equal(afterReselect.activeTabId, signature.activeTabId);
@@ -1758,6 +2341,7 @@ try {
     "the restored main window",
   );
   await delay(500);
+  await awaitHydration("the restored panel");
   const restoredTab = await tabState();
   assert.deepEqual(restoredTab.rowIds, signature.rowIds, "session restore keeps every loaded panel row");
   assert.equal(restoredTab.status, signature.status);
@@ -1774,10 +2358,10 @@ try {
     `a session restore spends at most one bounded tail refresh (${switchPanelReads.length})`,
   );
   for (const read of switchPanelReads) {
-    assert.equal(read.params.messageLimit, 100);
+    assert.equal(read.params.messageLimit, SUBAGENT_PAGE);
     assert.equal(read.params.messageBefore, undefined, "a restore never asks for an older page");
     assert.equal(read.params.messageAround, undefined, "a restore never re-centres a search");
-    assert(read.summary.returnedRows <= 100, "the refresh stays inside one page");
+    assert(read.summary.returnedRows <= SUBAGENT_PAGE, "the refresh stays inside one page");
     assert(read.summary.childRows === read.summary.returnedRows);
   }
   result.phases.sessionSwitch = {
@@ -1790,11 +2374,13 @@ try {
   // ------------------------------------- 7. alias opens the same chain tab
   const aliasFrom = mark();
   await driveMainScroll({ position: "end", untilTasks: [TASK_2] });
+  await awaitHydration("the chain before the alias");
   const beforeAlias = await tabState();
   await desktop.evaluate(
     `document.querySelector('[data-message-id="${TASK_2}"] button.subagent-task-card').click()`,
   );
   await delay(500);
+  await awaitHydration("the chain after the alias");
   const aliasTab = await tabState();
   assert.equal(aliasTab.activeTabId, beforeAlias.activeTabId, "a resumed Task identity resolves onto the open tab");
   assert.deepEqual(aliasTab.rowIds, beforeAlias.rowIds, "the alias does not switch the panel chain");
@@ -1886,22 +2472,26 @@ try {
     },
     "the stale tail refresh merge",
   );
+  await awaitHydration("the refreshed tail page");
   const staleTab = await tabState();
   const staleReads = readsFor(
     closeFrom,
     (event) => event.summary?.historyScope?.kind === "delegation",
   );
   assert.equal(staleReads.length, 1, "a stale reopen spends exactly one panel read");
-  assert.equal(staleRead.params.messageLimit, 100);
+  assert.equal(staleRead.params.messageLimit, SUBAGENT_PAGE);
   assert.equal(staleRead.params.contentLimit, 64 * 1024);
   assert.equal(staleRead.params.messageBefore, undefined, "a stale reopen never asks for an older page");
   assert.equal(staleRead.params.messageAround, undefined, "a stale reopen never re-centres");
   assert.equal(staleRead.params.historyScope.id, DELEGATION, "the refresh keeps the chain scope");
   assert.equal(staleRead.summary.historyScope.id, DELEGATION);
-  assert(staleRead.summary.returnedRows <= 100, "the refresh stays inside one page");
+  assert(staleRead.summary.returnedRows <= SUBAGENT_PAGE, "the refresh stays inside one page");
   assert.equal(staleRead.summary.childRows, staleRead.summary.returnedRows);
+  // The recorded id list is compacted once a page holds more than 130 rows, so
+  // the exact identity of every row is only available on the compact flag.
   assert(
-    staleRead.summary.messageIds.every((id) => id.startsWith("child-")),
+    staleRead.summary.messageIdsCompacted ||
+      staleRead.summary.messageIds.every((id) => id.startsWith("child-")),
     "no parent or other session row joins the tail page",
   );
   assert.deepEqual(
@@ -1909,11 +2499,10 @@ try {
     [TASK_1, TASK_2, TASK_3],
     "only the chain's Task context accompanies the tail",
   );
-  const heldRows = new Set(signature.rowIds);
-  assert.equal(
-    staleRead.summary.messageIds.filter((id) => heldRows.has(id)).length,
-    staleRead.summary.messageIds.length,
-    "every tail row merges over a held row",
+  assert(
+    staleRead.summary.messageStart >= CHAIN_SELECTION_START &&
+      staleRead.summary.messageEnd <= CHAIN_SELECTION_END,
+    `the tail page lies inside the chain's own selected range, so every row merges over a held row (${staleRead.summary.messageStart}..${staleRead.summary.messageEnd})`,
   );
   assert.deepEqual(staleTab.rowIds, signature.rowIds, "the refresh merges over the held page without a reset");
   assert.equal(staleTab.rowIds.length, CHAIN_CHILD_TOTAL);
@@ -2147,6 +2736,7 @@ try {
     restartPanelRead.summary.historyContextIds.includes(TASK_3),
     "the settled Task arrives as context",
   );
+  await awaitHydration("the restarted panel's page");
   const restartPanelTab = await tabState();
   assert.match(restartPanelTab.status, /Complet|Settled|Done/i);
   assert(!restartPanelTab.failed);
@@ -2168,6 +2758,11 @@ try {
   await desktop.screenshot("06-restart-settled-panel.png");
 
   // -------------------------------------------------------------- evidence
+  // The restart panel and the chain it re-read are part of the same claim: no
+  // commit of this run may mount more than one batch, including the windows the
+  // restart replaced.
+  const finalHydrationBatches = await assertHydrationBatches("the whole measured run");
+  result.phases.hydrationBatchesFinal = finalHydrationBatches;
   const provenanceAtFinish = captureProvenance();
   result.testedSource = {
     ...provenanceAtFinish,
@@ -2230,6 +2825,7 @@ try {
           delegationReads: result.allReads.filter((read) => read.historyScope?.kind === "delegation").length,
           sidecar: result.phases.settlement.sidecar,
           transcriptPrefixEqual: true,
+          hydrationBatches: result.phases.hydrationBatchesFinal,
         },
         artifacts: artifactDir,
       }),

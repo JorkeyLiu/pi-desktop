@@ -42,7 +42,14 @@ export type SubagentHistoryStatus = "loading" | "ready" | "empty" | "error";
 
 /** Scoped pages a session keeps before the least recently read one is dropped. */
 export const SUBAGENT_HISTORY_LIMIT = 12;
-export const SUBAGENT_HISTORY_PAGE_SIZE = 100;
+/**
+ * Selected child rows one local scoped page reads. Initial, latest, older and
+ * newer reads all use the same row policy: the store asks for
+ * `SUBAGENT_HISTORY_PAGE_SIZE` rows per read, so a chain of that many rows
+ * needs one read instead of one read per hundred rows. The live tail keeps its
+ * own smaller cap below.
+ */
+export const SUBAGENT_HISTORY_PAGE_SIZE = 500;
 export const SUBAGENT_HISTORY_CONTENT_LIMIT = 64 * 1024;
 /**
  * Live rows one chain may hold past its reading window. Live rows are the

@@ -2358,12 +2358,15 @@ validation still needed.
 
 #### E2E-207g: A delegate tab pages one continuous window, ceiling-free
 
-- **Preconditions**: One delegate chain long enough to page many times at a
- 100-row page size (the scoped-history fixtures' 1009 chain child rows), a built
-  desktop, and a host that records its `session.get` answers.
+- **Preconditions**: Delegate chains long enough to page several times at the
+  local 500-row page policy — the rendered fixture's 3500-row chain (seven
+  pages, six older reads to its head) and the real-host fixture's 2101 chain
+  child rows (one tail read, three older reads that stay inside the root run,
+  and the fourth that reaches its first child) — a built desktop, and a host
+  that records its `session.get` answers.
 - **Steps**: 1) Open the chain's `Task` card and use real upward wheel input at
   the tab's visible top until automatic boundary paging reaches the chain head.
-  Record the first three older reads, each read's scope echo and cursor, the
+  Record each older read, its scope echo and cursor, the
   first visible message-id anchor and its viewport offset before/after the
   prepend, every Task brief's DOM identity/order, the rendered user rows inside
   `.subagent-transcript-list`, and the older-loading box; hold each older host
@@ -2384,16 +2387,68 @@ validation still needed.
   that it draws no root Task prompt; page upward until the window reaches
   `child-1-0` and assert the root prompt appears once, as that run's own user
   row, with the visible anchor holding.
+  9) Wait for the pane's `data-hydration-state` to be `ready` with
+  `data-hydration-mounted` equal to `data-hydration-loaded` before asserting any
+  page's rows, order, prompt set, or reading anchor, and record the mounted-row
+  growth of every commit plus the hydration state the pane was in when each
+  Sample those commits from the pane's own commit report: a `MutationObserver`
+  on `.subagent-transcript-list` filtered to writes of
+  `data-hydration-mounted` records one sample per mounted-count write, so two
+  commits that one observation delivery carries stay two samples and no commit
+  is ever reported as the sum of two batches. 10) Assert the sampled commit
+  shape for every product-controlled batch of the run — the panel's first
+  mount, each wheel boundary page, the head entry, the distant focus read, and
+  the latest read: every window presents the bounded run (32 rows, or the whole
+  page when it is smaller) before its later batches — a window that opened on
+  the tiny live run already on screen reaches it on the first hydration commit
+  rather than at attach, and a replaced window opens on it directly — every
+  later commit grows the mounted run by at most one batch (128 rows), no commit
+  adds more than one batch of rows, and a commit that removed rows is reported
+  as a window replacement instead of being folded into a batch. 11) In the
+  historical window whose answer still names a newer page, make a real wheel
+  reach onto the exact loaded bottom (`scrollHeight - clientHeight`), hold the
+  forward answer, capture the boundary fragment and the jump control
+  synchronously right after the scroll and before any batch lands, then release
+  it and record every appended commit, the prompt set before, during, and after
+  each commit, and whether a second reach while the appended rows are still
+  mounting spends a read. Assert the reach lands on the exact loaded bottom
+  rather than a band above it, that the exact bottom still offers the jump
+  control before any latest read, that the appended page mounts in bounded
+  batches below the run the reader can see, that the held fragment keeps its
+  offset per batch, that no Task prompt is drawn or flashed, and that a reach
+  found on loaded-but-unmounted rows reveals them instead of reading. Then
+  issue one more reach as a native `End` key press at the exact bottom and
+  assert it appends the next page the same way. 12) From that historical window,
+  write `scrollTop` programmatically to the exact bottom with no user input and
+  assert that no read is issued, the window and its loaded rows are unchanged,
+  and the jump control is still present — a layout clamp or programmatic write
+  neither continues the window nor re-pins it.
+  Do not filter, excuse, or special-case a gesture, and do not accept a
+  run measured in a hidden window: the sampled `document.visibilityState` must
+  be `visible`, so the measured pane is the active layout a reader sees.
+  The runs this claim was measured on: the synthetic 3500-row chain presents a
+  32-row first run and grows no commit past 128 rows, counted per commit from
+  the pane's own mounted report; the real-host 2104-row chain opens on the tiny
+  live run and presents its 32-row run on the first hydration commit. The
+  forward (`after`) append is measured too: the wheel reach appends one page in
+  four commits of 128/128/128/116 with one visible fragment holding its offset
+  across all four, and the native `End` reach appends the next page the same
+  way.
 - **Expected**: Every read asks for the cursor the answer itself stated —
   `messageStart` for an older page, `messageEnd` plus one page for a forward
   page — and no read is triggered by a control: reaching the visible top or
   bottom continues the same contiguous interval one page in that direction,
-  exactly as the main transcript pages. The window keeps every page it read,
-  with no 400-row budget: paging to the head leaves all 1009 child rows in one
-  interval starting at `child-1-0`, `hasMoreBefore` false, `hasMoreAfter` true,
-  and a forward read that cannot move the window stops that direction at that
-  boundary instead of repeating itself (nothing was fetched, so there is nothing
-  to retry; the jump control or a search focus is what selects a new window).
+  exactly as the main transcript pages. One read is the local selected-row
+  page policy — 500 selected child rows, used identically by initial, latest,
+  older and newer reads — so the request cadence follows that policy while the
+  live tail's separate 100-row cap and the per-row content limit stay unchanged.
+  The window keeps every page it read, with no 400-row budget: paging to the
+  head leaves every child row of the fixture's chain (3500 rendered, 2101
+  real-host) in one interval starting at `child-1-0`, `hasMoreBefore` false,
+  `hasMoreAfter` true, and a forward read that cannot move the window stops that
+  direction at that boundary instead of repeating itself (nothing was fetched,
+  so there is nothing to retry; the jump control or a search focus is what
+  selects a new window).
   Across at least three real-wheel older pages, the same visible message-id
   anchor stays within 2 px of its prior viewport offset, including when that
   anchor is the Task brief; each root/resume brief appears once in chain order
@@ -2429,6 +2484,36 @@ validation still needed.
   rows outside it are not drawn as adjacent; a reopen that no live row touched
   costs no read, and a live-touched one costs exactly one newest-page read that
   extends the window when that page is adjacent and replaces it when it is not.
+  A loaded page reaches the DOM progressively, and the probe states that
+  explicitly instead of assuming a synchronous full list: the first commit mounts
+  a bounded run near the newest loaded row (32 rows), later commits mount the
+  remaining loaded rows in batches (at most 128 each), every loaded row is
+  mounted once the pane reports `ready`, and no row, prompt, disclosure, or
+  selection capability is dropped on the way — there is no row budget, spacer,
+  height estimate, or offscreen unmount. No commit grows the mounted run by more
+  than one batch and no gesture is exempt: a top reach that finds the loaded
+  rows still mounting keeps the older-loading state up and continues the same
+  bounded batches instead of mounting the page in one commit, and it asks the
+  host for more only once every loaded row is laid out, which keeps every older
+  request's pre-dispatch state at `data-hydration-state` `ready` with
+  `mounted === loaded`. A search target is reached by the same bounded batches
+  and aligned on the commit that mounts it, never by an unbounded mount; a
+  latest read or a superseding window replaces the queued batches of the range
+  it displaced. A pane with no visible box — its own layout collapsed, or the
+  window hidden — spends no further commit and keeps its state `pending`, and
+  its batches resume from that same state when the pane or the window becomes
+  visible. Across a prepended page's batches the held fragment keeps its offset,
+  and the final flattened `.subagent-transcript-list` row set matches the fully
+  mounted window.
+  A forward read that appends newer rows below the mounted run is bounded the
+  same way, mirrored: the appended page does not extend the run below the
+  reader in one commit — the rows the reader can see keep their place, the
+  appended rows join the run in batches of at most 128, and a second reach
+  found while they are still mounting reveals them instead of reading again.
+  Follow, the jump control, and latest semantics still require the drawn bottom
+  to equal the loaded bottom, so those are reached only once the appended page
+  has finished mounting (`data-hydration-state` `ready`), not by drawing it
+  synchronously.
 - **Specs linked**: `04-ux/08-component-spec.md` (§5.7 delegate history
   window), `03-runtime/06-host-rpc-protocol.md`,
   `03-runtime/01-ipc-protocol.md` (`historyRuns`), ADR 0335, ADR 0341
@@ -2488,6 +2573,109 @@ validation still needed.
   `e6b1f49f7964` (`index-BsU1TRbJ.js`), host `455980544242`, 8 main and 16
   delegation reads, `statusEntries` 20 at run time (the tree has since gained
   documentation-only edits).
+
+  Page-policy evidence — the same suites at source HEAD `c1459c2d0` plus this
+  uncommitted page-policy and index change, base `c1459c2d0`, on macOS with
+  Node `v24.12.0`, the desktop build `index-CXAI5FoS.js`, a freshly built
+  `pi-desktop-host-core` (host hash `455980544242`), and isolated synthetic
+  profiles. Every local scoped read asks for 500 selected child rows
+  (`messageLimit: 500`; `contentLimit: 65536` and the live tail's 100-row cap
+  unchanged), with no host, Rust, or wire change.
+  `node scripts/e2e-scoped-subagent-history.mjs` passes with `failures: []`:
+  the rendered fixture's 3500-row chain spends three automatic older pages at
+  cursors 3000/2500/2000 and holds `child-deep-3003/2503/2003` from 98.5625 to
+  98.875 px with `promptRows: 0`; its head trace walks six older pages from
+  `messageStart` 2500 to 0 with `promptRows` 0 through page 5 and 1 only on the
+  page that reaches the run head, keeping `child-deep-503` at 98.5625 →
+  98.875 px and the tall 2126 px `deep-task-row` brief as the physical-head
+  anchor at 31.390625 px; the delayed live read restores `child-anchor-33`
+  from 98.5625 to 99.015625 px and the collapsed/expanded `anchor-handoff`
+  root holds `child-anchor-14` from 90.953125 to 90.546875 px.
+  `node scripts/e2e-scoped-history-real-host.mjs` exits 0 with `defects: []`
+  on a 2101-row chain (four whole pages plus a 101-row head): four real CDP
+  wheel older pages at cursors 1603/1103/603/103 draw no new prompt on the
+  first three, keeping their pre-commit boundary anchors
+  `child-1-1603/1103/603` from 116.171875 to 116.484375, 116.484375 to
+  116.484375, and 116.171875 to 115.875 px (drift ≤ 0.297 px) with
+  `[task-2-msg, task-3-msg]` before, during, and after each commit; the fourth
+  page — the one whose window reaches the root run's first child `child-1-0` —
+  introduces `task-1-msg` once ahead of that held set while keeping
+  `child-1-103` at 116.171875 → 116 px, and paging to the head then retains all
+  2101 child rows in five reads from `child-1-0`, every `Task` brief exactly
+  once, in the flattened order `task-1-msg`, `child-1-0..2092`, `task-2-msg`,
+  `child-2-0..4`, `task-3-msg`, `child-3-a,b,c`, and no ordinary
+  root/main/`TaskWait` row. Provenance: worktree state `573627e9ed4039d3`,
+  source `8ff7b89532a09f21`, renderer `6507a274e085`, 8 main and 10
+  delegation reads, `statusEntries` 11 at run time.
+
+  Progressive-commit evidence — the same suites at source HEAD `c1459c2d0`
+  plus this uncommitted progressive-mount change, base `c1459c2d0`, macOS,
+  Node `v24.12.0`, a rebuilt desktop renderer and a freshly built
+  `pi-desktop-host-core`, isolated synthetic profiles. `node
+  scripts/e2e-scoped-subagent-history.mjs` passes with `failures: []` against
+  the 3500-row chain: its tail page's first commit mounts 32 rows and the page
+  reports `data-hydration-state` `pending` with `mounted < loaded` until every
+  loaded row is mounted (`readMs` 744 → `hydratedMs` 858), every one of the
+  three automatic older pages hydrates in 128-row batches that hold the anchor
+  at 98.5625 → 98.875 px per batch, the head trace keeps `promptRows: 0` through
+  five pages and draws the root prompt only on the page that reaches the run
+  head, and the delayed-live, checkpoint (collapsed and expanded), focus, jump,
+  and supersede steps keep their recorded anchors and single brief identities.
+  `node scripts/e2e-scoped-history-real-host.mjs` exits 0 with `defects: []`
+  on the 2101-row chain: five pages (one tail read plus four real CDP wheel
+  older reads at cursors 1603/1103/603/103), each older request dispatched while
+  the pane reported `data-hydration-state` `ready` with loaded === mounted
+  (502/1002/1502/2002 rows), each pre-commit boundary anchor (`child-1-1603`,
+  `child-1-1103`, `child-1-603`, `child-1-103`) holding from 116.171875 to
+  116.484375, 116.484375, 115.875, and 116 px (drift ≤ 0.484 px), the first
+  three pages drawing only `[task-2-msg, task-3-msg]` and the fourth
+  introducing `task-1-msg` once at the root run's head, with all 2101 child
+  rows, every `Task` brief once, and no ordinary root/main/`TaskWait` row in
+  the settled flattened order. Provenance: worktree state `7382119f888539b5`,
+  source `5c7dcc2674391e42`, renderer `a2c9c542d866` (`index-C7zljvFn.js`),
+  host `455980544242`, 8 main and 10 delegation reads, `statusEntries` 19.
+
+  Forward-append and per-commit evidence — the same suites at source HEAD
+  `c1459c2d0` plus this dirty tree, base `c1459c2d0`, macOS, Node `v24.12.0`,
+  renderer `index-CnYk3_bG.js` (`452833c69a70`), host `455980544242`, isolated
+  synthetic profiles. The commit sampler counts one sample per write of the
+  pane's own `data-hydration-mounted`, so two commits carried by one
+  observation delivery stay two samples: `node
+  scripts/e2e-scoped-subagent-history.mjs` reports 114 commits, six bounded
+  window starts (mounts 1/0/2/32/32/32), zero commits growing the mounted run
+  past 128 rows (largest added 128), and `failures: []`. Its forward phase
+  reaches the exact loaded bottom (`distanceFromBottom 0`) while the window
+  still states a newer page and the jump control is present, appends the page
+  at `messageBefore 1002` in four commits of 128/128/128/116 while holding
+  `child-deep-492`/`child-deep-620` at 77.796875 px in every batch, spends no
+  read for a reach found on the still-mounting rows, and draws no Task prompt
+  (`promptSamples [0,0,0,0,0]`); the native `End` reach at the same exact
+  bottom appends the page at `messageBefore 1502` the same way, holding
+  `child-deep-992` at 78.109375 px; a programmatic `scrollTop` clamp to the
+  exact bottom spends no read, keeps the window, and leaves the jump control
+  in place.
+  `node scripts/e2e-scoped-history-real-host.mjs` exits 0 with `defects: []`
+  across eighteen phases with 8 main and 11 delegation reads: the per-commit
+  sample holds 37 commits, three bounded window starts, 30 batches, largest
+  added 128, no growth past 128, no oversized window start, and
+  `visibilityState` `visible`. Its forward phase is real-host evidence, not a
+  fixture: the focused historical window (physical `253..753` of a 2251-row
+  chain) reaches its exact bottom with a real CDP wheel
+  (`distanceFromBottom 0`, `scrollTop 20713`, `scrollHeight 21281`,
+  `clientHeight 568`) while the jump control is present, spends exactly one
+  delegation-scoped read (`messageBefore 1253` — the window end `753` plus the
+  500-row page policy — with `messageLimit 500`, `contentLimit 65536`), and
+  that answer is `753..1253` with 500 selected rows, `hasMoreBefore` and
+  `hasMoreAfter` both true. The appended window is one contiguous interval
+  `child-1-251..child-1-1250` with no duplicate and every loaded row mounted
+  (1000/1000), draws no Task prompt, still offers the jump control, and the
+  page arrives in four commits of 128/128/128/116 with no window replacement;
+  the reach's reading fragment (`child-1-741` at 112.1875 px) keeps its
+  offset. That phase's reach while the appended rows are still mounting was
+  not observed, so the no-read-while-mounting claim rests on the rendered
+  fixture above. Provenance: worktree state `6ac85cc4667fccf7`, source
+  `e41187cf00e40ab7`, 23 status entries, both fingerprints taken over the tree
+  the run itself saw before these notes were written into it.
 
 #### E2E-207c: A main-window change never disturbs an open delegation panel
 

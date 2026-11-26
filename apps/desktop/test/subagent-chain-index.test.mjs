@@ -191,6 +191,7 @@ async function setup() {
   const { getTranscriptProjection } = await server.ssrLoadModule(
     "/src/lib/transcript-projection.ts",
   );
+  const index = await server.ssrLoadModule("/src/lib/subagent-index.ts");
   const dock = (messages, running = true) => {
     const projection = getTranscriptProjection(messages);
     return dockModel.collectDockSubagents({
@@ -210,6 +211,7 @@ async function setup() {
     metricsProvider,
     dockModel,
     getTranscriptProjection,
+    index,
     dock,
   };
 }
@@ -753,5 +755,143 @@ test("the fold's row work does not grow with the number of chains", () => {
   );
   console.log(
     `SUBAGENT_INDEX_SCALE chains2=${two.reads}/${two.rows} chains12=${twelve.reads}/${twelve.rows}`,
+  );
+});
+
+/** `Task` calls of one conversation, stated only by their resume arguments. */
+function resumeShape(entries) {
+  return entries.map((entry, index) =>
+    taskCall(`task-${entry.callId}`, entry.callId, {
+      delegationId: entry.delegationId,
+      resume: entry.resume,
+      description: `Shape ${index}`,
+    }),
+  );
+}
+
+/** The bounded ancestor walk the chain-root maps were stated with. */
+function legacyRootOf(callIds, resumeLink) {
+  const parentOf = new Map();
+  for (const [prior, next] of resumeLink) {
+    if (!parentOf.has(next)) parentOf.set(next, prior);
+  }
+  return (callId) => {
+    let root = callId;
+    for (let guard = 0; guard <= callIds.length; guard += 1) {
+      const parent = parentOf.get(root);
+      if (!parent || parent === root) break;
+      root = parent;
+    }
+    return root;
+  };
+}
+
+/** Resume shapes whose roots the bounded walk and the index must agree on. */
+function rootShapes() {
+  const linear = (count) =>
+    Array.from({ length: count }, (_, index) => ({
+      callId: `c-${index}`,
+      delegationId: `d-${index}`,
+      ...(index === 0 ? {} : { resume: index % 2 === 0 ? `d-${index - 1}` : `c-${index - 1}` }),
+    }));
+  return [
+    { label: "a linear chain in either resume form", entries: linear(12) },
+    {
+      label: "a fork from one prior",
+      entries: [
+        { callId: "f-1", delegationId: "fd-1" },
+        { callId: "f-2", delegationId: "fd-2", resume: "fd-1" },
+        { callId: "f-3", delegationId: "fd-3", resume: "fd-1" },
+        { callId: "f-4", delegationId: "fd-4", resume: "fd-2" },
+      ],
+    },
+    {
+      label: "a resume cycle",
+      entries: [
+        { callId: "y-a", delegationId: "ya", resume: "yb" },
+        { callId: "y-b", delegationId: "yb", resume: "ya" },
+      ],
+    },
+    {
+      label: "a call resuming itself",
+      entries: [{ callId: "s-1", delegationId: "sd-1", resume: "sd-1" }],
+    },
+    {
+      label: "a path into a cycle",
+      entries: [
+        { callId: "p-2", delegationId: "pd-2", resume: "pd-3" },
+        { callId: "p-3", delegationId: "pd-3", resume: "pd-2" },
+        { callId: "p-4", delegationId: "pd-4", resume: "pd-2" },
+        { callId: "p-5", delegationId: "pd-5", resume: "pd-4" },
+      ],
+    },
+    {
+      label: "a dangling resume name",
+      entries: [
+        { callId: "q-1", delegationId: "qd-1", resume: "missing-name" },
+        { callId: "q-2", delegationId: "qd-2", resume: "qd-1" },
+      ],
+    },
+  ];
+}
+
+test("every resume shape keeps the chain roots the bounded walk states", () => {
+  for (const shape of rootShapes()) {
+    const messages = resumeShape(shape.entries);
+    const { resumeLink } = api.chain.subagentResumeLinks(messages);
+    const callIds = shape.entries.map((entry) => entry.callId);
+    const legacyRoot = legacyRootOf(callIds, resumeLink);
+    const index = api.index.subagentTranscriptIndex(messages);
+    for (const callId of callIds) {
+      assert.equal(
+        index.chainKeys.get(callId),
+        legacyRoot(callId),
+        `${shape.label}: ${callId}`,
+      );
+    }
+  }
+});
+
+test("a long resume chain resolves its roots without walking an ancestor per call", () => {
+  // Count Map reads: the chain-root fold must probe each resume edge a bounded
+  // number of times. The counter patches the prototype inside one synchronous
+  // build, so it measures the index's own work, not a test seam.
+  const measure = (calls) => {
+    const messages = resumeShape(
+      Array.from({ length: calls }, (_, index) => ({
+        callId: `r-${index}`,
+        delegationId: `rd-${index}`,
+        ...(index === 0 ? {} : { resume: `rd-${index - 1}` }),
+      })),
+    );
+    const original = Map.prototype.get;
+    let gets = 0;
+    Map.prototype.get = function countGets(...args) {
+      gets += 1;
+      return original.apply(this, args);
+    };
+    try {
+      const index = api.index.subagentTranscriptIndex(messages);
+      assert.equal(index.chainCallIds("rd-0").size, calls);
+    } finally {
+      Map.prototype.get = original;
+    }
+    return { gets, calls };
+  };
+  const eight = measure(8);
+  const twoHundred = measure(200);
+  const perCall = (sample) => sample.gets / sample.calls;
+  const growth = perCall(twoHundred) / perCall(eight);
+  console.log(
+    `SUBAGENT_CHAIN_ROOT_SCALE calls8=${eight.gets}/${eight.calls} calls200=${twoHundred.gets}/${twoHundred.calls} growth=${growth.toFixed(2)}`,
+  );
+  assert.ok(
+    perCall(twoHundred) <= 24,
+    `a 200-call chain read ${twoHundred.gets} Map entries (${perCall(twoHundred).toFixed(1)} per call)`,
+  );
+  assert.ok(
+    growth <= 1.5,
+    `per-call Map work grew ${growth.toFixed(2)}x from 8 to 200 resume calls ` +
+      `(${eight.gets}/${eight.calls} then ${twoHundred.gets}/${twoHundred.calls})`,
   );
 });
