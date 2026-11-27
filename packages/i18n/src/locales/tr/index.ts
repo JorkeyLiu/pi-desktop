@@ -2148,6 +2148,7 @@ sklm: {
     subagentNoInstance: "Hiç başlamadı — devam edecek bir şey yok.",
     subagentEmpty: "Alt ajan ayrıntıları artık kullanılamıyor.",
     "subagentHistoryEmpty": "Bu alt ajanın henüz mesajı yok.",
+    "subagentLiveActivity": "Canlı etkinlik",
     resize: "Çalışma paneli genişliğini ayarla",
     maximize: "Expand work panel",
     restore: "Restore work panel",

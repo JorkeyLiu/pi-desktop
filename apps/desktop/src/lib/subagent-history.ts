@@ -460,6 +460,68 @@ export function subagentHistoryMessages(
   // order among themselves; durable-only rows never move for them.
   return orderRowsByLiveAnnouncement(next, liveOrder, (message) => liveOrder.has(message.id));
 }
+/**
+* The delegate's current live activity, projected from the live tail — never
+ * from the reading window.
+ *
+ * The history viewport (`subagentHistoryMessages`) and this projection are
+ * two separate semantics over the same state, not two copies of it: the
+ * window draws the durable range the reader opened, while this answers "what
+ * is this chain doing right now" from the parent's live array. A tab opened
+ * late therefore shows the running tool without any follow-up read, and a
+ * reader parked on an older page keeps seeing current activity while the
+ * window stays historical.
+ *
+ * Only in-flight rows qualify: child tool rows with an explicit unsettled
+ * `toolStatus` (`preparing`/`running`), and assistant rows still `streaming`
+ * under the chain's call. Root `Task` dispatches are briefs, not activity —
+ * the history context renders them — so they never appear here, including
+ * before the entry exists. A `tool_end` settles the row, which drops it from
+ * this projection exactly once; when the durable page has not caught up yet
+ * the row is briefly absent from both views, which is the honest state, not
+ * a second pending list. Rows the history view already draws (`visibleIds`)
+ * are excluded, so a following tail that merged the live row inline never
+ * shows it twice. Entry-independent: with no entry the chain resolves from
+ * the live array alone, so activity is visible while the first page loads.
+ */
+export function subagentLiveActivityRows(
+  entry: SubagentHistoryEntry | undefined,
+  live: readonly UiMessage[],
+  tabKey: string,
+  visibleIds: ReadonlySet<string>,
+): UiMessage[] {
+  if (!live.length) return [];
+  const chain = entry
+    ? subagentChainCallIds(
+        [...entry.context, ...entry.messages, ...live],
+        entry.tabKey || entry.canonicalId,
+      )
+    : subagentChainCallIds(live, tabKey);
+  if (!chain.size) return [];
+  const rows: UiMessage[] = [];
+  const seen = new Set<string>();
+  for (const message of live) {
+    if (seen.has(message.id) || visibleIds.has(message.id)) continue;
+    // Root dispatches identify the chain; they are briefs the history owns.
+    if (message.role === "tool" && isDelegationStartTool(message.toolName)) continue;
+    if (message.role === "tool") {
+      if (!message.parentToolCallId || !chain.has(message.parentToolCallId)) continue;
+      // An explicit unsettled state only: a row without one is a durable
+      // replay, never current activity.
+      if (typeof message.toolStatus !== "string" || !UNSETTLED_TOOL_STATUSES.has(message.toolStatus)) {
+        continue;
+      }
+    } else if (message.role === "assistant") {
+      if (message.status !== "streaming") continue;
+      if (!message.parentToolCallId || !chain.has(message.parentToolCallId)) continue;
+    } else {
+      continue;
+    }
+    seen.add(message.id);
+    rows.push(message);
+  }
+  return rows;
+}
 
 /**
  * Whether the retained contiguous window covers this run's opening.

@@ -2484,7 +2484,12 @@ validation still needed.
   — even when a boundary read is still outstanding, which it supersedes rather
   than waiting for — and then scrolls to the bottom of that fresh window, so it
   can never land on the bottom of a stale range. While a historical window is open, live
-  rows outside it are not drawn as adjacent; a reopen that no live row touched
+  rows outside it are not drawn as adjacent in the history list — the chain's
+  in-flight rows render instead in the live-activity section below the rows,
+  two projections of one state: the window draws the opened range while the
+  section shows the current `preparing`/`running` tools and `streaming`
+  replies, deduplicated by message id so a following tail never doubles them;
+  a reopen that no live row touched
   costs no read, and a live-touched one costs exactly one newest-page read that
   extends the window when that page is adjacent and replaces it when it is not.
   A loaded page reaches the DOM progressively, and the probe states that
@@ -2528,7 +2533,10 @@ validation still needed.
   contiguous-interval arithmetic, the boundary directions, the target/latest
   window replacement, the live/durable reconciliation and order — including a
   repeated tail range that confirms a finished child row's durable value — and
-  the held reading position. Rendered evidence —
+  the held reading position, plus the live-activity projection: a late-opened
+  running chain keeps one initial read while its current tool shows in the
+  activity section, entry-independent resolution, window/activity dedupe,
+  parallel running tools, and settled-row exit without duplication. Rendered evidence —
   `node scripts/e2e-scoped-subagent-history.mjs`
   exits 0 against the built stylesheet: paging to the head keeps 1009 rows in one
   window, holds the fragment's viewport offset across an older page, replaces
@@ -2593,7 +2601,14 @@ validation still needed.
   98.875 px and the tall 2126 px `deep-task-row` brief as the physical-head
   anchor at 31.390625 px; the delayed live read restores `child-anchor-33`
   from 98.5625 to 99.015625 px and the collapsed/expanded `anchor-handoff`
-  root holds `child-anchor-14` from 90.953125 to 90.546875 px.
+  root holds `child-anchor-14` from 90.953125 to 90.546875 px; the late-opened
+  running chain spends exactly one scoped read for its head page (`messageStart`
+  0, 500 rows, `hasMoreAfter` true, opened at `scrollTop` 0) while its running
+  tool renders in the live-activity section below the history scroller
+  (`aria-label` "Live activity") at 501.0625–568 px inside the 700 px panel
+  viewport — the same rect after paging up through the old history and at the
+  loaded bottom, with no further read — and the tool's `tool_end` unmounts the
+  section with the row appearing at most once and no additional read.
   `node scripts/e2e-scoped-history-real-host.mjs` exits 0 with `defects: []`
   on a 2101-row chain (four whole pages plus a 101-row head): four real CDP
   wheel older pages at cursors 1603/1103/603/103 draw no new prompt on the

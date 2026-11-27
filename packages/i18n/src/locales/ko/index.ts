@@ -2154,6 +2154,7 @@ sklm: {
     subagentNoInstance: "시작되지 않음 — 계속할 내용 없음.",
     subagentEmpty: "서브에이전트 세부 정보를 더 이상 사용할 수 없습니다.",
     subagentHistoryEmpty: "이 서브에이전트에는 아직 메시지가 없습니다.",
+    subagentLiveActivity: "실시간 활동",
     resize: "작업 패널 크기 조절",
     maximize: "Expand work panel",
     restore: "Restore work panel",

@@ -1502,6 +1502,23 @@ not a working claim, is what the reader sees.
   there, not through the main pane. Live row growth while an older read is
   still pending does not commit that page: the older-loading label stays
   visible and the reading hold waits for the requested read to finish.
+- The history window and the live activity are two projections of the same
+  state, not two copies of it. The window draws the durable range the reader
+  opened; a separate live-activity section below the rows answers what the
+  chain is doing right now, projected from the parent's live array by the
+  chain's own selector. It lists in-flight work only — child tool rows still
+  `preparing`/`running` and assistant rows still `streaming` — and never
+  `Task` dispatches, which are briefs the history owns. Rows the window
+  already draws are excluded, so a following tail that merged a live row
+  inline never shows it twice, and the section mounts nothing while it is
+  empty. The projection needs no entry: a delegation opened late — its `Task`
+  still running, its first read still in flight — already shows the running
+  tool there, even when the first durable page lands on an older range of a
+  longer history. It needs no eager entries either: only an open tab projects
+  its own chain. A `tool_end` settles the row out of the section exactly once;
+  when the durable page has not caught up yet the row is briefly absent from
+  both views, which is the honest state rather than a second pending list.
+  Explicit older/focus/latest navigation semantics are unchanged.
 - A chain is read across all of its executed `Task(resume)` runs, so a delegation opened
   by a resumed run is the same child conversation as its original dispatch, and
   an older caller's `Task` tool-call id resolves to it too. A rejected resume —

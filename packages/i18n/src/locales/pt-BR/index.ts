@@ -2104,6 +2104,7 @@ export const ptBR = {
     subagentNoInstance: "Nunca iniciado — nada a continuar.",
     subagentEmpty: "Os detalhes do subagente não estão mais disponíveis.",
     subagentHistoryEmpty: "Este subagente ainda não tem mensagens.",
+    subagentLiveActivity: "Atividade ao vivo",
     resize: "Redimensionar painel de trabalho",
     maximize: "Expandir painel de trabalho",
     restore: "Restaurar painel de trabalho",

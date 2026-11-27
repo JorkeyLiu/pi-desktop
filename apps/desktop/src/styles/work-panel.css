@@ -559,6 +559,29 @@ body:has(> .context-menu) .work-panel-header {
   text-align: center;
 }
 
+/* The delegate's current activity, projected from the live tail rather than
+   drawn from the history window: a pinned strip between the scroll area and
+   the composer, so it stays on screen while the reader pages the window above
+   it. The section only mounts while the projection holds rows the window does
+   not draw, and parallel tools scroll inside it instead of growing the tab. */
+.subagent-transcript-live-activity {
+  flex: none;
+  border-top: 1px dashed var(--ds-border-subtle);
+  padding: 8px 0 4px;
+}
+
+.subagent-transcript-live-activity-title {
+  padding: 0 16px 4px;
+  color: var(--ds-text-muted);
+  font-size: var(--text-xs);
+}
+
+.subagent-transcript-live-activity-rows {
+  overflow-y: auto;
+  max-height: 12rem;
+  padding-bottom: 4px;
+}
+
 /* A retained run that does not continue the rows above it: the omitted range
    is stated in place, so the reader never reads two non-adjacent ranges as one
    conversation. */

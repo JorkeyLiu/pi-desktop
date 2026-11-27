@@ -77,8 +77,10 @@ import {
   buildSubagentTranscriptUnits,
   stabilizeSubagentTranscriptUnits,
   subagentVisibleRows,
+  type SubagentRowUnit,
   type SubagentTranscriptUnit,
 } from "../../lib/subagent-hydration";
+import { messageThinking } from "../../lib/assistant-turns";
 import { delegateModelId, delegateThinkingLevel } from "../../features/chat/transcript/model";
 
 /**
@@ -620,6 +622,29 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
    * deferred top read all ask this question, so they all read this answer.
    */
   const hydrationPending = visibleUnits.length < transcriptUnits.length;
+  // The chain's current activity as its own rows, in the transcript's own
+  // language: tool rows keep ToolRow, reasoning and answers keep theirs. The
+  // projection already excluded everything the history window draws, so this
+  // list is empty — and renders nothing — whenever the tail merged those
+  // rows inline.
+  const liveActivityUnits = useMemo<readonly SubagentRowUnit[]>(() => {
+    const units: SubagentRowUnit[] = [];
+    for (const message of history.liveActivity) {
+      const key = `live-activity-${message.id}`;
+      if (message.role === "tool") {
+        units.push({ kind: "tool", key, messageId: message.id, message });
+        continue;
+      }
+      if (message.role !== "assistant") continue;
+      if (messageThinking(message)) {
+        units.push({ kind: "thinking", key, messageId: message.id, message });
+      }
+      if ((message.content || "").trim() || message.error) {
+        units.push({ kind: "answer", key, messageId: message.id, message });
+      }
+    }
+    return units;
+  }, [history.liveActivity]);
   useLayoutEffect(() => {
     if (history.messages.length) presented.current = true;
   }, [history.messages]);
@@ -1114,6 +1139,24 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
             </TooltipButton>
           ) : null}
         </div>
+        {liveActivityUnits.length > 0 ? (
+          <section
+            className="subagent-transcript-live-activity"
+            aria-label={t("panel.subagentLiveActivity")}
+            data-testid="subagent-live-activity"
+          >
+            <div className="subagent-transcript-live-activity-title">
+              {t("panel.subagentLiveActivity")}
+            </div>
+            <div className="subagent-transcript-live-activity-rows">
+              <SubagentTranscriptRows
+                units={liveActivityUnits}
+                handoffOrdinals={handoffOrdinals}
+                running
+              />
+            </div>
+          </section>
+        ) : null}
         <footer className="subagent-transcript-composer" data-testid="subagent-panel-footer">
           {/* The panel reuses the main composer's editor, box, and tokens; it
             only owns what the panel decides, which is what to send. */}

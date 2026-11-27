@@ -2139,6 +2139,7 @@ sklm: {
     "subagentNoInstance": "Nunca empezó — nada que continuar.",
     "subagentEmpty": "Los detalles del subagente ya no están disponibles.",
     "subagentHistoryEmpty": "Este subagente aún no tiene mensajes.",
+    "subagentLiveActivity": "Actividad en directo",
     "resize": "Cambiar tamaño del panel de trabajo",
     "maximize": "Expand work panel",
     "restore": "Restore work panel",

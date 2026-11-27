@@ -2615,3 +2615,76 @@ test("a 1009-row chain spends three scoped reads instead of one per hundred rows
     "the retained rows are the whole contiguous chain",
   );
 });
+
+ /*
+  * A delegation opened late — while its Task is still running — costs exactly
+  * one initial read, and the historical window it lands on does not claim the
+  * running tool that arrived before the tab existed. The tool's visibility is
+  * the live-activity projection's job (covered by subagent-live-activity.test.mjs
+  * and the rendered probe); this test locks the store contract with the old
+  * public API only: one initial read, brief first, no follow-up, no duplicate.
+  */
+test("a running chain opened late keeps a single initial read on its historical window", async (t) => {
+  const sessionId = "topic-delegate-late-open-window";
+  seedStore(sessionId);
+  const head = childRows(Array.from({ length: 500 }, (_, offset) => 1000 + offset));
+  const runningTask = { ...taskRow("call-1", "d1"), toolStatus: "running", status: "streaming" };
+  const runningChild = {
+    ...childRow(2000, "call-1"),
+    toolCallId: "bash-2000",
+    toolStatus: "running",
+    status: "streaming",
+  };
+  // The panel was never opened, so no entry routed these rows: they only
+  // exist in the parent's live array when the tab opens.
+  useAppStore.setState({ activeSessionId: sessionId, messages: [runningTask, runningChild] });
+  assert.equal(
+    findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1"),
+    undefined,
+    "the chain has no entry before it is opened",
+  );
+  const calls = [];
+  t.mock.method(api, "getSession", async (id, options) => {
+    calls.push({ id, options });
+    return page(id, head, {
+      messageStart: 1000,
+      messageEnd: 1500,
+      hasMoreBefore: false,
+      hasMoreAfter: true,
+      scope: delegation("d1"),
+      context: [taskRow("call-1", "d1")],
+    });
+  });
+
+  await useAppStore.getState().ensureSubagentHistory({ sessionId, tabKey: "d1" });
+  assert.equal(calls.length, 1, "opening a running chain spends exactly one initial read, never a tail follow-up");
+  const entry = findSubagentHistoryEntry(
+    useAppStore.getState().subagentHistory,
+    sessionId,
+    "d1",
+  );
+  assert.equal(entry.status, "ready");
+  assert.equal(entry.hasMoreAfter, true, "the first window stays a historical range");
+  const rendered = subagentHistoryMessages(entry, useAppStore.getState().messages);
+  assert.equal(rendered[0].id, "call-1-row", "the Task brief stays the opening row");
+  assert.ok(
+    !rendered.some((message) => message.id === "child-2000"),
+    "the historical window does not claim the live row",
+  );
+
+  // The tool ends: the history shows it at most once instead of duplicating it.
+  useAppStore.setState({
+    messages: [runningTask, { ...runningChild, toolStatus: "success", status: "complete" }],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const settled = findSubagentHistoryEntry(
+    useAppStore.getState().subagentHistory,
+    sessionId,
+    "d1",
+  );
+  const settledRendered = subagentHistoryMessages(settled, useAppStore.getState().messages);
+  assert.ok(
+    settledRendered.filter((message) => message.id === "child-2000").length <= 1,
+    "the tool_end never duplicates the row",
+  );
+});

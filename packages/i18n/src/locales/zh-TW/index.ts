@@ -2132,6 +2132,7 @@ sklm: {
     subagentNoInstance: "從未啟動——無可繼續內容。",
     subagentEmpty: "子智慧體詳情已不可用。",
     subagentHistoryEmpty: "此子智慧體尚無訊息。",
+    subagentLiveActivity: "即時動態",
     resize: "調整工作面板寬度",
     maximize: "放大",
     restore: "縮小",

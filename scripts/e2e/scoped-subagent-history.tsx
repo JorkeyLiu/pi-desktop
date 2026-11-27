@@ -242,6 +242,93 @@ function anchorHandoffRow(): UiMessage {
   });
 }
 
+// A chain the reader opens late, while its Task is still running: the durable
+// window is a long head page whose tail is far from the live tail, and the
+// running child tool arrived before the tab existed, so no durable row names
+// it. Its visibility is the live-activity projection's job, not the window's.
+const LATE_DELEGATION = "d-late";
+const LATE_CALL = "call-late";
+const LATE_TASK_ID = "late-task-row";
+const LATE_TOOL_ID = "late-tool-1";
+const LATE_PAGE_END = 500;
+const LATE_TOTAL = 2001;
+const lateRowId = (index: number) => `late-row-${index}`;
+
+/** The late chain's root `Task` card, still running when the tab opens. */
+function lateTaskRecord(running: boolean): UiMessage {
+  return message(LATE_TASK_ID, "tool", "", {
+    toolName: "Task",
+    toolCallId: LATE_CALL,
+    toolStatus: running ? "running" : "success",
+    status: running ? "streaming" : "complete",
+    toolArgs: {
+      agent: "explorer",
+      description: "Late chain",
+      task: "Explain the late chain.",
+    },
+    toolResult: {
+      details: {
+        delegationId: LATE_DELEGATION,
+        agent: "explorer",
+        status: running ? "running" : "completed",
+        startedAt: 1_000,
+        ...(running ? {} : { completedAt: 42_000 }),
+      },
+    },
+  });
+}
+
+/** The running child tool the durable window clips: it predates the tab. */
+function lateToolRow(status: "running" | "success"): UiMessage {
+  return message(LATE_TOOL_ID, "tool", "", {
+    toolName: "Bash",
+    toolCallId: LATE_TOOL_ID,
+    parentToolCallId: LATE_CALL,
+    agentName: "explorer",
+    toolStatus: status,
+    status: status === "running" ? "streaming" : "complete",
+    toolArgs: { command: "npm test" },
+    ...(status === "success" ? { toolResult: { details: { exitCode: 0 } } } : {}),
+  });
+}
+
+function lateChildRow(index: number): UiMessage {
+  return message(lateRowId(index), "assistant", `late chain row ${index}`, {
+    parentToolCallId: LATE_CALL,
+    agentName: "explorer",
+  });
+}
+
+/**
+ * The late chain's window: a long head page. The running tool arrived before
+ * the tab existed, so no durable row names it: the window clips it and states
+ * that newer rows exist. A later-boundary reach joins the next page below it,
+ * exactly like any other historical window.
+ */
+function lateDetail(messageBefore: number | undefined): SessionDetail {
+  const end = messageBefore === undefined ? LATE_PAGE_END : Math.max(0, Math.min(messageBefore, LATE_PAGE_END));
+  const start = 0;
+  return {
+    id: SESSION,
+    title: "Late chain fixture",
+    source: "local",
+    mode: "agent",
+    createdAt,
+    updatedAt: createdAt,
+    historyScope: { kind: "delegation" as const, id: LATE_DELEGATION },
+    messages: Array.from({ length: end - start }, (_, offset) => lateChildRow(start + offset)),
+    historyRuns: [
+      { callId: LATE_CALL, taskMessageId: LATE_TASK_ID, taskIndex: 0, firstChildIndex: 0 },
+    ],
+    historyContext: [],
+    messageStart: start,
+    messageEnd: end,
+    messageCount: LATE_TOTAL,
+    hasMoreBefore: false,
+    hasMoreAfter: end < LATE_TOTAL,
+  } as unknown as SessionDetail;
+}
+
 function anchorDetail(sessionId: string, messageBefore: number | undefined): SessionDetail {
   const end = messageBefore ?? ANCHOR_TOTAL;
   const start = messageBefore === undefined ? 30 : Math.max(0, end - 10);
@@ -356,6 +443,9 @@ function delegationDetail(
   }
   if (sessionId === SESSION && scopeId === ANCHOR_DELEGATION) {
     return anchorDetail(sessionId, messageBefore);
+  }
+  if (sessionId === SESSION && scopeId === LATE_DELEGATION) {
+    return lateDetail(messageBefore);
   }
   if (sessionId === OTHER_SESSION) {
     return {
@@ -2439,6 +2529,143 @@ globalThis.scopedHistoryProbe = async () => {
     "SCOPED_ANCHOR_TRACE " +
       JSON.stringify({ delayed: facts.anchorDelayedRead, checkpoints: checkpointTrace, ids: finalAnchorIds }),
   );
+
+  // 12. A chain opened late, while its Task is still running: one initial read
+  //     lands a long historical window that clips the running child tool, and
+  //     the tool stays visible in its own live-activity bar — outside the
+  //     history scroller, so no amount of paging can scroll it out of view.
+  //     The tool's `tool_end` retires the bar without duplicating the row.
+  flushSync(() => {
+    root?.unmount();
+    root = null;
+  });
+  flushSync(() => {
+    useAppStore.setState({
+      activeSessionId: SESSION,
+      messages: [lateTaskRecord(true), lateToolRow("running")],
+    } as never);
+  });
+  mountTab(LATE_DELEGATION);
+  const lateEntry = () => entry(SESSION, LATE_DELEGATION);
+  const lateReads = () => scopedReads().filter((read) => read.scope?.id === LATE_DELEGATION);
+  const lateSection = () => document.querySelector<HTMLElement>('[data-testid="subagent-live-activity"]');
+  const sectionInTab = () => {
+    const section = lateSection()?.getBoundingClientRect() ?? null;
+    const tabBox = tab()?.getBoundingClientRect() ?? null;
+    if (!section || !tabBox) return null;
+    return { top: section.top, bottom: section.bottom, tabTop: tabBox.top, tabBottom: tabBox.bottom };
+  };
+  const sectionInsideTab = (box: { top: number; bottom: number; tabTop: number; tabBottom: number } | null) =>
+    box !== null && box.top >= box.tabTop - 1 && box.bottom <= box.tabBottom + 1;
+  await until(
+    () => lateReads().length === 1 && lateEntry()?.status === "ready",
+    "the late chain's first scoped page",
+  );
+  await frames(2);
+  await awaitHydration("the late chain's first page", 15_000);
+  // The pane mounts the long window at its loaded bottom; a programmatic
+  // clamp to the head is not a reach (see 9d), so the head state below is the
+  // rendered viewport at scrollTop 0 with no read spent.
+  scroller()!.scrollTop = 0;
+  scroller()!.dispatchEvent(new Event("scroll", { bubbles: true }));
+  await frames(3);
+  const lateInitial = {
+    scrollTop: scroller()?.scrollTop ?? null,
+    reads: lateReads().length,
+    section: sectionInTab(),
+  };
+  failures.push(
+    ...failuresOf([
+      [lateReads().length === 1, "opening the running chain spends exactly one scoped read"],
+      [lateReads()[0]?.messageBefore === undefined, "the late chain's first page asks for no older cursor"],
+      [
+        lateEntry()?.messageStart === 0 && lateEntry()?.messageEnd === LATE_PAGE_END,
+        `the late window is the chain's head page (${lateEntry()?.messageStart}..${lateEntry()?.messageEnd})`,
+      ],
+      [lateEntry()?.hasMoreAfter === true, "the late window states that newer rows exist"],
+      [lateInitial.scrollTop === 0, `the late window opens at its head (scrollTop ${String(lateInitial.scrollTop)})`],
+      [lateSection() !== null, "the running chain's live activity renders its own bar"],
+      [lateSection()?.getAttribute("aria-label") === "Live activity", "the live activity bar names itself"],
+      [
+        lateSection()?.querySelector<HTMLElement>(`[data-message-id="${LATE_TOOL_ID}"]`) !== null,
+        "the running tool renders in the live activity bar",
+      ],
+      [
+        list()?.querySelector<HTMLElement>(`[data-message-id="${LATE_TOOL_ID}"]`) === null,
+        "the historical window does not claim the running tool",
+      ],
+      [
+        sectionInsideTab(lateInitial.section),
+        `the live activity bar sits inside the panel viewport at the head (${JSON.stringify(lateInitial.section)})`,
+      ],
+    ]),
+  );
+  // The reader scrolls up through the old history with their own gesture: the
+  // head has nothing older, so no read is spent, and the bar stays put.
+  const lateReadsBeforeUp = lateReads().length;
+  const lateUpInputAt = performance.now();
+  await reachTop();
+  await frames(3);
+  const lateAfterUp = sectionInTab();
+  failures.push(
+    ...failuresOf([
+      [lateReads().length === lateReadsBeforeUp, "scrolling the head history spends no further read"],
+      [
+        sectionInsideTab(lateAfterUp),
+        `the live activity bar stays in the panel viewport after paging up (${JSON.stringify(lateAfterUp)})`,
+      ],
+      [
+        lateSection()?.querySelector<HTMLElement>(`[data-message-id="${LATE_TOOL_ID}"]`) !== null,
+        "the running tool is still the live activity after paging up",
+      ],
+    ]),
+  );
+  // A programmatic clamp to the loaded bottom is not a reach either — but
+  // only once the reader's own gesture has expired (see 9d): otherwise the
+  // bottom scroll still reads as the reader's forward reach.
+  await until(
+    () => performance.now() > lateUpInputAt + TRANSCRIPT_SCROLL_GESTURE_WINDOW_MS + 60,
+    "the reader's gesture to expire",
+    2_000,
+  );
+  scroller()!.scrollTop = scroller()!.scrollHeight - scroller()!.clientHeight;
+  scroller()!.dispatchEvent(new Event("scroll", { bubbles: true }));
+  await frames(3);
+  const lateAfterBottom = sectionInTab();
+  failures.push(
+    ...failuresOf([
+      [lateReads().length === lateReadsBeforeUp, "clamping to the loaded bottom spends no read"],
+      [
+        sectionInsideTab(lateAfterBottom),
+        `the live activity bar stays in the panel viewport at the loaded bottom (${JSON.stringify(lateAfterBottom)})`,
+      ],
+    ]),
+  );
+  // The tool ends while its Task still runs: current activity is over, so the
+  // bar unmounts, and the row appears at most once instead of duplicating.
+  flushSync(() => {
+    useAppStore.setState({
+      messages: [lateTaskRecord(true), lateToolRow("success")],
+    } as never);
+  });
+  await frames(4);
+  failures.push(
+    ...failuresOf([
+      [lateSection() === null, "the tool_end retires the live activity bar"],
+      [
+        document.querySelectorAll<HTMLElement>(`[data-message-id="${LATE_TOOL_ID}"]`).length <= 1,
+        "the ended tool appears at most once",
+      ],
+      [lateReads().length === lateReadsBeforeUp, "the tool_end spends no scoped read"],
+    ]),
+  );
+  facts.lateOpen = {
+    initial: lateInitial,
+    afterUp: lateAfterUp,
+    afterBottom: lateAfterBottom,
+    reads: lateReads().length,
+  };
+  console.log("SCOPED_LATE_OPEN " + JSON.stringify(facts.lateOpen));
 
   facts.channels = channels.length;
   facts.scopedReads = scopedReads();

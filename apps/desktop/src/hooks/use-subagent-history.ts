@@ -3,6 +3,7 @@ import {
   findSubagentHistoryEntry,
   subagentHistoryIsFollowing,
   subagentHistoryMessages,
+  subagentLiveActivityRows,
 } from "../lib/subagent-history";
 import { EMPTY_TRANSCRIPT } from "../lib/transcript-reading";
 import { useAppStore } from "../stores/app-store";
@@ -49,9 +50,17 @@ export function useSubagentHistory(sessionId: string, tabKey: string) {
   }, [ensureSubagentHistory, sessionId, tabKey]);
 
   const messages = useMemo(() => subagentHistoryMessages(entry, live), [entry, live]);
+  // The chain's current activity, projected from the same live tail — not
+  // from the entry. Rows the history window already draws are excluded, so a
+  // following tail that merged them inline never shows them twice.
+  const liveActivity = useMemo(() => {
+    const visibleIds = new Set(messages.map((message) => message.id));
+    return subagentLiveActivityRows(entry, live, tabKey, visibleIds);
+  }, [entry, live, messages, tabKey]);
   return {
     entry,
     messages,
+    liveActivity,
     status: entry?.status ?? "loading",
     /** A read of already loaded rows is in flight; the rows stay rendered. */
     refreshing: entry?.refreshing === true,
