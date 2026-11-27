@@ -2576,6 +2576,7 @@ describe("DesktopAgentRuntime deferred tool catalog", () => {
       "Write",
       "Glob",
       "Grep",
+      "TodoWrite",
       "asktool",
       "Skill",
       "EnterPlanMode",
@@ -2585,6 +2586,8 @@ describe("DesktopAgentRuntime deferred tool catalog", () => {
     ]);
     expect((runtime as any).deferredToolNames.has("Glob")).toBe(false);
     expect((runtime as any).deferredToolNames.has("Grep")).toBe(false);
+    // TodoWrite is a prompt-mandated workflow capability: core, never on demand.
+    expect((runtime as any).deferredToolNames.has("TodoWrite")).toBe(false);
     expect(names).not.toContain("A2A");
     expect(names).not.toContain("Peer");
     expect(names).not.toContain("BrowserPreview");
@@ -2776,6 +2779,7 @@ describe("DesktopAgentRuntime deferred tool catalog", () => {
     expect(names).not.toContain("plugin_demo_run");
     expect(names).not.toContain("PluginScaffold");
     expect(names).not.toContain("PluginPack");
+    expect(names).not.toContain("TodoWrite");
 
     await runtime.dispose();
   });
@@ -2989,6 +2993,7 @@ describe("DesktopAgentRuntime mode and tool composition", () => {
         "SubmitGoal",
       ]),
     );
+    expect(goalTools).not.toContain("TodoWrite");
     expect(goalTools).toEqual(expect.arrayContaining(["Write", "Edit"]));
     expect(goalTools).not.toContain("plugin_demo_run");
     expect(goalTools).not.toContain("SubmitPlan");

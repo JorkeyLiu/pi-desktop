@@ -2020,6 +2020,9 @@ binding uses the fixed-declaration policy below, while preserving the same
 execution activation rules:
 
 - Agent: `Read`, `Bash`, `Edit`, and `Write` (matching pi's coding-agent core)
+- Agent: `TodoWrite`, because the agent prompt mandates the session checklist for
+  multi-step work, and a capability the model has to go looking for is one
+  it will not use
 - Agent: `Skill` whenever the skill catalog is non-empty (D404, ADR 0230) — the
   `# Skills` section and a user-typed `/skill:<skill-id>` both ask the model to call
   it, and a tool that is missing from the schema cannot be called at all

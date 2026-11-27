@@ -1943,7 +1943,7 @@ validation still needed.
   HTML page and observe the tool activity. 4) Start a second user prompt after
   the preview task completes.
 - **Expected**: The first request contains only the mode core tools (Agent:
-  `Read`/`Bash`/`Edit`/`Write`; Chat: `Read`/`Glob`/`Grep`)
+  `Read`/`Bash`/`Edit`/`Write`/`TodoWrite`; Chat: `Read`/`Glob`/`Grep`)
   and local `ToolSearch`; deferred schemas are
   represented only by a bounded `# On-demand tools` catalog. The agent calls
   `ToolSearch` before `BrowserPreview` (or the selected plugin/`Skill` tool)
@@ -11775,9 +11775,9 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
 - **Acceptance**: C / E / F / Quality / Security.
 - **Milestone**: M6+.
 - **Automation**: `pnpm test:e2e:todos` drives the product path: a real host
-  (SQLite + stdiorpc), the production Agent runtime's ToolSearch/TodoWrite
-  calls, and the transcript's own `ToolRow`, mounted in an isolated Electron
-  renderer with the application stylesheet. Only the external model stream and
+  (SQLite + stdiorpc), the production Agent runtime's first-request `TodoWrite`
+  declaration and direct `TodoWrite` calls, and the transcript's own `ToolRow`,
+  mounted in an isolated Electron renderer with the application stylesheet. Only the external model stream and
   the preload transport are fixtures; no live provider or user profile is used.
   The scenario covers the default-open checklist and the frameless body it
   expands to — no section heading, no copy-only header row — collapse surviving

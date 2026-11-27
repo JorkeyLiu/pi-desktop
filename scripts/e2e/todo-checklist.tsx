@@ -435,7 +435,7 @@ window.todoChecklistProbe = async () => {
       ),
     },
     host: "real-stdio-sqlite",
-    agent: "production-runtime-tool-search-todo-write",
+    agent: "production-runtime-direct-todo-write",
     provider: "deterministic-event-stream-only",
     renderer: "production-transcript-tool-row-and-checklist-card",
   };

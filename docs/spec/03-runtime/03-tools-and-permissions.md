@@ -8,7 +8,7 @@
 | Topic | Decision |
 |---|---|
 | Default mode | Agent |
-| Agent tools | Read / Glob / Grep / Write / Edit / Bash + registered plugin tools + optional Jev classifier |
+| Agent tools | Read / Glob / Grep / Write / Edit / Bash / TodoWrite + registered plugin tools + optional Jev classifier |
 | Plan tools | Read / Glob / Grep / BrowserPreview / Bash / SubmitPlan + plugin tools that declare plan-safe actions |
 | Goal tools | Read / Glob / Grep / BrowserPreview / Bash / SubmitGoal + plugin tools that declare plan-safe actions |
 | Plan and Goal hard deny | Write / Edit / plugin tools without `planSafeActions` / unknown tools / the other kind's submit tool |
@@ -46,15 +46,18 @@ Let the agent get things done, but stay under control by default.
 
 ### 2.1 Deferred ancillary tools (D185, ADR 0048)
 
-The first Agent request includes `Read`, `Bash`, `Edit`, `Write`, `Glob`, and
-`Grep`. Keeping workspace listing and content search in the initial schema
-avoids a discovery round trip for routine project exploration (the amendment
+The first Agent request includes `Read`, `Bash`, `Edit`, `Write`, `Glob`,
+`Grep`, and `TodoWrite`. Keeping workspace listing and content search in the
+initial schema avoids a discovery round trip for routine project exploration (the amendment
 to ADR 0048 records this change). Plan and Goal keep their read/inspection core.
 `Skill` is deliberately not deferred: a `/skill:<skill-id>` invocation instructs the
 model to call it, and a tool absent from the schema cannot be called at all, so
 it ships with the first request whenever the skill catalog is non-empty (D404,
-ADR 0230). The runtime still registers optional capabilities without sending
-their full schemas up front:
+ADR 0230). `TodoWrite` is core for the same reason: the agent prompt mandates the
+session checklist for multi-step work, so it ships with the first request in Agent mode.
+Prompt-mandated foundational workflow capabilities are core; optional plugin and domain
+capabilities stay deferred, with no per-tool discovery heuristics. The runtime still
+registers optional capabilities without sending their full schemas up front:
 
 - `BrowserPreview`
 - `PluginCheck`, `PluginScaffold`, and `PluginPack`
