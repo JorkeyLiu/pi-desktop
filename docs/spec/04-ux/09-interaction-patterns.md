@@ -483,12 +483,12 @@ may be retained while exactly one workspace supplies the visible shell context.
 - Native `<select>` popups remain platform-owned; this rule covers custom
   renderer surfaces only.
 - Pointer-anchored context menus (transcript rows, conversation
-  background, markdown links) are the same family: they portal to
-  `document.body` as a viewport-fixed layer, measure before reveal so
-  they never flash at the origin, clamp inside the viewport instead of
-  flipping, and close on outside press, Escape, Tab, window blur, or a
-  scroll of anything behind them. An empty item list never opens a
-  surface.
+  background, markdown links, work-panel tabs) are the same family: they
+  portal to `document.body` as a viewport-fixed layer, measure before
+  reveal so they never flash at the origin, clamp inside the viewport
+  instead of flipping, and close on outside press, Escape, Tab, or
+  window blur — never on a scroll behind them. An empty item list never
+  opens a surface.
 
 ### 1.6 Local profile footer
 

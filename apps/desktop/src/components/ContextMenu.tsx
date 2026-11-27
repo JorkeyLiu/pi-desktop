@@ -7,8 +7,9 @@
  * portals to `document.body` as a viewport-fixed layer (a transformed or
  * `overflow: hidden` ancestor cannot trap it), it is measured before it is
  * revealed so it never flashes at the viewport origin, it clamps inside the
- * viewport, and it closes on an outside press, Escape, or a scroll of anything
- * behind it. `is-open` gates visibility because a `visibility: hidden` surface
+ * viewport, and it closes on an outside press, Escape, resize, or blur — never
+ * on a scroll behind it, so transcript follow-scroll and tab-strip scrolling
+ * leave it up. `is-open` gates visibility because a `visibility: hidden`
  * cannot take focus.
  *
  * Menus are data, not children: `useContextMenu` owns the open request, call
@@ -372,14 +373,12 @@ export function ContextMenu({
     };
     window.addEventListener("pointerdown", onOutside, true);
     window.addEventListener("contextmenu", onOutside, true);
-    window.addEventListener("scroll", onOutside, true);
     window.addEventListener("resize", onClose);
     window.addEventListener("blur", onClose);
     window.addEventListener("keydown", onKeyDown, true);
     return () => {
       window.removeEventListener("pointerdown", onOutside, true);
       window.removeEventListener("contextmenu", onOutside, true);
-      window.removeEventListener("scroll", onOutside, true);
       window.removeEventListener("resize", onClose);
       window.removeEventListener("blur", onClose);
       window.removeEventListener("keydown", onKeyDown, true);
