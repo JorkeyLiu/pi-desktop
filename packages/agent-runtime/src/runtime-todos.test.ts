@@ -3,7 +3,7 @@ import { createAssistantMessageEventStream, type AssistantMessage, type Context,
 import { DesktopAgentRuntime } from "./runtime.js";
 
 describe("TodoWrite Agent user path", () => {
-  it("passes overlong Unicode content to the authoritative host and returns its truncation warning", async () => {
+  it("declares TodoWrite on the first Agent request and calls it directly", async () => {
     const content = "😀".repeat(501);
     const requests: Context[] = [];
     const hostCall = vi.fn(async (method: string) => method === "tools.execute"
@@ -18,15 +18,15 @@ describe("TodoWrite Agent user path", () => {
       thinkingLevel: "off",
       onEvent: () => undefined,
     });
+    // TodoWrite is core: the model calls it on the first turn, with no
+    // ToolSearch discovery round trip first.
     let round = 0;
     const streamSimple = (_model: unknown, context: Context) => {
       requests.push({ ...context, messages: [...context.messages] });
       round += 1;
       const toolCall: ToolCall | undefined = round === 1
-        ? { type: "toolCall" as const, id: "discover-todos", name: "ToolSearch", arguments: { query: "TodoWrite" } }
-        : round === 2
-          ? { type: "toolCall" as const, id: "write-todos", name: "TodoWrite", arguments: { todos: [{ content, status: "in_progress" }] } }
-          : undefined;
+        ? { type: "toolCall" as const, id: "write-todos", name: "TodoWrite", arguments: { todos: [{ content, status: "in_progress" }] } }
+        : undefined;
       const message: AssistantMessage = {
         role: "assistant", api: "openai-completions", provider: "local", model: "local-model",
         content: toolCall ? [toolCall] : [{ type: "text", text: "Checklist updated." }],
@@ -45,6 +45,11 @@ describe("TodoWrite Agent user path", () => {
     // execution, host forwarding, and tool-result replay on the real runtime.
     (runtime as unknown as { models: { streamSimple: typeof streamSimple } }).models = { streamSimple };
     try {
+      // The first provider request already declares TodoWrite: it is core,
+      // not an on-demand catalog row.
+      const firstTools = ((runtime as unknown as { agent: { state: { tools: Array<{ name: string }> } } }).agent.state.tools).map((tool) => tool.name);
+      expect(firstTools).toContain("TodoWrite");
+      expect((runtime as unknown as { deferredToolNames: Set<string> }).deferredToolNames.has("TodoWrite")).toBe(false);
       await runtime.prompt("Track the implementation steps.", "user-todo", "turn-todo");
       const result = requests.at(-1)?.messages.find((message) => message.role === "toolResult" && message.toolCallId === "write-todos");
       expect(result).toMatchObject({ isError: false, content: [{ type: "text", text: expect.stringContaining("truncated to 500 characters") }] });
@@ -90,13 +95,11 @@ describe("TodoWrite Agent user path", () => {
     let round = 0;
     const streamSimple = () => {
       round += 1;
-      // TodoWrite reaches the model through ToolSearch, so the same two-round
-      // discovery the production path performs comes first.
+      // TodoWrite is core, so the production path calls it directly: no
+      // ToolSearch discovery round precedes the write.
       const toolCall: ToolCall | undefined = round === 1
-        ? { type: "toolCall" as const, id: "discover-todos", name: "ToolSearch", arguments: { query: "TodoWrite" } }
-        : round === 2
-          ? { type: "toolCall" as const, id: "write-todos", name: "TodoWrite", arguments: { todos: [{ content: "raw", status: "in_progress" }] } }
-          : undefined;
+        ? { type: "toolCall" as const, id: "write-todos", name: "TodoWrite", arguments: { todos: [{ content: "raw", status: "in_progress" }] } }
+        : undefined;
       const message: AssistantMessage = {
         role: "assistant", api: "openai-completions", provider: "local", model: "local-model",
         content: toolCall ? [toolCall] : [{ type: "text", text: "Checklist updated." }],
@@ -113,6 +116,7 @@ describe("TodoWrite Agent user path", () => {
     };
     (runtime as unknown as { models: { streamSimple: typeof streamSimple } }).models = { streamSimple };
     try {
+      expect((runtime as unknown as { deferredToolNames: Set<string> }).deferredToolNames.has("TodoWrite")).toBe(false);
       await runtime.prompt("Track the implementation steps.", "user-todo-2", "turn-todo-2");
       const write = events.find((event) => event.toolCallId === "write-todos");
       expect(write).toBeDefined();

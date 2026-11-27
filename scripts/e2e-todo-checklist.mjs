@@ -85,13 +85,14 @@ app.whenReady().then(async () => {
         case "create": return (await host.call("session.create", { title: input, mode: "agent" }, 10000)).session.id;
         case "snapshot": return await host.call("todos.get", { sessionId: input }, 10000);
         case "write": {
-          // One real Agent turn: the model discovers TodoWrite, then calls it.
-          // Only the external model stream is replaced; discovery, argument
-          // validation, host RPC, SQLite, notifications and result replay all
-          // run in production code.
+          // One real Agent turn: the model calls TodoWrite directly on the
+          // first round — it ships with the first request as a core tool.
+          // Only the external model stream is replaced; argument validation,
+          // host RPC, SQLite, notifications and result replay all run in
+          // production code.
           const { turnId } = await host.call("session.beginTurn", { sessionId: input.sessionId }, 10000);
           const requests = [];
-          let round = 0, started = null, ended = null;
+          let round = 0, started = null, ended = null, firstCall = null;
           const runtime = new DesktopAgentRuntime({ host, sessionId: input.sessionId, turnId, mode: "agent",
             provider: { id: "todo-fixture", name: "Deterministic Todo fixture", baseUrl: "http://127.0.0.1:1/v1",
               modelId: "local-model", apiKey: "", authKind: "none", supportsReasoning: false, supportedThinkingLevels: ["off"] },
@@ -106,8 +107,9 @@ app.whenReady().then(async () => {
             requests.push({ ...context, messages: [...context.messages] });
             round++;
             const toolCall = round === 1
-              ? { type: "toolCall", id: "discover-todos", name: "ToolSearch", arguments: { query: "TodoWrite" } }
-              : round === 2 ? { type: "toolCall", id: "write-todos", name: "TodoWrite", arguments: todoArgs(input.todos) } : undefined;
+              ? { type: "toolCall", id: "write-todos", name: "TodoWrite", arguments: todoArgs(input.todos) }
+              : undefined;
+            if (round === 1) firstCall = toolCall.name;
             const message = { role: "assistant", api: "openai-completions", provider: "todo-fixture", model: "local-model",
               content: toolCall ? [toolCall] : [{ type: "text", text: "Checklist updated." }],
               usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
@@ -121,6 +123,9 @@ app.whenReady().then(async () => {
           try {
             await runtime.prompt("Track the requested implementation checklist.", "fixture-user-" + Date.now(), turnId);
             if (!started || !ended) throw new Error("The agent turn produced no TodoWrite call");
+            if (firstCall !== "TodoWrite") throw new Error("The first model round did not call TodoWrite directly");
+            const declared = runtime.agent.state.tools.map((tool) => tool.name);
+            if (!declared.includes("TodoWrite")) throw new Error("The first model request did not declare TodoWrite");
             if (ended.isError) throw new Error("Agent TodoWrite did not replay a successful tool result: " + JSON.stringify(ended.result));
             const stored = await host.call("todos.get", { sessionId: input.sessionId }, 10000);
             return { snapshot: stored, toolArgs: started.args, toolResult: ended.result, isError: false };

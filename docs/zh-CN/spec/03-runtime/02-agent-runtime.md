@@ -1079,6 +1079,7 @@ sidecar 构建了一个完整的工具注册表，但它不会序列化每个工
 该模式的核心集：
 
 - Agent：`Read`、`Bash`、`Edit` 和 `Write`（匹配 pi 的编码代理核心）
+- Agent：`TodoWrite`，因为 Agent 提示要求多步骤工作维护会话清单，而模型必须寻找的能力是它不会使用的能力
 - Agent：只要技能目录非空，`Skill` 也在核心集中（D404、ADR 0230）——`# Skills`
   段落与用户输入的 `/skill:<skill-id>` 都要求模型调用它，而模式中缺失的工具根本无法被调用
 - Agent：当子代理目录非空时，`Task`、`TaskWait`、`TaskList` 和

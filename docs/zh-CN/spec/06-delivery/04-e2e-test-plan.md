@@ -6107,7 +6107,7 @@ eleven-tool-round desktop paths are verified by
 - **链接规格：** `03-runtime/03-tools-and-permissions.md`、`03-runtime/04-data-storage.md`、`03-runtime/06-host-rpc-protocol.md`、`04-ux/08-component-spec.md` §9.2/§9.3、ADR 0312。
 - **验收：** C / E / F / Quality / Security。
 - **里程碑：** M6+。
-- **自动化：** `pnpm test:e2e:todos` 走产品路径：真实 Host（SQLite + stdiorpc）、生产 Agent 运行时的 ToolSearch/TodoWrite 调用，以及 transcript 自身的 `ToolRow`，在带应用样式表的隔离 Electron 渲染器中挂载。仅外部模型流和 preload 传输是 fixture，不使用真实 Provider 或用户配置。场景覆盖默认展开、收起在更新后保留、第二次写入不影响第一张卡片、混合取消计数、全部取消标签、清空状态与其 disclosure 目标、截断与单活动项归一化的渲染结果、对另一个会话 turn 的拒绝写入、已结束 turn 的写入、缺少已提交清单的旧行、经生产 store 的旧事件拒绝，以及 Host 重启后的持久性。渲染器契约另由 `apps/desktop/test/tool-presentation.test.mjs` 与 `apps/desktop/test/todo-checklist-card.test.mjs` 覆盖；`runtime-todos.test.ts` 覆盖工具校验与已提交清单经过运行时结果映射后仍完整；host-core `rpc::todos` 测试覆盖提交、拒绝、归一化与上报的清单。
+- **自动化：** `pnpm test:e2e:todos` 走产品路径：真实 Host（SQLite + stdiorpc）、生产 Agent 运行时的首次 `TodoWrite` 声明与直接 `TodoWrite` 调用，以及 transcript 自身的 `ToolRow`，在带应用样式表的隔离 Electron 渲染器中挂载。仅外部模型流和 preload 传输是 fixture，不使用真实 Provider 或用户配置。场景覆盖默认展开、收起在更新后保留、第二次写入不影响第一张卡片、混合取消计数、全部取消标签、清空状态与其 disclosure 目标、截断与单活动项归一化的渲染结果、对另一个会话 turn 的拒绝写入、已结束 turn 的写入、缺少已提交清单的旧行、经生产 store 的旧事件拒绝，以及 Host 重启后的持久性。渲染器契约另由 `apps/desktop/test/tool-presentation.test.mjs` 与 `apps/desktop/test/todo-checklist-card.test.mjs` 覆盖；`runtime-todos.test.ts` 覆盖工具校验与已提交清单经过运行时结果映射后仍完整；host-core `rpc::todos` 测试覆盖提交、拒绝、归一化与上报的清单。
 - **状态：** 构建 Desktop 和 Host 后，针对已构建的改动执行。Host-core 和渲染器定向测试是辅助检查，不能替代 Electron 用户旅程。
 
 ## 8. 可追溯性矩阵

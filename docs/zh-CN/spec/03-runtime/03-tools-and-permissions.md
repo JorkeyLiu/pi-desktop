@@ -11,7 +11,7 @@
 | 主题 | 决定 |
 |---|---|
 | 默认模式 | Agent |
-| Agent 工具 | 读取 / Glob / Grep / 写入 / 编辑 / Bash + 已注册的插件工具 |
+| Agent 工具 | 读取 / Glob / Grep / 写入 / 编辑 / Bash / TodoWrite + 已注册的插件工具 |
 | Plan 工具 | 读取 / Glob / Grep / BrowserPreview / Bash / SubmitPlan + 声明 plan-safe 动作的插件工具 |
 | Goal 工具 | 读取 / Glob / Grep / BrowserPreview / Bash / SubmitGoal + 声明 plan-safe 动作的插件工具 |
 | Plan 和 Goal 硬拒绝 | 写入 / 编辑 / 没有 `planSafeActions` 的插件工具 / 未知工具 / 另一类的提交工具 |
@@ -50,10 +50,12 @@
 ### 2. 1 延期辅助工具（D185、ADR 0048）
 
 按照 pi 的编码代理默认值，第一个 Agent 请求仅激活
-`Read`、`Bash`、`Edit` 和 `Write`； `Glob` 和 `Grep` 按需加载。
+`Read`、`Bash`、`Edit`、`Write` 和 `TodoWrite`； `Glob` 和 `Grep` 按需加载。
 Plan 和 Goal 保留其 read/inspection 核心。`Skill` 有意不作延迟：`/skill:<skill-id>`
 调用会指示模型调用它，而模式中不存在的工具根本无法被调用，因此只要技能目录非空，
-它就会随第一个请求一起发送（D404、ADR 0230）。运行时还注册功能
+它就会随第一个请求一起发送（D404、ADR 0230）。`TodoWrite` 出于同样原因常驻核心：
+Agent 提示要求多步骤工作维护会话清单，因此随 Agent 模式的第一个请求一起发送。
+提示要求的基石工作流能力属于核心；可选插件与领域能力保持延迟，不引入逐工具发现启发。运行时还注册功能
 无需预先发送其完整模式：
 
 - Agent 模式下的 `Glob` 和 `Grep`

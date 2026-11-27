@@ -739,6 +739,10 @@ const AGENT_CORE_TOOL_NAMES = new Set([
   "Edit",
   "Bash",
   ASK_TOOL_NAME,
+  // The agent prompt mandates the session checklist for multi-step work, so
+  // TodoWrite ships with the first request: a capability the model has to go
+  // looking for is one it will not use.
+  "TodoWrite",
   // The slash menu answers a user-invoked `/skill:<skill-id>` with an instruction to
   // call `Skill { id }` on the first turn (ADR 0219), and a capability the
   // model has to go looking for is one it will not use. Registration keeps its
