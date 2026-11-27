@@ -2225,6 +2225,9 @@ sklm: {
       binary: "İkili dosya — önizleme yok",
       tooLarge: "Dosya önizlemek için çok büyük",
       openFailed: "Dosya varsayılan uygulamayla açılamadı.",
+      download: "Kopyasını indir",
+      saveFailed: "Dosyanın kopyası kaydedilemedi.",
+      remoteUnavailable: "Uzak çalışma alanları için harici uygulamada açma kullanılamaz.",
     },
   },
   palette: {

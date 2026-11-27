@@ -2210,6 +2210,9 @@ sklm: {
       binary: "二进制文件，无法预览",
       tooLarge: "文件过大，无法预览",
       openFailed: "无法使用系统默认应用打开文件。",
+      download: "下载副本",
+      saveFailed: "无法保存文件副本。",
+      remoteUnavailable: "远程工作区不支持使用外部应用打开。",
     },
   },
   palette: {

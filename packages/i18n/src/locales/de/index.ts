@@ -2215,7 +2215,10 @@ sklm: {
       "reveal": "Im Finder anzeigen",
       "binary": "Binärdatei – Vorschau nicht verfügbar",
       "tooLarge": "Datei ist zu groß für die Vorschau",
-      "openFailed": "Die Datei konnte nicht mit der Standardanwendung geöffnet werden."
+      "openFailed": "Die Datei konnte nicht mit der Standardanwendung geöffnet werden.",
+      "download": "Kopie herunterladen",
+      "saveFailed": "Die Dateikopie konnte nicht gespeichert werden.",
+      "remoteUnavailable": "Öffnen in einer externen App ist für Remote-Arbeitsbereiche nicht verfügbar."
     }
   },
   "palette": {

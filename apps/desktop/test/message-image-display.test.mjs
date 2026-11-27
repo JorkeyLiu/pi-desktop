@@ -52,7 +52,7 @@ test("user message image attachments render as chips with a hover card", () => {
   assert.match(transcript, /<ImageHoverCard src=\{dataUrl\} anchor=\{anchor\} onDismiss=\{dismiss\} \/>/);
   assert.match(
     transcript,
-    /attachment\.kind === "image" \?/,
+    /attachment\.kind === "image" \|\| isViewableImageAttachment\(attachment\.mimeType, attachment\.name\) \?/,
   );
 });
 

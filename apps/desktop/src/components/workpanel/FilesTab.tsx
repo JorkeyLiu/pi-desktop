@@ -12,6 +12,7 @@ import { useAppStore } from "../../stores/app-store";
 import { api } from "../../lib/api";
 import { Markdown } from "../Markdown";
 import { fileDirOf } from "../../lib/chat-links";
+import { canSaveCopySelected } from "../../lib/save-copy-gate";
 import { Button, cx } from "../ui";
 import { TooltipButton } from "../ui";
 import {
@@ -74,11 +75,13 @@ function isMarkdownPath(path: string): boolean {
   return /\.(?:md|markdown)$/i.test(path);
 }
 
-function isMp4(path: string, mimeType?: string): boolean {
-  return /\.mp4$/i.test(path) || (
+function isExternallyOpenable(path: string, mimeType?: string): boolean {
+  if (/\.(?:mp3|wav|ogg|oga|opus|flac|m4a|aac|mp4|m4v|mov|webm|ogv)$/i.test(path)) return true;
+  if (
     /(?:^|[\\/])attachments[\\/][0-9a-f]{64}$/i.test(path) &&
-    mimeType?.toLowerCase() === "video/mp4"
-  );
+    /^(?:audio|video)\//i.test(mimeType ?? "")
+  ) return true;
+  return false;
 }
 
 function formatSize(size: number): string {
@@ -256,7 +259,7 @@ export function FilesTab() {
     return () => cancelAnimationFrame(frame);
   }, [file, selectedLine]);
 
-  const openMp4 = useCallback(async () => {
+  const openExternal = useCallback(async () => {
     if (!selected || remote) return;
     try {
       await api.fsOpen(selected, selectedMimeType, sessionId);
@@ -264,6 +267,15 @@ export function FilesTab() {
       showToast(t("panel.files.openFailed"), { variant: "error" });
     }
   }, [selected, selectedMimeType, sessionId, showToast, t]);
+
+  const saveCopy = useCallback(async () => {
+    if (!selected) return;
+    try {
+      await api.fsSaveCopy(selected, sessionId);
+    } catch {
+      showToast(t("panel.files.saveFailed"), { variant: "error" });
+    }
+  }, [selected, sessionId, showToast, t]);
 
   // Chat-initiated previews: open the file and expand its ancestor folders
   // so "back" lands on a tree that reveals it. Attachment blobs and absolute
@@ -358,6 +370,9 @@ export function FilesTab() {
   };
 
   if (selected !== null) {
+    // Dead buttons are worse than none: a remote session only keeps save-a-copy
+    // for locally stored attachment blobs, so anything else names the limit.
+    const canSaveCopy = canSaveCopySelected(remote, selected);
     return (
       <div className="file-viewer">
         <div className="file-viewer-header">
@@ -391,7 +406,15 @@ export function FilesTab() {
         </div>
         <div className="file-viewer-body" ref={viewerBodyRef}>
           {fileError ? (
-            <WorkTabEmpty icon={IconFileText} title={t("panel.files.error")} />
+            <WorkTabEmpty icon={IconFileText} title={t("panel.files.error")}>
+              {canSaveCopy ? (
+                <Button type="button" onClick={() => void saveCopy()}>
+                  {t("panel.files.download")}
+                </Button>
+              ) : (
+                <div className="file-tree-note">{t("panel.files.remoteUnavailable")}</div>
+              )}
+            </WorkTabEmpty>
           ) : !file ? (
             <div className="file-tree-note">{t("panel.files.loading")}</div>
           ) :
@@ -416,10 +439,18 @@ export function FilesTab() {
                   : t("panel.files.binary")
               }
             >
-              {!remote && isMp4(selected, selectedMimeType) && (
-                <Button type="button" onClick={() => void openMp4()}>
+              {canSaveCopy ? (
+                <Button type="button" onClick={() => void saveCopy()}>
+                  {t("panel.files.download")}
+                </Button>
+              ) : null}
+              {!remote && isExternallyOpenable(selected, selectedMimeType) && (
+                <Button type="button" onClick={() => void openExternal()}>
                   {t("chat.openFile")}
                 </Button>
+              )}
+              {remote && !canSaveCopy && (
+                <div className="file-tree-note">{t("panel.files.remoteUnavailable")}</div>
               )}
             </WorkTabEmpty>
           )}

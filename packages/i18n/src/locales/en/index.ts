@@ -2239,6 +2239,9 @@ sklm: {
       binary: "Binary file — preview unavailable",
       tooLarge: "File is too large to preview",
       openFailed: "Could not open the file with its default application.",
+      download: "Download a copy",
+      saveFailed: "Could not save a copy of the file.",
+      remoteUnavailable: "Opening in an external app is unavailable for remote workspaces.",
     },
   },
   palette: {

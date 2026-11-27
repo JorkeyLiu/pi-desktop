@@ -5979,15 +5979,19 @@ window; opening a normal panel afterward must still work.
   workspaces.
 - **Expected**: Directories list lazily, folders first, with `.git` /
   `node_modules` / build outputs hidden; text renders with syntax highlight
-  (capped at 5000 lines), images preview inline, binary and oversized files
-  show fallbacks with reveal still available. Traversal attempts are
-  rejected with `INVALID_ARGUMENT`; no workspace → empty state; switching
-  workspaces resets the tree and viewer.
+  (capped at 5000 lines), images preview inline. Binary, oversized, and failed
+  states show fallbacks with Download (a user-picked copy via `fs/saveCopy`)
+  and, for local media-suffix files, Open with the OS handler; reveal stays
+  local-only. On a remote session a file that is not locally stored shows the
+  unavailable explanation instead of a Download button that would fail.
+  Traversal attempts are rejected with `INVALID_ARGUMENT`; no workspace → empty
+  state; switching workspaces resets the tree and viewer.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md` §13a, ADR 0019,
-  `03-runtime/15-workspace-ignore-rules.md`
+  `03-runtime/15-workspace-ignore-rules.md`, `08-meta/decisions-log.md` (D668)
 - **Acceptance**: D (workspace), Security
 - **Milestone**: M5
-- **Status**: Unit-covered (`fs-panel-guard.test.mjs`); full UI scenario Draft
+- **Status**: Unit-covered (`fs-panel-guard.test.mjs`,
+  `attachment-file-actions.test.mjs`, `save-copy-gate.test.mjs`); full UI scenario Draft
 
 ---
 
@@ -10459,11 +10463,17 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
     as files, not images; stale temporary image data is cleared.
   - Non-SVG image attachments are unaffected, and capability metadata stays
     informational (D664 / ADR 0334).
+  - Viewable is wider than model-sendable: the sent SVG transcript attachment
+    still shows the same image hover card as other viewable images and opens
+    the shared image dialog; it is never sent as inline model bytes (Viewing
+    in `03-runtime/svg-attachment-input.md`, D668).
 - **Specs linked**: `03-runtime/svg-attachment-input.md`,
-  `03-runtime/01-ipc-protocol.md` §5.1, `04-ux/08-component-spec.md` §11.7
+  `03-runtime/01-ipc-protocol.md` §5.1, `04-ux/08-component-spec.md` §11.7,
+  `08-meta/decisions-log.md` (D668)
 - **Acceptance**: C (conversation & stream), F (persistence), Quality
 - **Milestone**: M5
-- **Status**: Unit-covered (`svg-attachments.test.mjs`); Desktop E2E Draft
+- **Status**: Unit-covered (`svg-attachments.test.mjs`,
+  `attachment-open-routing.test.mjs`); Desktop E2E Draft
 
 #### E2E-102d: Capability metadata no longer gates a normal image; oversized images fail visibly
 
@@ -15770,8 +15780,8 @@ are withdrawn with ADR 0165.
   1. Reopen the session. Confirm the pasted image renders as a chip like any
      other attachment, continuing the body text instead of heading it, and that
      hovering or focusing it reveals its preview card.
-  2. Click the chip. Confirm the host files viewer opens on that
-     attachment ref and shows the image.
+  2. Click the chip. Confirm the shared in-app image dialog opens on that
+     attachment ref and shows the image, with the message's other viewable images reachable by previous/next.
   3. Send a turn whose assistant markdown includes `![](docs/pixel.png)` and
      `![](/etc/passwd)`. Confirm the workspace image renders inline and the
      outside-root path does not load file bytes.
@@ -15780,14 +15790,15 @@ are withdrawn with ADR 0165.
 - **Expected**:
   - Contained image refs display inline within the 5MB cap.
   - Outside-root paths and mime spoofing of non-image extensions stay closed.
-  - Clicking a resolved image chip opens the host `file:` tab, not the OS
+  - Clicking a resolved image chip opens the shared image dialog (the composer preview contract), not the host `file:` tab or the OS
     handler.
 - **Specs linked**: `03-runtime/01-ipc-protocol.md`,
-  `04-ux/08-component-spec.md` §8.3, ADR 0172, `08-meta/decisions-log.md` (D334)
+  `04-ux/08-component-spec.md` §8.3 / §11.8, ADR 0172, `08-meta/decisions-log.md` (D334, D668)
 - **Acceptance**: C (conversation & stream), D (workspace), Security, Quality
 - **Milestone**: M5
 - **Status**: Unit-covered (`fs-panel-guard.test.mjs`,
-  `message-image-display.test.mjs`); full UI journey Draft (run only in a capable environment when this surface changes)
+  `message-image-display.test.mjs`, `sent-image-viewer.test.mjs`,
+  `attachment-open-routing.test.mjs`); full UI journey Draft (run only in a capable environment when this surface changes)
 
 #### E2E-188: Plugin host APIs list models, read in-flight context, and complete
 

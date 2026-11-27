@@ -2209,6 +2209,9 @@ sklm: {
       binary: "二進位制檔案，無法預覽",
       tooLarge: "檔案過大，無法預覽",
       openFailed: "無法使用系統預設應用程式開啟檔案。",
+      download: "下載副本",
+      saveFailed: "無法儲存檔案副本。",
+      remoteUnavailable: "遠端工作區不支援使用外部應用程式開啟。",
     },
   },
   palette: {

@@ -1,5 +1,6 @@
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { VIEWABLE_IMAGE_MIME } from "@pi-desktop/shared";
 import type { FsEntry, FsImageDataUrlResult, FsReadResult } from "@pi-desktop/shared";
 
 /**
@@ -27,17 +28,7 @@ const IGNORED_NAMES = new Set([
 export const MAX_TEXT_BYTES = 512 * 1024;
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
-export const IMAGE_MIME: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  svg: "image/svg+xml",
-  ico: "image/x-icon",
-  bmp: "image/bmp",
-  avif: "image/avif",
-};
+export const IMAGE_MIME: Record<string, string> = VIEWABLE_IMAGE_MIME;
 
 const ALLOWED_IMAGE_MIME = new Set(Object.values(IMAGE_MIME));
 

@@ -2898,15 +2898,17 @@ MainChat 弥补了缺口。 Maximized/fullscreen 调用保留最新的
   工作区。
 - **预期**：目录懒惰地列出，文件夹首先，带有 `.git` /
   `node_modules` / 隐藏构建输出；文本以语法高亮显示
-  （上限为 5000 行），图像预览内联、二进制和超大文件
-  显示后备并显示仍然可用。遍历尝试是
+  （上限为 5000 行），图像预览内联。binary、超大与失败态显示
+  后备：下载（经 `fs/saveCopy` 由用户自选目标存副本，允许时）与本地
+  媒体后缀文件的系统默认应用打开；显示位置保持仅本地。远端会话中
+  非本地存储的文件显示不可用说明，而不给出必定失败的下载按钮。遍历尝试是
   被 `INVALID_ARGUMENT` 拒绝；无工作空间→空状态；切换
   工作区重置树和查看器。
 - **链接规格**：`03-runtime/01-ipc-protocol.md` §13a、ADR 0019、
-  `03-runtime/15-workspace-ignore-rules.md`
+  `03-runtime/15-workspace-ignore-rules.md`、`08-meta/decisions-log.md`（D668）
 - **验收**：D（工作空间），安全
 - **里程碑**：M5
-- **状态**：单位覆盖（`fs-panel-guard.test.mjs`）；完整的 UI 场景草稿
+- **状态**：单位覆盖（`fs-panel-guard.test.mjs`、`attachment-file-actions.test.mjs`、`save-copy-gate.test.mjs`）；完整的 UI 场景草稿
 
 ---
 
@@ -7923,14 +7925,14 @@ eleven-tool-round desktop paths are verified by
 - **前提条件**：工作区含 `docs/pixel.png` 的 Agent 会话。用户曾粘贴图片，会话 JSONL 存有带 mimeType 的 `attachments/<sha256>` 图片引用。
 - **步骤**：
   1. 重新打开该会话。确认粘贴图片与其它附件一样是芯片、接在正文之后而不是排在正文上方，悬停或聚焦时浮出预览小卡。
-  2. 点击芯片。确认宿主文件查看器打开该附件引用并显示图片。
+  2. 点击芯片。确认应用内共享图片浮层打开该附件引用并显示图片，可用上一步/下一步切到该消息的其它可查看图片。
   3. 发送一回合，助手 Markdown 含 `![](docs/pixel.png)` 和 `![](/etc/passwd)`。确认工作区图片内联显示，工作区外路径不加载文件字节。
   4. 确认 `fs/readImageDataUrl` 在 `ref: "/etc/passwd"` 且 `mimeType: "image/png"` 时返回 `missing`，而不是 data URL。
-- **预期**：受限图片引用在 5MB 上限内内联显示；工作区外路径与对非图片扩展名的 mime 伪造保持关闭；点击已解析图片芯片打开宿主 `file:` 选项卡，而不是系统默认应用。
-- **链接规格**：`03-runtime/01-ipc-protocol.md`、`04-ux/08-component-spec.md` §8.3、ADR 0172、`08-meta/decisions-log.md`（D334）
+- **预期**：受限图片引用在 5MB 上限内内联显示；工作区外路径与对非图片扩展名的 mime 伪造保持关闭；点击已解析图片芯片打开共享图片浮层（输入框预览同一契约），而不是宿主 `file:` 选项卡或系统默认应用。
+- **链接规格**：`03-runtime/01-ipc-protocol.md`、`04-ux/08-component-spec.md` §8.3 / §11.8、ADR 0172、`08-meta/decisions-log.md`（D334、D668）
 - **验收**：C（对话与流）、D（工作区）、安全、质量
 - **里程碑**：M5
-- **状态**：单元已覆盖（`fs-panel-guard.test.mjs`、`message-image-display.test.mjs`）；完整 UI 旅程仍为草稿（除非用户明确要求，否则不要在本地跑 E2E）
+- **状态**：单元已覆盖（`fs-panel-guard.test.mjs`、`message-image-display.test.mjs`、`sent-image-viewer.test.mjs`、`attachment-open-routing.test.mjs`）；完整 UI 旅程仍为草稿（除非用户明确要求，否则不要在本地跑 E2E）
 
 #### E2E-188：插件宿主 API 可列出模型、读取进行中的上下文并发起补全
 

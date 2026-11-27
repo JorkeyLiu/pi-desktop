@@ -2231,6 +2231,9 @@ sklm: {
       binary: "바이너리 파일 — 미리 볼 수 없음",
       tooLarge: "파일이 너무 커서 미리 볼 수 없음",
       openFailed: "기본 앱으로 파일을 열 수 없습니다.",
+      download: "사본 다운로드",
+      saveFailed: "파일 사본을 저장할 수 없습니다.",
+      remoteUnavailable: "원격 작업 공간에서는 외부 앱으로 열 수 없습니다.",
     },
   },
   palette: {

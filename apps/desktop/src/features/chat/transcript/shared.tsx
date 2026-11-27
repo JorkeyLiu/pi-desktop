@@ -437,7 +437,7 @@ export function ToolActionIcon({ action }: { action: ToolAction }) {
 export const PREVIEWABLE_ACTIONS = new Set<ToolAction>(["read", "write", "edit", "fetch"]);
 
 export function fileChipIcon(name: string, kind?: "image" | "file") {
-  if (kind === "image" || /\.(avif|bmp|gif|heic|jpe?g|png|tiff?|webp)$/i.test(name)) {
+  if (kind === "image" || /\.(avif|bmp|gif|heic|jpe?g|png|svg|tiff?|webp)$/i.test(name)) {
     return IconImage;
   }
   if (
@@ -564,10 +564,11 @@ export function SessionLinkChip({ sessionId, ...position }: { sessionId: string 
 }
 
 /**
- * User-message image attachment as the same compact chip as any other file
+ * A user-message attachment as the same compact chip as any other file
  * reference. The host resolves the ref into a bounded data URL that the hover
  * (or focus) card shows; an unresolved load simply keeps the chip. Clicking
- * opens the files viewer on the same contained ref.
+ * a viewable image opens the shared dialog on the same contained ref;
+ * anything else opens the files viewer.
  */
 export function MessageAttachmentImage({
   attachment,

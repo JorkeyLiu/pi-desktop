@@ -2215,7 +2215,10 @@ sklm: {
       "reveal": "Révéler dans le Finder",
       "binary": "Fichier binaire — aperçu indisponible",
       "tooLarge": "Le fichier est trop volumineux pour être prévisualisé",
-      "openFailed": "Impossible d’ouvrir le fichier avec l’application par défaut."
+      "openFailed": "Impossible d’ouvrir le fichier avec l’application par défaut.",
+      "download": "Télécharger une copie",
+      "saveFailed": "Impossible d’enregistrer une copie du fichier.",
+      "remoteUnavailable": "L’ouverture dans une application externe est indisponible pour les espaces de travail distants."
     }
   },
   "palette": {

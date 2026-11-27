@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { useTranslation } from "react-i18next";
-import type { MessageAttachment } from "@pi-desktop/shared";
+import { isViewableImageAttachment, type MessageAttachment } from "@pi-desktop/shared";
 import { isThinkingActive } from "../../../lib/turn-process";
 import type {
   SubagentPromptUnit,
@@ -9,6 +9,9 @@ import type {
 } from "../../../lib/subagent-hydration";
 import { useOpenChatFileRef } from "../../../hooks/use-preview-target";
 import { AssistantErrorMessage, MessageAttachmentImage, ThinkingRow } from "./shared";
+import { ImageViewer } from "../../../components/ImageViewer";
+import { useMessageImageViewer } from "./useMessageImageViewer";
+import { openRoutedAttachment } from "./attachment-open-routing";
 import { ToolRow } from "./ToolRow";
 import { SubagentHandoffCheckpointRow, handoffCheckpoint } from "./SubagentHandoffCheckpoint";
 import { Markdown } from "../../../components/Markdown";
@@ -33,8 +36,27 @@ import { Markdown } from "../../../components/Markdown";
 function SubagentUserAttachments({ attachments }: { attachments?: MessageAttachment[] }) {
   const { t } = useTranslation();
   const openFile = useOpenChatFileRef();
-  const images = (attachments ?? []).filter((attachment) => attachment.kind === "image");
+  const imageViewer = useMessageImageViewer();
+  const images = (attachments ?? []).filter((attachment) =>
+    attachment.kind === "image" || isViewableImageAttachment(attachment.mimeType, attachment.name),
+  );
   if (!images.length) return null;
+  const openAttachmentRef = (
+    path: string,
+    baseDir?: string,
+    mimeType?: string,
+    position?: { line?: number; column?: number },
+  ) => {
+    openRoutedAttachment({
+      viewable: images,
+      path,
+      baseDir,
+      mimeType,
+      position,
+      openViewer: (attachments, index) => imageViewer.open(attachments, index),
+      openInFilesTab: (ref, dir, type, pos) => openFile(ref, dir, type, pos),
+    });
+  };
   return (
     <span
       className="message-attachments"
@@ -45,9 +67,20 @@ function SubagentUserAttachments({ attachments }: { attachments?: MessageAttachm
         <MessageAttachmentImage
           key={`${attachment.ref}:${attachment.name}`}
           attachment={attachment}
-          onOpenFile={openFile}
+          onOpenFile={openAttachmentRef}
         />
       ))}
+      {imageViewer.dialog ? (
+        <ImageViewer
+          items={imageViewer.dialog.items}
+          index={imageViewer.dialog.index}
+          source={imageViewer.dialog.source}
+          onSelect={imageViewer.select}
+          onClose={imageViewer.close}
+          onRetry={imageViewer.retry}
+          restoreFocus={imageViewer.restoreFocus}
+        />
+      ) : null}
     </span>
   );
 }

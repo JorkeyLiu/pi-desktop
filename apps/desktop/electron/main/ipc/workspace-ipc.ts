@@ -1,8 +1,8 @@
 import { BrowserWindow, dialog, shell, type OpenDialogOptions } from "electron";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
+import { copyFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import {
   ErrorCodes,
@@ -39,6 +39,7 @@ import {
   resolveRealOpenablePath,
 } from "@pi-desktop/host-runtime";
 import { openableMp4Path } from "../open-attachment-video";
+import { resolveSaveCopyTarget } from "../save-copy-target";
 import { isChatRefOutsideRoots, resolveChatFileRef } from "../chat-ref-resolve";
 import { getWorkspaceFileIndex } from "../fs-index";
 import {
@@ -991,6 +992,30 @@ export function registerWorkspaceIpc({
     const openError = await shell.openPath(stripWinLongPrefix(openPath));
     if (openError) throw new Error(openError);
     return { ok: true };
+  });
+
+  /**
+   * Save a copy of a file the panel already previews. The user picks the
+   * destination; bytes are copied, never executed. Remote sessions may only
+   * save locally stored files, so this channel never shells out.
+   */
+  handle(IPC.invoke.fsSaveCopy, async (input: { path?: string; sessionId?: string } = {}) => {
+    const resolved = await resolveSaveCopyTarget(String(input.path ?? ""), input.sessionId, {
+      isLocalStoredFile,
+      remoteFileWorkspace,
+      optionalWorkspaceRoot,
+      fsExtraRoots,
+      resolveRealOpenablePath,
+    });
+    if (!resolved.ok) {
+      throw Object.assign(new Error(resolved.reason), {
+        errorCode: ErrorCodes.INVALID_ARGUMENT,
+      });
+    }
+    const picked = await dialog.showSaveDialog({ defaultPath: basename(resolved.target) });
+    if (picked.canceled || !picked.filePath) return { ok: true, saved: false };
+    await copyFile(resolved.target, picked.filePath);
+    return { ok: true, saved: true };
   });
 
   handle(IPC.invoke.fsIndex, async (input: { sessionId?: string } = {}) => {

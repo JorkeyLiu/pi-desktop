@@ -31,6 +31,16 @@ Raster classification, the inline size bound, and the visible refusal of
 over-size/unreadable explicit images retain their behavior under ADR 0334;
 capability metadata is informational and no longer selects a file fallback.
 
+## Viewing
+
+Viewable is wider than model-sendable. The single `VIEWABLE_IMAGE_MIME`
+extension/MIME table in `@pi-desktop/shared` (`attachment-formats.ts`) is the
+rule for "can this be shown as an image": the host files-tab preview and the
+chat transcript route through it, so an SVG attachment gains the same image
+chip, hover card, and shared-dialog click behavior as other viewable formats.
+SVG is still never sent as inline model bytes (see `isSvgAttachment`); the
+transport contract above is unchanged.
+
 ## E2E-ATTACHMENTS-svg-file-fallback
 
 - **Preconditions:** Isolated desktop profile and workspace; local mock provider

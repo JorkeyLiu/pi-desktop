@@ -2215,7 +2215,10 @@ sklm: {
       "reveal": "Mostrar en el Finder",
       "binary": "Archivo binario: vista previa no disponible",
       "tooLarge": "El archivo es demasiado grande para obtener una vista previa",
-      "openFailed": "No se pudo abrir el archivo con la aplicación predeterminada."
+      "openFailed": "No se pudo abrir el archivo con la aplicación predeterminada.",
+      "download": "Descargar una copia",
+      "saveFailed": "No se pudo guardar una copia del archivo.",
+      "remoteUnavailable": "La apertura en una aplicación externa no está disponible para espacios de trabajo remotos."
     }
   },
   "palette": {

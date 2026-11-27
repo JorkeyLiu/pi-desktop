@@ -2165,7 +2165,7 @@ Single message render — either user (plaintext) or assistant (markdown streami
   heading it on a line of its own. Hovering or focusing the chip reveals the
   bounded data URL
   (`fs/readImageDataUrl`) in a read-only preview card above it (below it when
-  the chip sits at the top), and an unresolved load leaves the chip alone. A
+  the chip sits at the top), and an unresolved load leaves the chip alone. Activating a viewable-image chip opens the shared image dialog (the §11.8 modal) on the contained ref at that image's position among the message's viewable images; any other attachment chip keeps the files-tab path. A
   referenced
   conversation (`kind: "session"`) renders as a chat-icon chip labeled with the
   shared reference label and the referenced title; the tooltip and accessible
@@ -4575,6 +4575,7 @@ Anatomy:
   unsupported, oversized, or undecodable images show a retry state and retain
   the draft. Session/project changes or removal of the selected attachment
   dismiss the preview; late reads cannot replace a newer image.
+  The same dialog opens for a sent message's viewable image attachments (§8.3), with the message's viewable images as its navigation set; bytes for the dialog's current image travel through the same contained bridge.
 - Sent template invocations render in the transcript as a monospace command
   chip from the message's `command` field instead of the expanded body.
 - Sent `@path` file references (quoted or unquoted) render as the same compact

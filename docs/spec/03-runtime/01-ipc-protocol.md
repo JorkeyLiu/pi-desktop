@@ -2187,6 +2187,7 @@ Renderer IPC kept for the Plan-safe preview facade and URL fallback:
   `attachments/<sha256>` blob declared as `video/mp4`, the host creates a
   `.mp4` symlink inside its private app-data directory before the OS handoff,
   so the extensionless blob has a media association without copying its bytes.
+- `fs/saveCopy({path, sessionId?})` → `{ok, saved}`. Opens the OS save dialog for a user-picked destination and copies the file's bytes there; nothing is executed. Same realpath containment as `fs/read`, plus a regular-file check. A remote session may only save a locally stored file, otherwise `INVALID_ARGUMENT`; remote saves never touch `shell.openPath`. Renderer-only; not a plugin host API.
 - `fs/resolveRef({ref, sessionId?})` → `FsChatRefResolveResult`
   (for isolated sessions, lookup and file reads use `worktree.location` rather
   than the parent project checkout)
