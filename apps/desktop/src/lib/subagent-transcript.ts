@@ -173,3 +173,33 @@ export function buildSubagentTranscript(
     turns,
   };
 }
+/**
+ * The stable baseline for the delegate tab's working indicator: the newest
+ * child assistant reply's creation time.
+ *
+ * A child `message_start` mints a new assistant id (and `createdAt`) per reply
+ * while `message_update` keeps the same id, so the newest reply's `createdAt`
+ * resets once per reply and never per streaming token. It is data the tab
+ * already holds, so remounting on the same transcript restores the same
+ * elapsed instead of restarting at zero. Before the first reply there is no
+ * baseline here; the caller falls back to the delegation's own timing.
+ */
+export function subagentLatestReplyStartedAt(
+  messages: readonly UiMessage[],
+  delegationId: string,
+): number | undefined {
+  const target = delegationId.trim();
+  if (!target || messages.length === 0) return undefined;
+  const chain = chainCallIds(messages, target);
+  if (chain.size === 0) return undefined;
+  let baseline: number | undefined;
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    const parent = message.parentToolCallId;
+    if (!parent || !chain.has(parent)) continue;
+    const at = Date.parse(message.createdAt ?? "");
+    if (!Number.isFinite(at)) continue;
+    baseline = baseline === undefined ? at : Math.max(baseline, at);
+  }
+  return baseline;
+}

@@ -25,7 +25,9 @@ const {
   createSubagentHistoryEntry,
   findSubagentHistoryEntry,
   subagentHistoryIsFollowing,
+  subagentHistoryLiveTailRows,
   subagentHistoryMessages,
+  subagentHistoryRunPromptVisible,
 } = await import("../src/lib/subagent-history.ts");
 
 const stamp = (index) => new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString();
@@ -64,6 +66,7 @@ const page = (id, messages, options = {}) => ({
     ...(options.messageEnd !== undefined ? { messageEnd: options.messageEnd } : {}),
     ...(options.scope ? { historyScope: options.scope } : {}),
     ...(options.context ? { historyContext: options.context } : {}),
+    ...(options.runs ? { historyRuns: options.runs } : {}),
   },
 });
 
@@ -2023,20 +2026,21 @@ test("a forward page that cannot move the window stops asking", () => {
 });
 
 /*
- * Live rows are the parent's publication tail, not a physical page. They are
- * bounded on their own, and a tail that had to drop its oldest row leaves a
- * hole behind the window: the entry stops claiming the tail instead of drawing
- * a disconnected run as the end of the conversation.
+ * A reader-held range keeps the live tail on its own bound: live rows are the
+ * parent's publication tail, not a physical page. A tail that had to drop its
+ * oldest row leaves a hole behind the held window, so the entry stops
+ * claiming the tail instead of drawing a disconnected run as the end of the
+ * conversation.
  */
-test("a live tail past its own bound stops claiming the tail instead of hiding the hole", () => {
-  const detail = (start, count) => ({
+test("a reader-held range past the live bound stops claiming the tail instead of hiding the hole", () => {
+  const detail = (start, count, hasMoreAfter = true) => ({
     id: "topic-delegate-live-tail",
     title: "Conversation",
     messages: childRows(Array.from({ length: count }, (_, offset) => start + offset)),
     messageStart: start,
     messageEnd: start + count,
     hasMoreBefore: start > 0,
-    hasMoreAfter: false,
+    hasMoreAfter,
     messageCount: 5000,
     historyScope: delegation("d1"),
     historyContext: [taskRow("call-1", "d1")],
@@ -2069,8 +2073,9 @@ test("a live tail past its own bound stops claiming the tail instead of hiding t
     ).map((row) => row.id),
   );
 
-  // Live rows past the window, more than the live tail may hold: the oldest of
-  // them is dropped, so the live run no longer touches the durable window.
+  // Live rows past the held window, more than the live tail may hold: the
+  // oldest of them is dropped, so the live run no longer touches the window
+  // the reader is holding.
   const liveStart = 6 * SUBAGENT_HISTORY_PAGE_SIZE;
   const live = [
     taskRow("call-1", "d1"),
@@ -2098,6 +2103,195 @@ test("a live tail past its own bound stops claiming the tail instead of hiding t
     view.includes(`child-${SUBAGENT_HISTORY_PAGE_SIZE}`) &&
       view.includes(`child-${liveStart - 1}`),
     "the durable window is what the historical view draws",
+  );
+});
+/*
+ * Normal live growth while following stays at the live tail: the window
+ * reaches the scope's tail, so the same 150 live rows that a held range
+ * trims are kept whole here. The newest child stays visible, no latest arrow
+ * is owed, and no historical window is manufactured from the render cap.
+ */
+test("a following tail keeps live growth at the tail instead of manufacturing history", () => {
+  const detail = (start, count) => ({
+    id: "topic-delegate-following-tail",
+    title: "Conversation",
+    messages: childRows(Array.from({ length: count }, (_, offset) => start + offset)),
+    messageStart: start,
+    messageEnd: start + count,
+    hasMoreBefore: start > 0,
+    hasMoreAfter: false,
+    messageCount: 5000,
+    historyScope: delegation("d1"),
+    historyContext: [taskRow("call-1", "d1")],
+  });
+  let entry = createSubagentHistoryEntry("topic-delegate-following-tail", "d1", 1);
+  const tailStart = 5 * SUBAGENT_HISTORY_PAGE_SIZE;
+  entry = applySubagentHistoryPage(entry, detail(tailStart, SUBAGENT_HISTORY_PAGE_SIZE), "initial", 1);
+  for (const start of [4, 3, 2, 1]) {
+    entry = applySubagentHistoryPage(
+      entry,
+      detail(start * SUBAGENT_HISTORY_PAGE_SIZE, SUBAGENT_HISTORY_PAGE_SIZE),
+      "before",
+      2,
+    );
+  }
+  assert.equal(subagentHistoryIsFollowing(entry), true, "the window reaches the tail");
+  const liveStart = 6 * SUBAGENT_HISTORY_PAGE_SIZE;
+  const live = [
+    taskRow("call-1", "d1"),
+    ...childRows(Array.from({ length: 150 }, (_, offset) => liveStart + offset)),
+  ];
+  const published = applySubagentLiveRows(entry, live);
+  assert.ok(published, "live rows of this chain are routed in");
+  assert.equal(
+    published.hasMoreAfter,
+    false,
+    "following growth is not converted into a historical window",
+  );
+  assert.equal(
+    published.messages.length,
+    SUBAGENT_HISTORY_PAGE_SIZE * 5 + 150,
+    "the live tail is kept whole while it is being followed",
+  );
+  assert.equal(subagentHistoryIsFollowing(published), true, "the entry still follows the tail");
+  const view = subagentHistoryMessages(published, []).map((message) => message.id);
+  assert.ok(
+    view.includes(`child-${liveStart + 149}`),
+    "the newest live child stays visible while following",
+  );
+  assert.ok(
+    view.includes(`child-${SUBAGENT_HISTORY_PAGE_SIZE}`),
+    "the durable window stays contiguous with the live tail",
+  );
+});
+
+/**
+ * A following tail that outgrows its live bound re-anchors through the newest
+ * page instead of flipping historical. Live ingest on the following→over-cap
+ * transition schedules one latest refresh; the newest page covers the held
+ * window from its own start, so the entry collapses to that page and settles
+ * bounded at `hasMoreAfter: false` — one contiguous interval, no island rows,
+ * no latest arrow, current window bounds — and a second burst folds into the
+ * durable window the same way instead of accumulating past it.
+ */
+test("an over-cap following tail re-anchors through the newest page", async (t) => {
+  const sessionId = "topic-delegate-follow-reanchor";
+  seedStore(sessionId);
+  const calls = [];
+  const context = [taskRow("call-1", "d1")];
+  // A resumed run opens past the stale 5-row end: its Task prompt must stay
+  // visible once the re-anchor publishes the effective latest bounds.
+  const resumedRuns = [
+    { callId: "call-1", taskMessageId: "call-1-row", taskIndex: 0, firstChildIndex: 0 },
+    { callId: "call-2", taskMessageId: "call-2-row", taskIndex: 100, firstChildIndex: 150 },
+  ];
+  const first = childRows([0, 1, 2, 3, 4]);
+  const burst = (from) => childRows(Array.from({ length: 150 }, (_, offset) => from + offset));
+  let durable = [...first];
+  t.mock.method(api, "getSession", async (id) => {
+    calls.push(id);
+    // The first read opens the tail window; each re-anchor reads the newest
+    // page, which by then names every row the burst streamed.
+    return page(id, durable, {
+      messageStart: 0,
+      messageEnd: durable.length,
+      hasMoreAfter: false,
+      messageCount: durable.length,
+      scope: delegation("d1"),
+      context,
+      runs: resumedRuns,
+    });
+  });
+
+  await useAppStore.getState().ensureSubagentHistory({ sessionId, tabKey: "d1" });
+  const opened = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+  assert.equal(subagentHistoryIsFollowing(opened), true, "the tail window follows");
+  assert.equal(calls.length, 1, "opening the tail is one read");
+
+  async function settledEntry(expectedCalls) {
+    let entry;
+    for (let turn = 0; turn < 100; turn++) {
+      entry = findSubagentHistoryEntry(useAppStore.getState().subagentHistory, sessionId, "d1");
+      if (calls.length === expectedCalls && entry && entry.refreshing !== true) return entry;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    return entry;
+  }
+
+  function streamBurst(rows) {
+    useAppStore.setState({
+      activeSessionId: sessionId,
+      messages: [taskRow("call-1", "d1"), ...rows],
+    });
+  }
+
+  // Round one: 150 live rows stream past the 5-row tail window.
+  const extra = burst(5);
+  durable = [...first, ...extra];
+  streamBurst(extra);
+  const afterFirst = await settledEntry(2);
+  assert.equal(calls.length, 2, "the over-cap transition issues exactly one latest re-anchor");
+  assert.equal(afterFirst.hasMoreAfter, false, "no false latest arrow after the re-anchor");
+  assert.equal(subagentHistoryIsFollowing(afterFirst), true, "the entry still follows the tail");
+  assert.deepEqual(
+    afterFirst.messages.map((message) => message.id),
+    childRows(Array.from({ length: 155 }, (_, index) => index)).map((row) => row.id),
+    "the re-anchored window is one contiguous interval",
+  );
+  assert.equal(afterFirst.messageStart, 0, "the window still opens at the first row");
+  assert.equal(afterFirst.messageEnd, 155, "the window ends at the effective latest page");
+  assert.deepEqual(
+    afterFirst.pages.map((held) => [held.start, held.end]),
+    [[0, 155]],
+    "the same-start overlap collapses to one page record",
+  );
+  assert.equal(
+    subagentHistoryRunPromptVisible(afterFirst, { id: "call-2-row", toolCallId: "call-2" }),
+    true,
+    "a resumed run opening past the old end stays visible",
+  );
+  assert.equal(
+    subagentHistoryRunPromptVisible(afterFirst, { id: "call-1-row", toolCallId: "call-1" }),
+    true,
+    "the original run opening stays visible",
+  );
+  assert.equal(
+    subagentHistoryLiveTailRows(afterFirst).length,
+    0,
+    "the burst folded into the durable window instead of accumulating past it",
+  );
+  assert.deepEqual(afterFirst.livePending, [], "no unconfirmed row is left behind");
+  const firstView = subagentHistoryMessages(afterFirst, []).map((message) => message.id);
+  assert.ok(firstView.includes("child-154"), "the newest live child stays visible");
+
+  // Round two: 150 more stream past the re-anchored window.
+  const more = burst(155);
+  durable = [...first, ...extra, ...more];
+  streamBurst(more);
+  const afterSecond = await settledEntry(3);
+  assert.equal(calls.length, 3, "the next over-cap transition re-anchors once more, not in a storm");
+  assert.equal(afterSecond.hasMoreAfter, false, "still no false latest arrow");
+  assert.deepEqual(
+    afterSecond.messages.map((message) => message.id),
+    childRows(Array.from({ length: 305 }, (_, index) => index)).map((row) => row.id),
+    "repeated bursts stay one contiguous interval",
+  );
+  assert.equal(afterSecond.messageStart, 0, "the window still opens at the first row");
+  assert.equal(afterSecond.messageEnd, 305, "the window reaches the newest row again");
+  assert.deepEqual(
+    afterSecond.pages.map((held) => [held.start, held.end]),
+    [[0, 305]],
+    "repeated bursts collapse to the newest page record",
+  );
+  assert.equal(
+    subagentHistoryRunPromptVisible(afterSecond, { id: "call-2-row", toolCallId: "call-2" }),
+    true,
+    "the resumed run opening stays visible after the second re-anchor",
+  );
+  assert.equal(
+    subagentHistoryLiveTailRows(afterSecond).length,
+    0,
+    "repeated bursts keep folding into the durable window",
   );
 });
 

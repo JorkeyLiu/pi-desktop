@@ -8,11 +8,13 @@ import {
   findSubagentHistoryEntry,
   setSubagentHistoryEntry,
   SUBAGENT_HISTORY_CONTENT_LIMIT,
+  SUBAGENT_HISTORY_LIVE_TAIL_LIMIT,
   SUBAGENT_HISTORY_PAGE_SIZE,
   SUBAGENT_HISTORY_UNAVAILABLE,
   subagentHistoryHasRows,
   subagentHistoryHoldsWindowRow,
   subagentHistoryLiveIds,
+  subagentHistoryLiveTailRows,
   subagentHistoryScope,
   subagentHistoryTouchesLive,
   subagentHistoryLiveTaskState,
@@ -238,8 +240,10 @@ export function createSubagentHistoryRuntime(
    * The one explicit transition to the scope's tail.
    *
    * It reads the newest page and hands it to the window: an answer that
-   * provably overlaps what the entry holds is joined to it, and one that does
-   * not starts a fresh tail window. The entry therefore either stays one
+   * overlaps what the entry holds without reaching past its end is joined to
+   * it, one that covers the held range through a newer end collapses to the
+   * newest page, and one that does not overlap starts a fresh tail window. The
+   * entry therefore either stays one
    * contiguous interval or replaces it — never a target range followed by a
    * distant newest one — and the renderer scrolls to the rows this read
    * selected rather than to the bottom of what it held before.
@@ -506,6 +510,23 @@ export function createSubagentHistoryRuntime(
         if (activated || subagentHistoryLiveTaskState(next, live) === "settled") {
           convergences.push({ sessionId, tabKey: entry.tabKey });
         }
+      }
+      // A following tail that outgrew its live bound is the transition that
+      // used to flip the entry historical. It re-anchors through the newest
+      // page instead: the read joins the window it overlaps or replaces it,
+      // so the entry stays one bounded contiguous interval at the tail, with
+      // no latest arrow for a reader who never navigated away. Reader-held
+      // ranges keep their own trim and never take this path. The in-flight
+      // read dedupes through the existing generation machinery, and only an
+      // ingest that actually routed rows can retrigger it.
+      if (
+        touches &&
+        entry.hasMoreAfter !== true &&
+        next.hasMoreAfter !== true &&
+        next.refreshing !== true &&
+        subagentHistoryLiveTailRows(next).length > SUBAGENT_HISTORY_LIVE_TAIL_LIMIT
+      ) {
+        convergences.push({ sessionId, tabKey: entry.tabKey });
       }
     }
     if (buckets) set({ subagentHistory: buckets });

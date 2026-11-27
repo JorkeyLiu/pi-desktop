@@ -2,6 +2,7 @@ import { toolResultPayload } from "../../lib/tool-presentation";
 import { SubagentStopButton } from "../../features/chat/transcript/SubagentStopButton";
 import {
   collectDelegationStatuses,
+  collectDelegationTimings,
   subagentOutcome,
   type SubagentOutcome,
 } from "../../lib/subagent-topology";
@@ -60,7 +61,10 @@ import {
 } from "../../features/chat/composer/ComposerPrimaryAction";
 import { DisclosureAnchorContext } from "../../lib/disclosure-anchor-context";
 import { TranscriptDisclosureProvider } from "../../features/chat/transcript/disclosure";
-import { buildSubagentTranscript } from "../../lib/subagent-transcript";
+import {
+  buildSubagentTranscript,
+  subagentLatestReplyStartedAt,
+} from "../../lib/subagent-transcript";
 import { subagentHistoryRunPromptVisible } from "../../lib/subagent-history";
 import { handoffCheckpoint } from "../../features/chat/transcript/SubagentHandoffCheckpoint";
 import { WorkingIndicator } from "../../features/chat/transcript/ActivityGroup";
@@ -155,6 +159,10 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
         .filter((message) => message.role === "tool")
         .map((message) => ({ kind: "tool" as const, message })),
     [messages],
+  );
+  const delegationTimings = useMemo(
+    () => collectDelegationTimings(toolItems),
+    [toolItems],
   );
   const statuses = useMemo(
     () => collectDelegationStatuses(toolItems, { turnLive: isRunning }),
@@ -256,6 +264,16 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
     return false;
   }, [activeSessionId, childToolCallIds, pendingAsks, pendingPermissions]);
   const showWorking = running && !waitingOnUser;
+  // The working baseline is the chain's newest child reply: a new reply id
+  // resets it, streaming tokens keep it, and the same transcript restores it
+  // after unmount. Only before the first reply does the delegation's own
+  // timing stand in.
+  const workingStartedAt = useMemo(
+    () =>
+      subagentLatestReplyStartedAt(messages, activeDelegationId) ??
+      delegationTimings.get(activeDelegationId)?.startedAt,
+    [messages, activeDelegationId, delegationTimings],
+  );
   const chainMetrics = useMemo(
     () => aggregateChainMetricsFromMessages(messages, activeDelegationId),
     [messages, activeDelegationId],
@@ -1074,7 +1092,7 @@ function SubagentTranscriptSurface({ delegationId }: { delegationId: string }) {
                 </div>
               )}
 
-              {showWorking ? <WorkingIndicator /> : null}
+              {showWorking ? <WorkingIndicator startedAt={workingStartedAt} /> : null}
             </div>
           </div>
           {/*

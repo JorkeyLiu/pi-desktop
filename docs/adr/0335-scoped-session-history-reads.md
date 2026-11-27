@@ -256,12 +256,16 @@ loaded stays resident, but the reader's own reading window is not one of them.
 A panel keeps the contiguous pages the reader actually read for that chain —
 the same policy as the main transcript, with no row budget — so paging to the
 chain's head and paging back into its tail leaves one interval that holds
-every page read. Only the live tail is bounded on its own, at 100 rows per
+every page read. A reader-held live tail is bounded on its own, at 100 rows per
 chain, because live rows are not a physical page: they carry no bounds and
 never evict a page the reader is reading. Dropping the oldest of them leaves a
 hole between the retained window and what is kept, so the entry stops claiming
 the tail instead of presenting the remainder as contiguous — `hasMoreAfter`
-stays true and the explicit latest read refills it. One session keeps its 12
+stays true and the explicit latest read refills it. While the reader follows,
+the live tail is not trimmed: growth stays whole at the tail with no
+`hasMoreAfter` flip, and when the tail outgrows its 100-row live bound, live
+ingest re-anchors through the newest page so the entry settles bounded and
+contiguous with no flip. One session keeps its 12
 most recently read chains; eviction drops a whole chain, while no read inside a
 chain drops a page the reader read.
 

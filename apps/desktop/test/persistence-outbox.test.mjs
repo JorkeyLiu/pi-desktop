@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { PersistenceOutbox } from "../electron/main/persistence-outbox.ts";
-import { readMainSource } from "./helpers/main-source.mjs";
+import { readMainModule, readMainSource } from "./helpers/main-source.mjs";
 
 const silent = () => undefined;
 
@@ -15,7 +15,10 @@ test("session delete drops the outbox for that session (D318)", async () => {
 
 test("handshake drains the outbox before the renderer can hydrate (D327)", async () => {
   const main = await readMainSource();
-  assert.match(main, /await persistenceOutbox\.flush\(\(\) => host\)/);
+  // The handshake drain passes the runtime host, not the IPC request host:
+  // the truncate boundary it used to share this assertion with now flushes,
+  // cuts, then drops the session queue through dropSession instead.
+  assert.match(main, /await persistenceOutbox\.flush\(\(\) => runtimeState\.host\)/);
   assert.doesNotMatch(main, /void persistenceOutbox\.flush\(\(\) => host\)/);
   assert.match(main, /session\.recoverInflightMessages/);
 });
@@ -54,6 +57,65 @@ test("deleting a session drops its queued outbox entries (D318)", async () => {
   assert.deepEqual(
     stored.map((entry) => entry.sessionId),
     ["keep"],
+  );
+});
+test("truncate replacement drops queued appends the flush could not write", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-outbox-truncate-"));
+  const outbox = new PersistenceOutbox(dir, silent);
+  // The host is down, so the flush a truncate boundary runs first cannot
+  // write: the old tail stays queued behind it.
+  await outbox.enqueue(
+    {
+      key: "message:trunc:old-assistant",
+      sessionId: "trunc",
+      message: { id: "old-assistant", role: "assistant", content: "discarded" },
+    },
+    () => null,
+  );
+  await outbox.enqueue(
+    {
+      key: "message:trunc:old-tool",
+      sessionId: "trunc",
+      message: { id: "old-tool", role: "tool", content: "discarded" },
+    },
+    () => null,
+  );
+  await outbox.enqueue(
+    {
+      key: "message:other:live",
+      sessionId: "other",
+      message: { id: "live", role: "user", content: "keep" },
+    },
+    () => null,
+  );
+  assert.equal(outbox.size(), 3);
+  await outbox.prepareSessionReplacement("trunc", () => null);
+  assert.equal(outbox.size(), 1, "only the truncated session's queue is dropped");
+  const stored = JSON.parse(await readFile(join(dir, "session-message-outbox.json"), "utf8"));
+  assert.deepEqual(
+    stored.map((entry) => entry.sessionId),
+    ["other"],
+    "a late drain can no longer recreate the discarded tail",
+  );
+});
+
+test("a failed truncate keeps the session queue instead of dropping it first", async () => {
+  const agentIpc = await readMainModule("ipc/agent-ipc.ts");
+  // The boundary under test: the edit/retry prompt's truncate block.
+  const block = agentIpc.slice(
+    agentIpc.indexOf("if (truncateFromMessageId || truncateBefore !== undefined)"),
+    agentIpc.indexOf("sidecar.clearProjectInstructionRoot(req.sessionId)"),
+  );
+  assert.ok(block.length > 0, "the truncate block is found");
+  const flushed = block.indexOf("persistenceOutbox.flush(");
+  const cut = block.indexOf("\"session.truncateFrom\"");
+  const dropped = block.indexOf("persistenceOutbox.dropSession(req.sessionId)");
+  assert.ok(flushed >= 0 && cut > flushed, "writable appends land before the cut");
+  assert.ok(dropped > cut, "the session queue is dropped only after the cut lands");
+  assert.equal(
+    block.indexOf("prepareSessionReplacement"),
+    -1,
+    "no drop runs before the fallible cut",
   );
 });
 

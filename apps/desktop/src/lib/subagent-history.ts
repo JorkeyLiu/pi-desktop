@@ -574,6 +574,19 @@ export function subagentHistoryHoldsWindowRow(
 }
 
 /**
+ * Live rows the entry holds past its reading window: the parent's publication
+ * tail no durable page has confirmed yet.
+ *
+ * The same derivation the reader-held trim bounds. A following tail reports
+ * its whole live tail here, so live ingest can tell the transition that
+ * outgrows the bound from ordinary growth.
+ */
+export function subagentHistoryLiveTailRows(entry: SubagentHistoryEntry): UiMessage[] {
+  const pageIds = new Set((entry.pages ?? []).flatMap((page) => page.ids));
+  return entry.messages.filter((row) => !pageIds.has(row.id));
+}
+
+/**
  * Bound the live tail without touching the reading window.
  *
  * Live rows are the parent's publication tail: they carry no physical page
@@ -589,8 +602,7 @@ function limitLiveRows(
   limit: number,
 ): SubagentHistoryEntry {
   if (limit <= 0) return entry;
-  const pageIds = new Set((entry.pages ?? []).flatMap((page) => page.ids));
-  const live = entry.messages.filter((row) => !pageIds.has(row.id));
+  const live = subagentHistoryLiveTailRows(entry);
   if (live.length <= limit) return entry;
   const dropped = new Set(live.slice(0, live.length - limit).map((row) => row.id));
   return {
@@ -763,21 +775,27 @@ export function applySubagentLiveRows(
     entry.liveDuringRead !== liveDuringRead ||
     entry.finalized;
   if (!changed) return undefined;
-  return limitLiveRows(
-    {
-      ...entry,
-      messages,
-      context,
-      aliases,
-      livePending,
-      liveDuringRead,
-      status: messages.length || context.length ? "ready" : entry.status,
-      // Live rows arrived after the last durable read: the entry may miss
-      // events, so a reopen reads the tail again instead of trusting it.
-      finalized: false,
-    },
-    limit,
-  );
+  const next = {
+    ...entry,
+    messages,
+    context,
+    aliases,
+    livePending,
+    liveDuringRead,
+    status: messages.length || context.length ? "ready" : entry.status,
+    // Live rows arrived after the last durable read: the entry may miss
+    // events, so a reopen reads the tail again instead of trusting it.
+    finalized: false,
+  };
+  // A window at the tail is the live tail: trimming it would manufacture a
+  // historical window — and its jump control — for a reader who never
+  // navigated away. Only a reader-held range keeps the live tail on its own
+  // bound; it stops claiming the tail once the trim leaves a hole behind
+  // the window it is holding. A following tail that outgrows the bound
+  // re-anchors through the newest page instead (see `ingest`), so the entry
+  // stays one bounded contiguous interval at the tail.
+  if (next.hasMoreAfter !== true) return next;
+  return limitLiveRows(next, limit);
 }
 
 /** The page merged over what the entry already holds, newest value per row. */
@@ -855,8 +873,9 @@ function placeLiveRows(
  * never appended to a distant range. `initial` adopts the first durable page,
  * `before` grows the window backwards, `after` grows it forwards, `focus`
  * replaces the window with the page around a search target, and `latest`
- * replaces it with the scope's newest page unless that page provably overlaps
- * the held range.
+ * replaces it with the scope's newest page unless that page overlaps the held
+ * range without reaching past its end — an interior or same-range overlap
+ * joins the window (or leaves it, refreshing rows) instead.
  *
  * A page that cannot move the window's edge ends that direction instead: rows
  * keep their physical ranges, so appending an unjoined page is exactly how two
@@ -886,7 +905,17 @@ export function applySubagentHistoryPage(
     (direction === "latest" &&
       (windowStart === undefined ||
         windowEnd === undefined ||
-        page.start >= windowEnd));
+        page.start >= windowEnd ||
+        // A newest page that opens at or before the window's own opening and
+        // reaches past its end covers the whole held range (a same-start
+        // overlap after a resume, or one page for a short chain): joining
+        // would keep both page records and publish the stale shorter end,
+        // hiding rows the page already names. Collapse to the effective
+        // latest page instead; live rows the reader is watching still
+        // survive through `placeLiveRows` below. A same-range re-read ends
+        // exactly at the held end, so it keeps the joining path — a settled
+        // live row the page cannot name yet still survives the refresh.
+        (page.start <= windowStart && page.end > windowEnd)));
   // A joining answer has to move the edge the read asked for. A backward answer
   // that starts at or below the window's own oldest bound did not move it, and
   // a forward answer whose newest selected row is still inside the window did

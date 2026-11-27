@@ -8021,9 +8021,12 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   latest read — or a search focus — is what selects a new window. A
   post-settle prepend hold keeps the fragment the reader was reading, including
   when `content-visibility` skipped laying it out.
-- Only the live tail stays bounded on its own at 100 rows per chain; when it
-  trims, the window stops claiming the tail (`hasMoreAfter` true) and the
-  explicit latest read refills it. Live rows the reader is already watching
+- A reader-held live tail stays bounded on its own at 100 rows per chain; when
+  it trims, the window stops claiming the tail (`hasMoreAfter` true) and the
+  explicit latest read refills it. A following tail is not trimmed: while the
+  reader follows, live growth stays whole at the tail with no latest arrow; when
+  the tail outgrows its 100-row live bound, live ingest re-anchors through the
+  newest page, so the entry settles bounded and contiguous with no flip. Live rows the reader is already watching
   survive every replacement, confirmed by the page or keeping the place their
   announcement order gave them relative to the rows the page names.
 - Remote and native backends drop the delegation scope, so their answers stay

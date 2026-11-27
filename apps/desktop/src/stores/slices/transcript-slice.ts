@@ -203,6 +203,7 @@ export function createTranscriptSlice({
           attachments: promptAttachments,
           truncateFromMessageId,
         });
+        get().returnToLatestTranscript(sessionId);
         return true;
       } catch (error) {
         try {
@@ -294,6 +295,7 @@ export function createTranscriptSlice({
           attachments: promptAttachments,
           truncateFromMessageId,
         });
+        get().returnToLatestTranscript(sessionId);
       } catch (error) {
         set((current) => ({
           isRunning:

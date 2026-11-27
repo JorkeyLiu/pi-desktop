@@ -2440,8 +2440,11 @@ validation still needed.
   bottom continues the same contiguous interval one page in that direction,
   exactly as the main transcript pages. One read is the local selected-row
   page policy — 500 selected child rows, used identically by initial, latest,
-  older and newer reads — so the request cadence follows that policy while the
-  live tail's separate 100-row cap and the per-row content limit stay unchanged.
+  older and newer reads — so the request cadence follows that policy while a
+  reader-held live tail's separate 100-row cap and the per-row content limit
+  stay unchanged (a following tail keeps live growth at the tail, outside that
+  cap; when the tail outgrows its live bound, live ingest re-anchors through
+  the newest page so the window settles bounded and contiguous with no flip).
   The window keeps every page it read, with no 400-row budget: paging to the
   head leaves every child row of the fixture's chain (3500 rendered, 2101
   real-host) in one interval starting at `child-1-0`, `hasMoreBefore` false,

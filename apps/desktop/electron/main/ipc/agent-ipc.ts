@@ -542,6 +542,10 @@ export function registerAgentIpc({
           ...(truncateFromMessageId ? { fromMessageId: truncateFromMessageId } : {}),
           ...(truncateBefore !== undefined ? { truncateBefore } : {}),
         });
+        // Leftovers of the discarded branch are dropped only after the cut
+        // lands: a failed truncate keeps the queue, so the retry still finds
+        // the rows the fence admitted.
+        await persistenceOutbox.dropSession(req.sessionId);
         const revision = truncated.revision;
         if (
           revision?.rootUserId &&
