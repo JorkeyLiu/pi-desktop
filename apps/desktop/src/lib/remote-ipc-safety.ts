@@ -11,6 +11,8 @@ const localOnly = new Set<string>([
   IPC.invoke.workspaceReviewFiles, IPC.invoke.workspaceReviewRollbackFile,
   IPC.invoke.extensionsCommandRun, IPC.invoke.browserNavigate,
   IPC.invoke.fsResolveRef,
+  IPC.invoke.fsReadUserLink,
+  IPC.invoke.fsSaveCopyUserLink,
 ]);
 
 /** Defense in depth for keyboard/service callers that bypass disabled controls. */

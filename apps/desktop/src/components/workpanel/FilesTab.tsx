@@ -171,8 +171,14 @@ export function FilesTab() {
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedMimeType, setSelectedMimeType] = useState<string | undefined>();
   const [selectedLine, setSelectedLine] = useState<number | undefined>();
+  // ADR 0342: user-link mode opens one user-clicked absolute file outside
+  // every containment root through the user-link channels. Only the chat
+  // file-ref entry sets it (via the file tab's `userLink` flag); tree
+  // browsing never enters it.
+  const [selectedUserLink, setSelectedUserLink] = useState(false);
   const [file, setFile] = useState<FsReadResult | null>(null);
   const [fileError, setFileError] = useState(false);
+  const [fileErrorCode, setFileErrorCode] = useState<string | null>(null);
   const viewerBodyRef = useRef<HTMLDivElement>(null);
   const fileGeneration = useRef(0);
 
@@ -189,8 +195,10 @@ export function FilesTab() {
     setSelected(null);
     setSelectedMimeType(undefined);
     setSelectedLine(undefined);
+    setSelectedUserLink(false);
     setFile(null);
     setFileError(false);
+    setFileErrorCode(null);
   }, [root]);
 
   const loadDir = useCallback(
@@ -229,20 +237,29 @@ export function FilesTab() {
   );
 
   const openFile = useCallback(
-    async (rel: string, mimeType?: string, position?: { line?: number; column?: number }) => {
+    async (rel: string, mimeType?: string, position?: { line?: number; column?: number }, userLink?: boolean) => {
       const request = ++fileGeneration.current;
       setSelected(rel);
       setSelectedMimeType(mimeType);
       setSelectedLine(position?.line);
+      setSelectedUserLink(userLink === true);
       setFile(null);
       setFileError(false);
+      setFileErrorCode(null);
       try {
-        const result = await api.fsRead(rel, mimeType, sessionId);
+        // ADR 0342: a user-link file travels outside every containment root,
+        // so it reads through the dedicated user-link capability — never the
+        // contained channel, which would refuse it and report a restriction.
+        const result = userLink
+          ? await api.fsReadUserLink(rel, mimeType, sessionId)
+          : await api.fsRead(rel, mimeType, sessionId);
         if (request !== fileGeneration.current || scopeRef.current.root !== root || scopeRef.current.sessionId !== sessionId) return;
         setFile(result);
-      } catch {
+      } catch (error) {
         if (request !== fileGeneration.current || scopeRef.current.root !== root || scopeRef.current.sessionId !== sessionId) return;
         setFileError(true);
+        const code = (error as { code?: unknown } | null)?.code;
+        setFileErrorCode(typeof code === "string" ? code : null);
       }
     },
     [root, sessionId],
@@ -260,22 +277,28 @@ export function FilesTab() {
   }, [file, selectedLine]);
 
   const openExternal = useCallback(async () => {
-    if (!selected || remote) return;
+    // ADR 0342: external open is not offered for user-link files — the
+    // contained `fsOpen` channel cannot address them, and routing them there
+    // would only fail with a restriction. The button stays hidden instead.
+    if (!selected || remote || selectedUserLink) return;
     try {
       await api.fsOpen(selected, selectedMimeType, sessionId);
     } catch {
       showToast(t("panel.files.openFailed"), { variant: "error" });
     }
-  }, [selected, selectedMimeType, sessionId, showToast, t]);
+  }, [selected, selectedMimeType, sessionId, selectedUserLink, showToast, t]);
 
   const saveCopy = useCallback(async () => {
     if (!selected) return;
     try {
-      await api.fsSaveCopy(selected, sessionId);
+      // ADR 0342: a user-link download re-validates the source through the
+      // same gate as the read — renderer bytes are never written.
+      if (selectedUserLink) await api.fsSaveCopyUserLink(selected, sessionId);
+      else await api.fsSaveCopy(selected, sessionId);
     } catch {
       showToast(t("panel.files.saveFailed"), { variant: "error" });
     }
-  }, [selected, sessionId, showToast, t]);
+  }, [selected, selectedUserLink, sessionId, showToast, t]);
 
   // Chat-initiated previews: open the file and expand its ancestor folders
   // so "back" lands on a tree that reveals it. Attachment blobs and absolute
@@ -304,7 +327,7 @@ export function FilesTab() {
     void openFile(path, fileRequest.mimeType, {
       line: fileRequest.line,
       column: fileRequest.column,
-    });
+    }, fileRequest.userLink);
   }, [fileRequest, root, loadDir, openFile]);
 
   const renderDir = (rel: string, depth: number): React.ReactNode => {
@@ -372,7 +395,19 @@ export function FilesTab() {
   if (selected !== null) {
     // Dead buttons are worse than none: a remote session only keeps save-a-copy
     // for locally stored attachment blobs, so anything else names the limit.
-    const canSaveCopy = canSaveCopySelected(remote, selected);
+    // A user-link file (ADR 0342) is always local — a remote session never
+    // opens one — so download stays available while reveal/open stay hidden.
+    const canSaveCopy = selectedUserLink ? !remote : canSaveCopySelected(remote, selected);
+    // ADR 0342: a user-link read failure names what actually happened
+    // (missing / not a regular file / read failure) instead of the generic
+    // panel error; contained reads keep their existing copy.
+    const userLinkErrorTitle = !selectedUserLink || !fileError
+      ? null
+      : fileErrorCode === "NOT_FOUND"
+        ? t("chat.fileUserLinkMissing", { name: selected })
+        : fileErrorCode === "INVALID_ARGUMENT"
+          ? t("chat.fileUserLinkNotFile", { name: selected })
+          : t("chat.fileUserLinkFailed", { name: selected });
     return (
       <div className="file-viewer">
         <div className="file-viewer-header">
@@ -385,7 +420,10 @@ export function FilesTab() {
               setSelected(null);
               setSelectedMimeType(undefined);
               setSelectedLine(undefined);
+              setSelectedUserLink(false);
               setFile(null);
+              setFileError(false);
+              setFileErrorCode(null);
             }}
           >
             <IconChevronLeft size={14} />
@@ -394,7 +432,7 @@ export function FilesTab() {
             {selected}
           </span>
           {file && <span className="file-viewer-size">{formatSize(file.size)}</span>}
-          {!remote ? <TooltipButton
+          {!remote && !selectedUserLink ? <TooltipButton
             type="button"
             className="icon-btn icon-btn-square"
             tooltip={t("panel.files.reveal")}
@@ -406,7 +444,7 @@ export function FilesTab() {
         </div>
         <div className="file-viewer-body" ref={viewerBodyRef}>
           {fileError ? (
-            <WorkTabEmpty icon={IconFileText} title={t("panel.files.error")}>
+            <WorkTabEmpty icon={IconFileText} title={userLinkErrorTitle ?? t("panel.files.error")}>
               {canSaveCopy ? (
                 <Button type="button" onClick={() => void saveCopy()}>
                   {t("panel.files.download")}
@@ -444,7 +482,7 @@ export function FilesTab() {
                   {t("panel.files.download")}
                 </Button>
               ) : null}
-              {!remote && isExternallyOpenable(selected, selectedMimeType) && (
+              {!remote && !selectedUserLink && isExternallyOpenable(selected, selectedMimeType) && (
                 <Button type="button" onClick={() => void openExternal()}>
                   {t("chat.openFile")}
                 </Button>

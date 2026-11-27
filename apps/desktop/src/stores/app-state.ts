@@ -442,6 +442,8 @@ export type AppState = {
     mimeType?: string;
     line?: number;
     column?: number;
+    /** Mirrors the opening file tab's user-link mode (ADR 0342). */
+    userLink?: boolean;
   } | null;
   /**
    * Open (or activate) the transcript tab of one delegated subagent, labelling
@@ -485,6 +487,7 @@ export type AppState = {
     path: string,
     mimeType?: string,
     position?: { line?: number; column?: number },
+    options?: { userLink?: boolean },
   ) => void;
   openUrlInWorkPanel: (url: string) => void;
   updateBrowserWorkPanelTab: (state: BrowserState) => void;

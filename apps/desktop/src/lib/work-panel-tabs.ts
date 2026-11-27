@@ -11,6 +11,12 @@ export type WorkPanelTab = {
   label?: string;
   kind: WorkPanelTabKind;
   resource?: string;
+  /**
+   * User-link mode (ADR 0342): the file was opened by an explicit user click
+   * on an absolute path outside every containment root. Only the chat
+   * file-ref opener sets it; the files tab reads user-link channels for it.
+   */
+  userLink?: boolean;
   /** Guest URL or workspace path for the Browser plugin view (D333). */
   location?: string;
   /** Stored attachment mimeType for extension-less `attachments/<sha256>` images. */
@@ -40,6 +46,8 @@ export type WorkPanelContext = WorkPanelTabsState & {
     mimeType?: string;
     line?: number;
     column?: number;
+    /** Mirrors the opening file tab's user-link mode (ADR 0342). */
+    userLink?: boolean;
   } | null;
 };
 
@@ -55,6 +63,7 @@ export function createWorkPanelFileRequest(
     ...(tab.mimeType ? { mimeType: tab.mimeType } : {}),
     ...(tab.line != null ? { line: tab.line } : {}),
     ...(tab.column != null ? { column: tab.column } : {}),
+    ...(tab.userLink ? { userLink: true as const } : {}),
   };
 }
 /**
@@ -490,12 +499,25 @@ export function normalizeWorkPanelFilePath(path: string): string {
   return absolute ? `/${normalized}` : normalized;
 }
 
+/**
+ * A Windows-absolute spelling: drive-absolute (`C:\…` / `C:/…`) or UNC
+ * (`\\host\share…`, optionally already slash-folded to `//host/share…`).
+ * Used only to keep a user-link tab's address byte-identical (F-01, ADR 0342):
+ * segment normalization would fold a UNC `\\` prefix into a broken path.
+ */
+export function isWindowsAbsolutePath(path: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\") || path.startsWith("//");
+}
+
 export function fileWorkPanelTab(
   path: string,
   mimeType?: string,
   position?: { line?: number; column?: number },
+  options?: { userLink?: boolean },
 ): WorkPanelTab {
-  const resource = normalizeWorkPanelFilePath(path);
+  // A user-link tab keeps a Windows-absolute spelling verbatim so a UNC
+  // prefix survives; every other tab normalizes segments as before.
+  const resource = options?.userLink && isWindowsAbsolutePath(path) ? path : normalizeWorkPanelFilePath(path);
   return {
     id: `file:${resource}`,
     kind: "file",
@@ -503,6 +525,7 @@ export function fileWorkPanelTab(
     ...(mimeType ? { mimeType } : {}),
     ...(position?.line != null ? { line: position.line } : {}),
     ...(position?.column != null ? { column: position.column } : {}),
+    ...(options?.userLink ? { userLink: true as const } : {}),
   };
 }
 

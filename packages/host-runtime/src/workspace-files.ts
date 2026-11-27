@@ -1,4 +1,5 @@
-import { readFile, readdir, realpath, stat } from "node:fs/promises";
+ import { constants } from "node:fs";
+ import { open, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { VIEWABLE_IMAGE_MIME } from "@pi-desktop/shared";
 import type { FsEntry, FsImageDataUrlResult, FsReadResult } from "@pi-desktop/shared";
@@ -388,3 +389,119 @@ export async function readOpenableImage(
     return { kind: "missing", errorCode: "FILE_NOT_FOUND" };
   }
 }
+ /**
+  * User-link file access (ADR 0342): the user clicked an absolute local path
+  * in chat, and the click itself authorizes opening that exact file — even
+  * outside every containment root. This never consults a workspace root, a
+  * scratch store, or a deny list, and it must never be reachable from agent
+  * tools, plugin APIs, or reference completion: only the main-process
+  * user-link IPC channels call it.
+  *
+  * The error carries a machine-readable `errorCode` (`NOT_FOUND` when the
+  * path names nothing, `INVALID_ARGUMENT` when it names something that is
+  * not an absolute regular-file path) so the renderer can report each
+  * failure accurately instead of reusing the containment copy.
+  */
+ function userLinkError(code: "NOT_FOUND" | "INVALID_ARGUMENT", message: string): Error {
+   return Object.assign(new Error(message), { errorCode: code });
+ }
+
+ /** Absolute local path, or a rejection — shorthands are never guessed. */
+ function assertUserLinkAbsolute(path: string): string {
+   const raw = String(path ?? "").trim();
+   if (!raw || raw.includes(" ") || raw.startsWith("~") || !isAbsolute(raw)) {
+     throw userLinkError("INVALID_ARGUMENT", "user-link path must be a local absolute path");
+   }
+   return raw;
+ }
+
+ /**
+  * Classify a failed user-link open: an existing non-regular file (socket,
+  * device, or anything else the open refused) stays `INVALID_ARGUMENT`, while
+  * a path that names nothing is `NOT_FOUND`.
+  */
+ async function classifyUserLinkOpenFailure(real: string): Promise<Error> {
+   try {
+     if (!(await stat(real)).isFile()) {
+       return userLinkError("INVALID_ARGUMENT", "user-link path is not a regular file");
+     }
+   } catch {
+     // Falls through to NOT_FOUND below.
+   }
+   return userLinkError("NOT_FOUND", "no file exists at the linked path");
+ }
+
+ /**
+  * Resolve a user-clicked absolute path to the canonical regular file to
+  * read or copy. `realpath` follows symlinks exactly as the user asked — the
+  * read addresses the link target — and the final target must exist. The
+  * file-kind verdict itself always comes from an open fd's `fstat` in the
+  * callers below, never from this `realpath` probe alone.
+  */
+ export async function resolveUserLinkTarget(path: string): Promise<string> {
+   const absolute = assertUserLinkAbsolute(path);
+   try {
+     return await realpath(absolute);
+   } catch {
+     throw userLinkError("NOT_FOUND", "no file exists at the linked path");
+   }
+ }
+
+ /**
+  * Read one user-clicked absolute file for in-app preview. Classification and
+  * resource caps match the contained `previewFile` table (text ≤512 KiB,
+  * image data URL ≤5 MiB, `binary`, `tooLarge`): those are resource bounds,
+  * not content filtering.
+  *
+  * The path is opened with `O_NONBLOCK` so a FIFO can never stall the IPC
+  * handler waiting for a writer, and the open fd is `fstat`d before any byte
+  * is read, so a directory, FIFO, socket, or device is refused even if it
+  * appeared between `realpath` and `open`. Reads are bounded to cap + 1, so
+  * a file that grew past its `fstat` size still reports `tooLarge` instead
+  * of loading unbounded bytes.
+  */
+ export async function readUserLinkFile(path: string, mimeType?: string): Promise<FsReadResult> {
+   const real = await resolveUserLinkTarget(path);
+   const imageMime = imageMimeFor(path, mimeType);
+   const cap = imageMime ? MAX_IMAGE_BYTES : MAX_TEXT_BYTES;
+   const handle = await open(real, constants.O_RDONLY | constants.O_NONBLOCK).catch(
+     async () => {
+       throw await classifyUserLinkOpenFailure(real);
+     },
+   );
+   try {
+     const info = await handle.stat();
+     if (!info.isFile()) {
+       throw userLinkError("INVALID_ARGUMENT", "user-link path is not a regular file");
+     }
+     if (info.size > cap) {
+       return { kind: "tooLarge", size: info.size };
+     }
+     const chunks: Buffer[] = [];
+     let total = 0;
+     const slab = Buffer.alloc(64 * 1024);
+     for (;;) {
+       const { bytesRead } = await handle.read(slab, 0, slab.length, null);
+       if (bytesRead === 0) break;
+       total += bytesRead;
+       if (total > cap) {
+         return { kind: "tooLarge", size: info.size };
+       }
+       chunks.push(Buffer.from(slab.subarray(0, bytesRead)));
+     }
+     const buffer = Buffer.concat(chunks, total);
+     if (imageMime) {
+       return {
+         kind: "image",
+         dataUrl: `data:${imageMime};base64,${buffer.toString("base64")}`,
+         size: buffer.length,
+       };
+     }
+     if (looksBinary(buffer)) {
+       return { kind: "binary", size: info.size };
+     }
+     return { kind: "text", content: buffer.toString("utf8"), size: info.size };
+   } finally {
+     await handle.close().catch(() => undefined);
+   }
+ }

@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { isActiveInProject } from "@pi-desktop/shared";
 import { useAppStore } from "../stores/app-store";
 import { api } from "../lib/api";
-import { isHtmlFilePath, toWorkspaceRel, type ChatPreviewTarget } from "../lib/chat-links";
+import { isAbsoluteFilePath, isHtmlFilePath, toWorkspaceRel, type ChatPreviewTarget } from "../lib/chat-links";
 import { openHttpUrl } from "../lib/open-http-url";
 import {
   BROWSER_PLUGIN_TAB,
@@ -35,10 +35,19 @@ export function useOpenPreviewTarget() {
     (target: ChatPreviewTarget) => {
       if (!localToolsAllowed) return;
       if (target.kind === "file") {
-        return openFileRef(target.path, undefined, undefined, {
-          line: target.line,
-          column: target.column,
-        });
+        // Tool rows name agent-chosen paths, so they never open through the
+        // chat user-link capability (ADR 0342): an outside-roots absolute path
+        // keeps reporting the access limit here.
+        return openFileRef(
+          target.path,
+          undefined,
+          undefined,
+          {
+            line: target.line,
+            column: target.column,
+          },
+          { allowUserLink: false },
+        );
       }
       if (target.kind === "session") {
         void useAppStore.getState().selectSession(target.sessionId).catch(() => undefined);
@@ -53,6 +62,29 @@ export function useOpenPreviewTarget() {
 /** Dot-relative references resolve against the markdown file being viewed. */
 function isDotRelative(path: string): boolean {
   return path.startsWith("./") || path.startsWith("../");
+}
+
+/**
+ * Where a chat file reference goes next.
+ *
+ * `resolved` is the completed in-roots file (ADR 0262). `userLink` is an
+ * absolute local path outside every allowed root (ADR 0342): completion
+ * refused it, but the user's click may still open that exact file through
+ * the user-link capability — no completion, no guessing, no restriction
+ * report. Missing, relative, and shorthand tokens never become user links.
+ */
+export type ChatFileRefTarget =
+  | { kind: "resolved"; ref: ResolvedChatFileRef }
+  | { kind: "userLink"; path: string };
+
+/**
+ * An absolute local path as the main process would read it: without the
+ * composer sigil or a trailing `:line[:col]` position, both of which travel
+ * beside the path rather than inside it.
+ */
+function asUserLinkPath(raw: string): string | null {
+  const token = String(raw ?? "").trim().replace(/^@/, "").replace(/:\d+(?::\d+)?$/, "");
+  return token && isAbsoluteFilePath(token) ? token : null;
 }
 
 /**
@@ -159,7 +191,7 @@ function useResolveChatFileRef() {
     async (
       path: string,
       baseDir?: string,
-    ): Promise<ResolvedChatFileRef | null> => {
+    ): Promise<ChatFileRefTarget | null> => {
       const state = useAppStore.getState();
       const ownerId = paneSessionId || state.activeSessionId;
       const session = state.sessions.find((item) => item.id === ownerId);
@@ -181,6 +213,13 @@ function useResolveChatFileRef() {
       }
       const match = result.match;
       if (!match) {
+        // ADR 0342: an absolute path outside every allowed root is not a
+        // restriction to report — the user's click opens that exact file
+        // through the user-link capability instead.
+        if (result.reason === "outside-allowed-roots") {
+          const userLink = asUserLinkPath(anchored ?? raw);
+          if (userLink) return { kind: "userLink", path: userLink };
+        }
         const key = result.reason === "outside-allowed-roots"
           ? "chat.fileRefRestricted"
           : "chat.fileRefMissing";
@@ -189,12 +228,15 @@ function useResolveChatFileRef() {
       }
       if (match.root !== "workspace") {
         return {
-          path: match.absolutePath,
-          absolutePath: match.absolutePath,
-          relativePath: null,
-          inProject: false,
-          primary: false,
-          scratch: match.sessionScratch === true,
+          kind: "resolved",
+          ref: {
+            path: match.absolutePath,
+            absolutePath: match.absolutePath,
+            relativePath: null,
+            inProject: false,
+            primary: false,
+            scratch: match.sessionScratch === true,
+          },
         };
       }
       // A project group can hold several folders, and a relative path always
@@ -202,12 +244,15 @@ function useResolveChatFileRef() {
       // absolute path and the file view switches to that folder (ADR 0263).
       const primary = match.projectRoot ? match.projectRoot.primary : true;
       return {
-        path: primary ? match.relativePath : match.absolutePath,
-        absolutePath: match.absolutePath,
-        relativePath: match.relativePath,
-        inProject: true,
-        primary,
-        scratch: false,
+        kind: "resolved",
+        ref: {
+          path: primary ? match.relativePath : match.absolutePath,
+          absolutePath: match.absolutePath,
+          relativePath: match.relativePath,
+          inProject: true,
+          primary,
+          scratch: false,
+        },
       };
     },
     [paneSessionId, sessionId, showToast, t, workspacePath],
@@ -243,12 +288,13 @@ export function useOpenChatFileRef() {
       baseDir?: string,
       mimeType?: string,
       position?: { line?: number; column?: number },
+      options?: { allowUserLink?: boolean },
     ) => {
       const line = position?.line;
       const column = position?.column;
       void (async () => {
-        const resolved = await resolveRef(path, baseDir);
-        if (!resolved) return;
+        const target = await resolveRef(path, baseDir);
+        if (!target) return;
         const current = useAppStore.getState();
         if (
           (current.workspace?.path ?? null) !== workspacePath ||
@@ -256,6 +302,20 @@ export function useOpenChatFileRef() {
         ) {
           return;
         }
+        // ADR 0342: the user clicked an absolute local path outside every
+        // allowed root. Open that exact file in the host file tab's user-link
+        // mode — no completion, no browser/file-manager routing (those are
+        // project surfaces), and no restriction report.
+        if (target.kind === "userLink") {
+          if (options?.allowUserLink === false) {
+            showToast(t("chat.fileRefRestricted", { name: String(path ?? "").trim() }), { variant: "error" });
+            return;
+          }
+          if (current.workspace?.remote) return;
+          openFile(target.path, mimeType, { line, column }, { userLink: true });
+          return;
+        }
+        const resolved = target.ref;
         const hasPosition = line !== undefined || column !== undefined;
         if (
           !current.workspace?.remote &&
@@ -325,10 +385,17 @@ export function useRevealChatFileRef() {
   return useCallback(
     (path: string, baseDir?: string) => {
       void (async () => {
-        const resolved = await resolveRef(path, baseDir);
-        if (!resolved) return;
+        const target = await resolveRef(path, baseDir);
+        if (!target) return;
+        // Reveal stays on the contained channel (ADR 0342 leaves `fsReveal`
+        // unchanged), so a user-link path outside the roots is still refused
+        // here instead of revealing a differently named file.
+        if (target.kind === "userLink") {
+          showToast(t("chat.fileRefRestricted", { name: path }), { variant: "error" });
+          return;
+        }
         try {
-          await api.fsReveal(resolved.path, sessionId);
+          await api.fsReveal(target.ref.path, sessionId);
         } catch {
           showToast(t("chat.fileRevealFailed"), { variant: "error" });
         }
@@ -359,8 +426,13 @@ export function useCopyChatFileRef() {
       kind: "absolute" | "relative",
     ) => {
       void (async () => {
-        const resolved = await resolveRef(path, baseDir);
-        if (!resolved) return;
+        const target = await resolveRef(path, baseDir);
+        if (!target) return;
+        // Copying an address needs no containment: an absolute user-link path
+        // copies as itself, while a relative spelling still needs its root.
+        const resolved = target.kind === "userLink"
+          ? { absolutePath: target.path, relativePath: null as string | null }
+          : target.ref;
         const value =
           kind === "absolute" ? resolved.absolutePath : resolved.relativePath;
         if (!value) {

@@ -1576,6 +1576,20 @@ export const api = {
     invoke(IPC.invoke.fsOpen, { path, mimeType, ...(sessionId ? { sessionId } : {}) }),
   fsSaveCopy: (path: string, sessionId?: string) =>
     invoke<{ ok: true; saved: boolean }>(IPC.invoke.fsSaveCopy, { path, ...(sessionId ? { sessionId } : {}) }),
+  /**
+   * Read one user-clicked absolute file outside every containment root
+   * (ADR 0342). The click is the authorization; only the chat file-ref opener
+   * calls this, never agent, plugin, or completion paths.
+   */
+  fsReadUserLink: (path: string, mimeType?: string, sessionId?: string) =>
+    invoke<FsReadResult>(IPC.invoke.fsReadUserLink, {
+      path,
+      ...(mimeType ? { mimeType } : {}),
+      ...(sessionId ? { sessionId } : {}),
+    }),
+  /** Save-a-copy for a user-link file; re-validates the source in main. */
+  fsSaveCopyUserLink: (path: string, sessionId?: string) =>
+    invoke<{ ok: true; saved: boolean }>(IPC.invoke.fsSaveCopyUserLink, { path, ...(sessionId ? { sessionId } : {}) }),
   fsIndex: (sessionId?: string) => invoke<FsIndexResult>(IPC.invoke.fsIndex, { ...(sessionId ? { sessionId } : {}) }),
   /**
    * Complete a file reference from chat text to a real file (D320 follow-up).

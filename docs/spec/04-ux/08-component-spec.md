@@ -2184,7 +2184,10 @@ Single message render — either user (plaintext) or assistant (markdown streami
   by polling. Non-ASCII filenames, spaces, and Windows drive/backslash paths
   remain whole candidates. User-message paths outside the allowed roots stay
   plain after verification, while assistant references and tool paths remain
-  clickable so the opener can explain the access limit. Home paths stay plain.
+  clickable. Clicking an absolute local path outside the allowed roots opens that
+  exact file in the host file tab's user-link mode — no completion, no access-limit
+  report — while a reference that matches nothing still reports itself. Home paths
+  stay plain.
   Clicking a chip
    completes the reference through `pi-desktop/fs/resolveRef` — the whole open
    project is searched, its group's folders primary first (ADR 0263) — and opens
@@ -2195,8 +2198,9 @@ Single message render — either user (plaintext) or assistant (markdown streami
    view as a project-relative path and a sibling-folder file as an absolute one,
    which is also how scratch and attachment files are addressed. A resolved
    image chip resolves and opens the same way. A chip whose reference
-   matches nothing opens nothing and reports itself; an absolute path outside
-   every allowed root reports the access limit separately. The OS default application
+   matches nothing opens nothing and reports itself; an absolute local path outside
+   every allowed root opens directly in the host file tab's user-link mode instead of
+   reporting the access limit. The OS default application
    is no longer what this click does.
   HTTP(S) URLs remain inline text links. Bare URLs preserve balanced parentheses
   in paths, queries, and fragments; an unmatched closing parenthesis wrapping
