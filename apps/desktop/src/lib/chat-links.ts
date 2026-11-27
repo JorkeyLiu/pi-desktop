@@ -91,7 +91,8 @@ function isLikelyFilePath(path: string): boolean {
   return KNOWN_EXTS.has(baseExt);
 }
 
-function isAbsoluteFilePath(path: string): boolean {
+/** Absolute local path on the running platform (POSIX, drive, or UNC spelling). */
+export function isAbsoluteFilePath(path: string): boolean {
   return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
 }
 

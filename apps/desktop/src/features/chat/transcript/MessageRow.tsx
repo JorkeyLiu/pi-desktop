@@ -9,12 +9,14 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import type { MessageAttachment, UiMessage } from "@pi-desktop/shared";
-import { splitInlineContent } from "@pi-desktop/shared";
+import { isViewableImageAttachment, splitInlineContent } from "@pi-desktop/shared";
 import { useOpenChatFileRef } from "../../../hooks/use-preview-target";
+import { openRoutedAttachment } from "./attachment-open-routing";
 import { sessionAllows } from "../../../lib/remote-session-safety";
 import { useSlotSessionId } from "../../../plugins/renderer-slots/use-slots";
 import { useAppStore } from "../../../stores/app-store";
 import { Markdown } from "../../../components/Markdown";
+import { ImageViewer } from "../../../components/ImageViewer";
 import {
   IconChevronLeft,
   IconChevronRight,
@@ -35,6 +37,7 @@ import {
 } from "./shared";
 import { useTranscriptMenu } from "./TranscriptMenu";
 import { getExtraMessageAttachments } from "./extra-attachments";
+import { useMessageImageViewer } from "./useMessageImageViewer";
 
 function SkillInvocationText({ message }: { message: UiMessage }) {
   const command = message.command ?? "";
@@ -89,6 +92,7 @@ export const MessageRow = memo(function MessageRow({
   const localWorkspaceRoot = useAppStore((s) => s.workspace?.path);
   const workspaceRoot = sessionAllows(session, "canUseLocalTools") ? localWorkspaceRoot : undefined;
   const openFileRef = useOpenChatFileRef();
+  const imageViewer = useMessageImageViewer();
   // userAction belongs to user cards; other rows keep a plugin-free bar.
   const slotUser = isUser ? slotMessage("user", message) : undefined;
   const [editing, setEditing] = useState(false);
@@ -121,6 +125,34 @@ export const MessageRow = memo(function MessageRow({
     () => splitInlineContent(String(message.content || ""), message.attachments ?? []).parts,
     [message.attachments, message.content],
   );
+  // Every viewable image in reading order: inline tokens first, then the trailing list.
+  const viewableAttachments = useMemo(() => [
+    ...userContentParts.flatMap((part) =>
+      part.kind === "attachment" && isViewableImageAttachment(part.attachment.mimeType, part.attachment.name)
+        ? [part.attachment]
+        : [],
+    ),
+    ...extraAttachments.filter((attachment) =>
+      isViewableImageAttachment(attachment.mimeType, attachment.name),
+    ),
+  ], [userContentParts, extraAttachments]);
+  // A viewable image opens in the shared dialog; everything else keeps the files-tab path.
+  const openAttachmentRef = (
+    path: string,
+    baseDir?: string,
+    mimeType?: string,
+    position?: { line?: number; column?: number },
+  ) => {
+    openRoutedAttachment({
+      viewable: viewableAttachments,
+      path,
+      baseDir,
+      mimeType,
+      position,
+      openViewer: (attachments, index) => imageViewer.open(attachments, index),
+      openInFilesTab: (ref, dir, type, pos) => openFileRef(ref, dir, type, pos),
+    });
+  };
   const renderContentPart = (
     part: (typeof userContentParts)[number],
     index: number,
@@ -137,7 +169,7 @@ export const MessageRow = memo(function MessageRow({
       <MessageAttachmentImage
         key={`${keyPrefix}-${index}`}
         attachment={part.attachment}
-        onOpenFile={openFileRef}
+        onOpenFile={openAttachmentRef}
         inline
       />
     );
@@ -150,11 +182,11 @@ export const MessageRow = memo(function MessageRow({
       aria-label={t("chat.messageAttachments")}
     >
       {extraAttachments.map((attachment) =>
-        attachment.kind === "image" ? (
+        attachment.kind === "image" || isViewableImageAttachment(attachment.mimeType, attachment.name) ? (
           <MessageAttachmentImage
             key={`${attachment.ref}:${attachment.name}`}
             attachment={attachment}
-            onOpenFile={openFileRef}
+            onOpenFile={openAttachmentRef}
           />
         ) : (
           <span key={`${attachment.ref}:${attachment.name}`} role="listitem">
@@ -355,6 +387,17 @@ export const MessageRow = memo(function MessageRow({
             ) : null}
             <ActionSlotSide slot="userAction" side="right" message={slotUser} />
           </div>
+        ) : null}
+        {imageViewer.dialog ? (
+          <ImageViewer
+            items={imageViewer.dialog.items}
+            index={imageViewer.dialog.index}
+            source={imageViewer.dialog.source}
+            onSelect={imageViewer.select}
+            onClose={imageViewer.close}
+            onRetry={imageViewer.retry}
+            restoreFocus={imageViewer.restoreFocus}
+          />
         ) : null}
       </div>
     </div>

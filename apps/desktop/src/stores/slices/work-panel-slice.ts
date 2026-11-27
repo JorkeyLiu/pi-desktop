@@ -539,8 +539,8 @@ export function createWorkPanelSlice({
     });
   },
 
-  openFileInWorkPanel: (path, mimeType, position) => {
-    get().openWorkPanelTab(fileWorkPanelTab(path, mimeType, position));
+  openFileInWorkPanel: (path, mimeType, position, options) => {
+    get().openWorkPanelTab(fileWorkPanelTab(path, mimeType, position, options));
   },
   updateBrowserWorkPanelTab: (event) => {
     const sessionId = event.sessionId;

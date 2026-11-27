@@ -1,8 +1,8 @@
 import { BrowserWindow, dialog, shell, type OpenDialogOptions } from "electron";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
+import { copyFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import {
   ErrorCodes,
@@ -39,6 +39,12 @@ import {
   resolveRealOpenablePath,
 } from "@pi-desktop/host-runtime";
 import { openableMp4Path } from "../open-attachment-video";
+import { resolveSaveCopyTarget } from "../save-copy-target";
+import {
+  copyUserLinkTarget,
+  readUserLink,
+  resolveUserLinkCopyTarget,
+} from "../user-link-file";
 import { isChatRefOutsideRoots, resolveChatFileRef } from "../chat-ref-resolve";
 import { getWorkspaceFileIndex } from "../fs-index";
 import {
@@ -992,6 +998,63 @@ export function registerWorkspaceIpc({
     if (openError) throw new Error(openError);
     return { ok: true };
   });
+
+  /**
+   * Save a copy of a file the panel already previews. The user picks the
+   * destination; bytes are copied, never executed. Remote sessions may only
+   * save locally stored files, so this channel never shells out.
+   */
+  handle(IPC.invoke.fsSaveCopy, async (input: { path?: string; sessionId?: string } = {}) => {
+    const resolved = await resolveSaveCopyTarget(String(input.path ?? ""), input.sessionId, {
+      isLocalStoredFile,
+      remoteFileWorkspace,
+      optionalWorkspaceRoot,
+      fsExtraRoots,
+      resolveRealOpenablePath,
+    });
+    if (!resolved.ok) {
+      throw Object.assign(new Error(resolved.reason), {
+        errorCode: ErrorCodes.INVALID_ARGUMENT,
+      });
+    }
+    const picked = await dialog.showSaveDialog({ defaultPath: basename(resolved.target) });
+    if (picked.canceled || !picked.filePath) return { ok: true, saved: false };
+    await copyFile(resolved.target, picked.filePath);
+    return { ok: true, saved: true };
+  });
+
+  /**
+   * User-link read and save-a-copy (ADR 0342): the user clicked an absolute
+   * local path in chat, and the click itself authorizes opening that exact
+   * file — even outside every containment root. Both channels are
+   * main-window-only: plugin panel/webContents bridge calls fail the sender
+   * check, so plugins and agents cannot invoke this capability. Remote-owned
+   * sessions reject before any filesystem access with no local fallback.
+   */
+  handleWithEvent(
+    IPC.invoke.fsReadUserLink,
+    async (event, input: { path?: string; mimeType?: string; sessionId?: string } = {}) => {
+      assertMainWindowSender(event);
+      return readUserLink(String(input.path ?? ""), input.sessionId, { remoteFileWorkspace }, input.mimeType);
+    },
+  );
+
+  handleWithEvent(
+    IPC.invoke.fsSaveCopyUserLink,
+    async (event, input: { path?: string; sessionId?: string } = {}) => {
+      assertMainWindowSender(event);
+      const resolved = await resolveUserLinkCopyTarget(String(input.path ?? ""), input.sessionId, { remoteFileWorkspace });
+      if (!resolved.ok) {
+        throw Object.assign(new Error(resolved.reason), {
+          errorCode: ErrorCodes.INVALID_ARGUMENT,
+        });
+      }
+      const picked = await dialog.showSaveDialog({ defaultPath: basename(resolved.target) });
+      if (picked.canceled || !picked.filePath) return { ok: true, saved: false };
+      await copyUserLinkTarget(resolved.target, picked.filePath);
+      return { ok: true, saved: true };
+    },
+  );
 
   handle(IPC.invoke.fsIndex, async (input: { sessionId?: string } = {}) => {
     const remote = await remoteFileWorkspace(input.sessionId);

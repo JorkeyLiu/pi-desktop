@@ -434,6 +434,9 @@ export const de = {
     "fileRefMissing": "Keine Datei entspricht {{name}}",
     "fileRefRestricted": "{{name}} liegt außerhalb der für die App zugänglichen Orte",
     "fileRefLookupFailed": "Dieser Dateiverweis konnte nicht geprüft werden.",
+    "fileUserLinkMissing": "Unter {{name}} existiert keine Datei.",
+    "fileUserLinkNotFile": "{{name}} ist keine reguläre Datei.",
+    "fileUserLinkFailed": "{{name}} konnte nicht geöffnet werden.",
     "fileManagerUnavailable": "Der Dateimanager ist nicht verfügbar. Die Datei wurde im integrierten Viewer geöffnet.",
     "revealFileInFolder": "Im Ordner anzeigen",
     "fileRevealFailed": "Die Datei konnte nicht im Ordner angezeigt werden.",
@@ -2215,7 +2218,10 @@ sklm: {
       "reveal": "Im Finder anzeigen",
       "binary": "Binärdatei – Vorschau nicht verfügbar",
       "tooLarge": "Datei ist zu groß für die Vorschau",
-      "openFailed": "Die Datei konnte nicht mit der Standardanwendung geöffnet werden."
+      "openFailed": "Die Datei konnte nicht mit der Standardanwendung geöffnet werden.",
+      "download": "Kopie herunterladen",
+      "saveFailed": "Die Dateikopie konnte nicht gespeichert werden.",
+      "remoteUnavailable": "Öffnen in einer externen App ist für Remote-Arbeitsbereiche nicht verfügbar."
     }
   },
   "palette": {

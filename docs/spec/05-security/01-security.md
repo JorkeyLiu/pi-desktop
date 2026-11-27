@@ -92,6 +92,17 @@ sidecar's workspace file resolver remain restricted to the session workspace.
   (`workspace::tests::blocks_escape` covers escape attempts)
 - Symlink targets outside the root are rejected when detectable unless the
   explicit path was approved by the host permission layer
+- User-link file view (ADR 0342) is the one click-authorized exception: an
+  absolute local path the user clicks in chat opens that exact file in the
+  host file viewer even outside every containment root, with no second
+  confirmation and no content or sensitive-path screening. The capability is a
+  separate main-window-only IPC pair (`fs/readUserLink`, `fs/saveCopyUserLink`)
+  that agents, plugins, and reference completion cannot reach; remote-owned
+  sessions reject with no local-filesystem fallback; only existing regular
+  files open (open-fd `fstat` after `realpath`); the 512 KiB text / 5 MiB image
+  caps still bound reads. A compromised renderer could open any readable
+  regular file the user could click, but cannot widen agent, plugin, or
+  completion access.
 
 Plan is not itself the workspace security boundary. Host-core resolves the
 durable session mode for every `tools.execute` call and applies the Plan matrix

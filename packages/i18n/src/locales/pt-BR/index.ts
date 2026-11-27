@@ -436,6 +436,9 @@ export const ptBR = {
     fileRefMissing: "Nenhum arquivo corresponde a {{name}}",
     fileRefRestricted: "{{name}} está fora dos locais que o aplicativo pode acessar",
     fileRefLookupFailed: "Não foi possível verificar esta referência de arquivo.",
+    fileUserLinkMissing: "Não existe arquivo em {{name}}.",
+    fileUserLinkNotFile: "{{name}} não é um arquivo comum.",
+    fileUserLinkFailed: "Não foi possível abrir {{name}}.",
     fileManagerUnavailable: "O gerenciador de arquivos está indisponível. O arquivo foi aberto no visualizador integrado.",
     revealFileInFolder: "Mostrar na pasta",
     fileRevealFailed: "Não foi possível mostrar o arquivo na pasta.",
@@ -2180,7 +2183,10 @@ export const ptBR = {
       reveal: "Revelar no Finder",
       binary: "Arquivo binário — pré-visualização indisponível",
       tooLarge: "O arquivo é grande demais para pré-visualização",
-      openFailed: "Não foi possível abrir o arquivo com o aplicativo padrão."
+      openFailed: "Não foi possível abrir o arquivo com o aplicativo padrão.",
+      download: "Baixar uma cópia",
+      saveFailed: "Não foi possível salvar uma cópia do arquivo.",
+      remoteUnavailable: "A abertura em um app externo está indisponível para espaços de trabalho remotos."
     }
   },
   palette: {

@@ -2187,6 +2187,21 @@ Renderer IPC kept for the Plan-safe preview facade and URL fallback:
   `attachments/<sha256>` blob declared as `video/mp4`, the host creates a
   `.mp4` symlink inside its private app-data directory before the OS handoff,
   so the extensionless blob has a media association without copying its bytes.
+- `fs/saveCopy({path, sessionId?})` → `{ok, saved}`. Opens the OS save dialog for a user-picked destination and copies the file's bytes there; nothing is executed. Same realpath containment as `fs/read`, plus a regular-file check. A remote session may only save a locally stored file, otherwise `INVALID_ARGUMENT`; remote saves never touch `shell.openPath`. Renderer-only; not a plugin host API.
+- `fs/readUserLink({path, mimeType?, sessionId?})` → text (≤512KB) / image data URL (≤5MB) /
+  binary / tooLarge (ADR 0342). Opens the one absolute local file the user clicked in chat, even outside
+  every containment root: the click itself is the authorization, so there is no confirmation and no
+  content or sensitive-path screening. Main-window-only (`handleWithEvent` + `assertMainWindowSender`);
+  plugin panel webContents calls fail the sender check, and agents, plugins, and reference completion can
+  never reach these channels. Remote-owned sessions reject (`INVALID_ARGUMENT`) with no local-filesystem
+  fallback. The path must be a local absolute path (POSIX `/…`, Windows drive/UNC); directories, FIFOs,
+  sockets, devices, and other non-regular files are refused (`INVALID_ARGUMENT`) through an open-fd
+  `fstat` after `realpath`, and a path naming nothing reports `NOT_FOUND`. Classification and caps match
+  `fs/read` — resource bounds, not content filtering. Renderer-only; not a plugin host API.
+- `fs/saveCopyUserLink({path, sessionId?})` → `{ok, saved}`. Save-a-copy for a user-clicked absolute file:
+  re-validates the source through the same realpath-plus-regular-file gate as the read path, shows the OS
+  save dialog, and copies bytes main-side; renderer-supplied bytes are never trusted. Same
+  main-window-only and remote gates as `fs/readUserLink`.
 - `fs/resolveRef({ref, sessionId?})` → `FsChatRefResolveResult`
   (for isolated sessions, lookup and file reads use `worktree.location` rather
   than the parent project checkout)
@@ -2223,7 +2238,9 @@ Renderer IPC kept for the Plan-safe preview facade and URL fallback:
   wider store; it still searches the session's own one. A reference that matches
   nothing returns `match: null`; an absolute path outside every allowed root
   also returns `reason: "outside-allowed-roots"`, without trying a same-name
-  file inside a root. Resolving never opens anything (ADR 0262).
+  file inside a root. Resolving never opens anything (ADR 0262). An absolute local path that lands on
+  `outside-allowed-roots` is routed renderer-side to `fs/readUserLink` (user-link mode) instead of reporting
+  the restriction; missing, relative, and shorthand tokens never become user links (ADR 0342).
 - `fs/list` stays workspace-only; traversal outside is rejected
   (`INVALID_ARGUMENT`).
 

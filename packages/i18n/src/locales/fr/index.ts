@@ -434,6 +434,9 @@ export const fr = {
     "fileRefMissing": "Aucun fichier ne correspond à {{name}}",
     "fileRefRestricted": "{{name}} se trouve hors des emplacements accessibles à l'application",
     "fileRefLookupFailed": "Impossible de vérifier cette référence de fichier.",
+    "fileUserLinkMissing": "Aucun fichier à {{name}}.",
+    "fileUserLinkNotFile": "{{name}} n'est pas un fichier ordinaire.",
+    "fileUserLinkFailed": "Impossible d'ouvrir {{name}}.",
     "fileManagerUnavailable": "Le gestionnaire de fichiers est indisponible. Le fichier a été ouvert dans le lecteur intégré.",
     "revealFileInFolder": "Afficher dans le dossier",
     "fileRevealFailed": "Impossible d'afficher le fichier dans son dossier.",
@@ -2215,7 +2218,10 @@ sklm: {
       "reveal": "Révéler dans le Finder",
       "binary": "Fichier binaire — aperçu indisponible",
       "tooLarge": "Le fichier est trop volumineux pour être prévisualisé",
-      "openFailed": "Impossible d’ouvrir le fichier avec l’application par défaut."
+      "openFailed": "Impossible d’ouvrir le fichier avec l’application par défaut.",
+      "download": "Télécharger une copie",
+      "saveFailed": "Impossible d’enregistrer une copie du fichier.",
+      "remoteUnavailable": "L’ouverture dans une application externe est indisponible pour les espaces de travail distants."
     }
   },
   "palette": {

@@ -2898,15 +2898,17 @@ MainChat 弥补了缺口。 Maximized/fullscreen 调用保留最新的
   工作区。
 - **预期**：目录懒惰地列出，文件夹首先，带有 `.git` /
   `node_modules` / 隐藏构建输出；文本以语法高亮显示
-  （上限为 5000 行），图像预览内联、二进制和超大文件
-  显示后备并显示仍然可用。遍历尝试是
+  （上限为 5000 行），图像预览内联。binary、超大与失败态显示
+  后备：下载（经 `fs/saveCopy` 由用户自选目标存副本，允许时）与本地
+  媒体后缀文件的系统默认应用打开；显示位置保持仅本地。远端会话中
+  非本地存储的文件显示不可用说明，而不给出必定失败的下载按钮。遍历尝试是
   被 `INVALID_ARGUMENT` 拒绝；无工作空间→空状态；切换
   工作区重置树和查看器。
 - **链接规格**：`03-runtime/01-ipc-protocol.md` §13a、ADR 0019、
-  `03-runtime/15-workspace-ignore-rules.md`
+  `03-runtime/15-workspace-ignore-rules.md`、`08-meta/decisions-log.md`（D668）
 - **验收**：D（工作空间），安全
 - **里程碑**：M5
-- **状态**：单位覆盖（`fs-panel-guard.test.mjs`）；完整的 UI 场景草稿
+- **状态**：单位覆盖（`fs-panel-guard.test.mjs`、`attachment-file-actions.test.mjs`、`save-copy-gate.test.mjs`）；完整的 UI 场景草稿
 
 ---
 
@@ -7923,14 +7925,24 @@ eleven-tool-round desktop paths are verified by
 - **前提条件**：工作区含 `docs/pixel.png` 的 Agent 会话。用户曾粘贴图片，会话 JSONL 存有带 mimeType 的 `attachments/<sha256>` 图片引用。
 - **步骤**：
   1. 重新打开该会话。确认粘贴图片与其它附件一样是芯片、接在正文之后而不是排在正文上方，悬停或聚焦时浮出预览小卡。
-  2. 点击芯片。确认宿主文件查看器打开该附件引用并显示图片。
+  2. 点击芯片。确认应用内共享图片浮层打开该附件引用并显示图片，可用上一步/下一步切到该消息的其它可查看图片。
   3. 发送一回合，助手 Markdown 含 `![](docs/pixel.png)` 和 `![](/etc/passwd)`。确认工作区图片内联显示，工作区外路径不加载文件字节。
   4. 确认 `fs/readImageDataUrl` 在 `ref: "/etc/passwd"` 且 `mimeType: "image/png"` 时返回 `missing`，而不是 data URL。
-- **预期**：受限图片引用在 5MB 上限内内联显示；工作区外路径与对非图片扩展名的 mime 伪造保持关闭；点击已解析图片芯片打开宿主 `file:` 选项卡，而不是系统默认应用。
-- **链接规格**：`03-runtime/01-ipc-protocol.md`、`04-ux/08-component-spec.md` §8.3、ADR 0172、`08-meta/decisions-log.md`（D334）
+- **预期**：受限图片引用在 5MB 上限内内联显示；工作区外路径与对非图片扩展名的 mime 伪造保持关闭；点击已解析图片芯片打开共享图片浮层（输入框预览同一契约），而不是宿主 `file:` 选项卡或系统默认应用。
+- **链接规格**：`03-runtime/01-ipc-protocol.md`、`04-ux/08-component-spec.md` §8.3 / §11.8、ADR 0172、ADR 0342、`08-meta/decisions-log.md`（D334、D668、D669）
 - **验收**：C（对话与流）、D（工作区）、安全、质量
 - **里程碑**：M5
-- **状态**：单元已覆盖（`fs-panel-guard.test.mjs`、`message-image-display.test.mjs`）；完整 UI 旅程仍为草稿（除非用户明确要求，否则不要在本地跑 E2E）
+- **状态**：单元已覆盖（`fs-panel-guard.test.mjs`、`message-image-display.test.mjs`、`sent-image-viewer.test.mjs`、`attachment-open-routing.test.mjs`、`user-link-file-access.test.mjs`、`workspace-files.test.ts` 用户链接用例）；完整 UI 旅程仍为草稿（除非用户明确要求，否则不要在本地跑 E2E）
+
+#### E2E-USERLINK-outside-root-file-view：点击绝对本地路径即打开该确切文件
+
+- **前提条件**：本地（非远端）会话；一切允许根之外各有一个纯文本文件与一张可查看图片（如 `/tmp/outside/note.md`、`/tmp/outside/photo.png`）。
+- **步骤**：1. 助手回合写出外部文本文件的绝对路径，点击链接，确认宿主文件选项卡直接打开该文件内容，无访问限制、无确认。2. 点击外部图片的绝对路径，确认宿主文件选项卡在 5MB 上限内显示图片。3. 确认工作区内图片芯片仍走共享图片浮层，`![](/tmp/outside/photo.png)` 行内图片永不把文件字节载入转录。4. 确认同一外部路径调 `fs/read` 仍被拒绝，目录等非常规文件报“不是普通文件”，工具行点击同一外部路径仍报访问限制（ADR 0342 入口分离），缺失/相对/简写保持原有错误文案。
+- **预期**：用户点击的绝对本地文件精确打开，无确认、无内容或敏感路径审查；代理、插件与引用补全的限制不变，用户链接通道仅主窗口可用，远端会话永不读本机。
+- **链接规格**：`03-runtime/01-ipc-protocol.md` §13a、`04-ux/08-component-spec.md` §8.3、`05-security/01-security.md` §4、ADR 0342、`08-meta/decisions-log.md`（D669）
+- **验收**：C（对话与流）、D（工作区）、安全、质量
+- **里程碑**：M5
+- **状态**：单元已覆盖（`workspace-files.test.ts` 用户链接用例、`user-link-file-access.test.mjs`）；完整 UI 旅程草稿
 
 #### E2E-188：插件宿主 API 可列出模型、读取进行中的上下文并发起补全
 

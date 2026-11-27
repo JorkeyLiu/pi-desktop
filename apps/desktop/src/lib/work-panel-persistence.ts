@@ -1,5 +1,6 @@
 import {
   isKnownWorkPanelTab,
+  isWindowsAbsolutePath,
   normalizeWorkPanelFilePath,
   parsePluginViewRef,
   type WorkPanelContext,
@@ -140,9 +141,19 @@ export function restoreWorkPanelTab(raw: unknown): WorkPanelTab | null {
     }
     case "file": {
       if (!resource) return null;
-      const normalized = normalizeWorkPanelFilePath(resource);
+      // A persisted Windows-absolute user-link spelling round-trips verbatim
+      // so a UNC prefix survives open-persist-restore; legacy mangled records
+      // fail the predicate and normalize exactly as before (F-01, ADR 0342).
+      const normalized =
+        raw.userLink === true && isWindowsAbsolutePath(resource)
+          ? resource
+          : normalizeWorkPanelFilePath(resource);
       if (!normalized) return null;
-      return { ...tab, id: `file:${normalized}`, resource: normalized };
+      // A restored user-link tab re-opens through the user-link channels when
+      // refocused, exactly as before the restart (ADR 0342).
+      return raw.userLink === true
+        ? { ...tab, id: `file:${normalized}`, resource: normalized, userLink: true as const }
+        : { ...tab, id: `file:${normalized}`, resource: normalized };
     }
     case "subagent": {
       if (!resource) return null;

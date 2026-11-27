@@ -434,6 +434,9 @@ export const es = {
     "fileRefMissing": "Ningún archivo coincide con {{name}}",
     "fileRefRestricted": "{{name}} está fuera de las ubicaciones a las que puede acceder la aplicación",
     "fileRefLookupFailed": "No se pudo comprobar esta referencia de archivo.",
+    "fileUserLinkMissing": "No existe ningún archivo en {{name}}.",
+    "fileUserLinkNotFile": "{{name}} no es un archivo normal.",
+    "fileUserLinkFailed": "No se pudo abrir {{name}}.",
     "fileManagerUnavailable": "El administrador de archivos no está disponible. El archivo se abrió en el visor integrado.",
     "revealFileInFolder": "Mostrar en carpeta",
     "fileRevealFailed": "No se pudo mostrar el archivo en su carpeta.",
@@ -2215,7 +2218,10 @@ sklm: {
       "reveal": "Mostrar en el Finder",
       "binary": "Archivo binario: vista previa no disponible",
       "tooLarge": "El archivo es demasiado grande para obtener una vista previa",
-      "openFailed": "No se pudo abrir el archivo con la aplicación predeterminada."
+      "openFailed": "No se pudo abrir el archivo con la aplicación predeterminada.",
+      "download": "Descargar una copia",
+      "saveFailed": "No se pudo guardar una copia del archivo.",
+      "remoteUnavailable": "La apertura en una aplicación externa no está disponible para espacios de trabajo remotos."
     }
   },
   "palette": {
